@@ -7,13 +7,15 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { SkillSnapshot } from "../skills/types.js";
 
 type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
 
-vi.mock("../infra/git-commit.js", () => ({
+vi.mock("../infra/git-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
   resolveCommitHash: () => "abcdef0",
 }));
 
@@ -44,9 +46,37 @@ import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  loadPluginManifestRegistry.mockClear();
 });
 
 describe("trajectory metadata", () => {
+  it("uses prepared plugin metadata without rescanning manifests", () => {
+    const metadata = buildTrajectoryRunMetadata({
+      pluginMetadataSnapshot: {
+        plugins: [
+          {
+            id: "prepared-plugin",
+            name: "Prepared Plugin",
+            origin: "bundled",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            hooks: [],
+            skills: [],
+          },
+        ],
+      } as never,
+      workspaceDir: "/tmp/workspace",
+      timeoutMs: 30_000,
+    });
+
+    expect(metadata.plugins).toMatchObject({
+      source: "manifest-registry",
+      entries: [{ id: "prepared-plugin" }],
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
   it("redacts harness argv and local paths with the support redaction rules", () => {
     const originalArgv = process.argv;
     process.argv = [
@@ -90,43 +120,20 @@ describe("trajectory metadata", () => {
 
   it("captures redacted config plus active plugin and skill inventory", () => {
     const registry = createEmptyPluginRegistry();
-    registry.plugins.push({
-      id: "demo-plugin",
-      name: "Demo Plugin",
-      version: "1.2.3",
-      source: "bundled",
-      origin: "bundled",
-      enabled: true,
-      activated: true,
-      imported: true,
-      status: "loaded",
-      toolNames: ["demo_tool"],
-      hookNames: [],
-      channelIds: ["demo-channel"],
-      cliBackendIds: [],
-      providerIds: ["demo-provider"],
-      embeddingProviderIds: [],
-      speechProviderIds: [],
-      realtimeTranscriptionProviderIds: [],
-      realtimeVoiceProviderIds: [],
-      mediaUnderstandingProviderIds: [],
-      transcriptSourceProviderIds: [],
-      imageGenerationProviderIds: [],
-      videoGenerationProviderIds: [],
-      musicGenerationProviderIds: [],
-      webFetchProviderIds: [],
-      webSearchProviderIds: [],
-      migrationProviderIds: [],
-      memoryEmbeddingProviderIds: [],
-      agentHarnessIds: ["openclaw"],
-      cliCommands: [],
-      services: [],
-      gatewayDiscoveryServiceIds: [],
-      commands: [],
-      httpRoutes: 0,
-      hookCount: 0,
-      configSchema: false,
-    });
+    registry.plugins.push(
+      createPluginRecord({
+        id: "demo-plugin",
+        name: "Demo Plugin",
+        version: "1.2.3",
+        source: "bundled",
+        origin: "bundled",
+        imported: true,
+        toolNames: ["demo_tool"],
+        channelIds: ["demo-channel"],
+        providerIds: ["demo-provider"],
+        agentHarnessIds: ["openclaw"],
+      }),
+    );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
 
     const metadata = buildTrajectoryRunMetadata({

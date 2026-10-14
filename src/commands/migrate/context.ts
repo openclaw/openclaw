@@ -1,7 +1,9 @@
 /** Migration provider context and report-directory helpers. */
 import path from "node:path";
+import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
-import { getRuntimeConfig } from "../../config/config.js";
+import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
@@ -32,7 +34,25 @@ export function buildMigrationReportDir(
   return path.join(stateDir, "migration", providerId, stamp);
 }
 
-/** Builds the provider-facing migration context from CLI options and runtime state. */
+/** Resolves an explicit migration owner without allowing typo-created agent stores. */
+function resolveMigrationTargetAgentId(
+  config: OpenClawConfig,
+  rawAgentId: string | undefined,
+): string | undefined {
+  const raw = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !raw) {
+    throw new Error("--agent must not be blank");
+  }
+  if (!raw) {
+    return undefined;
+  }
+  if (!isValidAgentId(raw)) {
+    throw new Error(`Invalid agent id "${raw}".`);
+  }
+  const agentId = normalizeAgentId(raw);
+  return resolveConfiguredAgentId(config, agentId);
+}
+
 export function buildMigrationContext(params: {
   source?: string;
   targetAgentId?: string;
@@ -46,12 +66,12 @@ export function buildMigrationContext(params: {
   reportDir?: string;
   json?: boolean;
 }): MigrationProviderContext {
-  const config = params.configOverride ?? getRuntimeConfig();
+  const config = params.configOverride ?? loadConfig();
   const stateDir = resolveStateDir();
   return {
     config,
     stateDir,
-    targetAgentId: params.targetAgentId,
+    targetAgentId: resolveMigrationTargetAgentId(config, params.targetAgentId),
     itemKinds: params.itemKinds,
     source: params.source,
     includeSecrets: Boolean(params.includeSecrets),

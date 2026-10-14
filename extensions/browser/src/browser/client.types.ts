@@ -1,17 +1,25 @@
-/**
- * Browser client response types.
- *
- * Shared by the browser control client, CLI, and Browser agent tool.
- */
-/** Browser transport backing the selected profile. */
+import type { lookup as dnsLookupCb } from "node:dns";
+import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
+import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
+
+type BrowserCdpLookup = typeof dnsLookupCb;
+
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
-type BrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
+
+export type ProfileStatus = {
+  name: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  color: string;
+  driver: "openclaw" | "existing-session" | "extension";
+  running: boolean;
+  tabCount: number;
+  isDefault: boolean;
+  isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
+};
 
 export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
 
@@ -24,13 +32,13 @@ export type BrowserGraphicsDevice = {
   driverVersion: string;
 };
 
-export type BrowserVideoDecodeCapability = {
+type BrowserVideoDecodeCapability = {
   profile: string;
   minResolution: { width: number; height: number };
   maxResolution: { width: number; height: number };
 };
 
-export type BrowserVideoEncodeCapability = {
+type BrowserVideoEncodeCapability = {
   profile: string;
   maxResolution: { width: number; height: number };
   maxFramerateNumerator: number;
@@ -77,11 +85,14 @@ export type BrowserTabOwnership =
         | "browser-identity-lookup-failed";
     };
 
-/** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
   driver?: "openclaw" | "existing-session" | "extension";
+  engine?: BrowserEngineId;
+  sessionScope?: BrowserEngineDescriptor["sessionScope"];
+  screenshotFidelity?: BrowserEngineDescriptor["screenshotFidelity"];
+  availableEngines?: BrowserEngineDescriptor[];
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
@@ -103,7 +114,7 @@ export type BrowserStatus = {
   userDataDir: string | null;
   color: string;
   headless: boolean;
-  headlessSource?: BrowserHeadlessSource;
+  headlessSource?: ManagedBrowserHeadlessSource;
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
@@ -121,13 +132,23 @@ export type BrowserTab = {
   targetId: string;
   /** Stable, human-friendly tab handle for this profile runtime (for example t1). */
   tabId?: string;
+  /** Runtime-scoped native Chrome tab id exposed only by the browser-extension driver. */
+  webExtensionTabId?: number;
   /** Optional user-assigned tab label. */
   label?: string;
   title: string;
   url: string;
+  /** Listing-time observation; unavailable URLs stay redacted, not implicitly trusted. */
+  urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
   wsUrl?: string;
+  /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
+  wsLookup?: BrowserCdpLookup;
   type?: string;
 };
+
+export type BrowserTabsResult =
+  | { running: true; tabs: BrowserTab[] }
+  | { running: false; tabs: [] };
 
 /** Internal tab-open result. Browser tools must remove internal metadata before model output. */
 export type BrowserOpenResult = BrowserTab & {
@@ -135,29 +156,4 @@ export type BrowserOpenResult = BrowserTab & {
   resolvedProfile?: string;
 };
 
-/** Private page capture returned to Browser extraction callers. */
-export type BrowserPageContentResult =
-  | {
-      ok: true;
-      targetId: string;
-      url: string;
-      html: string;
-    }
-  | {
-      ok: false;
-      error: "invalid_selector" | "selector_not_found";
-      message: string;
-      targetId: string;
-      url: string;
-    };
-
-/** ARIA snapshot node exposed in structured snapshot responses. */
-export type SnapshotAriaNode = {
-  ref: string;
-  role: string;
-  name: string;
-  value?: string;
-  description?: string;
-  backendDOMNodeId?: number;
-  depth: number;
-};
+export type { AriaSnapshotNode as SnapshotAriaNode } from "./cdp-ax.js";

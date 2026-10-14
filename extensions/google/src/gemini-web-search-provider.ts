@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -97,6 +96,8 @@ function withGoogleModelProviderFallbacks(
   if (provider.baseUrl !== undefined) {
     gemini.providerBaseUrl = provider.baseUrl;
   }
+  // Provider headers stay scoped to the provider base URL. Web-search headers
+  // are configured explicitly under the Google plugin for its own endpoint.
   Object.defineProperty(mergedSearchConfig, "gemini", {
     value: gemini,
     enumerable: geminiDescriptor?.enumerable ?? false,

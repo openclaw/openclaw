@@ -1,10 +1,12 @@
 export {
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
+  listSetupInferencePrepareOptions,
 } from "./setup-inference-auth-options.js";
 export type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
+  SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 export type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 export {
@@ -19,6 +21,7 @@ export type {
   CompleteSetupInferenceResult,
   DetectSetupInferenceDeps,
   ProviderAutoSetupInferenceKind,
+  SavedAuthSetupInferenceKind,
   SetupInferenceCandidate,
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
@@ -35,5 +38,4 @@ export {
   resolvePersistentApplyInference,
   verifySetupInference,
   verifySetupInferenceConfig,
-} from "./setup-inference-verify.js";
-export type { ResolvePersistentApplyInferenceDeps } from "./setup-inference-verify.js";
+} from "./setup-inference-turn.js";

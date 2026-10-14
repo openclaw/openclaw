@@ -1,10 +1,10 @@
 import AppKit
 import Foundation
-import OpenClawChatUI
 import Testing
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct WebChatSwiftUISmokeTests {
     private struct TestTransport: OpenClawChatTransport {
@@ -39,6 +39,18 @@ struct WebChatSwiftUISmokeTests {
         }
 
         func setActiveSessionKey(_: String) async throws {}
+    }
+
+    @Test func `response and thinking headings keep their semantic typography`() {
+        #expect(ChatMarkdownRenderer.Typography.response.headingStyle == .hierarchy)
+        #expect(ChatMarkdownRenderer.Typography.thinking.headingStyle == .prose)
+    }
+
+    @Test func `assistant segments select one complete markdown typography profile`() {
+        let segments = AssistantTextParser.segments(
+            from: "<think># Internal plan</think><final># Final answer</final>")
+
+        #expect(segments.map(\.kind.markdownTypography) == [.thinking, .response])
     }
 
     @Test func `session observer remains visible until the last shared gateway window closes`() {
@@ -113,29 +125,11 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `window controller merges titlebar and keeps toolbar controls`() throws {
-        let traceKeys = [
-            OpenClawChatWindowShell.assistantTraceDefaultsKey,
-            OpenClawChatWindowShell.assistantReasoningDefaultsKey,
-            OpenClawChatWindowShell.assistantToolActivityDefaultsKey,
-        ]
-        let previousTraceValues = traceKeys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
-        traceKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
-        defer {
-            for (key, value) in previousTraceValues {
-                if let value {
-                    UserDefaults.standard.set(value, forKey: key)
-                } else {
-                    UserDefaults.standard.removeObject(forKey: key)
-                }
-            }
-        }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
-            presentation: .window,
             transport: TestTransport(),
             windowTitle: "Studio — OpenClaw")
         let window = try #require(controller._testWindow)
-        let capabilities = try #require(controller._testChatCapabilities)
 
         #expect(window.styleMask.contains(.fullSizeContentView))
         #expect(window.titleVisibility == .hidden)
@@ -143,15 +137,12 @@ struct WebChatSwiftUISmokeTests {
         #expect(window.toolbarStyle == .unified)
         #expect(window.titlebarSeparatorStyle == .none)
         #expect(window.isMovableByWindowBackground)
+        #expect(window.isRestorable == false)
         #expect(window.title == "Studio — OpenClaw")
         window.title = "main"
         #expect(window.title == "Studio — OpenClaw")
         #expect(controller._testSceneBridgingOptions?.contains(.toolbars) == true)
         #expect(controller._testSceneBridgingOptions?.contains(.title) == false)
-        #expect(capabilities.hasTalkControl)
-        #expect(capabilities.hasSpeech)
-        #expect(capabilities.hasVoiceNoteControl)
-        #expect(capabilities.displayOptions == .assistantTrace)
 
         controller.show()
         #expect(window.titleVisibility == .hidden)
@@ -159,20 +150,9 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
-    @Test func `panel controller present and close`() {
-        let anchor = { NSRect(x: 200, y: 400, width: 40, height: 40) }
-        let controller = WebChatSwiftUIWindowController(
-            sessionKey: "main",
-            presentation: .panel(anchorProvider: anchor),
-            transport: TestTransport())
-        controller.presentAnchored(anchorProvider: anchor)
-        controller.close()
-    }
-
     @Test func `closing a full window releases it and notifies its owner once`() {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
-            presentation: .window,
             transport: TestTransport())
         var closeCount = 0
         var visibilityChanges: [Bool] = []
@@ -188,28 +168,119 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `one Gateway profile can own multiple independent windows`() async throws {
-        let manager = WebChatManager()
-        let profile = try MacGatewayProfile(
-            id: "same-gateway",
-            name: "Same Gateway",
-            url: #require(URL(string: "wss://same.example")))
+        try await withIsolatedWebChatProfile { manager, profile in
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
+            let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
 
-        try await manager.show(profile: profile)
-        try await manager.show(profile: profile)
-        let connection = await MacGatewayConnectionFleet.shared.connection(profileID: profile.id)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
+            #expect(manager.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection)))
+            manager.resetPrimaryConnections()
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 2)
+            #expect(manager.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection)))
+            manager.closeGatewayWindows(profileID: profile.id)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 0)
+            #expect(!manager.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection)))
+        }
+    }
 
-        #expect(manager._testProfileWindowCount(profileID: profile.id) == 2)
-        #expect(manager._testSessionObserverVisible(connection: connection))
-        await manager.closeGatewayWindows(profileID: profile.id)
-        #expect(manager._testProfileWindowCount(profileID: profile.id) == 0)
-        #expect(!manager._testSessionObserverVisible(connection: connection))
+    @Test(arguments: [false, true])
+    func `hiding retains the window and its draft while removing it from the Dock and Window menu`(
+        minimized: Bool) async throws
+    {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            initialDraft: "Keep this draft",
+            transport: TestTransport())
+        defer { controller.close() }
+        let window = try #require(controller._testWindow)
+        controller.show()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+        }
+        #expect(controller.isWindowOpen)
+
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+            }
+        } else {
+            controller.hide()
+        }
+        #expect(controller._testWindow === window)
+        #expect(!controller.isWindowOpen)
+        #expect(!window.isVisible)
+        #expect(!window.isMiniaturized)
+        #expect(window.isExcludedFromWindowsMenu)
+        #expect(controller._testDraft == "Keep this draft")
+
+        controller.show()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+                controller.show()
+            }
+        }
+        #expect(controller._testWindow === window)
+        #expect(controller.isWindowOpen)
+        #expect(!window.isExcludedFromWindowsMenu)
+        #expect(controller._testDraft == "Keep this draft")
+    }
+
+    @Test(arguments: ["close", "hide", "reuse"])
+    func `pending profile opens honor window lifetime and ordinary opens reuse the admitted window`(
+        action: String) async throws
+    {
+        try await withIsolatedWebChatProfile { manager, profile in
+            let fleet = MacGatewayConnectionFleet.shared
+            let release = DispatchSemaphore(value: 0)
+            let gateEntered = AsyncStream.makeStream(of: Void.self)
+            let blockedFleet = Task.detached {
+                await fleet.holdForPendingWindowRegression(
+                    entered: gateEntered.continuation,
+                    release: release)
+            }
+            defer { release.signal() }
+            var gateIterator = gateEntered.stream.makeAsyncIterator()
+            await gateIterator.next()
+
+            let first = manager.openGatewayWindow(for: .profile(profile.id))
+            let second = manager.openGatewayWindow(for: .profile(profile.id))
+            // Let both production entrypoints reach the held connection owner.
+            await Task.yield()
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 0)
+            switch action {
+            case "close": manager.close()
+            case "hide": manager.hideWindows()
+            default: break
+            }
+            release.signal()
+            #expect(await blockedFleet.value)
+            await first.value
+            await second.value
+
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == (action == "reuse" ? 1 : 0))
+            #expect(manager.hasVisibleWindows == (action == "reuse"))
+        }
     }
 
     @Test func `initial draft populates an empty composer without replacing user text`() {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             initialDraft: "Wake up, my friend!",
-            presentation: .window,
             transport: TestTransport())
 
         #expect(controller._testDraft == "Wake up, my friend!")
@@ -218,28 +289,13 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
-    @Test func `controller explicit agent wins and nil falls back to cached default`() throws {
-        let cachedIdentity = try #require(OpenClawChatSessionRoutingIdentity(
-            scope: "global",
-            mainSessionKey: "main",
-            defaultAgentID: "main"))
-        let explicit = WebChatSwiftUIWindowController(
-            sessionKey: "global",
-            agentID: " Work ",
-            presentation: .window,
-            cachedRoutingIdentity: cachedIdentity,
-            store: nil)
-        let fallback = WebChatSwiftUIWindowController(
-            sessionKey: "global",
-            agentID: nil,
-            presentation: .window,
-            cachedRoutingIdentity: cachedIdentity,
-            store: nil)
-
-        #expect(explicit._testActiveAgentID == "work")
-        #expect(fallback._testActiveAgentID == "main")
-        explicit.close()
-        fallback.close()
+    @Test func `controller explicit agent wins and nil falls back to cached default`() {
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: " Work ", cachedDefaultAgentID: "main") == "work")
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: nil, cachedDefaultAgentID: "main") == "main")
+        #expect(WebChatSwiftUIWindowController.effectiveAgentID(
+            explicitAgentID: "  ", cachedDefaultAgentID: " MAIN ") == "main")
     }
 
     @Test func `max and Ultra thinking preferences survive reopen`() throws {
@@ -274,5 +330,18 @@ struct WebChatSwiftUISmokeTests {
 
         #expect(WebChatSwiftUIWindowController.persistedVerboseLevel(defaults: defaults) == nil)
         #expect(defaults.object(forKey: "openclaw.webchat.verboseLevel") == nil)
+    }
+}
+
+extension MacGatewayConnectionFleet {
+    fileprivate func holdForPendingWindowRegression(
+        entered: AsyncStream<Void>.Continuation,
+        release: DispatchSemaphore) -> Bool
+    {
+        // Hold the actual fleet admission boundary so close runs after show
+        // starts but before it can acquire its connection.
+        entered.yield()
+        entered.finish()
+        return release.wait(timeout: .now() + 5) == .success
     }
 }

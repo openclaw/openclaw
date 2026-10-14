@@ -1,132 +1,68 @@
-// Coverage for waiting on completion-required async tool tasks.
-import { describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  completeTaskRunByRunId,
-  createRunningTaskRun,
-} from "../../../tasks/detached-task-runtime.js";
-import type { TaskRecord } from "../../../tasks/runtime-internal.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
+  clearGeneratedMediaTaskActivity,
+  createMediaGenerationOperation,
+  updateMediaGenerationOperation,
+} from "../../media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type AsyncStartedToolMeta,
-} from "./attempt.async-tasks.js";
+} from "./attempt-async-tasks.js";
 
-function requireCreatedTask(task: TaskRecord | null): TaskRecord {
-  // Task registry creation returns null for invalid task shapes; tests require
-  // a concrete active record before waiting.
+const sessionKey = "agent:main:cron:daily-media:run:run-123";
+function startTask(kind = "image", requesterSessionKey = sessionKey) {
+  const runId = `tool:${kind}_generate:run-123`;
+  const task = createMediaGenerationOperation({
+    taskId: runId,
+    runId,
+    taskKind: `${kind}_generation`,
+    sourceId: `${kind}_generate:test`,
+    requesterSessionKey,
+    status: "running",
+    createdAt: 1,
+    startedAt: 1,
+    lastEventAt: 1,
+  });
   if (!task) {
-    throw new Error("expected test task to be created");
+    throw new Error("expected native media task");
   }
   return task;
 }
+function completeTask(runId: string, endedAt: number) {
+  updateMediaGenerationOperation(runId, {
+    status: "succeeded",
+    endedAt,
+    lastEventAt: endedAt,
+    terminalSummary: "Generated media.",
+  });
+  clearGeneratedMediaTaskActivity(runId);
+}
+function wait(params: Partial<Parameters<typeof waitForCompletionRequiredAsyncTasks>[0]>) {
+  return waitForCompletionRequiredAsyncTasks({
+    sessionKey,
+    getToolMetas: () => [],
+    getDeadlineAtMs: () => undefined,
+    now: () => 0,
+    pollIntervalMs: 500,
+    ...params,
+  });
+}
 
 describe("waitForCompletionRequiredAsyncTasks", () => {
-  it("waits for async task ids discovered during the attempt", async () => {
-    // Tool metadata is the primary source for async task ids produced during
-    // the current attempt.
-    resetTaskRegistryForTests();
-    const task = requireCreatedTask(
-      createRunningTaskRun({
-        runtime: "cli",
-        taskKind: "image_generation",
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-        ownerKey: "agent:main:cron:daily-media:run:run-123",
-        scopeKind: "session",
-        runId: "tool:image_generate:run-123",
-        task: "daily image",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        startedAt: 1,
-        lastEventAt: 1,
-      }),
-    );
-    const metas: AsyncStartedToolMeta[] = [
-      {
-        toolName: "image_generate",
-        asyncStarted: true,
-        asyncTaskRunId: "tool:image_generate:run-123",
-        asyncTaskId: task.taskId,
-      },
-    ];
-
-    const waitPromise = waitForCompletionRequiredAsyncTasks({
-      getToolMetas: () => metas,
-      deadlineAtMs: Date.now() + 10_000,
-      pollIntervalMs: 1,
-    });
-    completeTaskRunByRunId({
-      runId: "tool:image_generate:run-123",
-      runtime: "cli",
-      sessionKey: "agent:main:cron:daily-media:run:run-123",
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Generated 1 image",
-      terminalSummary: "Generated 1 image.",
-    });
-
-    await expect(waitPromise).resolves.toMatchObject({
-      waitedRunIds: ["tool:image_generate:run-123"],
-      timedOutRunIds: [],
-    });
-  });
-
-  it("requires a wait when the cron run has an active tracked media task", () => {
-    resetTaskRegistryForTests();
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "image_generation",
-      sourceId: "image_generate:openai",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:image_generate:run-123",
-      task: "daily image",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
-
-    expect(
-      requiresCompletionRequiredAsyncTaskWait({
-        sessionKey,
-        toolMetas: [],
-      }),
-    ).toBe(true);
-  });
+  beforeEach(() => resetGeneratedMediaTaskActivityForTests());
+  afterEach(() => resetGeneratedMediaTaskActivityForTests());
 
   it("skips media task waiting after sessions_yield pauses the attempt", () => {
-    resetTaskRegistryForTests();
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "image_generation",
-      sourceId: "image_generate:openai",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:image_generate:run-123",
-      task: "daily image",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
-
+    const task = startTask();
     expect(
       shouldWaitForCompletionRequiredAsyncTasks({
         sessionKey,
-        toolMetas: [
-          {
-            toolName: "image_generate",
-            asyncStarted: true,
-            asyncTaskRunId: "tool:image_generate:run-123",
-          },
-        ],
+        toolMetas: [{ asyncStarted: true, asyncTaskRunId: task.runId }],
         yieldDetected: true,
       }),
     ).toBe(false);
@@ -139,248 +75,121 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
     ).toBe(true);
   });
 
-  it("waits for active cron media tasks from the task registry", async () => {
-    // Cron media tools may start tasks before metadata is flushed, so the
-    // registry is also consulted by session key.
-    resetTaskRegistryForTests();
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "image_generation",
-      sourceId: "image_generate:openai",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:image_generate:run-123",
-      task: "daily image",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
-
-    const waitPromise = waitForCompletionRequiredAsyncTasks({
-      getToolMetas: () => [],
-      sessionKey,
-      deadlineAtMs: Date.now() + 10_000,
-      pollIntervalMs: 1,
-    });
-    completeTaskRunByRunId({
-      runId: "tool:image_generate:run-123",
-      runtime: "cli",
-      sessionKey,
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Generated 1 image",
-      terminalSummary: "Generated 1 image.",
-    });
-
-    await expect(waitPromise).resolves.toMatchObject({
-      waitedRunIds: ["tool:image_generate:run-123"],
+  it("waits for active cron tasks discovered from native media operations", async () => {
+    const task = startTask();
+    await expect(wait({ sleep: async () => completeTask(task.taskId, 2) })).resolves.toMatchObject({
+      waitedRunIds: [task.runId],
       timedOutRunIds: [],
+      terminalTasks: [
+        { taskId: task.taskId, status: "succeeded", terminalSummary: "Generated media." },
+      ],
     });
   });
 
-  it("waits for active cron video tasks from the task registry", async () => {
-    resetTaskRegistryForTests();
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "video_generation",
-      sourceId: "video_generate:fal",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:video_generate:run-123",
-      task: "daily video",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
-
-    const waitPromise = waitForCompletionRequiredAsyncTasks({
-      getToolMetas: () => [],
-      sessionKey,
-      deadlineAtMs: Date.now() + 10_000,
-      pollIntervalMs: 1,
-    });
-    completeTaskRunByRunId({
-      runId: "tool:video_generate:run-123",
-      runtime: "cli",
-      sessionKey,
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Generated 1 video",
-      terminalSummary: "Generated 1 video.",
-    });
-
-    await expect(waitPromise).resolves.toMatchObject({
-      waitedRunIds: ["tool:video_generate:run-123"],
+  it("ignores media operations owned by another requester", async () => {
+    startTask("image", "agent:main:parent");
+    expect(requiresCompletionRequiredAsyncTaskWait({ sessionKey, toolMetas: [] })).toBe(false);
+    await expect(wait({ getDeadlineAtMs: () => 0 })).resolves.toEqual({
+      waitedRunIds: [],
       timedOutRunIds: [],
+      terminalTasks: [],
     });
   });
 
   it("waits for async task ids discovered after an earlier async completion", async () => {
-    resetTaskRegistryForTests();
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    const imageTask = requireCreatedTask(
-      createRunningTaskRun({
-        runtime: "cli",
-        taskKind: "image_generation",
-        sourceId: "image_generate:openai",
-        requesterSessionKey: sessionKey,
-        ownerKey: sessionKey,
-        scopeKind: "session",
-        runId: "tool:image_generate:run-123",
-        task: "daily image",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        startedAt: 1,
-        lastEventAt: 1,
-      }),
-    );
+    const first = startTask();
     const metas: AsyncStartedToolMeta[] = [
       {
-        toolName: "image_generate",
         asyncStarted: true,
-        asyncTaskRunId: "tool:image_generate:run-123",
-        asyncTaskId: imageTask.taskId,
+        asyncTaskRunId: first.runId,
+        asyncTaskId: first.taskId,
       },
     ];
-    let now = 1;
-    let pollCount = 0;
-
+    // Registry admission prunes completed records against the real epoch.
+    const startedAt = Date.now();
+    let now = startedAt;
+    let polls = 0;
     await expect(
-      waitForCompletionRequiredAsyncTasks({
+      wait({
+        sessionKey: undefined,
         getToolMetas: () => metas,
-        deadlineAtMs: 20,
+        getDeadlineAtMs: () => startedAt + 19,
         now: () => now,
+        pollIntervalMs: 2,
         sleep: async (ms) => {
-          pollCount += 1;
           now += ms;
-          if (pollCount === 1) {
-            completeTaskRunByRunId({
-              runId: "tool:image_generate:run-123",
-              runtime: "cli",
-              sessionKey,
-              endedAt: now,
-              lastEventAt: now,
-              progressSummary: "Generated 1 image",
-              terminalSummary: "Generated 1 image.",
-            });
-            const musicTask = requireCreatedTask(
-              createRunningTaskRun({
-                runtime: "cli",
-                taskKind: "music_generation",
-                sourceId: "music_generate:fal",
-                requesterSessionKey: sessionKey,
-                ownerKey: sessionKey,
-                scopeKind: "session",
-                runId: "tool:music_generate:run-456",
-                task: "daily track",
-                deliveryStatus: "not_applicable",
-                notifyPolicy: "silent",
-                startedAt: now,
-                lastEventAt: now,
-              }),
-            );
+          if (++polls === 1) {
+            completeTask(first.taskId, now);
+            const next = startTask("music");
             metas.push({
-              toolName: "music_generate",
               asyncStarted: true,
-              asyncTaskRunId: "tool:music_generate:run-456",
-              asyncTaskId: musicTask.taskId,
+              asyncTaskRunId: next.runId,
+              asyncTaskId: next.taskId,
             });
-          } else if (pollCount === 2) {
-            completeTaskRunByRunId({
-              runId: "tool:music_generate:run-456",
-              runtime: "cli",
-              sessionKey,
-              endedAt: now,
-              lastEventAt: now,
-              progressSummary: "Generated music",
-              terminalSummary: "Generated music.",
-            });
+          } else {
+            completeTask("tool:music_generate:run-123", now);
           }
         },
-        pollIntervalMs: 2,
       }),
     ).resolves.toMatchObject({
-      waitedRunIds: ["tool:image_generate:run-123", "tool:music_generate:run-456"],
+      waitedRunIds: [first.runId, "tool:music_generate:run-123"],
       timedOutRunIds: [],
+      terminalTasks: [
+        { taskId: first.taskId, status: "succeeded", terminalSummary: "Generated media." },
+        { taskId: "tool:music_generate:run-123", status: "succeeded" },
+      ],
     });
+    expect(polls).toBe(2);
   });
 
-  it("reports tasks that do not finish before the deadline", async () => {
-    resetTaskRegistryForTests();
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "music_generation",
-      sourceId: "music_generate:test",
-      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-      ownerKey: "agent:main:cron:daily-media:run:run-123",
-      scopeKind: "session",
-      runId: "tool:music_generate:run-123",
-      task: "daily track",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
-    let now = 1;
-
+  it("rereads paused and resumed deadlines beyond the former finite sentinel", async () => {
+    const task = startTask();
+    const startedAt = MAX_TIMER_TIMEOUT_MS + 1;
+    let now = startedAt;
+    let deadlineAtMs: number | undefined = now + 750;
+    const expectedSleeps = [500, 500, 500, 250];
+    let polls = 0;
+    const getDeadlineAtMs = vi.fn(() => deadlineAtMs);
     await expect(
-      waitForCompletionRequiredAsyncTasks({
-        getToolMetas: () => [
-          {
-            toolName: "music_generate",
-            asyncStarted: true,
-            asyncTaskRunId: "tool:music_generate:run-123",
-          },
-        ],
-        deadlineAtMs: 5,
+      wait({
+        getDeadlineAtMs,
         now: () => now,
         sleep: async (ms) => {
+          expect(ms).toBe(expectedSleeps[polls]);
           now += ms;
+          polls += 1;
+          if (polls === 1) {
+            deadlineAtMs = undefined;
+          } else if (polls === 3) {
+            deadlineAtMs = now + 250;
+          }
         },
-        pollIntervalMs: 2,
       }),
-    ).resolves.toMatchObject({
-      waitedRunIds: ["tool:music_generate:run-123"],
-      timedOutRunIds: ["tool:music_generate:run-123"],
-    });
+    ).resolves.toMatchObject({ waitedRunIds: [task.runId], timedOutRunIds: [task.runId] });
+    expect(now).toBe(startedAt + 1_750);
+    expect(polls).toBe(expectedSleeps.length);
+    expect(getDeadlineAtMs).toHaveBeenCalledTimes(5);
   });
 
-  it("stops waiting when the run abort signal fires", async () => {
-    resetTaskRegistryForTests();
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "music_generation",
-      sourceId: "music_generate:test",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:music_generate:run-123",
-      task: "daily track",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
+  it("stops an unlimited in-flight task poll promptly on abort", async () => {
+    startTask();
     const controller = new AbortController();
-
-    await expect(
-      waitForCompletionRequiredAsyncTasks({
-        getToolMetas: () => [],
-        sessionKey,
-        deadlineAtMs: Date.now() + 10_000,
-        abortSignal: controller.signal,
-        sleep: async () => {
-          controller.abort();
-        },
-        pollIntervalMs: 2,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    const reason = new Error("run cancelled during task poll");
+    const sleeping = createDeferred();
+    try {
+      await expect(
+        wait({
+          abortSignal: controller.signal,
+          sleep: async (ms) => {
+            expect(ms).toBe(500);
+            controller.abort(reason);
+            await sleeping.promise;
+          },
+        }),
+      ).rejects.toMatchObject({ name: "AbortError", cause: reason });
+    } finally {
+      sleeping.resolve();
+      await sleeping.promise;
+    }
   });
 });

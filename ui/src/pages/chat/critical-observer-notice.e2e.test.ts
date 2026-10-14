@@ -1,349 +1,130 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
-  canRunPlaywrightChromium,
-  controlUiSessionPath,
-  controlUiSessionUrl,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
+  activateSelfRemovingControl,
+  waitForPatch,
+} from "../../e2e/session-management.test-support.ts";
+import { controlUiSessionUrl, installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../../test-helpers/control-ui-session-fixtures.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/critical-observer-notice",
-);
+const suite = createControlUiE2eSuite({ name: "Control UI observer notification policy" });
 const selectedSessionKey = "agent:main:main";
-const backgroundSessionKey = "agent:main:other";
-const baseTime = Date.parse("2026-07-25T18:00:00.000Z");
+const backgroundSessionKey = "agent:main:verification";
+const runId = "verification-run";
+const baseTime = Date.parse("2026-09-18T05:00:00.000Z");
 
-let server: ControlUiE2eServer;
-let browser: Browser;
-
-function sessionsListResponse() {
-  return {
-    count: 2,
-    defaults: {
-      contextTokens: null,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-    },
-    path: "",
-    sessions: [
-      {
-        key: selectedSessionKey,
-        kind: "direct",
-        label: "Main session",
-        updatedAt: baseTime,
-      },
-      {
-        key: backgroundSessionKey,
-        kind: "direct",
-        label: "Background investigation",
-        updatedAt: baseTime - 1_000,
-      },
-    ],
-    ts: baseTime,
-  };
-}
-
-function observerDigest(params: {
-  sessionKey: string;
-  health: "on-track" | "stuck";
-  revision: number;
-  headline: string;
-}) {
-  return {
-    ...params,
-    runId: `observer-run-${params.sessionKey}`,
-    updatedAt: baseTime + params.revision,
-  };
-}
-
-async function waitForToastUpdate(page: Page): Promise<void> {
-  await page.locator("openclaw-toast-host").evaluate(async (element) => {
-    await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
-  });
-}
-
-describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close().catch(() => {});
-      throw error;
-    }
-  });
-
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
-  });
-
-  it("announces critical background sessions, navigates, and dedupes after dismissal", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    page.setDefaultTimeout(10_000);
-    try {
-      const gateway = await installMockGateway(page, {
-        historyMessages: [
+suite.define(() => {
+  it("keeps background observer assessments in the sidebar without interrupting chat or replacing Undo", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
+      async ({ page }) => {
+        const main = sessionRow(selectedSessionKey, "Main", baseTime);
+        const background = sessionRow(
+          backgroundSessionKey,
+          "Background verification",
+          baseTime - 1,
           {
-            content: [{ type: "text", text: "Selected session A is ready." }],
-            role: "assistant",
-            timestamp: baseTime,
+            hasActiveRun: true,
+            activeRunIds: [runId],
+            status: "running",
           },
-        ],
-        methodResponses: {
-          "sessions.list": sessionsListResponse(),
-        },
-        sessionKey: selectedSessionKey,
-      });
-
-      const response = await page.goto(controlUiSessionUrl(server.baseUrl, selectedSessionKey));
-      expect(response?.status()).toBe(200);
-      await page.getByText("Selected session A is ready.").waitFor({ state: "visible" });
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedSessionKey));
-
-      const toast = page.locator(".app-toast");
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
-          sessionKey: backgroundSessionKey,
-          health: "on-track",
-          headline: "Background session is healthy",
-          revision: 1,
-        }),
-      );
-      await waitForToastUpdate(page);
-      expect(await toast.count()).toBe(0);
-
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
+        );
+        const archived = sessionRow("agent:main:completed", "Completed work", baseTime - 2);
+        const gateway = await installMockGateway(page, {
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Your current conversation stays uninterrupted." }],
+            },
+          ],
+          sessions: [main, background, archived],
+          sessionArchiveFiltering: true,
           sessionKey: selectedSessionKey,
-          health: "stuck",
-          headline: "Selected session needs attention",
-          revision: 1,
-        }),
-      );
-      await waitForToastUpdate(page);
-      expect(await toast.count()).toBe(0);
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        await page.getByText("Your current conversation stays uninterrupted.").waitFor();
+        const currentUrl = page.url();
+        const row = page.locator(
+          `.sidebar-recent-session[data-session-key="${backgroundSessionKey}"]`,
+        );
+        await row.waitFor({ state: "visible" });
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: backgroundSessionKey },
+        });
 
-      const firstHeadline = "Background verification is stuck";
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
-          sessionKey: backgroundSessionKey,
-          health: "stuck",
-          headline: firstHeadline,
-          revision: 2,
-        }),
-      );
-      await toast.waitFor({ state: "visible" });
-      expect(await toast.locator(".app-toast__message").textContent()).toContain(firstHeadline);
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "01-critical-background-session.png"),
-      });
+        // Record transient notices too, so an auto-dismiss cannot turn an unwanted alert into a pass.
+        const observerNotices = await page.evaluateHandle(() => {
+          const messages: string[] = [];
+          const host = document.querySelector("openclaw-toast-host");
+          if (!host) {
+            throw new Error("Shared toast host is unavailable");
+          }
+          const observer = new MutationObserver(() => {
+            const message = host.querySelector(".app-toast__message")?.textContent;
+            if (message) {
+              messages.push(message);
+            }
+          });
+          observer.observe(host, { childList: true, subtree: true, characterData: true });
+          return messages;
+        });
 
-      await toast.locator(".app-toast__action").click();
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath(backgroundSessionKey));
-      expect(await toast.count()).toBe(0);
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "02-after-open-thread-navigation.png"),
-      });
+        const emit = async (
+          health: "stuck" | "waiting-on-user" | "on-track",
+          revision: number,
+          headline: string,
+        ) => {
+          await gateway.emitGatewayEvent("session.observer", {
+            sessionKey: backgroundSessionKey,
+            agentId: "main",
+            sessionId: background.sessionId,
+            runId,
+            health,
+            revision,
+            headline,
+            updatedAt: baseTime + revision,
+          });
+          await expect.poll(() => row.textContent()).toContain(headline);
+          // Include the old lazy notification chunk in the baseline observation.
+          await page.waitForLoadState("networkidle");
+        };
 
-      await page.locator("a.nav-item--home").click();
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath(selectedSessionKey));
+        await emit("stuck", 1, "Verification is waiting for a repair");
+        await page.screenshot({ path: path.join(suite.artifactDir, "observer-assessment.png") });
+        expect(await page.locator(".app-toast").count()).toBe(0);
+        await emit("waiting-on-user", 2, "A decision is needed in the background session");
+        expect(await page.locator(".app-toast").count()).toBe(0);
+        expect(await observerNotices.jsonValue()).toEqual([]);
+        expect(page.url()).toBe(currentUrl);
 
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
-          sessionKey: backgroundSessionKey,
-          health: "on-track",
-          headline: "Background verification recovered",
-          revision: 3,
-        }),
-      );
-      await waitForToastUpdate(page);
-      expect(await toast.count()).toBe(0);
-
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
-          sessionKey: backgroundSessionKey,
-          health: "stuck",
-          headline: "Background verification is stuck again",
-          revision: 4,
-        }),
-      );
-      await toast.waitFor({ state: "visible" });
-      await toast.locator(".app-toast__dismiss").click();
-      expect(await toast.count()).toBe(0);
-
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
-          sessionKey: backgroundSessionKey,
-          health: "stuck",
-          headline: "Repeated stuck update remains deduped",
-          revision: 5,
-        }),
-      );
-      await waitForToastUpdate(page);
-      expect(await toast.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it.each([
-    {
-      name: "suppresses the configured selected-agent foreground alias",
-      sessionKey: "agent:work:primary",
-      visible: false,
-    },
-    {
-      name: "suppresses the canonical selected-agent global foreground",
-      sessionKey: "global",
-      visible: false,
-    },
-    {
-      name: "announces a genuine selected-agent background session",
-      sessionKey: "agent:work:investigation",
-      visible: true,
-    },
-    {
-      name: "announces a genuine other-agent configured-main session",
-      sessionKey: "agent:other:primary",
-      visible: true,
-    },
-  ])("mocked-Gateway Chromium configured-global alias: $name", async (testCase) => {
-    const historyMessages = [
-      {
-        content: [{ type: "text", text: "Configured global foreground is ready." }],
-        role: "assistant",
-        timestamp: baseTime,
+        const archiveRow = page.locator(
+          `.sidebar-recent-session[data-session-key="${archived.key}"]`,
+        );
+        await archiveRow.hover();
+        await archiveRow.click({ button: "right" });
+        await activateSelfRemovingControl(
+          page.getByRole("menuitem", { name: "Archive session", exact: true }),
+        );
+        await waitForPatch(
+          gateway,
+          (params) => params.key === archived.key && params.archived === true,
+        );
+        const toast = page.locator(".app-toast");
+        const undo = toast.getByRole("button", { name: "Undo", exact: true });
+        await undo.waitFor({ state: "visible" });
+        await undo.focus();
+        await emit("stuck", 3, "Background verification still needs a repair");
+        expect(await toast.textContent()).toContain("Session archived");
+        await page.screenshot({ path: path.join(suite.artifactDir, "undo-preserved.png") });
+        await undo.click();
+        await waitForPatch(
+          gateway,
+          (params) => params.key === archived.key && params.archived === false,
+        );
+        await archiveRow.waitFor({ state: "visible" });
+        expect(page.url()).toBe(currentUrl);
       },
-    ];
-    const agentsList = {
-      agents: [
-        { id: "work", identity: { name: "Work" }, name: "Work" },
-        { id: "other", identity: { name: "Other" }, name: "Other" },
-      ],
-      defaultId: "work",
-      mainKey: "primary",
-      scope: "global",
-    };
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    page.setDefaultTimeout(10_000);
-    try {
-      const gateway = await installMockGateway(page, {
-        assistantAgentId: "work",
-        defaultAgentId: "work",
-        historyMessages,
-        methodResponses: {
-          "agents.list": agentsList,
-          "chat.startup": {
-            agentsList,
-            messages: historyMessages,
-            metadata: {
-              models: [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
-            },
-            sessionId: "configured-global-observer-session",
-            thinkingLevel: null,
-          },
-          "sessions.list": {
-            count: 3,
-            defaults: {
-              contextTokens: null,
-              model: "gpt-5.5",
-              modelProvider: "openai",
-            },
-            path: "",
-            sessions: [
-              {
-                key: "global",
-                kind: "global",
-                label: "Configured global foreground",
-                updatedAt: baseTime,
-              },
-              {
-                key: "agent:work:investigation",
-                kind: "direct",
-                label: "Selected-agent background investigation",
-                updatedAt: baseTime - 1_000,
-              },
-              {
-                key: "agent:other:primary",
-                kind: "direct",
-                label: "Other-agent configured main",
-                updatedAt: baseTime - 2_000,
-              },
-            ],
-            ts: baseTime,
-          },
-        },
-        sessionKey: "global",
-      });
-
-      const response = await page.goto(`${server.baseUrl}chat?session=global`);
-      expect(response?.status()).toBe(200);
-      await page.getByText("Configured global foreground is ready.").waitFor({ state: "visible" });
-      expect(new URL(page.url()).searchParams.get("session")).toBe("global");
-      expect(await gateway.getRequests("connect")).toHaveLength(1);
-
-      const headline = `Configured-global observer notice for ${testCase.sessionKey}`;
-      await gateway.emitGatewayEvent(
-        "session.observer",
-        observerDigest({
-          sessionKey: testCase.sessionKey,
-          health: "stuck",
-          headline,
-          revision: 1,
-        }),
-      );
-
-      const toast = page.locator(".app-toast");
-      if (testCase.visible) {
-        await toast.waitFor({ state: "visible" });
-        expect(await toast.locator(".app-toast__message").textContent()).toContain(headline);
-      } else {
-        await waitForToastUpdate(page);
-        expect(await toast.count()).toBe(0);
-      }
-    } finally {
-      await context.close();
-    }
+    );
   });
 });

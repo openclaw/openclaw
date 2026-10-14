@@ -1,6 +1,8 @@
 // Argv invocation tests cover CLI argv normalization before command dispatch.
+import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { getCommanderCommandPath } from "./program/commander-parse-facts.js";
 
 describe("argv-invocation", () => {
   it("resolves root help and empty command path", () => {
@@ -25,38 +27,37 @@ describe("argv-invocation", () => {
     });
   });
 
-  it("consumes agent parent option values before the exec subcommand", () => {
-    expect(
-      resolveCliArgvInvocation([
-        "node",
-        "openclaw",
-        "agent",
-        "--model",
-        "openai/gpt-5.6-sol",
-        "exec",
-        "fix it",
-      ]).commandPath,
-    ).toEqual(["agent", "exec"]);
+  it.each([
+    ["skills", ["--agent", "verify"], ["skills"]],
+
+    ["skills", ["--", "verify"], ["skills", "verify"]],
+  ])("matches Commander for %s %j", async (rootName, args, expectedPath) => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    const root = program.command(rootName);
+    if (rootName === "config") {
+      root.option("--section <section>");
+    } else {
+      root.option("--agent <id>").option("--json");
+    }
+    const child = root.command(rootName === "config" ? "get" : "verify");
+    let parsedPath: string[] = [];
+    for (const command of [root, child]) {
+      command.action(() => {
+        parsedPath = getCommanderCommandPath(command);
+      });
+    }
+    const argv = ["node", "openclaw", rootName, ...args];
+
+    await program.parseAsync(argv);
+
+    expect(parsedPath).toEqual(expectedPath);
+    expect(resolveCliArgvInvocation(argv).commandPath).toEqual(parsedPath);
   });
 
-  it("does not treat an exec-valued parent option as the subcommand", () => {
-    expect(
-      resolveCliArgvInvocation(["node", "openclaw", "agent", "--message", "exec"]).commandPath,
-    ).toEqual(["agent"]);
-  });
-
-  it("consumes root options between the agent parent and exec", () => {
-    expect(
-      resolveCliArgvInvocation([
-        "node",
-        "openclaw",
-        "agent",
-        "--no-color",
-        "--model",
-        "openai/gpt-5.6-sol",
-        "exec",
-        "fix it",
-      ]).commandPath,
-    ).toEqual(["agent", "exec"]);
-  });
+  it.each([["help", "update", "cleanup"]])(
+    "recognizes update help without promoting scoped version flags: %j",
+    (...args) => {
+      expect(resolveCliArgvInvocation(["node", "openclaw", ...args]).hasHelpOrVersion).toBe(true);
+    },
+  );
 });

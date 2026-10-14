@@ -1,27 +1,8 @@
-// Discord plugin module implements gateway lifecycle behavior.
 type GatewayTimer = NodeJS.Timeout;
 
 export class GatewayHeartbeatTimers {
   heartbeatInterval?: GatewayTimer;
   firstHeartbeatTimeout?: GatewayTimer;
-
-  private scheduleHeartbeatCycle(params: {
-    intervalMs: number;
-    isAcked: () => boolean;
-    onAckTimeout: () => void;
-    onHeartbeat: () => void;
-  }): void {
-    this.heartbeatInterval = setTimeout(() => {
-      this.heartbeatInterval = undefined;
-      if (!params.isAcked()) {
-        params.onAckTimeout();
-        return;
-      }
-      params.onHeartbeat();
-      this.scheduleHeartbeatCycle(params);
-    }, params.intervalMs);
-    this.heartbeatInterval.unref?.();
-  }
 
   start(params: {
     intervalMs: number;
@@ -31,12 +12,24 @@ export class GatewayHeartbeatTimers {
     random?: () => number;
   }): void {
     this.stop();
+    const scheduleHeartbeatCycle = () => {
+      this.heartbeatInterval = setTimeout(() => {
+        this.heartbeatInterval = undefined;
+        if (!params.isAcked()) {
+          params.onAckTimeout();
+          return;
+        }
+        params.onHeartbeat();
+        scheduleHeartbeatCycle();
+      }, params.intervalMs);
+      this.heartbeatInterval.unref?.();
+    };
     const random = params.random ?? Math.random;
     this.firstHeartbeatTimeout = setTimeout(
       () => {
         this.firstHeartbeatTimeout = undefined;
         params.onHeartbeat();
-        this.scheduleHeartbeatCycle(params);
+        scheduleHeartbeatCycle();
       },
       Math.max(0, params.intervalMs * random()),
     );
@@ -44,13 +37,12 @@ export class GatewayHeartbeatTimers {
   }
 
   stop(): void {
-    if (this.heartbeatInterval) {
-      clearTimeout(this.heartbeatInterval);
-      this.heartbeatInterval = undefined;
-    }
-    if (this.firstHeartbeatTimeout) {
-      clearTimeout(this.firstHeartbeatTimeout);
-      this.firstHeartbeatTimeout = undefined;
+    for (const key of ["heartbeatInterval", "firstHeartbeatTimeout"] as const) {
+      const timer = this[key];
+      if (timer) {
+        clearTimeout(timer);
+        this[key] = undefined;
+      }
     }
   }
 }

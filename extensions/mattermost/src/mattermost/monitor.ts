@@ -1,7 +1,6 @@
-// Mattermost plugin module orchestrates monitor setup, ingress, and teardown.
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
@@ -12,7 +11,6 @@ import {
   createMattermostClient,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
-  type MattermostPost,
   type MattermostUser,
 } from "./client.js";
 import {
@@ -21,9 +19,11 @@ import {
   setInteractionCallbackUrl,
   setInteractionSecret,
 } from "./interactions.js";
+import { normalizeMention } from "./monitor-helpers.js";
 import {
   createMattermostIngressMonitor,
   type MattermostIngressLifecycle,
+  type MattermostIngressPost,
 } from "./monitor-ingress.js";
 import { registerMattermostInteractions } from "./monitor-interactions.js";
 import { createMattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
@@ -60,6 +60,17 @@ type MonitorMattermostOpts = {
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
+function publishMattermostRecoveringStatus(
+  statusSink: MonitorMattermostOpts["statusSink"],
+  error: unknown,
+): void {
+  statusSink?.({
+    lastError: String(error),
+    connected: false,
+    lifecycle: "recovering",
+  });
+}
+
 export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
   const core = getMattermostRuntime();
   const runtime =
@@ -72,6 +83,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
     } satisfies RuntimeEnv);
   const cfg = (opts.config ?? core.config.current()) as OpenClawConfig;
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    core.channel.debounce.resolveInboundDebounceMs({
+      cfg: readConfig(),
+      channel: "mattermost",
+    });
   const account = resolveMattermostAccount({ cfg, accountId: opts.accountId });
   const pairing = createChannelPairingController({
     core,
@@ -94,7 +111,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
 
   // Wait for the Mattermost API to accept our bot token before proceeding.
@@ -109,10 +126,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     {
       abortSignal: opts.abortSignal,
       jitterRatio: 0.2,
-      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      reconnectAfterClose: false,
       onError: (err) => {
         runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
-        opts.statusSink?.({ lastError: String(err), connected: false });
+        publishMattermostRecoveringStatus(opts.statusSink, err);
       },
       onReconnect: (delayMs) => {
         runtime.log?.(`mattermost: API not accessible, retrying in ${Math.round(delayMs / 1000)}s`);
@@ -125,15 +142,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = normalizeOptionalString(botUser.username);
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
-  await registerMattermostMonitorSlashCommands({
-    client,
-    cfg,
-    runtime,
-    account,
-    baseUrl,
-    botUserId,
-  });
-  const slashEnabled = getSlashCommandState(account.accountId) != null;
 
   // Derive a stable HMAC secret so CLI and gateway validate the same callbacks.
   setInteractionSecret(account.accountId, botToken);
@@ -173,7 +181,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const mediaMaxBytes =
     resolveChannelMediaMaxBytes({
       cfg,
-      resolveChannelLimitMb: () => undefined,
+      resolveChannelLimitMb: () => account.config.mediaMaxMb,
       accountId: account.accountId,
     }) ?? 8 * 1024 * 1024;
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -219,69 +227,91 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       allowedInteractionSourceIps.length > 0 ? allowedInteractionSourceIps : ["127.0.0.1", "::1"],
     handleModelPickerInteraction: createMattermostModelPickerInteractionHandler(monitor),
   });
+  try {
+    await registerMattermostMonitorSlashCommands({
+      client,
+      cfg,
+      runtime,
+      account,
+      baseUrl,
+      botUserId,
+    });
+  } catch (error) {
+    // The callback route must exist before remote slash setup, but not outlive failed startup.
+    unregisterInteractions();
+    throw error;
+  }
+  const slashEnabled = getSlashCommandState(account.accountId) != null;
   const handlePost = createMattermostPostHandler(monitor);
   const handleReactionEvent = createMattermostReactionHandler(monitor);
 
   const debouncer = core.channel.debounce.createInboundDebouncer<{
-    post: MattermostPost;
+    post: MattermostIngressPost;
     payload: MattermostEventPayload;
     turnAdoptionLifecycle: MattermostIngressLifecycle;
   }>({
-    debounceMs: core.channel.debounce.resolveInboundDebounceMs({
-      cfg,
-      channel: "mattermost",
-    }),
+    debounceMs: resolveDebounceMs(),
+    resolveDebounceMs,
     buildKey: (entry) => {
       const channelId =
         entry.post.channel_id ??
         entry.payload.data?.channel_id ??
         entry.payload.broadcast?.channel_id;
-      if (!channelId) {
+      if (!channelId || !entry.post.user_id) {
         return null;
       }
       const threadId = normalizeOptionalString(entry.post.root_id);
-      return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}`;
+      // Cross-sender merging would apply only the final post's identity during access checks.
+      return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}:${entry.post.user_id}`;
     },
     shouldDebounce: (entry) => {
-      if (entry.post.file_ids?.length) {
+      // Typed posts are dropped downstream; batching would let their text or type affect a user post.
+      if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
         return false;
       }
       const text = normalizeOptionalString(entry.post.message) ?? "";
-      return Boolean(text) && !core.channel.commands.isControlCommandMessage(text, cfg);
+      // Same mention-stripped view as the post handler, so "@bot /new" is never batched.
+      return (
+        Boolean(text) &&
+        !core.channel.commands.isControlCommandMessage(normalizeMention(text, botUsername), cfg)
+      );
     },
-    onFlush: async (entries) => {
+    onFlush: (entries, createFlush) => {
       const last = entries.at(-1);
-      if (!last) {
-        return;
-      }
       const { lifecycle, settle } = fanInChannelIngressLifecycles(
         entries.map((entry) => entry.turnAdoptionLifecycle),
       );
-      try {
-        if (entries.length === 1) {
-          await handlePost(last.post, last.payload, lifecycle);
-          await settle();
-          return;
-        }
-        const mergedPost: MattermostPost = {
-          ...last.post,
-          message: entries
-            .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
-            .filter(Boolean)
-            .join("\n"),
-          file_ids: [],
-        };
-        await handlePost(
-          mergedPost,
-          last.payload,
-          lifecycle,
-          entries.map((entry) => entry.post.id),
-        );
-        await settle();
-      } catch (error) {
-        await lifecycle?.onAbandoned();
-        throw error;
-      }
+      return createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          if (!last) {
+            return;
+          }
+          try {
+            const mergedPost =
+              entries.length === 1
+                ? last.post
+                : {
+                    ...last.post,
+                    message: entries
+                      .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
+                      .filter(Boolean)
+                      .join("\n"),
+                    file_ids: [],
+                  };
+            await handlePost(
+              mergedPost,
+              last.payload,
+              admissionLifecycle,
+              entries.length > 1 ? entries.map((entry) => entry.post.id) : undefined,
+            );
+            await settle();
+          } catch (error) {
+            await admissionLifecycle.onAbandoned();
+            throw error;
+          }
+        },
+      });
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
@@ -343,7 +373,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       jitterRatio: 0.2,
       onError: (err) => {
         runtime.error?.(`mattermost connection failed: ${String(err)}`);
-        opts.statusSink?.({ lastError: String(err), connected: false });
+        publishMattermostRecoveringStatus(opts.statusSink, err);
       },
       onReconnect: (delayMs) => {
         runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
@@ -351,10 +381,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
   } finally {
     await ingress.stop();
-    unregisterInteractions?.();
+    unregisterInteractions();
   }
-  const slashShutdownCleanupPromise = slashShutdownCleanup;
-  if (slashShutdownCleanupPromise) {
-    await Promise.resolve(slashShutdownCleanupPromise);
-  }
+  await Promise.resolve(slashShutdownCleanup);
 }

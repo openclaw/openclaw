@@ -1,12 +1,7 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
-import { parseStrictFiniteNumber } from "./parse-finite-number.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -81,51 +76,39 @@ export async function fetchCodexUsage(
       defaultHeaders,
     }) ?? defaultHeaders;
 
-  const res = await fetchJson(
-    "https://chatgpt.com/backend-api/wham/usage",
-    { method: "GET", headers },
+  const parsed = await fetchUsageJson({
+    provider: "openai",
+    url: "https://chatgpt.com/backend-api/wham/usage",
+    init: { method: "GET", headers },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await discardUsageResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider: "openai",
-      status: res.status,
-      tokenExpiredStatuses: [401, 403],
-    });
-  }
-
-  const parsed = await readUsageJson("openai", res);
+    tokenExpiredStatuses: [401, 403],
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }
   const data = parsed.data as CodexUsageResponse;
   const windows: UsageWindow[] = [];
 
-  if (data.rate_limit?.primary_window) {
-    const pw = data.rate_limit.primary_window;
-    const windowHours = Math.round((pw.limit_window_seconds || 10800) / 3600);
+  for (const kind of ["primary_window", "secondary_window"] as const) {
+    const window = data.rate_limit?.[kind];
+    if (!window) {
+      continue;
+    }
+    const primary = kind === "primary_window";
+    const windowHours = Math.round(
+      (window.limit_window_seconds || (primary ? 10800 : 86400)) / 3600,
+    );
     windows.push({
-      label: `${windowHours}h`,
-      usedPercent: clampPercent(pw.used_percent || 0),
-      resetAt: pw.reset_at ? pw.reset_at * 1000 : undefined,
-    });
-  }
-
-  if (data.rate_limit?.secondary_window) {
-    const sw = data.rate_limit.secondary_window;
-    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = resolveSecondaryWindowLabel({
-      windowHours,
-      primaryResetAt: data.rate_limit?.primary_window?.reset_at,
-      secondaryResetAt: sw.reset_at,
-    });
-    windows.push({
-      label,
-      usedPercent: clampPercent(sw.used_percent || 0),
-      resetAt: sw.reset_at ? sw.reset_at * 1000 : undefined,
+      label: primary
+        ? `${windowHours}h`
+        : resolveSecondaryWindowLabel({
+            windowHours,
+            primaryResetAt: data.rate_limit?.primary_window?.reset_at,
+            secondaryResetAt: window.reset_at,
+          }),
+      usedPercent: clampPercent(window.used_percent || 0),
+      resetAt: window.reset_at ? window.reset_at * 1000 : undefined,
     });
   }
 

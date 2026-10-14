@@ -1,21 +1,25 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const CONTROL_UI_INDEX = "dist/control-ui/index.html";
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
 const CONTROL_UI_ASSETS = [
   "dist/control-ui/assets/app.js",
   "dist/control-ui/assets/app.js.br",
@@ -23,14 +27,23 @@ const CONTROL_UI_ASSETS = [
 ] as const;
 const CONTROL_UI_FILES = [CONTROL_UI_INDEX, ...CONTROL_UI_ASSETS];
 const CHECK_SCRIPT = resolve("scripts/check-openclaw-package-tarball.mjs");
-const TYPESCRIPT_PACKAGE_ROOT = fileURLToPath(
-  new URL("../../node_modules/typescript", import.meta.url),
-);
 
 function writeFixtureFile(packageRoot: string, relativePath: string, content: string): void {
   const filePath = join(packageRoot, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content);
+}
+
+function chmodTreeWorldReadable(dir: string): void {
+  chmodSync(dir, 0o755);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      chmodTreeWorldReadable(entryPath);
+    } else {
+      chmodSync(entryPath, statSync(entryPath).mode & 0o111 ? 0o755 : 0o644);
+    }
+  }
 }
 
 function withPackedPackage(
@@ -43,12 +56,6 @@ function withPackedPackage(
   try {
     mkdirSync(packageRoot, { recursive: true });
     const version = "2026.7.2";
-    const typescriptRoot = resolve("node_modules/typescript");
-    const typescriptVersion = (
-      JSON.parse(readFileSync(join(typescriptRoot, "package.json"), "utf8")) as {
-        version: string;
-      }
-    ).version;
     writeFixtureFile(
       packageRoot,
       "package.json",
@@ -60,45 +67,39 @@ function withPackedPackage(
           ? {}
           : {
               scripts: { postinstall: "node scripts/postinstall-bundled-plugins.mjs" },
-              dependencies: { typescript: typescriptVersion },
-              bundledDependencies: ["typescript"],
             }),
       }),
     );
-    writeFixtureFile(packageRoot, "dist/postinstall-inventory.json", JSON.stringify(inventory));
+    writeFixtureFile(
+      packageRoot,
+      "dist/postinstall-inventory.json",
+      JSON.stringify([...new Set([...inventory, CODE_MODE_WORKER_PATH])]),
+    );
     writeFixtureFile(packageRoot, "dist/index.js", "export {};\n");
+    writeFixtureFile(packageRoot, CODE_MODE_WORKER_PATH, "export {};\n");
     writeFixtureFile(
       packageRoot,
       CONTROL_UI_INDEX,
       '<!doctype html><script type="module" src="./assets/app.js"></script>\n',
     );
     for (const assetPath of CONTROL_UI_ASSETS) {
-      writeFixtureFile(packageRoot, assetPath, "shipped Control UI asset\n");
+      writeFixtureFile(packageRoot, assetPath, "export {};\n");
     }
-    writeFixtureFile(
-      packageRoot,
-      "dist/openclaw-install-guard",
-      "OpenClaw package preinstall has not completed.\n",
-    );
+    writeFixtureFile(packageRoot, ".openclaw-lifecycle-pending", "pending\n");
     for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
       writeFixtureFile(packageRoot, relativePath, `# ${relativePath}\n`);
     }
     for (const relativePath of [
       "scripts/postinstall-bundled-plugins.mjs",
-      "scripts/lib/guard-inventory-utils.mjs",
-      "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/fs-safe-prebuild.mjs",
+      "scripts/windows-cmd-helpers.mjs",
+      "scripts/lib/package-lifecycle-marker.mjs",
     ]) {
       const destination = join(packageRoot, relativePath);
       mkdirSync(dirname(destination), { recursive: true });
       copyFileSync(resolve(relativePath), destination);
     }
-    if (options.postinstall !== false) {
-      // Offline npm must exercise the same bundled TypeScript AST dependency
-      // that the real postinstall uses to preserve its complete import graph.
-      cpSync(typescriptRoot, join(packageRoot, "node_modules/typescript"), {
-        recursive: true,
-      });
-    }
+    chmodTreeWorldReadable(packageRoot);
 
     const packed = spawnSync(
       "npm",
@@ -122,6 +123,12 @@ function withPackedPackage(
 
 function checkPackedPackage(tarball: string) {
   return spawnSync(process.execPath, [CHECK_SCRIPT, tarball], {
+    env: preparedScriptWrapperEnv([
+      [
+        new URL("../../scripts/check-openclaw-package-tarball.mts", import.meta.url),
+        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.packageTarball),
+      ],
+    ]),
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -151,7 +158,6 @@ function installPackedPackage(root: string, tarball: string) {
       "--no-audit",
       "--no-fund",
       "--offline",
-      TYPESCRIPT_PACKAGE_ROOT,
       tarball,
     ],
     {
@@ -174,23 +180,6 @@ function installPackedPackage(root: string, tarball: string) {
 }
 
 describe("packaged Control UI postinstall inventory", () => {
-  it.each(CONTROL_UI_FILES)(
-    "rejects a real npm package when postinstall would delete %s",
-    (omittedFile) => {
-      const inventory = ["dist/index.js", ...CONTROL_UI_FILES].filter(
-        (relativePath) => relativePath !== omittedFile,
-      );
-      withPackedPackage(inventory, ({ tarball }) => {
-        const result = checkPackedPackage(tarball);
-
-        expect(result.status, result.stdout).not.toBe(0);
-        expect(result.stderr).toContain(
-          `postinstall inventory omits Control UI file ${omittedFile}`,
-        );
-      });
-    },
-  );
-
   it("proves actual npm postinstall deletes an omitted dashboard from a falsely accepted package", () => {
     withPackedPackage(["dist/index.js"], ({ root, tarball }) => {
       const validation = checkPackedPackage(tarball);
@@ -201,9 +190,12 @@ describe("packaged Control UI postinstall inventory", () => {
       }
 
       expect(validation.status, validation.stdout).not.toBe(0);
-      expect(validation.stderr).toContain(
-        "postinstall inventory omits Control UI file dist/control-ui/index.html",
-      );
+      const validationErrors = validation.stderr.split(/\r?\n/u);
+      for (const relativePath of CONTROL_UI_FILES) {
+        expect
+          .soft(validationErrors)
+          .toContain(`postinstall inventory omits packaged dist file ${relativePath}`);
+      }
     });
   });
 
@@ -215,6 +207,7 @@ describe("packaged Control UI postinstall inventory", () => {
       expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
 
       const installedPackageRoot = installPackedPackage(root, tarball);
+      expect(existsSync(join(installedPackageRoot, CODE_MODE_WORKER_PATH))).toBe(true);
       for (const relativePath of CONTROL_UI_FILES) {
         expect(existsSync(join(installedPackageRoot, relativePath))).toBe(true);
       }

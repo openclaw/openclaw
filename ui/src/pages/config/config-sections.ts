@@ -1,89 +1,76 @@
-export type ConfigPageId =
-  | "config"
-  | "communications"
-  | "appearance"
-  | "notifications"
-  | "security"
-  | "automation"
-  | "mcp"
-  | "memory"
-  | "infrastructure"
-  | "ai-agents"
-  | "advanced";
-
-export const COMMUNICATION_SECTION_KEYS = [
-  "messages",
-  "broadcast",
-  "talk",
-  "audio",
-  "channels",
+// Advanced renders without an include list: it shows every section that has no
+// curated home (config-page computes its exclude list).
+// Each curated page opens at its first section.
+const CONFIG_PAGES = [
+  ["communications", ["messages", "tts", "transcripts"]],
+  ["appearance", ["__appearance__", "ui"]],
+  ["notifications", ["__notifications__"]],
+  ["security", ["security", "approvals"]],
+  ["automation", ["commands", "hooks", "bindings", "cron"]],
+  ["mcp", ["mcp"]],
+  ["memory", ["memory"]],
+  ["talk", ["talk"]],
+  ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
+  ["updates", ["update"]],
+  ["ai-agents", ["agents", "skills", "tools", "session"]],
+  ["advanced", undefined],
 ] as const;
 
-export const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
+export type ConfigPageId = (typeof CONFIG_PAGES)[number][0];
+export const CONFIG_PAGE_IDS = CONFIG_PAGES.map(([pageId]) => pageId);
+const CONFIG_SECTION_KEYS_BY_PAGE = Object.fromEntries<readonly string[] | undefined>(CONFIG_PAGES);
 
-const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
-
-// Curated Privacy & Security home: the schema-backed security/approvals policy
-// sections render here, below the curated status rows (security.ts).
-export const SECURITY_SECTION_KEYS = ["security", "approvals"] as const;
-
-export const AUTOMATION_SECTION_KEYS = [
-  "commands",
-  "hooks",
-  "bindings",
-  "cron",
-  "plugins",
-] as const;
-
-export const INFRASTRUCTURE_SECTION_KEYS = [
-  "gateway",
-  "web",
-  "browser",
-  "nodeHost",
-  "canvasHost",
-  "discovery",
-  "media",
-  "acp",
-] as const;
-
-export const MCP_SECTION_KEYS = ["mcp"] as const;
-
-// Curated Memory home: engine/backend/add-on rows plus the Dreaming tab render
-// above the memory schema section (memory.ts). Memory left AI & Agents because
-// the engine choice and dreaming's global cron are not agent defaults.
-export const MEMORY_SECTION_KEYS = ["memory"] as const;
-
-export const AI_AGENTS_SECTION_KEYS = ["agents", "models", "skills", "tools", "session"] as const;
-
-export const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
-  ...COMMUNICATION_SECTION_KEYS,
-  ...APPEARANCE_SECTION_KEYS,
-  ...NOTIFICATION_SECTION_KEYS,
-  ...SECURITY_SECTION_KEYS,
-  ...AUTOMATION_SECTION_KEYS,
-  ...INFRASTRUCTURE_SECTION_KEYS,
-  ...MCP_SECTION_KEYS,
-  ...MEMORY_SECTION_KEYS,
-  ...AI_AGENTS_SECTION_KEYS,
+// Search and page rendering must agree on section ownership, or a result can
+// open a page whose editor rejects the section it promised to reveal.
+const CONFIG_PAGE_BY_SECTION = new Map<string, ConfigPageId | "plugin-settings">([
+  ...CONFIG_PAGES.flatMap(([pageId, sectionKeys]) =>
+    (sectionKeys ?? []).map((sectionKey) => [sectionKey, pageId] as const),
+  ),
+  ["plugins", "plugin-settings"],
 ]);
 
-// "config" (the curated General hub) and "advanced" render without an include
-// list: General shows no schema sections at all, Advanced shows every section
-// that has no curated home (config-page computes its exclude list).
-const CONFIG_SECTION_KEYS_BY_PAGE = {
-  config: undefined,
-  communications: COMMUNICATION_SECTION_KEYS,
-  appearance: APPEARANCE_SECTION_KEYS,
-  notifications: NOTIFICATION_SECTION_KEYS,
-  security: SECURITY_SECTION_KEYS,
-  automation: AUTOMATION_SECTION_KEYS,
-  mcp: MCP_SECTION_KEYS,
-  memory: MEMORY_SECTION_KEYS,
-  infrastructure: INFRASTRUCTURE_SECTION_KEYS,
-  "ai-agents": AI_AGENTS_SECTION_KEYS,
-  advanced: undefined,
-} as const satisfies Record<ConfigPageId, readonly string[] | undefined>;
+export const SCOPED_CONFIG_SECTION_KEYS = new Set(CONFIG_PAGE_BY_SECTION.keys());
 
 export function configSectionKeysForPage(pageId: ConfigPageId): readonly string[] | undefined {
   return CONFIG_SECTION_KEYS_BY_PAGE[pageId];
+}
+
+export function configPageForSection(sectionKey: string): ConfigPageId | "plugin-settings" {
+  // Sections without a curated home render on the Advanced page.
+  return CONFIG_PAGE_BY_SECTION.get(sectionKey) ?? "advanced";
+}
+
+export type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+
+export function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
+  const activeSection = configSectionKeysForPage(pageId)?.[0] ?? null;
+  if (activeSection === null && pageId !== "advanced") {
+    throw new Error("Unknown config page");
+  }
+  return { activeSection, activeSubsection: null };
+}
+
+export function normalizeConfigSelection(
+  pageId: ConfigPageId,
+  activeSection: string | null,
+  activeSubsection: string | null,
+): ConfigSelection {
+  const sections = configSectionKeysForPage(pageId) ?? null;
+  // Advanced renders without an include list; sections that have a curated
+  // home elsewhere must not activate here.
+  if (pageId === "advanced" && activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
+    return { activeSection: null, activeSubsection: null };
+  }
+  if (sections && (!activeSection || !sections.includes(activeSection))) {
+    return defaultConfigSelection(pageId);
+  }
+  return { activeSection, activeSubsection };
+}
+
+export function configSelectionFromSearch(pageId: ConfigPageId, search: string): ConfigSelection {
+  const section = new URLSearchParams(search).get("section");
+  if (!section) {
+    return defaultConfigSelection(pageId);
+  }
+  return normalizeConfigSelection(pageId, section, null);
 }

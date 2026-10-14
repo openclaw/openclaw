@@ -1,17 +1,25 @@
-import { copyPluginToolMeta } from "../../../plugins/tools.js";
+import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
+import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import {
-  clearToolActivityRun,
-  getLastToolActivityMs,
-  notifyToolActivity,
-  onToolActivity,
-} from "../../../shared/tool-activity-heartbeat.js";
-import { copyBeforeToolCallHookMarker } from "../../agent-tools.before-tool-call.js";
-import { copyChannelAgentToolMeta } from "../../channel-tools.js";
-import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
-import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 
-export { clearToolActivityRun, getLastToolActivityMs, notifyToolActivity, onToolActivity };
+export async function withEmbeddedAttemptToolActivity<R>(
+  runId: string,
+  operation: () => Promise<R>,
+): Promise<R> {
+  const interval = setInterval(() => notifyToolActivity(runId), 60_000);
+  interval.unref?.();
+  try {
+    notifyToolActivity(runId);
+    return await operation();
+  } finally {
+    clearInterval(interval);
+    notifyToolActivity(runId);
+  }
+}
 
 export function wrapEmbeddedAttemptToolWithActivity<T extends AnyAgentTool>(
   tool: T,
@@ -20,24 +28,27 @@ export function wrapEmbeddedAttemptToolWithActivity<T extends AnyAgentTool>(
   const originalExecute = tool.execute;
   const wrappedTool = {
     ...tool,
-    execute: (async (...args: Parameters<typeof originalExecute>) => {
-      // Long-running tools keep the attempt's idle watchdog alive.
-      const interval = setInterval(() => notifyToolActivity(runId), 60_000);
-      interval.unref?.();
-      try {
-        notifyToolActivity(runId);
-        return await originalExecute(...args);
-      } finally {
-        clearInterval(interval);
-        notifyToolActivity(runId);
-      }
-    }) as typeof originalExecute,
+    execute: ((...args: Parameters<typeof originalExecute>) =>
+      withEmbeddedAttemptToolActivity(runId, () =>
+        originalExecute(...args),
+      )) as typeof originalExecute,
   } as T;
-  // Tool metadata lives in identity-keyed WeakMaps, so object spread is insufficient.
-  copyPluginToolMeta(tool, wrappedTool);
-  copyChannelAgentToolMeta(tool, wrappedTool);
-  copyBeforeToolCallHookMarker(tool, wrappedTool);
-  copyToolTerminalPresentation(tool, wrappedTool);
-  copyCodeModeControlToolIdentity(tool, wrappedTool);
+  // Tool metadata is identity-keyed, so object spread is insufficient.
+  copyAgentToolMetadata(tool, wrappedTool, (source) =>
+    wrapEmbeddedAttemptToolWithActivity(source, runId),
+  );
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrappedTool, async (params) => {
+      const prepared = await withEmbeddedAttemptToolActivity(runId, () => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) =>
+              withEmbeddedAttemptToolActivity(runId, () => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
   return wrappedTool;
 }

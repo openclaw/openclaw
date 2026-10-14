@@ -1,6 +1,8 @@
 /** In-memory binding store helpers for Codex app-server tests. */
 export * from "./session-binding.js";
+import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -8,12 +10,47 @@ import {
   createCodexAppServerBindingStore,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
+  type CodexBindingStateStore,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
 
-export function createCodexTestBindingStateStore(): PluginStateSyncKeyedStore<StoredCodexAppServerBinding> {
-  const values = new Map<string, StoredCodexAppServerBinding>();
+export function createCodexTestBindingStateStore(
+  values = new Map<string, StoredCodexAppServerBinding>(),
+): PluginStateSyncKeyedStore<StoredCodexAppServerBinding> & CodexBindingStateStore {
+  const observe = (key: string) => ({
+    value: structuredClone(values.get(key)),
+    comparison: JSON.stringify([key, values.get(key)]),
+  });
   return {
+    asyncReads: {
+      lookup: async (key) => values.get(key),
+      lookupMany: async (keys) => keys.map((key) => ({ ok: true, value: values.get(key) })),
+      entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    },
+    withCurrent({ assertCurrent }) {
+      assertCurrent();
+      return {
+        async observe(key) {
+          assertCurrent();
+          return observe(key);
+        },
+        async compareAndApply(key, comparison, intent) {
+          assertCurrent();
+          const current = observe(key);
+          if (current.comparison !== comparison) {
+            return { status: "conflict", current };
+          }
+          if (intent.action === "keep") {
+            return { status: "unchanged" };
+          }
+          if (intent.operation === "delete") {
+            return { status: values.delete(key) ? "applied" : "unchanged" };
+          }
+          values.set(key, structuredClone(intent.value));
+          return { status: "applied" };
+        },
+      };
+    },
     register(key, value) {
       values.set(key, value);
     },
@@ -39,6 +76,10 @@ export function createCodexTestBindingStateStore(): PluginStateSyncKeyedStore<St
       return value;
     },
     delete: (key) => values.delete(key),
+    deleteIf: (key, predicate) => {
+      const value = values.get(key);
+      return value !== undefined && predicate(value) && values.delete(key);
+    },
     entries: () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
     clear: () => values.clear(),
   };
@@ -116,7 +157,7 @@ export async function readCodexAppServerBinding(
   sessionId: string,
   _lookup?: unknown,
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  return await testCodexAppServerBindingStore.read(testIdentity(sessionId));
+  return testCodexAppServerBindingStore.read(testIdentity(sessionId));
 }
 
 export async function writeCodexAppServerBinding(
@@ -135,4 +176,58 @@ export async function clearCodexAppServerBindingForThread(
     kind: "clear",
     threadId,
   });
+}
+
+export function createCodexTestContextEngineBinding() {
+  return {
+    schemaVersion: 1 as const,
+    engineId: "lossless-claw",
+    policyFingerprint: "policy-1",
+    projection: {
+      schemaVersion: 1 as const,
+      mode: "thread_bootstrap" as const,
+      epoch: "epoch-1",
+      fingerprint: "fingerprint-1",
+    },
+  };
+}
+
+export function testConversationIdentity(sessionFile: string) {
+  return {
+    kind: "conversation" as const,
+    bindingId: legacyCodexConversationBindingId(sessionFile),
+  };
+}
+
+export async function writeTestConversationBinding(
+  sessionFile: string,
+  binding: CodexAppServerThreadBinding,
+): Promise<void> {
+  await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
+    kind: "set",
+    binding: { clientId: "test-client", ...binding },
+  });
+}
+
+export async function readTestConversationBinding(sessionFile: string) {
+  return testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
+}
+
+export function createConversationInspection(
+  conversation: Parameters<typeof inspectConversationBinding>[0],
+  bindingId: string | undefined,
+): ReturnType<typeof inspectConversationBinding> {
+  return {
+    status: "available",
+    binding: bindingId
+      ? {
+          bindingId,
+          targetSessionKey: "agent:main:codex-bound-test",
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt: 1,
+        }
+      : null,
+  };
 }

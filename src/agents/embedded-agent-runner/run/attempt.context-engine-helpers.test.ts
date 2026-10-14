@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { findLatestUncompactedAttemptUsageSnapshot } from "./attempt.context-engine-helpers.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import {
+  buildLoopPromptCacheInfo,
+  findLatestUncompactedAttemptUsageSnapshot,
+} from "./attempt-context-engine-helpers.js";
 
 const ASSISTANT_WITH_USAGE = {
   role: "assistant",
@@ -21,16 +25,6 @@ const ASSISTANT_WITH_USAGE = {
 } satisfies AssistantMessage;
 
 describe("findLatestUncompactedAttemptUsageSnapshot", () => {
-  it("uses current-attempt transcript usage when no compaction changed the context", () => {
-    expect(
-      findLatestUncompactedAttemptUsageSnapshot({
-        messagesSnapshot: [ASSISTANT_WITH_USAGE],
-        prePromptMessageCount: 0,
-        compactionOccurred: false,
-      })?.usage,
-    ).toMatchObject({ input: 12, output: 4, total: 16 });
-  });
-
   it("does not resurrect transcript usage across a compaction retry", () => {
     expect(
       findLatestUncompactedAttemptUsageSnapshot({
@@ -39,5 +33,72 @@ describe("findLatestUncompactedAttemptUsageSnapshot", () => {
         compactionOccurred: true,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("context-engine prompt cache metadata", () => {
+  const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
+
+  it("does not reuse a prior turn's usage when the current attempt has no assistant", () => {
+    const priorAssistant = {
+      role: "assistant",
+      content: "prior turn",
+      timestamp: 2,
+      usage: { input: 99, output: 7, cacheRead: 1234, total: 1340 },
+    } as unknown as AgentMessage;
+
+    expect(
+      buildLoopPromptCacheInfo({
+        messagesSnapshot: [seedMessage, priorAssistant],
+        prePromptMessageCount: 2,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the latest nonzero usage when an aborted assistant reports zeros", () => {
+    const completedAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
+    } as unknown as AgentMessage;
+    const abortedAssistant = {
+      role: "assistant",
+      content: "",
+      timestamp: "2026-04-16T16:50:00.000Z",
+      stopReason: "aborted",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    } as unknown as AgentMessage;
+
+    const promptCache = buildLoopPromptCacheInfo({
+      messagesSnapshot: [seedMessage, completedAssistant, abortedAssistant],
+      prePromptMessageCount: 1,
+      retention: "short",
+    });
+    expect(promptCache?.lastCallUsage).toMatchObject({
+      input: 38_333,
+      cacheRead: 120_320,
+      total: 158_719,
+    });
+    expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
+  });
+
+  it("falls back to the persisted cache touch when loop usage has no cache metrics", () => {
+    const assistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: { input: 1, output: 2, total: 3 },
+    } as unknown as AgentMessage;
+
+    const promptCache = buildLoopPromptCacheInfo({
+      messagesSnapshot: [seedMessage, assistant],
+      prePromptMessageCount: 1,
+      retention: "short",
+      fallbackLastCacheTouchAt: 123,
+    });
+    expect(promptCache?.retention).toBe("short");
+    expect(promptCache?.lastCallUsage?.total).toBe(3);
+    expect(promptCache?.lastCacheTouchAt).toBe(123);
   });
 });

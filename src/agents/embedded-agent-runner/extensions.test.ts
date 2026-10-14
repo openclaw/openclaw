@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
-import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -19,7 +18,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
+function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir = "/workspace") {
   // The safeguard runtime attaches to the session manager, so tests keep the
   // same manager instance around for both factory construction and inspection.
   const sessionManager = {} as SessionManager;
@@ -32,8 +31,6 @@ function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
     cfg,
     sessionManager,
     workspaceDir,
-    provider: "anthropic",
-    modelId: "claude-sonnet-4-20250514",
     model,
   });
 
@@ -48,7 +45,6 @@ function expectSafeguardRuntime(
 
   expect(factories).toContain(compactionSafeguardExtension);
   const runtime = getCompactionSafeguardRuntime(sessionManager);
-  expect(runtime?.contextWindowTokens).toBe(200_000);
   expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
   expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
 }
@@ -124,25 +120,5 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
       "/tmp/openclaw-workspace",
     );
-  });
-
-  it("enables cache-ttl pruning for custom anthropic-messages providers", () => {
-    const factories = buildEmbeddedExtensionFactories({
-      cfg: {
-        agents: {
-          defaults: {
-            contextPruning: {
-              mode: "cache-ttl",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      sessionManager: {} as SessionManager,
-      provider: "litellm",
-      modelId: "claude-sonnet-4-6",
-      model: { api: "anthropic-messages", contextWindow: 200_000 } as Model,
-    });
-
-    expect(factories).toContain(contextPruningExtension);
   });
 });

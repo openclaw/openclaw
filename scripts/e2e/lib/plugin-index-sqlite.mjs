@@ -3,38 +3,30 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readPositiveIntEnv } from "./env-limits.mjs";
+import {
+  resolveOpenClawConfigPath as configPath,
+  resolveOpenClawStateDir as stateDir,
+} from "./openclaw-state-paths.mjs";
 import { readTextFileBounded } from "./text-file-utils.mjs";
 
-const INDEX_KEY = "installed-plugin-index";
+const STATE_KEY = "plugins.installedIndex";
+const PRE_V13_INDEX_KEY = "installed-plugin-index";
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
 const JSON_ARTIFACT_MAX_BYTES = readPositiveIntEnv(
   "OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES",
   1024 * 1024,
 );
 
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
 function readJsonMaybe(file) {
-  let text;
   try {
-    text = readTextFileBounded(file, "plugin index JSON artifact", JSON_ARTIFACT_MAX_BYTES, {
+    const text = readTextFileBounded(file, "plugin index JSON artifact", JSON_ARTIFACT_MAX_BYTES, {
       tailBytes: ERROR_DETAIL_TAIL_BYTES,
     });
+    return JSON.parse(text);
   } catch (error) {
     if (error?.code === "ETOOBIG") {
       throw error;
     }
-    return {};
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
     return {};
   }
 }
@@ -44,10 +36,7 @@ function textTooLargeError(message) {
 }
 
 function parseIndexJsonText(text, label) {
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes > JSON_ARTIFACT_MAX_BYTES) {
-    throw textTooLargeError(`${label} exceeded ${JSON_ARTIFACT_MAX_BYTES} bytes (${bytes} bytes)`);
-  }
+  assertIndexJsonByteLength(Buffer.byteLength(text, "utf8"), label);
   return JSON.parse(text);
 }
 
@@ -69,6 +58,79 @@ function legacyIndexPath(root = stateDir()) {
   return path.join(root, "plugins", "installs.json");
 }
 
+function tableExists(db, tableName) {
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
+  );
+}
+
+function readBoundedIndexRow(db, table, keyColumn, key, jsonColumns, columns) {
+  if (!tableExists(db, table)) {
+    return undefined;
+  }
+  const source = `FROM ${table} WHERE ${keyColumn} = ?`;
+  const lengths = db
+    .prepare(
+      `SELECT ${jsonColumns.map((column) => `octet_length(${column}) AS ${column}_bytes`).join(", ")} ${source}`,
+    )
+    .get(key);
+  if (!lengths) {
+    return undefined;
+  }
+  for (const column of jsonColumns) {
+    assertIndexJsonByteLength(lengths[`${column}_bytes`], `plugin index ${column}`);
+  }
+  return db.prepare(`SELECT ${columns} ${source}`).get(key);
+}
+
+function readCurrentSqlitePluginIndex(db) {
+  const row = readBoundedIndexRow(
+    db,
+    "config_machine_state",
+    "state_key",
+    STATE_KEY,
+    ["value_json"],
+    "value_json",
+  );
+  if (!row) {
+    return {};
+  }
+  const value = parseIndexJsonText(row.value_json, "plugin index value_json");
+  return value?.index && typeof value.index === "object" ? value.index : {};
+}
+
+function readPreV13SqlitePluginIndex(db) {
+  const row = readBoundedIndexRow(
+    db,
+    "installed_plugin_index",
+    "index_key",
+    PRE_V13_INDEX_KEY,
+    ["install_records_json", "plugins_json", "diagnostics_json"],
+    `version, warning, host_contract_version, compat_registry_version,
+     migration_version, policy_hash, generated_at_ms, refresh_reason,
+     install_records_json, plugins_json, diagnostics_json`,
+  );
+  if (!row) {
+    return {};
+  }
+  return {
+    version: Number(row.version),
+    ...(row.warning ? { warning: row.warning } : {}),
+    hostContractVersion: row.host_contract_version,
+    compatRegistryVersion: row.compat_registry_version,
+    migrationVersion: Number(row.migration_version),
+    policyHash: row.policy_hash,
+    generatedAtMs: Number(row.generated_at_ms),
+    ...(row.refresh_reason ? { refreshReason: row.refresh_reason } : {}),
+    installRecords: parseIndexJsonText(
+      row.install_records_json,
+      "plugin index install_records_json",
+    ),
+    plugins: parseIndexJsonText(row.plugins_json, "plugin index plugins_json"),
+    diagnostics: parseIndexJsonText(row.diagnostics_json, "plugin index diagnostics_json"),
+  };
+}
+
 function readSqlitePluginIndex(root = stateDir()) {
   const dbPath = sqlitePath(root);
   if (!fs.existsSync(dbPath)) {
@@ -77,56 +139,17 @@ function readSqlitePluginIndex(root = stateDir()) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const lengths = db
-      .prepare(
-        `
-          SELECT octet_length(install_records_json) AS install_records_json_bytes,
-                 octet_length(plugins_json) AS plugins_json_bytes,
-                 octet_length(diagnostics_json) AS diagnostics_json_bytes
-            FROM installed_plugin_index
-           WHERE index_key = ?
-        `,
-      )
-      .get(INDEX_KEY);
-    if (!lengths) {
-      return {};
+    const schemaVersion = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+    // v13 retired the wide row. Versioned databases must never cross-read the
+    // other schema; only unversioned E2E fixtures may probe current then legacy.
+    if (schemaVersion >= 13) {
+      return readCurrentSqlitePluginIndex(db);
     }
-    assertIndexJsonByteLength(
-      lengths.install_records_json_bytes,
-      "plugin index install_records_json",
-    );
-    assertIndexJsonByteLength(lengths.plugins_json_bytes, "plugin index plugins_json");
-    assertIndexJsonByteLength(lengths.diagnostics_json_bytes, "plugin index diagnostics_json");
-    const row = db
-      .prepare(
-        `
-          SELECT version, warning, host_contract_version, compat_registry_version,
-                 migration_version, policy_hash, generated_at_ms, refresh_reason,
-                 install_records_json, plugins_json, diagnostics_json
-            FROM installed_plugin_index
-           WHERE index_key = ?
-        `,
-      )
-      .get(INDEX_KEY);
-    if (!row) {
-      return {};
+    if (schemaVersion >= 1) {
+      return readPreV13SqlitePluginIndex(db);
     }
-    return {
-      version: Number(row.version),
-      ...(row.warning ? { warning: row.warning } : {}),
-      hostContractVersion: row.host_contract_version,
-      compatRegistryVersion: row.compat_registry_version,
-      migrationVersion: Number(row.migration_version),
-      policyHash: row.policy_hash,
-      generatedAtMs: Number(row.generated_at_ms),
-      ...(row.refresh_reason ? { refreshReason: row.refresh_reason } : {}),
-      installRecords: parseIndexJsonText(
-        row.install_records_json,
-        "plugin index install_records_json",
-      ),
-      plugins: parseIndexJsonText(row.plugins_json, "plugin index plugins_json"),
-      diagnostics: parseIndexJsonText(row.diagnostics_json, "plugin index diagnostics_json"),
-    };
+    const current = readCurrentSqlitePluginIndex(db);
+    return current.installRecords ? current : readPreV13SqlitePluginIndex(db);
   } catch (error) {
     if (error?.code === "ETOOBIG") {
       throw error;
@@ -139,7 +162,9 @@ function readSqlitePluginIndex(root = stateDir()) {
 
 export function readPluginInstallIndex(options = {}) {
   const root = options.stateDir ?? stateDir();
-  const config = readJsonMaybe(options.configPath ?? configPath());
+  // Failure diagnostics may inspect the persisted index without consulting config.
+  const config =
+    options.configPath === null ? {} : readJsonMaybe(options.configPath ?? configPath());
   const sqliteIndex = readSqlitePluginIndex(root);
   if (sqliteIndex.installRecords) {
     return sqliteIndex;
@@ -158,7 +183,7 @@ export function readPluginInstallIndex(options = {}) {
 }
 
 export function readPluginInstallRecords(options = {}) {
-  return readPluginInstallIndex(options).installRecords ?? {};
+  return readPluginInstallIndex(options).installRecords;
 }
 
 export function writePluginInstallIndexForE2E(index, options = {}) {
@@ -167,6 +192,54 @@ export function writePluginInstallIndexForE2E(index, options = {}) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   try {
+    const now = Date.now();
+    const storageMode =
+      options.storageMode === "existing-schema"
+        ? Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0) >= 13
+          ? "current"
+          : "pre-v13"
+        : (options.storageMode ?? "current");
+    if (storageMode === "current") {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS config_machine_state (
+          state_key TEXT NOT NULL PRIMARY KEY,
+          value_json TEXT NOT NULL,
+          updated_at_ms INTEGER NOT NULL
+        );
+      `);
+      const persisted = {
+        revision: now,
+        index: {
+          version: index.version ?? 1,
+          warning:
+            index.warning ??
+            "DO NOT EDIT. This row is generated by OpenClaw plugin registry commands.",
+          hostContractVersion: index.hostContractVersion ?? "docker-e2e",
+          compatRegistryVersion: index.compatRegistryVersion ?? "docker-e2e",
+          migrationVersion: index.migrationVersion ?? 1,
+          policyHash: index.policyHash ?? "docker-e2e",
+          generatedAtMs: index.generatedAtMs ?? now,
+          ...(index.workspaceDir ? { workspaceDir: index.workspaceDir } : {}),
+          ...(index.refreshReason ? { refreshReason: index.refreshReason } : {}),
+          installRecords: index.installRecords ?? {},
+          plugins: index.plugins ?? [],
+          diagnostics: index.diagnostics ?? [],
+        },
+      };
+      db.prepare(
+        `
+          INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+          VALUES (?, ?, ?)
+          ON CONFLICT(state_key) DO UPDATE SET
+            value_json = excluded.value_json,
+            updated_at_ms = excluded.updated_at_ms
+        `,
+      ).run(STATE_KEY, JSON.stringify(persisted), now);
+      return;
+    }
+    if (storageMode !== "pre-v13") {
+      throw new Error(`Unknown plugin index storage mode: ${String(storageMode)}`);
+    }
     db.exec(`
       CREATE TABLE IF NOT EXISTS installed_plugin_index (
         index_key TEXT NOT NULL PRIMARY KEY,
@@ -184,7 +257,6 @@ export function writePluginInstallIndexForE2E(index, options = {}) {
         updated_at_ms INTEGER NOT NULL
       );
     `);
-    const now = Date.now();
     db.prepare(
       `
         INSERT INTO installed_plugin_index (
@@ -207,7 +279,7 @@ export function writePluginInstallIndexForE2E(index, options = {}) {
           updated_at_ms = excluded.updated_at_ms
       `,
     ).run(
-      INDEX_KEY,
+      PRE_V13_INDEX_KEY,
       index.version ?? 1,
       index.hostContractVersion ?? "docker-e2e",
       index.compatRegistryVersion ?? "docker-e2e",

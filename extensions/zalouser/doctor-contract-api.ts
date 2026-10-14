@@ -1,4 +1,3 @@
-// Zalouser API module exposes the plugin public contract.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,14 +6,10 @@ import { buildAgentSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import {
-  deleteSessionEntry,
-  deliveryContextFromSession,
-  listSessionEntries,
-  resolveStorePath,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+// Doctor enumeration cold-loads this closure; session-store-runtime pulls the
+// session-accessor/kysely graph, so values load lazily inside async bodies.
+import type { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveZalouserDmSessionScope } from "./src/session-scope.js";
 import {
@@ -30,7 +25,7 @@ import {
   type StoredZaloCredentials,
 } from "./src/session-state.js";
 
-export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
+export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
 type LegacyZalouserCredentialSource = {
   filePath: string;
@@ -82,17 +77,17 @@ async function collectLegacyZalouserCredentialSources(
     .toSorted((left, right) => left.profile.localeCompare(right.profile));
 }
 
-function collectLegacyZalouserDmEntries(
+async function collectLegacyZalouserDmEntries(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   options: { readOnly?: boolean } = {},
-): LegacyZalouserDmEntry[] {
+): Promise<LegacyZalouserDmEntry[]> {
+  const { listAgentIds } = await import("openclaw/plugin-sdk/agent-scope-runtime");
+  const { deliveryContextFromSession, listSessionEntries, resolveStorePath } =
+    await import("openclaw/plugin-sdk/session-store-runtime");
   const entries = new Map<string, LegacyZalouserDmEntry>();
   const fallbackAccountId = config.channels?.zalouser?.defaultAccount?.trim() || "default";
-  const agentIds = new Set([
-    "main",
-    ...(config.agents?.list ?? []).flatMap(({ id }) => (id?.trim() ? [id.trim()] : [])),
-  ]);
+  const agentIds = new Set(["main", ...listAgentIds(config)]);
   for (const agentId of agentIds) {
     const storePath = resolveStorePath(config.session?.store, { agentId, env });
     const storedEntries = listSessionEntries({
@@ -243,14 +238,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       ) {
         return null;
       }
-      const pending = collectLegacyZalouserDmEntries(config, env, { readOnly: true });
+      const pending = await collectLegacyZalouserDmEntries(config, env, { readOnly: true });
       const count = pending.flatMap(({ legacyKeys }) => legacyKeys).length;
       return count > 0
         ? { preview: [`- Zalo Personal direct-message session keys: ${count} legacy row(s)`] }
         : null;
     },
     async migrateLegacyState({ config, env }) {
-      const pending = collectLegacyZalouserDmEntries(config, env);
+      const { deleteSessionEntry, upsertSessionEntry } =
+        await import("openclaw/plugin-sdk/session-store-runtime");
+      const pending = await collectLegacyZalouserDmEntries(config, env);
       const warnings: string[] = [];
       let migrated = 0;
       for (const entry of pending) {

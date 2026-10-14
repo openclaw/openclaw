@@ -2,11 +2,17 @@
 // admission: the dispatch decision and the CLI run must happen within the
 // enqueued global-lane task, not before it, so dispatched runs obey the same
 // lifecycle, placement, and concurrency gates as native embedded runs.
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const runEmbeddedAgentViaCliBackendIfEligible = vi.hoisted(() => vi.fn());
@@ -16,11 +22,7 @@ vi.mock("./cli-backend-dispatch.js", () => ({
 
 import { runEmbeddedAgent } from "./run.js";
 
-const tempRoot = mkdtempSync(join(tmpdir(), "cli-dispatch-lane-"));
-
-afterAll(() => {
-  rmSync(tempRoot, { recursive: true, force: true });
-});
+const tempRoot = useSessionStoreTempDirs(afterAll, "cli-dispatch-lane-").make();
 
 const dispatchResult: EmbeddedAgentRunResult = {
   payloads: [{ text: "dispatched" }],
@@ -32,6 +34,7 @@ const dispatchResult: EmbeddedAgentRunResult = {
 
 function laneRunParams() {
   return {
+    admittedRunContext: createTestAdmittedRunContext("run-cli-dispatch-lane-test"),
     sessionId: "recall-lane-session",
     sessionKey: "agent:main:recall-lane-test",
     agentId: "main",
@@ -73,7 +76,16 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       return result;
     };
 
-    const result = await runEmbeddedAgent({ ...laneRunParams(), enqueue });
+    const params = laneRunParams();
+    setRuntimeConfigSnapshot(params.config);
+    onTestFinished(clearRuntimeConfigSnapshot);
+    const sessionEntry: InternalSessionEntry = {
+      sessionId: params.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "cli-dispatch-lifecycle",
+    };
+    await upsertSessionEntryCore(params.sessionTarget, sessionEntry);
+    const result = await runEmbeddedAgent({ ...params, enqueue });
 
     expect(result.payloads?.[0]?.text).toBe("dispatched");
     // Both lane admissions (session, then global) must fully wrap the
@@ -86,5 +98,10 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       "global-lane-exit",
     ]);
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0].sessionTarget).toMatchObject({
+      ...params.sessionTarget,
+      expectedWriterRunId: params.runId,
+      expectedLifecycleRevision: sessionEntry.lifecycleRevision,
+    });
   });
 });

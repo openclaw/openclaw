@@ -1,36 +1,20 @@
-// Duckduckgo helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_DDG_SAFE_SEARCH = "moderate";
 
 export type DdgSafeSearch = "strict" | "moderate" | "off";
 
-type DdgPluginConfig = {
-  webSearch?: {
-    region?: string;
-    safeSearch?: string;
-  };
-};
-
-function resolveDdgWebSearchConfig(
-  config?: OpenClawConfig,
-): DdgPluginConfig["webSearch"] | undefined {
-  const pluginConfig = config?.plugins?.entries?.duckduckgo?.config as DdgPluginConfig | undefined;
-  const webSearch = pluginConfig?.webSearch;
-  if (webSearch && typeof webSearch === "object" && !Array.isArray(webSearch)) {
-    return webSearch;
-  }
-  return undefined;
+function resolveDdgWebSearchConfig(config?: OpenClawConfig) {
+  return asOptionalRecord(config?.plugins?.entries?.duckduckgo?.config?.webSearch);
 }
 
 export function resolveDdgRegion(config?: OpenClawConfig): string | undefined {
-  const region = resolveDdgWebSearchConfig(config)?.region;
-  if (typeof region !== "string") {
-    return undefined;
-  }
-  const trimmed = region.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(resolveDdgWebSearchConfig(config)?.region);
 }
 
 export function resolveDdgSafeSearch(config?: OpenClawConfig): DdgSafeSearch {

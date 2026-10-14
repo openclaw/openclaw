@@ -7,7 +7,6 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   classifyMediaReferenceSource,
   MediaReferenceError,
-  normalizeMediaReferenceSource,
   parseInboundMediaUri,
   resolveInboundMediaReference,
   resolveMediaReferenceLocalPath,
@@ -34,11 +33,6 @@ async function expectMediaReferenceError(
 }
 
 describe("media reference helpers", () => {
-  it("normalizes outbound MEDIA tags without changing canonical media URIs", () => {
-    expect(normalizeMediaReferenceSource("  MEDIA: ./out.png")).toBe("./out.png");
-    expect(normalizeMediaReferenceSource("media://inbound/a.png")).toBe("media://inbound/a.png");
-  });
-
   it("classifies supported and unsupported media reference schemes", () => {
     expect(classifyMediaReferenceSource("media://inbound/a.png")).toStrictEqual({
       hasScheme: true,
@@ -214,6 +208,13 @@ describe("media reference helpers", () => {
       MediaReferenceError,
     );
     expect(() => parseInboundMediaUri("media://inbound/%00.png")).toThrow(MediaReferenceError);
+    for (const claim of [
+      ["media://user", "password@inbound/claim.png"].join(":"),
+      "media://inbound/claim.png?signature=private-secret",
+      "media://inbound/claim.png#private-fragment",
+    ]) {
+      expect(() => parseInboundMediaUri(claim), claim).toThrow(MediaReferenceError);
+    }
   });
 
   it("rejects symlinked inbound media files", async () => {

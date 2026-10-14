@@ -1,8 +1,12 @@
 // Doctor lint flow tests cover lint diagnostics surfaced by doctor.
 import { describe, expect, it } from "vitest";
+import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
-import { normalizeHealthCheck } from "./health-check-adapter.js";
-import type { RunnableHealthCheck } from "./health-check-runner-types.js";
+import {
+  clearHealthChecksForTest,
+  listHealthChecks,
+  registerHealthCheck,
+} from "./health-check-registry.js";
 import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 
 const ctx: HealthCheckContext = {
@@ -39,90 +43,136 @@ describe("runDoctorLintChecks", () => {
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
   });
 
-  it("skips default-disabled checks unless explicitly selected", async () => {
-    const defaultDisabled = normalizeHealthCheck({
-      ...check("targeted", async () => [
-        { checkId: "targeted", severity: "warning" as const, message: "warn" },
-      ]),
-      defaultEnabled: false,
-    });
-
-    await expect(
-      runDoctorLintChecks(ctx, {
-        checks: [defaultDisabled],
+  it("reports conflicting selectors for a registered health check", async () => {
+    const checkId = "plugin/example/critical";
+    let detections = 0;
+    const existingChecks = listHealthChecks();
+    registerHealthCheck(
+      check(checkId, async () => {
+        detections += 1;
+        return [{ checkId, severity: "error", message: "critical failure" }];
       }),
-    ).resolves.toMatchObject({
-      checksRun: 0,
-      checksSkipped: 1,
-      findings: [],
-    });
+    );
 
-    await expect(
-      runDoctorLintChecks(ctx, {
-        checks: [defaultDisabled],
-        onlyIds: ["targeted"],
-      }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [expect.objectContaining({ checkId: "targeted" })],
-    });
+    try {
+      const selectors = new Set([checkId]);
+      const result = await runDoctorLintChecks(ctx, {
+        onlyIds: selectors,
+        skipIds: selectors,
+      });
+
+      expect(detections).toBe(0);
+      expect(result.checksRun).toBe(0);
+      expect(result.checksSkipped).toBe(1);
+      expect(result.findings).toEqual([
+        {
+          checkId: "core/doctor/lint-selection",
+          severity: "error",
+          message: `Health check ${checkId} cannot be selected by --only and excluded by --skip.`,
+          path: checkId,
+        },
+      ]);
+      expect(exitCodeFromFindings(result.findings)).toBe(1);
+    } finally {
+      clearHealthChecksForTest();
+      for (const existingCheck of existingChecks) {
+        registerHealthCheck(existingCheck);
+      }
+    }
   });
 
-  it("runs default-disabled checks when all checks are requested", async () => {
-    const defaultDisabled = normalizeHealthCheck({
-      ...check("targeted", async () => [
-        { checkId: "targeted", severity: "warning" as const, message: "warn" },
-      ]),
-      defaultEnabled: false,
-    });
-    const defaultEnabled = check("regular", async () => []);
-
+  it("retains every overlap diagnostic when exclusion removes all selected checks", async () => {
+    const ids = ["plugin/example/first", "plugin/example/second"];
     const result = await runDoctorLintChecks(ctx, {
-      checks: [defaultDisabled, defaultEnabled],
-      includeAllChecks: true,
+      checks: ids.map((id) => check(id, async () => [])),
+      onlyIds: ids,
+      skipIds: ids,
     });
 
-    expect(result).toMatchObject({
+    expect(result.checksRun).toBe(0);
+    expect(result.checksSkipped).toBe(2);
+    expect(result.findings).toEqual(
+      ids.map((id) => ({
+        checkId: "core/doctor/lint-selection",
+        severity: "error",
+        message: `Health check ${id} cannot be selected by --only and excluded by --skip.`,
+        path: id,
+      })),
+    );
+    expect(exitCodeFromFindings(result.findings)).toBe(1);
+  });
+
+  it("keeps unknown-only diagnostics without treating partial overlap as an error", async () => {
+    const skippedId = "plugin/example/skipped";
+    const selectedId = "plugin/example/selected";
+    const unknownId = "plugin/future/not-loaded";
+    const detections: string[] = [];
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [skippedId, selectedId].map((id) =>
+        check(id, async () => {
+          detections.push(id);
+          return [];
+        }),
+      ),
+      onlyIds: [skippedId, unknownId, selectedId],
+      skipIds: [skippedId, "plugin/future/ignored"],
+    });
+
+    expect(result.checksRun).toBe(1);
+    expect(result.checksSkipped).toBe(1);
+    expect(detections).toEqual([selectedId]);
+    expect(result.findings).toEqual([
+      {
+        checkId: "core/doctor/lint-selection",
+        severity: "error",
+        message: `Unknown health check id selected by --only: ${unknownId}.`,
+        path: unknownId,
+      },
+    ]);
+    expect(exitCodeFromFindings(result.findings)).toBe(1);
+  });
+
+  it("records acquisition cancellation without diagnosing a failed inspection", async () => {
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [
+        check("cancelled", async () => {
+          throw new OpenClawStateLeaseAcquisitionError("state lease fixture", {
+            kind: "aborted",
+            reason: "caller-signal",
+            elapsedMs: 250,
+          });
+        }),
+        check("next", async () => [{ checkId: "next", severity: "info", message: "inspected" }]),
+      ],
+    });
+
+    expect(result).toEqual({
       checksRun: 2,
       checksSkipped: 0,
-      findings: [expect.objectContaining({ checkId: "targeted" })],
+      findings: [
+        {
+          checkId: "cancelled",
+          severity: "info",
+          errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
+          message:
+            "state lease inspection not performed: aborted after 250 ms by the caller's signal",
+        },
+        { checkId: "next", severity: "info", message: "inspected" },
+      ],
     });
+    expect(exitCodeFromFindings(result.findings)).toBe(0);
   });
 
-  it("supports single-run checks in lint mode", async () => {
-    const runnable: RunnableHealthCheck = {
-      id: "run-check",
-      kind: "core",
-      description: "run check",
-      async run(runCtx) {
-        expect(runCtx).toMatchObject({
-          mode: "lint",
-          repair: false,
-        });
-        return {
-          findings: [
-            {
-              checkId: "run-check",
-              severity: "warning",
-              message: "warn",
-            },
-          ],
-        };
-      },
-    };
-    const checkLocal = normalizeHealthCheck(runnable);
-
-    const result = await runDoctorLintChecks(ctx, { checks: [checkLocal] });
-
-    expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
-  });
-
-  it("turns thrown checks into error findings", async () => {
+  it.each([
+    new OpenClawStateLeaseAcquisitionError("state lease fixture", {
+      kind: "held",
+      holder: { owner: "another-owner", epoch: 1 },
+    }),
+  ])("retains ordinary, operation and storage failures as errors: %s", async (error) => {
     const result = await runDoctorLintChecks(ctx, {
       checks: [
         check("boom", async () => {
-          throw new Error("nope");
+          throw error;
         }),
       ],
     });
@@ -131,9 +181,10 @@ describe("runDoctorLintChecks", () => {
       {
         checkId: "boom",
         severity: "error",
-        message: "health check threw: nope",
+        message: `health check threw: ${error.message}`,
       },
     ]);
+    expect(exitCodeFromFindings(result.findings)).toBe(1);
   });
 
   it("keeps truncated thrown error messages UTF-16 safe", async () => {
@@ -146,21 +197,12 @@ describe("runDoctorLintChecks", () => {
       ],
     });
 
-    expect(result.findings[0]?.message).toBe(`health check threw: ${"A".repeat(252)}...`);
-  });
-});
-
-describe("exitCodeFromFindings", () => {
-  it("uses the selected severity threshold", () => {
-    const findings = [{ checkId: "a", severity: "warning" as const, message: "warn" }];
-
-    expect(exitCodeFromFindings(findings, "warning")).toBe(1);
-    expect(exitCodeFromFindings(findings, "error")).toBe(0);
-  });
-
-  it("does not fail default lint for informational findings", () => {
-    const findings = [{ checkId: "a", severity: "info" as const, message: "info" }];
-
-    expect(exitCodeFromFindings(findings)).toBe(0);
+    expect(result.findings).toEqual([
+      {
+        checkId: "emoji-boom",
+        severity: "error",
+        message: `health check threw: ${"A".repeat(252)}...`,
+      },
+    ]);
   });
 });

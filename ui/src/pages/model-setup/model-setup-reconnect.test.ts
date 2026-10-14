@@ -1,0 +1,278 @@
+/* @vitest-environment jsdom */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
+import { i18n } from "../../i18n/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import type { ModelSetupRouteData } from "./first-run-setup.ts";
+import {
+  createPage,
+  mountModelSetupPage,
+  unmountModelSetupPage,
+} from "./test-helpers/solid-page.test-support.tsx";
+
+type TestModelSetupPage = HTMLElement & {
+  routeData?: ModelSetupRouteData;
+  updateComplete: Promise<boolean>;
+};
+
+const detection: SystemAgentSetupDetectResult = {
+  candidates: [],
+  unavailableCandidates: [],
+  manualProviders: [],
+  authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
+  prepareOptions: [],
+  recommendedInstalls: [],
+  workspace: "/tmp/workspace",
+  setupComplete: false,
+};
+
+function createFixture() {
+  const request = vi.fn<GatewayBrowserClient["request"]>();
+  const client = { request } as unknown as GatewayBrowserClient;
+  const listeners = new Set<(snapshot: ApplicationGateway["snapshot"]) => void>();
+  const selectionListeners = new Set<() => void>();
+  const connectedSnapshot = {
+    client,
+    phase: "connected" as const,
+    offlineStable: false,
+    hello: {
+      type: "hello-ok" as const,
+      protocol: 1,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read", "operator.admin"],
+        recoveryScope: "synthetic-setup-owner",
+      },
+      features: { methods: ["openclaw.setup.detect", "openclaw.setup.verify"] },
+    },
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: "main",
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
+  } satisfies ApplicationGateway["snapshot"];
+  const gateway = {
+    snapshot: connectedSnapshot as ApplicationGateway["snapshot"],
+    connection: {
+      gatewayUrl: "ws://localhost",
+      token: "",
+      bootstrapToken: "",
+      password: "",
+    },
+    connectionRevision: 0,
+    eventLog: [],
+    eventLogRevision: 0,
+    loadSelfProfile: async () => null,
+    connect: vi.fn(),
+    setSessionKey: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+    subscribe: (listener: (snapshot: ApplicationGateway["snapshot"]) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeEventLog: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  } satisfies ApplicationGateway;
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const selection = { selectedId: "main", scopeId: "main" };
+  const context = {
+    gateway,
+    settingsAgentSelection: {
+      state: selection,
+      subscribe: (listener: () => void) => {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
+    },
+    basePath: "",
+    navigate: vi.fn(),
+    runtimeConfig,
+  } as unknown as ApplicationContext;
+  const setGatewayPhase = (phase: "connected" | "reconnecting") => {
+    gateway.snapshot = {
+      ...connectedSnapshot,
+      phase,
+      hello: phase === "connected" ? { ...connectedSnapshot.hello } : null,
+    };
+    for (const listener of listeners) {
+      listener(gateway.snapshot);
+    }
+  };
+  const setAgent = (agentId: string) => {
+    selection.selectedId = agentId;
+    for (const listener of selectionListeners) {
+      listener();
+    }
+  };
+  return {
+    context,
+    request,
+    runtimeConfig,
+    setGatewayPhase,
+    setAgent,
+    detectCalls: () => request.mock.calls.filter(([method]) => method === "openclaw.setup.detect"),
+  };
+}
+
+async function mountPage(context: ApplicationContext): Promise<TestModelSetupPage> {
+  const provider = createApplicationContextProvider(context);
+  const page = createPage(context);
+  page.routeData = { firstRun: false };
+  provider.append(page);
+  document.body.append(provider);
+  mountModelSetupPage(page);
+  await page.updateComplete;
+  return page;
+}
+
+function selectedModelDetail(page: TestModelSetupPage): string | undefined {
+  return page.querySelector(".model-setup__current-copy > .muted")?.textContent?.trim();
+}
+
+describe("ModelSetupPage detection ownership", () => {
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  it("starts one detection when the visit arrives after mounting on a connected Gateway", async () => {
+    const { context, request, runtimeConfig } = createFixture();
+    request.mockResolvedValue(detection);
+    const provider = createApplicationContextProvider(context);
+    const page = createPage(context);
+    provider.append(page);
+    document.body.append(provider);
+    mountModelSetupPage(page);
+    await page.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    page.routeData = { firstRun: false };
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledOnce();
+      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull();
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("waits for the connected Gateway when the page mounts during reconnect", async () => {
+    const { context, request, runtimeConfig, setGatewayPhase, detectCalls } = createFixture();
+    request.mockImplementation(async (method) =>
+      method === "openclaw.setup.detect" ? detection : {},
+    );
+    setGatewayPhase("reconnecting");
+    const page = await mountPage(context);
+
+    expect(page.querySelector('[data-auth-choice="provider-auth"]')).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    setGatewayPhase("connected");
+    await vi.waitFor(() => {
+      expect(detectCalls()).toHaveLength(1);
+      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull();
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("cancels stale detection on reattach and accepts only the replacement result", async () => {
+    const { context, request, runtimeConfig, detectCalls } = createFixture();
+    const stale = createDeferred<SystemAgentSetupDetectResult>();
+    let signal: AbortSignal | undefined;
+    request.mockImplementationOnce(async (_method, _params, options) => {
+      signal = options?.signal;
+      return stale.promise;
+    });
+    request.mockImplementation(async (method) =>
+      method === "openclaw.setup.detect"
+        ? { ...detection, configuredModel: "provider/current-model", setupComplete: true }
+        : {},
+    );
+    const page = await mountPage(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+    const provider = page.parentElement!;
+    unmountModelSetupPage(page);
+    page.remove();
+    page.routeData = { firstRun: false };
+    provider.append(page);
+    mountModelSetupPage(page);
+    await vi.waitFor(() => expect(selectedModelDetail(page)).toBe("current-model"));
+    expect(signal?.aborted).toBe(true);
+    expect(detectCalls()).toHaveLength(2);
+    expect(detectCalls().at(-1)).toEqual([
+      "openclaw.setup.detect",
+      { agentId: "main" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ]);
+    // A server can finish after local cancellation; it cannot publish into the next visit.
+    stale.resolve({ ...detection, configuredModel: "provider/stale-model", setupComplete: true });
+    await vi.waitFor(() => expect(request.mock.settledResults[0]?.type).toBe("fulfilled"));
+    await page.updateComplete;
+    expect(selectedModelDetail(page)).toBe("current-model");
+    runtimeConfig.dispose();
+  });
+
+  it("recovers the selected provider wizard across a same-Gateway reconnect", async () => {
+    const { context, request, runtimeConfig, setGatewayPhase } = createFixture();
+    let oldWizardSignal: AbortSignal | undefined;
+    let nextCalls = 0;
+    request.mockImplementation(async (method, _params, options) => {
+      if (method === "openclaw.setup.auth.start") {
+        return { done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        nextCalls += 1;
+        if (nextCalls > 1) {
+          return {
+            done: false,
+            status: "running",
+            step: {
+              id: "provider-key",
+              type: "text",
+              message: "Enter the selected provider key",
+              sensitive: true,
+            },
+          };
+        }
+        oldWizardSignal = options?.signal;
+        return await new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      }
+      if (method === "config.get") {
+        return { config: {}, sourceConfig: {}, raw: "{}", hash: "hash-1", valid: true, issues: [] };
+      }
+      return method === "openclaw.setup.detect" ? detection : {};
+    });
+    const page = await mountPage(context);
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')!.click();
+    await vi.waitFor(() => expect(oldWizardSignal).toBeInstanceOf(AbortSignal));
+    const start = request.mock.calls.find(([method]) => method === "openclaw.setup.auth.start")!;
+
+    setGatewayPhase("reconnecting");
+    setGatewayPhase("connected");
+    await vi.waitFor(() => expect(page.textContent).toContain("Enter the selected provider key"));
+    expect(oldWizardSignal?.aborted).toBe(true);
+    expect(
+      request.mock.calls.filter(([method]) => method === "openclaw.setup.auth.start"),
+    ).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toHaveLength(0);
+    expect(request.mock.calls.findLast(([method]) => method === "wizard.next")?.[1]).toEqual({
+      sessionId: (start[1] as { sessionId: string }).sessionId,
+    });
+    runtimeConfig.dispose();
+  });
+});

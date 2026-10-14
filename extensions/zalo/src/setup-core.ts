@@ -1,13 +1,13 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Zalo plugin module implements setup core behavior.
 import {
   createDelegatedSetupWizardProxy,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  patchScopedAccountConfig,
   createSetupTranslator,
+  setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
@@ -16,12 +16,6 @@ import { promptZaloAllowFrom } from "./setup-allow-from.js";
 const t = createSetupTranslator();
 
 const channel = "zalo" as const;
-
-type ZaloAccountSetupConfig = {
-  enabled?: boolean;
-  dmPolicy?: string;
-  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
-};
 
 export const zaloSetupAdapter = {
   ...createPatchedAccountSetupAdapter({
@@ -62,6 +56,7 @@ export const zaloSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use ZALO_BOT_TOKEN" },
+      envVars: ["ZALO_BOT_TOKEN"],
     },
   },
   legacyAdapter: zaloSetupAdapter,
@@ -71,48 +66,13 @@ export const zaloDmPolicy = createChannelDmPolicy({
   label: "Zalo",
   channel,
   resolveAccount: (cfg, accountId) => {
-    const resolvedAccountId =
-      accountId && normalizeAccountId(accountId)
-        ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZaloAccountId(cfg);
+    const resolvedAccountId = accountId
+      ? normalizeAccountId(accountId)
+      : resolveDefaultZaloAccountId(cfg);
     return resolveZaloAccount({ cfg, accountId: resolvedAccountId });
   },
-  applyPatch: ({ cfg, account, patch }) => {
-    if (account.accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          zalo: {
-            ...cfg.channels?.zalo,
-            enabled: true,
-            ...patch,
-          },
-        },
-      };
-    }
-    const currentAccount = cfg.channels?.zalo?.accounts?.[account.accountId] as
-      | ZaloAccountSetupConfig
-      | undefined;
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalo: {
-          ...cfg.channels?.zalo,
-          enabled: true,
-          accounts: {
-            ...cfg.channels?.zalo?.accounts,
-            [account.accountId]: {
-              ...currentAccount,
-              enabled: currentAccount?.enabled ?? true,
-              ...patch,
-            },
-          },
-        },
-      },
-    };
-  },
+  applyPatch: ({ cfg, account, patch }) =>
+    patchScopedAccountConfig({ cfg, channelKey: channel, accountId: account.accountId, patch }),
   promptAllowFrom: async ({ cfg, prompter, accountId }) =>
     promptZaloAllowFrom({
       cfg,
@@ -138,15 +98,6 @@ export function createZaloSetupWizardProxy(
     credentials: [],
     delegateFinalize: true,
     dmPolicy: zaloDmPolicy,
-    disable: (cfg) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalo: {
-          ...cfg.channels?.zalo,
-          enabled: false,
-        },
-      },
-    }),
+    disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   });
 }

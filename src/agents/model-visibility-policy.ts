@@ -6,9 +6,8 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentConfig, resolveAgentModelFallbacksOverride } from "./agent-scope.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
+import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
   createModelVisibilityPolicyWithFallbacks,
   type ModelVisibilityPolicy,
@@ -18,16 +17,6 @@ export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
   allowManifestNormalization: true,
   allowPluginNormalization: true,
 } as const;
-
-function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
-  if (params.agentId) {
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-    if (override !== undefined) {
-      return override;
-    }
-  }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
 
 function resolveAdditionalConfiguredModelRefs(params: {
   cfg: OpenClawConfig;
@@ -51,33 +40,20 @@ function resolveAdditionalConfiguredModelRefs(params: {
 }
 
 export function createModelVisibilityPolicy(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+  params: Omit<
+    Parameters<typeof createModelVisibilityPolicyWithFallbacks>[0],
+    "fallbackModels" | "additionalConfiguredModelRefs"
+  >,
 ): ModelVisibilityPolicy {
   return createModelVisibilityPolicyWithFallbacks({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    agentId: params.agentId,
-    fallbackModels: resolveAllowedFallbacks({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
+    ...params,
+    fallbackModels: resolveConfiguredModelFallbacks(params),
     additionalConfiguredModelRefs: resolveAdditionalConfiguredModelRefs(params),
     // Model visibility is used by lightweight status/list paths. Keep plugin
     // manifest normalization opt-in so those paths do not load plugin runtime
     // metadata unless a caller explicitly needs it.
     allowManifestNormalization: params.allowManifestNormalization ?? false,
     allowPluginNormalization: params.allowPluginNormalization ?? false,
-    manifestPlugins: params.manifestPlugins,
   });
 }
 

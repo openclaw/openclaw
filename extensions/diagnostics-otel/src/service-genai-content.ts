@@ -1,33 +1,22 @@
 import {
   ATTR_GEN_AI_INPUT_MESSAGES,
   ATTR_GEN_AI_OUTPUT_MESSAGES,
-  ATTR_GEN_AI_SYSTEM_INSTRUCTIONS,
   ATTR_GEN_AI_TOOL_CALL_ARGUMENTS,
   ATTR_GEN_AI_TOOL_CALL_ID,
   ATTR_GEN_AI_TOOL_CALL_RESULT,
   ATTR_GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_OPERATION_NAME_VALUE_EXECUTE_TOOL,
 } from "@opentelemetry/semantic-conventions/incubating";
+import type {
+  DiagnosticEventPrivateData,
+  DiagnosticModelCallContent,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MAX_OTEL_CONTENT_ARRAY_ITEMS,
-  MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
   normalizeOtelContentValue,
   safeJsonString,
-  type OtelContentCapturePolicy,
 } from "./service-content-normalization.js";
-
-export type OtelModelCallContent = {
-  inputMessages?: unknown;
-  outputMessages?: unknown;
-  systemPrompt?: string;
-  toolDefinitions?: unknown;
-};
-
-export type OtelToolCallContent = {
-  toolInput?: unknown;
-  toolOutput?: unknown;
-};
 
 function textPart(content: string): Record<string, unknown> {
   return { type: "text", content };
@@ -94,7 +83,7 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
       return [textPart(String(value))];
     }
-    const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    const json = safeJsonString(value);
     return json ? [textPart(json)] : [];
   }
   const parts: Record<string, unknown>[] = [];
@@ -111,16 +100,10 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     const text = textPartContent(part);
     if (text !== undefined) {
       parts.push(textPart(text));
-    } else if (part.type === "thinking" && typeof part.thinking === "string") {
-      parts.push({ type: "reasoning", content: part.thinking });
-    } else if (part.type === "toolCall" && typeof part.name === "string") {
-      parts.push({
-        type: "tool_call",
-        name: part.name,
-        ...(typeof part.id === "string" ? { id: part.id } : {}),
-        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
-      });
-    } else if (part.type === "tool_call" && typeof part.name === "string") {
+    } else if (
+      (part.type === "toolCall" || part.type === "tool_call") &&
+      typeof part.name === "string"
+    ) {
       parts.push({
         type: "tool_call",
         name: part.name,
@@ -143,9 +126,74 @@ function contentParts(value: unknown): Record<string, unknown>[] {
   return parts;
 }
 
+const INTERNAL_REASONING_MESSAGE_FIELDS = [
+  "reasoning",
+  "reasoning_content",
+  "reasoning_details",
+  "reasoning_text",
+] as const;
+
+const INTERNAL_REASONING_PART_FIELDS = [
+  "textSignature",
+  "thinkingSignature",
+  "thoughtSignature",
+] as const;
+
+function redactInternalReasoningParts(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  return value.map((part) => {
+    if (
+      isRecord(part) &&
+      (part.type === "thinking" || part.type === "redacted_thinking" || part.type === "reasoning")
+    ) {
+      return { type: "reasoning", redacted: true };
+    }
+    if (!isRecord(part)) {
+      return part;
+    }
+    const redacted = { ...part };
+    // Replay signatures carry opaque provider reasoning state even when attached
+    // to visible text or tool calls. Preserve the visible part, not replay state.
+    for (const field of INTERNAL_REASONING_PART_FIELDS) {
+      delete redacted[field];
+    }
+    return redacted;
+  });
+}
+
+function redactInternalReasoningFromMessage(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const redacted = { ...value };
+  // Compatible provider replay payloads can attach reasoning beside `content`
+  // instead of using OpenClaw's normalized thinking blocks. Those fields are
+  // transport-private too and must not survive compatibility serialization.
+  for (const field of INTERNAL_REASONING_MESSAGE_FIELDS) {
+    delete redacted[field];
+  }
+  const hasContentParts = Array.isArray(value.content);
+  const hasExplicitParts = Array.isArray(value.parts);
+  if (hasContentParts) {
+    redacted.content = redactInternalReasoningParts(value.content);
+  }
+  if (hasExplicitParts) {
+    redacted.parts = redactInternalReasoningParts(value.parts);
+  }
+  return redacted;
+}
+
+function redactInternalReasoningFromMessages(value: unknown): unknown {
+  return Array.isArray(value)
+    ? value.map((message) => redactInternalReasoningFromMessage(message))
+    : redactInternalReasoningFromMessage(value);
+}
+
 function normalizeGenAiMessage(
   value: unknown,
-  fallbackRole = "user",
+  fallbackRole: "user" | "assistant",
 ): Record<string, unknown> | undefined {
   if (typeof value === "string") {
     return { role: fallbackRole, parts: [textPart(value)] };
@@ -225,42 +273,9 @@ function assignJsonAttribute(
   key: string,
   value: unknown,
 ): void {
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+  const json = safeJsonString(value);
   if (json) {
     attributes[key] = json;
-  }
-}
-
-function assignGenAiModelContentAttributes(
-  attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
-  policy: OtelContentCapturePolicy,
-): void {
-  if (policy.systemPrompt && typeof content?.systemPrompt === "string") {
-    const systemInstructions = [textPart(content.systemPrompt)];
-    assignJsonAttribute(attributes, ATTR_GEN_AI_SYSTEM_INSTRUCTIONS, systemInstructions);
-  }
-  if (policy.inputMessages) {
-    const inputMessages = normalizeGenAiMessages(content?.inputMessages, "user");
-    if (inputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_INPUT_MESSAGES, inputMessages);
-      assignJsonAttribute(attributes, "input.value", inputMessages);
-      attributes["input.mime_type"] = "application/json";
-    }
-  }
-  if (policy.toolDefinitions) {
-    const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
-    if (toolDefinitions.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
-    }
-  }
-  if (policy.outputMessages) {
-    const outputMessages = normalizeGenAiMessages(content?.outputMessages, "assistant");
-    if (outputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_OUTPUT_MESSAGES, outputMessages);
-      assignJsonAttribute(attributes, "output.value", outputMessages);
-      attributes["output.mime_type"] = "application/json";
-    }
   }
 }
 
@@ -291,55 +306,60 @@ export function assignOtelToolIdentityAttributes(
 
 export function assignOtelModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
-  policy: OtelContentCapturePolicy,
+  content: DiagnosticModelCallContent | undefined,
+  captureContent: boolean,
 ): void {
-  assignGenAiModelContentAttributes(attributes, content, policy);
-  if (policy.inputMessages) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.input_messages",
-      content?.inputMessages,
-    );
+  if (!captureContent) {
+    return;
   }
-  if (policy.toolDefinitions) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.tool_definitions",
-      content?.toolDefinitions,
-    );
+  // Provider-native thinking blocks are not user-visible model output. Keep only
+  // a structural marker on compatibility attributes and omit them from semconv
+  // message parts, whose reasoning schema requires exportable content.
+  const redactedInput = redactInternalReasoningFromMessages(content?.inputMessages);
+  const redactedOutput = redactInternalReasoningFromMessages(content?.outputMessages);
+  const inputMessages = normalizeGenAiMessages(redactedInput, "user");
+  if (inputMessages.length > 0) {
+    assignJsonAttribute(attributes, ATTR_GEN_AI_INPUT_MESSAGES, inputMessages);
+    assignJsonAttribute(attributes, "input.value", inputMessages);
+    attributes["input.mime_type"] = "application/json";
   }
-  if (policy.outputMessages) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.output_messages",
-      content?.outputMessages,
-    );
+  const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
+  if (toolDefinitions.length > 0) {
+    assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
   }
-  if (policy.systemPrompt) {
-    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
+  const outputMessages = normalizeGenAiMessages(redactedOutput, "assistant");
+  if (outputMessages.length > 0) {
+    assignJsonAttribute(attributes, ATTR_GEN_AI_OUTPUT_MESSAGES, outputMessages);
+    assignJsonAttribute(attributes, "output.value", outputMessages);
+    attributes["output.mime_type"] = "application/json";
   }
+  assignOtelContentAttribute(attributes, "openclaw.content.input_messages", redactedInput);
+  assignOtelContentAttribute(
+    attributes,
+    "openclaw.content.tool_definitions",
+    content?.toolDefinitions,
+  );
+  assignOtelContentAttribute(attributes, "openclaw.content.output_messages", redactedOutput);
 }
 
 export function assignOtelToolContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  content: OtelToolCallContent | undefined,
-  policy: OtelContentCapturePolicy,
+  content: DiagnosticEventPrivateData["toolContent"],
+  captureContent: boolean,
 ): void {
+  if (!captureContent) {
+    return;
+  }
   // Mirror captured content onto the semconv keys next to the shipped
   // openclaw.content.* names; normalize once so both copies stay byte-identical.
-  if (policy.toolInputs) {
-    const toolInput = normalizeOtelContentValue(content?.toolInput);
-    if (toolInput) {
-      attributes[ATTR_GEN_AI_TOOL_CALL_ARGUMENTS] = toolInput;
-      attributes["openclaw.content.tool_input"] = toolInput;
-    }
+  const toolInput = normalizeOtelContentValue(content?.toolInput);
+  if (toolInput) {
+    attributes[ATTR_GEN_AI_TOOL_CALL_ARGUMENTS] = toolInput;
+    attributes["openclaw.content.tool_input"] = toolInput;
   }
-  if (policy.toolOutputs) {
-    const toolOutput = normalizeOtelContentValue(content?.toolOutput);
-    if (toolOutput) {
-      attributes[ATTR_GEN_AI_TOOL_CALL_RESULT] = toolOutput;
-      attributes["openclaw.content.tool_output"] = toolOutput;
-    }
+  const toolOutput = normalizeOtelContentValue(content?.toolOutput);
+  if (toolOutput) {
+    attributes[ATTR_GEN_AI_TOOL_CALL_RESULT] = toolOutput;
+    attributes["openclaw.content.tool_output"] = toolOutput;
   }
 }

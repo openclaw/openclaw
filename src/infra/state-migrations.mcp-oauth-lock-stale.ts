@@ -1,18 +1,8 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
 const LEGACY_LOCK_STALE_MS = 60_000;
-
-function parseLockPayload(raw: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 /** Classify only retired-runtime owners whose age and process identity are provably stale. */
 export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
@@ -21,7 +11,7 @@ export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
   isPidDefinitelyDead?: (pid: number) => boolean;
   getProcessStartTime?: (pid: number) => number | null;
 }): boolean {
-  const payload = parseLockPayload(params.raw);
+  const payload = safeParseJsonRecord(params.raw);
   if (!payload) {
     return false;
   }

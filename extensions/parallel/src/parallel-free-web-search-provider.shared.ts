@@ -1,5 +1,8 @@
 import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provider-web-search-contract";
 
+// Shared by the tool schema and runtime validation without loading search execution.
+export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
+
 const PARALLEL_FREE_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
 
 export function createParallelFreeWebSearchProviderBase() {
@@ -7,6 +10,7 @@ export function createParallelFreeWebSearchProviderBase() {
     id: "parallel-free",
     label: "Parallel Search (Free)",
     hint: "Free web search via Parallel's hosted Search MCP — no API key required",
+    configPath: null,
     onboardingScopes: [...PARALLEL_FREE_ONBOARDING_SCOPES],
     // Keyless: always uses Parallel's free hosted Search MCP. Keep it
     // selectable, but never auto-detected; users must opt in before search

@@ -27,8 +27,9 @@ Other common Linux launch failures:
 
 - `The profile appears to be in use by another Chromium process`: stale
   `Singleton*` lock files in the managed profile directory. OpenClaw removes
-  these locks and retries once when the lock points at a dead or
-  different-host process.
+  these locks and retries once when the lock points at a dead process on the
+  current host. Locks naming another hostname are preserved until you verify
+  that the profile is no longer in use, including after a machine rename.
 - `Missing X server or $DISPLAY`: a visible browser was explicitly requested
   on a host without a desktop session. Local managed profiles fall back to
   headless mode on Linux when both `DISPLAY` and `WAYLAND_DISPLAY` are unset.
@@ -107,6 +108,11 @@ systemctl --user enable --now openclaw-browser.service
 
 ### Verify the browser works
 
+These calls go to the OpenClaw browser control service, not to the Chrome CDP
+port used above. Its port is derived from `gateway.port` (default `18791` =
+gateway port + 2), so adjust the number if you moved the Gateway port. `jq` only
+pretty-prints the response; drop the pipe if you do not have it installed.
+
 ```bash
 curl -s http://127.0.0.1:18791/ | jq '{running, pid, chosenBrowser}'
 curl -s -X POST http://127.0.0.1:18791/start
@@ -128,7 +134,7 @@ On Raspberry Pi, older VPS hosts, or slow storage, use a manually launched
 browser with `attachOnly` when Chrome needs more time to expose its CDP HTTP
 endpoint or become ready than the managed-browser deadline permits.
 
-### Problem: No Chrome tabs found for profile="user"
+## Problem: No Chrome tabs found for profile="user"
 
 You are using the `user` (`existing-session` / Chrome MCP) profile and no
 tabs are open to attach to.
@@ -149,8 +155,9 @@ Notes:
   limits: ref-driven actions only, one file per upload, no dialog `timeoutMs`
   overrides, no `wait --load networkidle`, and no `responsebody`, PDF export,
   download interception, or batch actions.
-- Local `openclaw`-driver profiles auto-assign `cdpPort`/`cdpUrl`; only set
-  those manually for remote CDP.
+- Local `openclaw`-driver profiles get a `cdpPort` allocated when OpenClaw
+  creates them; a profile you declare by hand must set `cdpPort` itself, or
+  `cdpUrl` for remote CDP.
 - Remote CDP profiles accept `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) for `/json/version` discovery, or WS(S) when your browser
   service gives you a direct DevTools socket URL.

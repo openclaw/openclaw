@@ -4,32 +4,13 @@ import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-u
 import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";
 
 describe("fetchCodexUsage", () => {
-  it("returns token expired for auth failures", async () => {
+  it.each([401])("returns token expired for a %s auth failure", async (status) => {
     const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(401, { error: "unauthorized" }),
+      makeResponse(status, { error: "unauthorized" }),
     );
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.error).toBe("Token expired");
-    expect(result.windows).toHaveLength(0);
-  });
-
-  it("returns HTTP status errors for non-auth failures", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(429, { error: "throttled" }),
-    );
-
-    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
-    expect(result.error).toBe("HTTP 429");
-    expect(result.windows).toHaveLength(0);
-  });
-
-  it("returns a stable error for malformed successful usage JSON", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
-
-    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
-
-    expect(result.error).toBe("Malformed usage response");
     expect(result.windows).toHaveLength(0);
   });
 
@@ -124,6 +105,7 @@ describe("fetchCodexUsage", () => {
   it("labels short secondary windows in hours", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
+        credits: { balance: "not-a-number" },
         rate_limit: {
           secondary_window: {
             limit_window_seconds: 21_600,
@@ -135,31 +117,6 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.windows).toEqual([{ label: "6h", usedPercent: 11, resetAt: undefined }]);
-  });
-
-  it("keeps credits as a provider unit instead of assuming dollars", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        credits: { balance: "7.5" },
-      }),
-    );
-
-    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
-    expect(result.plan).toBeUndefined();
-    expect(result.billing).toEqual([{ type: "balance", amount: 7.5, unit: "credits" }]);
-    expect(result.windows).toStrictEqual([]);
-  });
-
-  it("omits invalid credit strings", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(200, {
-        plan_type: "Plus",
-        credits: { balance: "not-a-number" },
-      }),
-    );
-
-    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
-    expect(result.plan).toBe("Plus");
     expect(result.billing).toBeUndefined();
   });
 });

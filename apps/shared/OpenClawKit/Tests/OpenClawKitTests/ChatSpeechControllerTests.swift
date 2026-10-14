@@ -56,7 +56,8 @@ private struct SpeechHarness {
         self.controller = OpenClawChatSpeechController(
             synthesize: synthesize,
             clipPlayer: clipPlayer,
-            localSpeech: localSpeaker)
+            localSpeech: localSpeaker,
+            playbackCoordinator: ChatMediaPlaybackCoordinator())
     }
 }
 
@@ -132,8 +133,7 @@ struct ChatSpeechControllerTests {
         harness.controller.toggle(messageID: messageID, text: "Long reply")
         #expect(harness.controller.phase == .idle)
         #expect(harness.clipPlayer.stopCount > 0)
-        // The interrupted clip resolves false, but the bumped generation must
-        // keep the stop from cascading into the on-device voice.
+        // Cancelling playback must not fall through to the on-device voice.
         for _ in 0..<50 {
             await Task.yield()
         }

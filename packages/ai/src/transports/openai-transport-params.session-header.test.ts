@@ -1,7 +1,10 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "../providers/openai-prompt-cache.js";
-import { buildOpenAIClientHeaders } from "./openai-transport-params.js";
+import {
+  buildOpenAIClientHeaders,
+  buildOpenAISdkRequestOptions,
+} from "./openai-transport-params.js";
 
 const codexModel = {
   id: "gpt-5.6-luna",
@@ -10,7 +13,15 @@ const codexModel = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
 } as Model;
 
-const context = { messages: [] } as unknown as Context;
+const context = { messages: [] } satisfies Context;
+
+const proxyResponsesModel = {
+  id: "gpt-5.5",
+  provider: "openai-proxy",
+  api: "openai-responses",
+  baseUrl: "https://responses-proxy.example.test/v1",
+  compat: { sendSessionIdHeader: true },
+} as Model;
 
 describe("buildOpenAIClientHeaders session_id affinity header", () => {
   it("clamps long internal session ids to the backend's 64-char cache key limit", () => {
@@ -23,15 +34,64 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
       longSessionId,
     );
     const sessionHeader = headers.session_id;
-    expect(sessionHeader).toBeDefined();
     expect(Array.from(sessionHeader ?? "").length).toBeLessThanOrEqual(
       OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH,
     );
     expect(sessionHeader?.startsWith("internal-session-effects-session-companion-")).toBe(true);
   });
 
-  it("passes short session ids through unchanged", () => {
-    const headers = buildOpenAIClientHeaders(codexModel, context, undefined, undefined, "abc-123");
-    expect(headers.session_id).toBe("abc-123");
+  it("omits generated Responses session headers when caching is disabled", () => {
+    const headers = buildOpenAIClientHeaders(
+      proxyResponsesModel,
+      context,
+      undefined,
+      undefined,
+      "proxy-session-123",
+      "none",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it.each(["short"] as const)(
+    "preserves a mixed-case caller header with %s retention",
+    (cacheRetention) => {
+      const headers = buildOpenAIClientHeaders(
+        proxyResponsesModel,
+        context,
+        { SeSsIoN_Id: "caller-affinity" },
+        undefined,
+        "generated-affinity",
+        cacheRetention,
+      );
+      expect(new Headers(headers).get("session_id")).toBe("caller-affinity");
+      expect(
+        Object.keys(headers).filter((name) => name.toLowerCase() === "session_id"),
+      ).toHaveLength(1);
+    },
+  );
+});
+
+describe("buildOpenAISdkRequestOptions turn controls", () => {
+  const model = {
+    id: "gpt-5.6-luna",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  } as Model;
+
+  it.each([7])("keeps SDK retries at zero for legacy maxRetries=%s", (maxRetries) => {
+    const signal = new AbortController().signal;
+    const options: SimpleStreamOptions = { timeoutMs: 1_234, maxRetries };
+
+    expect(buildOpenAISdkRequestOptions(model, signal, options)).toEqual({
+      signal,
+      timeout: 1_234,
+      maxRetries: 0,
+    });
+  });
+
+  it("does not add a retry policy when the turn does not specify one", () => {
+    expect(buildOpenAISdkRequestOptions(model)).toBeUndefined();
   });
 });

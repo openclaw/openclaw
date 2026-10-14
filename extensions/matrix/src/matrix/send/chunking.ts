@@ -1,7 +1,10 @@
-// Matrix helper module prepares and chunks outbound formatted text.
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  resolveMarkdownTableMode,
+  type MarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { findCodeRegions, isInsideCode, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
@@ -10,21 +13,20 @@ import {
   type MatrixSpoilerMarkers,
   type MatrixSpoilerProtection,
 } from "../format-profile.js";
-import {
-  findMatrixMarkdownMetadataRanges,
-  hasMatrixSpoilerMetadataCollision,
-} from "../format-spoiler-ranges.js";
+import { analyzeMatrixSpoilers, prepareMatrixMarkdownSource } from "../format-spoiler-ranges.js";
 import { findMatrixTableSourceRanges } from "../format-table-ranges.js";
 import {
   markdownToMatrixBody,
   MATRIX_FORMAT_PROFILE,
   protectMatrixSpoilerDelimiters,
+  renderMatrixBody,
   renderMatrixMarkdownTables,
 } from "../format.js";
 
 type MatrixPreparedSingleText = {
   trimmedText: string;
   convertedText: string;
+  preparedBody: string;
   singleEventLimit: number;
   eventTextLength: number;
   fitsInSingleEvent: boolean;
@@ -35,14 +37,27 @@ type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
   chunks: string[];
 };
 
-const getCore = () => getMatrixRuntime();
+function normalizeMatrixEventLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return limit;
+  }
+  return Math.max(1, Math.floor(limit));
+}
+
+function resolveMatrixChunkOverflow(chunk: string, limit: number): number {
+  const body = markdownToMatrixBody(chunk);
+  const renderedLength = Math.max(chunk.length, body.length);
+  if (limit === 1 && Array.from(chunk).length === 1 && Array.from(body).length === 1) {
+    // One astral code point occupies two UTF-16 units but cannot be split into a valid event.
+    return 0;
+  }
+  return Math.max(0, renderedLength - limit);
+}
 
 function protectMatrixUnderlineTags(markdown: string): MatrixSpoilerProtection {
-  const codeRegions = findCodeRegions(markdown);
-  const metadataRanges = findMatrixMarkdownMetadataRanges(markdown);
-  const tags = [...tokenizeHtmlTags(markdown)].filter(
+  const { codeRegions, metadataRanges, underlineTags } = prepareMatrixMarkdownSource(markdown);
+  const tags = underlineTags.filter(
     (tag) =>
-      (tag.name === "u" || tag.name === "ins") &&
       !tag.selfClosing &&
       !isInsideCode(tag.start, codeRegions) &&
       !isMarkdownEscaped(markdown, tag.start) &&
@@ -81,20 +96,29 @@ function restoreMatrixStyleChunks(
   spoiler: MatrixSpoilerMarkers | undefined,
   underline: MatrixSpoilerMarkers | undefined,
 ): string[] {
+  if (!spoiler && !underline) {
+    return chunks;
+  }
   const stack: MatrixChunkStyle[] = [];
   const syntax = {
-    spoiler: { open: "||", close: "||", markers: spoiler },
-    underline: { open: "<u>", close: "</u>", markers: underline },
+    spoiler: { open: "||", close: "||" },
+    underline: { open: "<u>", close: "</u>" },
   } as const;
   return chunks.map((chunk) => {
     let restored = stack.map((style) => syntax[style].open).join("");
     for (const character of chunk) {
-      const opening = (Object.keys(syntax) as MatrixChunkStyle[]).find(
-        (style) => character === syntax[style].markers?.open,
-      );
-      const closing = (Object.keys(syntax) as MatrixChunkStyle[]).find(
-        (style) => character === syntax[style].markers?.close,
-      );
+      const opening =
+        character === spoiler?.open
+          ? "spoiler"
+          : character === underline?.open
+            ? "underline"
+            : undefined;
+      const closing =
+        character === spoiler?.close
+          ? "spoiler"
+          : character === underline?.close
+            ? "underline"
+            : undefined;
       if (opening) {
         stack.push(opening);
         restored += syntax[opening].open;
@@ -164,24 +188,25 @@ export function prepareMatrixSingleText(
   const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
   const tableMode =
     opts.tableMode ??
-    getCore().channel.text.resolveMarkdownTableMode({
+    resolveMarkdownTableMode({
       cfg,
       channel: "matrix",
       accountId: opts.accountId,
       supportsBlockTables: MATRIX_FORMAT_PROFILE.constructs.table === "native",
     });
-  const singleEventLimit = Math.min(
-    getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
-    MATRIX_FORMAT_PROFILE.chunk.limit,
-  );
   const convertedText = renderMatrixMarkdownTables(trimmedText, tableMode);
-  const eventTextLength = Math.max(
-    convertedText.length,
-    markdownToMatrixBody(convertedText).length,
+  const singleEventLimit = normalizeMatrixEventLimit(
+    Math.min(
+      resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+      MATRIX_FORMAT_PROFILE.chunk.limit,
+    ),
   );
+  const preparedBody = markdownToMatrixBody(convertedText);
+  const eventTextLength = Math.max(convertedText.length, preparedBody.length);
   return {
     trimmedText,
     convertedText,
+    preparedBody,
     singleEventLimit,
     eventTextLength,
     fitsInSingleEvent: eventTextLength <= singleEventLimit,
@@ -205,17 +230,22 @@ export function chunkMatrixText(
       chunks: preparedText.convertedText ? [preparedText.convertedText] : [],
     };
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
-  const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
-  const collisionRedacted = hasMatrixSpoilerMetadataCollision(preparedText.convertedText)
-    ? markdownToMatrixBody(preparedText.convertedText)
-    : undefined;
+  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(
+    opts.cfg,
+    "matrix",
+    opts.accountId,
+  );
+  const analysis = analyzeMatrixSpoilers(preparedText.convertedText);
+  const collisionRedacted = analysis.metadataCollision ? renderMatrixBody(analysis) : undefined;
   const chunkSegment = (segmentText: string): string[] => {
-    const sourceText = hasMatrixSpoilerMetadataCollision(segmentText)
-      ? markdownToMatrixBody(segmentText)
+    const segmentAnalysis = analyzeMatrixSpoilers(segmentText);
+    const sourceText = segmentAnalysis.metadataCollision
+      ? renderMatrixBody(segmentAnalysis)
       : segmentText;
     const protectedUnderline = protectMatrixUnderlineTags(sourceText);
-    const protectedSpoilers = protectMatrixSpoilerDelimiters(protectedUnderline.markdown);
+    const protectedSpoilers = protectMatrixSpoilerDelimiters(
+      analyzeMatrixSpoilers(protectedUnderline.markdown),
+    );
     const wrapperReserve =
       (protectedSpoilers.markers ? 4 : 0) + (protectedUnderline.markers ? 7 : 0);
     const privateMarkers = [protectedSpoilers.markers, protectedUnderline.markers].flatMap(
@@ -223,7 +253,7 @@ export function chunkMatrixText(
     );
     let reserve = wrapperReserve;
     while (reserve < preparedText.singleEventLimit) {
-      const protectedChunks = getCore().channel.text.chunkMarkdownTextWithMode(
+      const protectedChunks = getMatrixRuntime().channel.text.chunkMarkdownTextWithMode(
         protectedSpoilers.markdown,
         preparedText.singleEventLimit - reserve,
         chunkMode,
@@ -241,10 +271,8 @@ export function chunkMatrixText(
       });
       const overflow = Math.max(
         0,
-        ...restored.map(
-          (chunk) =>
-            Math.max(chunk.length, markdownToMatrixBody(chunk).length) -
-            preparedText.singleEventLimit,
+        ...restored.map((chunk) =>
+          resolveMatrixChunkOverflow(chunk, preparedText.singleEventLimit),
         ),
       );
       if (overflow === 0) {

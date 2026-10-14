@@ -1,37 +1,28 @@
-import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { finalizeCopilotAttempt } from "./attempt-cleanup.js";
 import {
-  createPromptError,
   createResult,
-  readString,
+  readNonEmptyString,
   resolvePoolAcquire,
-  toError,
+  toCopilotError,
 } from "./attempt-config.js";
 import { runCopilotExecution } from "./attempt-execution.js";
 import { prepareCopilotAttemptContext } from "./attempt-prepare.js";
-import type { AgentHarnessAttemptResult, CopilotAttemptDeps } from "./attempt-types.js";
+import type {
+  AgentHarnessAttemptResult,
+  CopilotAttemptDeps,
+  CopilotAttemptParams,
+} from "./attempt-types.js";
+import { createPromptError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
-export type { CopilotSessionConfig } from "./attempt-types.js";
 export { resolvePoolAcquire };
 export async function runCopilotAttempt(
-  params: AgentHarnessAttemptParams,
+  params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
 ): Promise<AgentHarnessAttemptResult> {
   const now = deps.now ?? Date.now;
   const attemptStartedAt = now();
-  const {
-    settledToolFinalization,
-    input,
-    createToolBridge,
-    ringZeroSystemAgentRun,
-    messages,
-    modelRef,
-    resolvedWorkspaceForSandbox,
-    sandboxSessionKey,
-    sessionAgentId,
-    hookContextWindowFields,
-    hookContext,
-  } = prepareCopilotAttemptContext(params, deps);
+  const prepared = prepareCopilotAttemptContext(params, deps);
+  const { settledToolFinalization, input, messages, modelRef, hookContext } = prepared;
   const finishAttempt = (result: AgentHarnessAttemptResult) =>
     settledToolFinalization
       ? Promise.resolve(result)
@@ -42,63 +33,47 @@ export async function runCopilotAttempt(
         aborted: true,
         externalAbort: true,
         messagesSnapshot: messages,
-        now,
         promptError: undefined,
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
   try {
     resolveCopilotProvider({
       model: modelRef,
-      resolvedApiKey: readString(params.resolvedApiKey),
-      authProfileId: readString(params.authProfileId),
+      resolvedApiKey: readNonEmptyString(params.resolvedApiKey),
+      authProfileId: readNonEmptyString(params.authProfileId),
     });
   } catch (error) {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
-        promptError: createPromptError("model_not_supported", toError(error).message, error),
+        promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
   const settledFinalizationSessionId = settledToolFinalization
-    ? readString(input.initialReplayState?.sdkSessionId)
+    ? readNonEmptyString(input.initialReplayState?.sdkSessionId)
     : undefined;
   if (settledToolFinalization && !settledFinalizationSessionId) {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
-        now,
         promptError: createPromptError(
           "settled_finalization_session_unavailable",
           "[copilot-attempt] settled tool finalization requires the existing Copilot SDK session",
         ),
         sdkSessionId: undefined,
-        sessionIdUsed: input.sessionId,
       }),
     );
   }
   return await runCopilotExecution({
+    ...prepared,
     params,
     deps,
     now,
     attemptStartedAt,
-    settledToolFinalization,
-    input,
-    createToolBridge,
-    ringZeroSystemAgentRun,
-    messages,
-    modelRef,
-    resolvedWorkspaceForSandbox,
-    sandboxSessionKey,
-    sessionAgentId,
-    hookContextWindowFields,
-    hookContext,
     finishAttempt,
     settledFinalizationSessionId,
   });

@@ -1,40 +1,27 @@
-/** Handles /whoami identity reporting for authorized command senders. */
-import { logVerbose } from "../../globals.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-/** Command handler for the /whoami identity diagnostic. */
-export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (params.command.commandBodyNormalized !== "/whoami") {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /whoami from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  const senderId = params.ctx.SenderId ?? "";
-  const senderUsername = params.ctx.SenderUsername ?? "";
-  const lines = ["🧭 Identity", `Channel: ${params.command.channel}`];
-  if (senderId) {
-    lines.push(`User id: ${senderId}`);
-  }
-  if (senderUsername) {
-    const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
-    lines.push(`Username: ${handle}`);
-  }
-  if (params.ctx.ChatType === "group" && params.ctx.From) {
-    lines.push(`Chat: ${params.ctx.From}`);
-  }
-  if (params.ctx.MessageThreadId != null) {
-    lines.push(`Thread: ${params.ctx.MessageThreadId}`);
-  }
-  const allowFromSender = params.command.senderId ?? "";
-  if (allowFromSender) {
-    lines.push(`AllowFrom: ${allowFromSender}`);
-  }
-  return { shouldContinue: false, reply: { text: lines.join("\n") } };
-};
+export const handleWhoamiCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/whoami",
+    match: (body) => (body === "/whoami" ? true : null),
+    silentUnauthorized: true,
+  },
+  (params) => {
+    const senderId = params.ctx.SenderId ?? "";
+    const senderUsername = params.ctx.SenderUsername ?? "";
+    const allowFromSender = params.command.senderId ?? "";
+    const lines = [
+      "🧭 Identity",
+      `Channel: ${params.command.channel}`,
+      senderId ? `User id: ${senderId}` : undefined,
+      senderUsername
+        ? `Username: ${senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`}`
+        : undefined,
+      params.ctx.ChatType === "group" && params.ctx.From ? `Chat: ${params.ctx.From}` : undefined,
+      params.ctx.MessageThreadId != null ? `Thread: ${params.ctx.MessageThreadId}` : undefined,
+      allowFromSender ? `AllowFrom: ${allowFromSender}` : undefined,
+    ];
+    return commandReply(lines.filter(Boolean).join("\n"));
+  },
+);

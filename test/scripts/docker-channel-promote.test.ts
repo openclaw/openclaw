@@ -17,15 +17,24 @@ function imageConfig(version: string): string {
 }
 
 function createDockerMock(params: {
+  browserAvailable?: boolean;
   candidateVersion: string;
   currentVersion?: string;
+  sourceImageConfigs?: Record<string, string>;
   wrongTargetDigest?: string;
 }) {
   const targetDigests = new Map<string, string>();
   return vi.fn((_command: string, args: string[]) => {
     if (args[2] === "inspect") {
       const ref = args[3]!;
+      if (params.browserAvailable === false && ref.includes("-browser")) {
+        throw new Error(`${ref}: manifest unknown`);
+      }
       if (args.at(-1)?.includes(".Image")) {
+        const platform = args.at(-1)?.includes("linux/arm64") ? "linux/arm64" : "linux/amd64";
+        if (ref.includes("@") && params.sourceImageConfigs?.[platform] !== undefined) {
+          return params.sourceImageConfigs[platform];
+        }
         return imageConfig(ref.includes("@") ? params.candidateVersion : params.currentVersion!);
       }
       if (params.wrongTargetDigest && ref.includes(":extended-stable")) {
@@ -80,80 +89,47 @@ function requireJob(workflow: Workflow, name: string): WorkflowJob {
 }
 
 describe("Docker channel promotion", () => {
-  it("plans every extended-stable image variant in both registries", () => {
-    expect(createDockerChannelPromotionPlan({ version: "2026.6.33", images })).toEqual({
-      channel: "extended-stable",
-      promotions: images.flatMap((image) => [
+  it("stops channel alias writes when authority is revoked between registries", () => {
+    const docker = createDockerMock({ candidateVersion: "2026.7.1", currentVersion: "2026.7.1" });
+    const writes: string[][] = [];
+    let revoked = false;
+    const execFileSyncImpl = (command: string, args: string[]) => {
+      const result = docker(command, args);
+      if (args[2] === "create") {
+        writes.push(args);
+        if (writes.length === 3) {
+          revoked = true;
+        }
+      }
+      return result;
+    };
+
+    expect(() =>
+      promoteDockerChannel(
+        { version: "2026.7.1", images },
         {
-          image,
-          sourceRef: `${image}:2026.6.33`,
-          targetRefs: [`${image}:extended-stable`],
+          execFileSyncImpl,
+          verifyAttestationsImpl: skipAttestationVerification,
+          revalidateAuthority: () => {
+            if (revoked) {
+              throw new Error("Publication authority revoked");
+            }
+          },
+          log: () => {},
         },
-        {
-          image,
-          sourceRef: `${image}:2026.6.33-slim`,
-          targetRefs: [`${image}:extended-stable-slim`],
-        },
-        {
-          image,
-          sourceRef: `${image}:2026.6.33-browser`,
-          targetRefs: [`${image}:extended-stable-browser`],
-        },
-      ]),
-      version: "2026.6.33",
-    });
+      ),
+    ).toThrow("Publication authority revoked");
+    expect(writes).toHaveLength(3);
   });
 
-  it("preflights every source before moving and verifying aliases", () => {
-    const calls: string[][] = [];
-    const docker = createDockerMock({
-      candidateVersion: "2026.6.33",
-      currentVersion: "2026.6.33",
-    });
-    const execFileSyncImpl = vi.fn((command: string, args: string[]) => {
-      calls.push(args);
-      return docker(command, args);
-    });
-    const verifyAttestationsImpl = vi.fn();
-
-    promoteDockerChannel(
-      { version: "2026.6.33", images },
-      { execFileSyncImpl, verifyAttestationsImpl },
-    );
-
-    const firstCreate = calls.findIndex((args) => args[2] === "create");
-    expect(firstCreate).toBe(30);
-    expect(calls.slice(0, firstCreate).every((args) => args[2] === "inspect")).toBe(true);
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(6);
-    expect(verifyAttestationsImpl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        imageRefs: [
-          `ghcr.io/openclaw/openclaw@${digest}`,
-          `ghcr.io/openclaw/openclaw@${digest}`,
-          `ghcr.io/openclaw/openclaw@${digest}`,
-          `docker.io/openclaw/openclaw@${digest}`,
-          `docker.io/openclaw/openclaw@${digest}`,
-          `docker.io/openclaw/openclaw@${digest}`,
-        ],
-        requiredPlatforms: [
-          { architecture: "amd64", os: "linux", variant: undefined },
-          { architecture: "arm64", os: "linux", variant: undefined },
-        ],
+  it.each(["r20260820"])("rejects malformed rebuild suffix %s", (imageTagSuffix) => {
+    expect(() =>
+      createDockerChannelPromotionPlan({
+        version: "2026.7.1",
+        imageTagSuffix,
+        images: images.slice(0, 1),
       }),
-    );
-    expect(execFileSyncImpl).toHaveBeenCalledWith(
-      "docker",
-      [
-        "buildx",
-        "imagetools",
-        "create",
-        "--prefer-index=false",
-        "--tag",
-        "ghcr.io/openclaw/openclaw:extended-stable",
-        `ghcr.io/openclaw/openclaw@${digest}`,
-      ],
-      expect.objectContaining({ timeout: 120_000 }),
-    );
+    ).toThrow("Invalid Docker image tag suffix");
   });
 
   it("fails without mutating when any version-specific source is missing", () => {
@@ -198,27 +174,20 @@ describe("Docker channel promotion", () => {
 
     expect(() =>
       promoteDockerChannel(
-        { version: "2026.6.33", images: images.slice(0, 1) },
+        {
+          version: "2026.6.33",
+          imageTagSuffix: "-r20260820",
+          images: images.slice(0, 1),
+        },
         { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
       ),
     ).toThrow(
       "Refusing to move ghcr.io/openclaw/openclaw:extended-stable backward from 2026.6.34 to 2026.6.33",
     );
-    expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
-  });
-
-  it.each([
-    ["same", "2026.6.33", "2026.6.33"],
-    ["newer", "2026.6.34", "2026.6.33"],
-  ])("allows an automatic %s-version promotion", (_label, candidateVersion, currentVersion) => {
-    const execFileSyncImpl = createDockerMock({ candidateVersion, currentVersion });
-
-    promoteDockerChannel(
-      { version: candidateVersion, images: images.slice(0, 1) },
-      { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
+    expect(execFileSyncImpl.mock.calls[0]?.[1]).toContain(
+      "ghcr.io/openclaw/openclaw:2026.6.33-r20260820",
     );
-
-    expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(true);
+    expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
   });
 
   it("allows an explicitly approved rollback", () => {
@@ -239,7 +208,15 @@ describe("Docker channel promotion", () => {
     expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(true);
   });
 
-  it("allows a first promotion when the target alias does not exist", () => {
+  it.each([
+    [
+      "no such manifest in buffered stderr",
+      () =>
+        Object.assign(new Error("docker inspect failed"), {
+          stderr: Buffer.from("no such manifest"),
+        }),
+    ],
+  ])("allows a first promotion for %s", (_label, createMissingError) => {
     let created = false;
     const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
       if (args[2] === "create") {
@@ -248,9 +225,7 @@ describe("Docker channel promotion", () => {
       }
       if (args.at(-1)?.includes(".Image")) {
         if (!args[3]!.includes("@") && !created) {
-          const error = new Error("docker inspect failed");
-          Object.assign(error, { stderr: `ERROR: ${args[3]}: not found` });
-          throw error;
+          throw createMissingError();
         }
         return imageConfig("2026.6.33");
       }
@@ -265,12 +240,17 @@ describe("Docker channel promotion", () => {
     expect(created).toBe(true);
   });
 
-  it("fails closed when an existing alias cannot be inspected", () => {
+  it.each([
+    [
+      "an unrelated executable lookup",
+      Object.assign(new Error("docker inspect failed"), {
+        stderr: "docker credential helper: not found",
+      }),
+    ],
+  ])("fails closed on %s while inspecting an existing alias", (_label, inspectionError) => {
     const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
       if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@")) {
-        const error = new Error("unauthorized: authentication required");
-        Object.assign(error, { stderr: "denied: requested access to the resource is denied" });
-        throw error;
+        throw inspectionError;
       }
       if (args.at(-1)?.includes(".Image")) {
         return imageConfig("2026.6.33");
@@ -283,7 +263,28 @@ describe("Docker channel promotion", () => {
         { version: "2026.6.33", images: images.slice(0, 1) },
         { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
       ),
-    ).toThrow("unauthorized");
+    ).toThrow(inspectionError.message);
+    expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
+  });
+
+  it("does not treat a longer image token as the inspected alias", () => {
+    const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
+      if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@")) {
+        const error = new Error("docker inspect failed");
+        Object.assign(error, { stderr: `mirror-${args[3]}: not found` });
+        throw error;
+      }
+      return args.at(-1)?.includes(".Image")
+        ? imageConfig("2026.6.33")
+        : JSON.stringify({ digest });
+    });
+
+    expect(() =>
+      promoteDockerChannel(
+        { version: "2026.6.33", images: images.slice(0, 1) },
+        { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
+      ),
+    ).toThrow("docker inspect failed");
     expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
   });
 
@@ -327,18 +328,62 @@ describe("Docker channel promotion", () => {
     ).toEqual(Array(3).fill(`ghcr.io/openclaw/openclaw@${digest}`));
   });
 
-  it("rejects a source whose version label does not match the requested release", () => {
-    const execFileSyncImpl = createDockerMock({
-      candidateVersion: "2026.6.34",
-      currentVersion: "2026.6.33",
-    });
+  it.each(["custom-build"])(
+    "rejects source label %s at the requested-release comparison",
+    (candidateVersion) => {
+      const execFileSyncImpl = createDockerMock({
+        candidateVersion,
+        currentVersion: "2026.6.33",
+      });
 
-    expect(() =>
+      expect(() =>
+        promoteDockerChannel(
+          { version: "2026.6.33", images: images.slice(0, 1) },
+          { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
+        ),
+      ).toThrow(
+        `ghcr.io/openclaw/openclaw@${digest} reports version ${candidateVersion}, expected 2026.6.33`,
+      );
+      expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
+    },
+  );
+
+  it.each([
+    ["malformed JSON", "{", "linux/amd64"],
+    ["second-platform missing label", "{}", "linux/arm64"],
+  ])("rejects %s before writing aliases", (_name, raw, platform) => {
+    const execFileSyncImpl = createDockerMock({
+      candidateVersion: "2026.6.33",
+      currentVersion: "2026.6.33",
+      sourceImageConfigs: { [platform]: raw },
+    });
+    const promote = vi.fn(() =>
       promoteDockerChannel(
         { version: "2026.6.33", images: images.slice(0, 1) },
         { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
       ),
-    ).toThrow(`ghcr.io/openclaw/openclaw@${digest} reports version 2026.6.34, expected 2026.6.33`);
+    );
+    const sourceRef = `${images[0]}@${digest}`;
+
+    expect(promote).toThrow(
+      raw === "{"
+        ? `Could not parse the ${platform} image config for ${sourceRef}.`
+        : `${sourceRef} does not have an org.opencontainers.image.version label for ${platform}.`,
+    );
+    if (raw === "{") {
+      expect(promote.mock.results[0]?.value).toHaveProperty("cause", expect.any(SyntaxError));
+    } else {
+      expect(promote.mock.results[0]?.value).not.toHaveProperty("cause");
+    }
+    expect(execFileSyncImpl.mock.calls.at(-1)?.[1]).toEqual([
+      "buildx",
+      "imagetools",
+      "inspect",
+      sourceRef,
+      "--format",
+      `{{json (index .Image "${platform}")}}`,
+    ]);
+    expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
   });
 
   it("rejects a source whose platform version labels disagree", () => {
@@ -368,50 +413,25 @@ describe("Docker channel promotion", () => {
   it("uses the digest-bound promotion path for releases and approved repairs", () => {
     const workflow = readWorkflow(".github/workflows/docker-channel-promote.yml");
     const releaseWorkflow = readWorkflow(".github/workflows/docker-release.yml");
-    const createManifest = requireJob(releaseWorkflow, "create-manifest");
-    const verifyAttestations = requireJob(releaseWorkflow, "verify-attestations");
+    const publish = requireJob(releaseWorkflow, "publish");
     const resolve = requireJob(workflow, "resolve");
     const approve = requireJob(workflow, "approve");
     const promote = requireJob(workflow, "promote");
 
-    expect(releaseWorkflow.concurrency).toEqual({
-      group:
-        "${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || 'docker-release-publish' }}",
+    expect(releaseWorkflow.concurrency).toBeUndefined();
+    expect(publish.concurrency).toEqual({
+      group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",
     });
-    expect(verifyAttestations.permissions).toEqual({ contents: "read", packages: "write" });
-
-    const manifestTagStep = createManifest.steps?.find(
-      (step) => step.name === "Resolve manifest tags",
-    );
-    expect(manifestTagStep?.run).not.toContain("alias");
-    expect(manifestTagStep?.env).not.toHaveProperty("DEFAULT_ALIASES");
-
-    const releaseSteps = verifyAttestations.steps ?? [];
-    const resolveRefsStep = releaseSteps.find((step) => step.name === "Resolve image refs");
-    expect(resolveRefsStep?.run).not.toContain("alias");
-    expect(resolveRefsStep?.env).not.toHaveProperty("DEFAULT_ALIASES");
-    const releaseAttestationIndex = releaseSteps.findIndex(
-      (step) => step.name === "Verify Docker attestations",
-    );
-    const releasePromotionIndex = releaseSteps.findIndex(
-      (step) => step.name === "Promote and verify channel aliases",
-    );
-    expect(releaseAttestationIndex).toBeGreaterThan(-1);
-    expect(releasePromotionIndex).toBeGreaterThan(releaseAttestationIndex);
-    expect(releaseSteps[releasePromotionIndex]?.if).toBe(
-      "${{ github.event_name != 'workflow_dispatch' && needs.resolve_release_policy.outputs.channel != 'beta' }}",
-    );
-    expect(releaseSteps[releasePromotionIndex]?.run).toContain(
-      "node scripts/docker-channel-promote.mjs",
-    );
-    expect(releaseSteps[releasePromotionIndex]?.run).not.toContain("--allow-rollback");
-    expect(
-      Object.values(releaseWorkflow.jobs ?? {}).flatMap((job) =>
-        (job.steps ?? []).filter((step) => step.run?.includes("docker-channel-promote.mjs")),
-      ),
-    ).toHaveLength(1);
+    expect(publish.environment).toBeUndefined();
+    expect(requireJob(releaseWorkflow, "approve").environment).toBe("docker-release");
+    expect(publish.permissions).toEqual({
+      actions: "read",
+      attestations: "read",
+      contents: "read",
+      packages: "write",
+    });
 
     expect(resolve.permissions).toEqual({ contents: "read" });
     expect(resolve.steps?.find((step) => step.uses?.startsWith("actions/checkout@"))?.with).toEqual(

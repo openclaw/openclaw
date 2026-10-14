@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   me: vi.fn(),
-  resolveWorkspaceId: vi.fn(),
   workspaces: vi.fn(),
 }));
 
@@ -28,23 +27,19 @@ vi.mock("./http-client.js", () => ({
   },
 }));
 
-vi.mock("./resolve.js", () => ({
-  resolveWorkspaceId: mocks.resolveWorkspaceId,
-}));
-
 import { clickClackSetupPlugin } from "./channel.setup.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
-const configuredAccount = {
-  channels: {
-    clickclack: {
-      baseUrl: "https://clickclack.example",
-      token: "ccb_test",
-      workspace: "default",
-    },
-  },
-} satisfies CoreConfig;
+function channelConfig(clickclack: NonNullable<NonNullable<CoreConfig["channels"]>["clickclack"]>) {
+  return { channels: { clickclack } };
+}
+
+const configuredAccount = channelConfig({
+  baseUrl: "https://clickclack.example",
+  token: "ccb_test",
+  workspace: "default",
+});
 
 function tokenCredential() {
   const credential = clickClackSetupWizard.credentials[0];
@@ -58,10 +53,8 @@ describe("ClickClack setup wizard", () => {
   beforeEach(() => {
     mocks.createClient.mockReset();
     mocks.me.mockReset();
-    mocks.resolveWorkspaceId.mockReset();
     mocks.workspaces.mockReset();
     mocks.me.mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
-    mocks.resolveWorkspaceId.mockResolvedValue("wsp_default");
     mocks.workspaces.mockResolvedValue([
       { id: "wsp_default", name: "Default", slug: "default", created_at: "2026-01-01" },
     ]);
@@ -91,14 +84,7 @@ describe("ClickClack setup wizard", () => {
     vi.stubEnv("CLICKCLACK_BOT_TOKEN", "ccb_env");
     expect(
       credential.inspect({
-        cfg: {
-          channels: {
-            clickclack: {
-              baseUrl: "https://clickclack.example",
-              workspace: "default",
-            },
-          },
-        } as CoreConfig,
+        cfg: channelConfig({ baseUrl: "https://clickclack.example", workspace: "default" }),
         accountId: "default",
       }),
     ).toMatchObject({
@@ -113,15 +99,11 @@ describe("ClickClack setup wizard", () => {
       fs.writeFileSync(tokenFile, "ccb_file\n", "utf8");
       expect(
         credential.inspect({
-          cfg: {
-            channels: {
-              clickclack: {
-                baseUrl: "https://clickclack.example",
-                tokenFile,
-                workspace: "default",
-              },
-            },
-          } as CoreConfig,
+          cfg: channelConfig({
+            baseUrl: "https://clickclack.example",
+            tokenFile,
+            workspace: "default",
+          }),
           accountId: "default",
         }),
       ).toMatchObject({
@@ -131,15 +113,11 @@ describe("ClickClack setup wizard", () => {
       });
     });
 
-    const secretRefAccount = {
-      channels: {
-        clickclack: {
-          baseUrl: "https://clickclack.example",
-          token: { source: "file", provider: "vault", id: "/clickclack/token" },
-          workspace: "default",
-        },
-      },
-    } satisfies CoreConfig;
+    const secretRefAccount = channelConfig({
+      baseUrl: "https://clickclack.example",
+      token: { source: "file", provider: "vault", id: "/clickclack/token" },
+      workspace: "default",
+    });
     expect(await clickClackSetupWizard.status.resolveConfigured({ cfg: secretRefAccount })).toBe(
       true,
     );
@@ -165,16 +143,12 @@ describe("ClickClack setup wizard", () => {
   it("switches the default account to env auth before URL and workspace prompts", async () => {
     const credential = tokenCredential();
     const next = await credential.applyUseEnv?.({
-      cfg: {
-        channels: {
-          clickclack: {
-            baseUrl: "https://clickclack.example",
-            token: "ccb_stale",
-            tokenFile: "/run/secrets/stale",
-            workspace: "default",
-          },
-        },
-      } as CoreConfig,
+      cfg: channelConfig({
+        baseUrl: "https://clickclack.example",
+        token: "ccb_stale",
+        tokenFile: "/run/secrets/stale",
+        workspace: "default",
+      }),
       accountId: "default",
     });
 
@@ -205,22 +179,7 @@ describe("ClickClack setup wizard", () => {
       workspace: "default",
     });
     expect(mocks.me).toHaveBeenCalledTimes(1);
-    expect(mocks.resolveWorkspaceId).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports the resolved bot and workspace after live validation", async () => {
-    const note = vi.fn(async () => undefined);
-
-    await runSetupWizardFinalize({
-      finalize: clickClackSetupWizard.finalize,
-      cfg: configuredAccount,
-      prompter: createTestWizardPrompter({ note }),
-    });
-
-    expect(mocks.me.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.resolveWorkspaceId.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(note).toHaveBeenCalledWith(
+    expect(queued.prompter.note).toHaveBeenCalledWith(
       "Connected as @openclaw — workspace Default resolved.",
       "ClickClack connection",
     );
@@ -229,15 +188,11 @@ describe("ClickClack setup wizard", () => {
   it("uses the resolved setup credential for live validation", async () => {
     await runSetupWizardFinalize({
       finalize: clickClackSetupWizard.finalize,
-      cfg: {
-        channels: {
-          clickclack: {
-            baseUrl: "https://clickclack.example",
-            token: { source: "file", provider: "vault", id: "/clickclack/token" },
-            workspace: "default",
-          },
-        },
-      } satisfies CoreConfig,
+      cfg: channelConfig({
+        baseUrl: "https://clickclack.example",
+        token: { source: "file", provider: "vault", id: "/clickclack/token" },
+        workspace: "default",
+      }),
       credentialValues: { token: "ccb_resolved" },
     });
 
@@ -265,21 +220,13 @@ describe("ClickClack setup wizard", () => {
   });
 
   it("keeps setup saved when workspace resolution fails", async () => {
-    mocks.resolveWorkspaceId.mockResolvedValue("wsp_missing");
     mocks.workspaces.mockResolvedValue([]);
     const note = vi.fn(async () => undefined);
 
     await expect(
       runSetupWizardFinalize({
         finalize: clickClackSetupWizard.finalize,
-        cfg: {
-          channels: {
-            clickclack: {
-              ...configuredAccount.channels.clickclack,
-              workspace: "wsp_missing",
-            },
-          },
-        },
+        cfg: channelConfig({ ...configuredAccount.channels.clickclack, workspace: "wsp_missing" }),
         prompter: createTestWizardPrompter({ note }),
       }),
     ).resolves.toBeUndefined();

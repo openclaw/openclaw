@@ -1,6 +1,6 @@
-// Slack plugin module owns durable Agent View mode state.
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalSlackRuntime } from "../runtime.js";
+import { writeLruMapEntry } from "./lru-map-cache.js";
 
 const SLACK_AGENT_VIEW_STATE_NAMESPACE = "agent-view-workspaces";
 const SLACK_AGENT_VIEW_THREAD_STATE_NAMESPACE = "agent-view-threads";
@@ -20,15 +20,13 @@ type StoredSlackManagedThreadState = {
 
 export function createSlackAgentViewState(params: {
   accountId: string;
-  teamId: string;
-  apiAppId: string;
+  getTeamId: () => string;
+  getApiAppId: () => string;
   warn: (action: string, error: unknown) => void;
 }) {
   let enabled = false;
   let loaded = false;
   let persisted = false;
-  let workspaceStore: PluginStateKeyedStore<StoredSlackAgentViewState> | undefined;
-  let threadStore: PluginStateKeyedStore<StoredSlackManagedThreadState> | undefined;
   let warned = false;
   const managedThreads = new Map<string, true>();
 
@@ -40,54 +38,53 @@ export function createSlackAgentViewState(params: {
     params.warn(action, error);
   };
 
-  const openWorkspaceStore = () => {
-    if (workspaceStore) {
-      return workspaceStore;
-    }
-    const runtime = getOptionalSlackRuntime();
-    if (!runtime) {
-      return undefined;
-    }
-    try {
-      // Slack cannot switch an app back to Assistant View, so this marker has no TTL.
-      workspaceStore = runtime.state.openKeyedStore<StoredSlackAgentViewState>({
-        namespace: SLACK_AGENT_VIEW_STATE_NAMESPACE,
-        maxEntries: SLACK_AGENT_VIEW_STATE_MAX_ENTRIES,
-      });
-      return workspaceStore;
-    } catch (error) {
-      warnOnce("open", error);
-      return undefined;
-    }
+  const createStoreOpener = <T>(namespace: string, maxEntries: number) => {
+    let store: PluginStateKeyedStore<T> | undefined;
+    return () => {
+      if (store) {
+        return store;
+      }
+      const runtime = getOptionalSlackRuntime();
+      if (!runtime) {
+        return undefined;
+      }
+      try {
+        store = runtime.state.openKeyedStore<T>({ namespace, maxEntries });
+        return store;
+      } catch (error) {
+        warnOnce("open", error);
+        return undefined;
+      }
+    };
   };
 
-  const openThreadStore = () => {
-    if (threadStore) {
-      return threadStore;
-    }
-    const runtime = getOptionalSlackRuntime();
-    if (!runtime) {
-      return undefined;
-    }
-    try {
-      threadStore = runtime.state.openKeyedStore<StoredSlackManagedThreadState>({
-        namespace: SLACK_AGENT_VIEW_THREAD_STATE_NAMESPACE,
-        maxEntries: SLACK_AGENT_VIEW_THREAD_STATE_MAX_ENTRIES,
-      });
-      return threadStore;
-    } catch (error) {
-      warnOnce("open", error);
-      return undefined;
-    }
-  };
+  // Slack cannot switch an app back to Assistant View, so this marker has no TTL.
+  const openWorkspaceStore = createStoreOpener<StoredSlackAgentViewState>(
+    SLACK_AGENT_VIEW_STATE_NAMESPACE,
+    SLACK_AGENT_VIEW_STATE_MAX_ENTRIES,
+  );
+  const openThreadStore = createStoreOpener<StoredSlackManagedThreadState>(
+    SLACK_AGENT_VIEW_THREAD_STATE_NAMESPACE,
+    SLACK_AGENT_VIEW_THREAD_STATE_MAX_ENTRIES,
+  );
 
-  const workspaceStateKey = params.apiAppId
-    ? JSON.stringify(["workspace", params.accountId, params.teamId, params.apiAppId])
-    : undefined;
+  const resolveStateKey = (thread?: [channelId: string, threadTs: string]) => {
+    const apiAppId = params.getApiAppId();
+    return apiAppId
+      ? JSON.stringify([
+          thread ? "thread" : "workspace",
+          params.accountId,
+          params.getTeamId(),
+          apiAppId,
+          ...(thread ?? []),
+        ])
+      : undefined;
+  };
   const record = async () => {
     enabled = true;
     loaded = true;
-    if (persisted || !workspaceStateKey) {
+    const stateKey = resolveStateKey();
+    if (persisted || !stateKey) {
       return;
     }
     const openedStore = openWorkspaceStore();
@@ -95,7 +92,7 @@ export function createSlackAgentViewState(params: {
       return;
     }
     try {
-      await openedStore.register(workspaceStateKey, {
+      await openedStore.register(stateKey, {
         experience: "agent",
         observedAt: Date.now(),
       });
@@ -112,8 +109,9 @@ export function createSlackAgentViewState(params: {
     if (loaded) {
       return false;
     }
-    if (!workspaceStateKey) {
-      loaded = true;
+    const stateKey = resolveStateKey();
+    if (!stateKey) {
+      // No app id yet: keep the durable lookup pending until it is learned.
       return false;
     }
     const openedStore = openWorkspaceStore();
@@ -121,7 +119,7 @@ export function createSlackAgentViewState(params: {
       return false;
     }
     try {
-      const stored = await openedStore.lookup(workspaceStateKey);
+      const stored = await openedStore.lookup(stateKey);
       loaded = true;
       enabled = stored?.experience === "agent";
       persisted = enabled;
@@ -134,33 +132,14 @@ export function createSlackAgentViewState(params: {
 
   const managedThreadKey = (channelId: string, threadTs: string) =>
     JSON.stringify([channelId, threadTs]);
-  const managedThreadStateKey = (channelId: string, threadTs: string) =>
-    params.apiAppId
-      ? JSON.stringify([
-          "thread",
-          params.accountId,
-          params.teamId,
-          params.apiAppId,
-          channelId,
-          threadTs,
-        ])
-      : undefined;
   const rememberManagedThread = (key: string) => {
-    managedThreads.delete(key);
-    managedThreads.set(key, true);
-    if (managedThreads.size <= SLACK_MANAGED_THREAD_CACHE_MAX_ENTRIES) {
-      return;
-    }
-    const oldestKey = managedThreads.keys().next().value;
-    if (oldestKey !== undefined) {
-      managedThreads.delete(oldestKey);
-    }
+    writeLruMapEntry(managedThreads, key, true, SLACK_MANAGED_THREAD_CACHE_MAX_ENTRIES);
   };
 
   const recordManagedThread = async (channelId: string, threadTs: string) => {
     const key = managedThreadKey(channelId, threadTs);
     rememberManagedThread(key);
-    const stateKey = managedThreadStateKey(channelId, threadTs);
+    const stateKey = resolveStateKey([channelId, threadTs]);
     const openedStore = stateKey ? openThreadStore() : undefined;
     if (!openedStore || !stateKey) {
       return;
@@ -180,7 +159,7 @@ export function createSlackAgentViewState(params: {
     if (managedThreads.has(key)) {
       return true;
     }
-    const stateKey = managedThreadStateKey(channelId, threadTs);
+    const stateKey = resolveStateKey([channelId, threadTs]);
     const openedStore = stateKey ? openThreadStore() : undefined;
     if (!openedStore || !stateKey) {
       return false;

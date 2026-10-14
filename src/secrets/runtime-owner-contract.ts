@@ -1,8 +1,8 @@
 /** Process-local identity for the non-secret config that an owner may use with a credential. */
 import { createHash } from "node:crypto";
-import { stableStringify } from "../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { secretRefKey } from "./ref-contract.js";
 import { isRecord } from "./shared.js";
 
@@ -13,7 +13,7 @@ export function canonicalizeSecretRefsForOwnerContract(
   value: unknown,
   defaults: SecretDefaults | undefined,
 ): unknown {
-  const ref = coerceSecretRef(value, defaults);
+  const ref = parseSecretRef(value, defaults);
   if (ref) {
     return { secretRef: secretRefKey(ref) };
   }

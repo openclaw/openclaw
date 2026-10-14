@@ -1,165 +1,20 @@
-import type { AssistantMessage, AssistantMessageEvent, Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import {
-  processResponsesStream as processTransportStream,
-  type OpenAIResponsesStreamEvent,
-} from "./openai-responses-stream-internal.js";
+  completed,
+  runFixture,
+  type ParityFixture,
+} from "./openai-responses-stream-parity.test-helpers.js";
 
-type ProjectedEvent = {
-  type: string;
-  contentIndex?: number;
-  delta?: string;
-  content?: string;
-};
-
-type ProjectedBlock =
-  | { type: "thinking"; thinking: string; encrypted: boolean }
-  | { type: "text"; text: string }
-  | {
-      type: "toolCall";
-      id: string;
-      name: string;
-      arguments: unknown;
-      partialJson: boolean;
-    };
-
-type ProcessResult = {
-  events: ProjectedEvent[];
-  content: ProjectedBlock[];
-  responseId: string | null;
-  stopReason: string;
-  error: string | null;
-};
-
-type ParityFixture = {
-  name: string;
-  events: Record<string, unknown>[];
-  canonical: ProcessResult;
-};
-
-const model = {
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
-
-function createOutput(): AssistantMessage {
+function responseMessage(id: string, text: string, phase?: "commentary" | "final_answer") {
   return {
+    id,
+    type: "message",
     role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 0,
+    status: "completed",
+    ...(phase ? { phase } : {}),
+    content: [{ type: "output_text", text, annotations: [] }],
   };
 }
-
-async function* eventStream(
-  events: readonly Record<string, unknown>[],
-): AsyncGenerator<OpenAIResponsesStreamEvent> {
-  for (const event of events) {
-    yield event as OpenAIResponsesStreamEvent;
-  }
-}
-
-function projectEvent(event: AssistantMessageEvent): ProjectedEvent | undefined {
-  if (
-    event.type !== "thinking_start" &&
-    event.type !== "thinking_delta" &&
-    event.type !== "thinking_end" &&
-    event.type !== "text_start" &&
-    event.type !== "text_delta" &&
-    event.type !== "text_end" &&
-    event.type !== "toolcall_start" &&
-    event.type !== "toolcall_delta" &&
-    event.type !== "toolcall_end"
-  ) {
-    return undefined;
-  }
-  return {
-    type: event.type,
-    contentIndex: event.contentIndex,
-    ...(event.type === "thinking_delta" ||
-    event.type === "text_delta" ||
-    event.type === "toolcall_delta"
-      ? { delta: event.delta }
-      : {}),
-    ...(event.type === "thinking_end" || event.type === "text_end"
-      ? { content: event.content }
-      : {}),
-  };
-}
-
-function projectBlock(block: AssistantMessage["content"][number]): ProjectedBlock {
-  if (block.type === "thinking") {
-    let encrypted = false;
-    if (block.thinkingSignature) {
-      try {
-        const item = JSON.parse(block.thinkingSignature) as { encrypted_content?: unknown };
-        encrypted = typeof item.encrypted_content === "string" && item.encrypted_content.length > 0;
-      } catch {
-        encrypted = false;
-      }
-    }
-    return { type: "thinking", thinking: block.thinking, encrypted };
-  }
-  if (block.type === "text") {
-    return { type: "text", text: block.text };
-  }
-  const toolCall = block as typeof block & { partialJson?: string };
-  return {
-    type: "toolCall",
-    id: toolCall.id.replace(/^call_[a-f0-9]{24}/, "call_<generated>"),
-    name: toolCall.name,
-    arguments: toolCall.arguments,
-    partialJson: "partialJson" in toolCall,
-  };
-}
-
-async function runFixture(events: readonly Record<string, unknown>[]): Promise<ProcessResult> {
-  const output = createOutput();
-  const captured: AssistantMessageEvent[] = [];
-  let error: string | null = null;
-  try {
-    await processTransportStream(
-      eventStream(events),
-      output,
-      { push: (event) => captured.push(event as AssistantMessageEvent) },
-      model,
-    );
-  } catch (cause) {
-    error = cause instanceof Error ? cause.message : String(cause);
-  }
-  return {
-    events: captured.map(projectEvent).filter((event) => event !== undefined),
-    content: output.content.map(projectBlock),
-    responseId: output.responseId ?? null,
-    stopReason: output.stopReason,
-    error,
-  };
-}
-
-const completed = (id: string, output: unknown[] = []) => ({
-  type: "response.completed",
-  sequence_number: 99,
-  response: { id, status: "completed", output },
-});
 
 const fixtures: ParityFixture[] = [
   {
@@ -208,34 +63,55 @@ const fixtures: ParityFixture[] = [
     },
   },
   {
-    name: "raw reasoning delta with empty summary",
+    name: "reasoning summary text and part completion preserve delta order",
     events: [
       {
         type: "response.output_item.added",
         output_index: 0,
-        item: { id: "rs_raw", type: "reasoning", summary: [], content: [] },
+        item: { id: "rs_summary", type: "reasoning", summary: [], content: [] },
       },
       {
-        type: "response.reasoning_text.delta",
+        type: "response.reasoning_summary_part.added",
         output_index: 0,
-        item_id: "rs_raw",
-        delta: "raw thought",
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        delta: "summary",
+      },
+      {
+        type: "response.reasoning_summary_part.done",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "summary" },
       },
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: { id: "rs_raw", type: "reasoning", summary: [], content: [] },
+        item: {
+          id: "rs_summary",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "summary" }],
+          content: [],
+        },
       },
-      completed("resp_raw"),
+      completed("resp_summary"),
     ],
     canonical: {
       events: [
         { type: "thinking_start", contentIndex: 0 },
-        { type: "thinking_delta", contentIndex: 0, delta: "raw thought" },
-        { type: "thinking_end", contentIndex: 0, content: "raw thought" },
+        { type: "thinking_delta", contentIndex: 0, delta: "summary" },
+        { type: "thinking_delta", contentIndex: 0, delta: "\n\n" },
+        { type: "thinking_end", contentIndex: 0, content: "summary" },
       ],
-      content: [{ type: "thinking", thinking: "raw thought", encrypted: false }],
-      responseId: "resp_raw",
+      content: [{ type: "thinking", thinking: "summary", encrypted: false }],
+      responseId: "resp_summary",
       stopReason: "stop",
       error: null,
     },
@@ -246,13 +122,7 @@ const fixtures: ParityFixture[] = [
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: {
-          id: "msg_early",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "early", annotations: [] }],
-        },
+        item: responseMessage("msg_early", "early"),
       },
     ],
     canonical: {
@@ -444,13 +314,7 @@ const fixtures: ParityFixture[] = [
     events: [
       {
         type: "response.output_item.done",
-        item: {
-          id: "msg_before_tool",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "Hello", annotations: [] }],
-        },
+        item: responseMessage("msg_before_tool", "Hello"),
       },
       {
         type: "response.output_item.added",
@@ -476,13 +340,7 @@ const fixtures: ParityFixture[] = [
       },
       {
         type: "response.output_item.done",
-        item: {
-          id: "msg_after_tool",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "Hello again", annotations: [] }],
-        },
+        item: responseMessage("msg_after_tool", "Hello again"),
       },
       completed("resp_tool_boundary"),
     ],
@@ -543,15 +401,9 @@ const fixtures: ParityFixture[] = [
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: {
-          id: "msg_text",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "hello", annotations: [] }],
-        },
+        item: responseMessage("msg_text", "hello"),
       },
-      completed("resp_text"),
+      completed("resp_text", [responseMessage("msg_text", "hello")]),
     ],
     canonical: {
       events: [
@@ -567,17 +419,7 @@ const fixtures: ParityFixture[] = [
   },
   {
     name: "terminal-only completed message recovery",
-    events: [
-      completed("resp_terminal_text", [
-        {
-          id: "msg_terminal",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "recovered", annotations: [] }],
-        },
-      ]),
-    ],
+    events: [completed("resp_terminal_text", [responseMessage("msg_terminal", "recovered")])],
     canonical: {
       events: [
         { type: "text_start", contentIndex: 0 },
@@ -586,6 +428,287 @@ const fixtures: ParityFixture[] = [
       content: [{ type: "text", text: "recovered" }],
       responseId: "resp_terminal_text",
       stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal completed message recovery after multiple streamed reasoning blocks",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_before_multi_first", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_before_multi_first",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "first thought" }],
+          content: [],
+        },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
+        item: { id: "rs_before_multi_second", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 1,
+        item: {
+          id: "rs_before_multi_second",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "second thought" }],
+          content: [],
+        },
+      },
+      completed("resp_multi_reasoning_terminal_text", [
+        {
+          id: "rs_before_multi_first",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "first thought" }],
+          content: [],
+        },
+        {
+          id: "rs_before_multi_second",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "second thought" }],
+          content: [],
+        },
+        responseMessage("msg_after_multiple_reasoning", "recovered final answer", "final_answer"),
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "first thought" },
+        { type: "thinking_start", contentIndex: 1 },
+        { type: "thinking_end", contentIndex: 1, content: "second thought" },
+        { type: "text_start", contentIndex: 2 },
+        { type: "text_end", contentIndex: 2, content: "recovered final answer" },
+      ],
+      content: [
+        { type: "thinking", thinking: "first thought", encrypted: false },
+        { type: "thinking", thinking: "second thought", encrypted: false },
+        { type: "text", text: "recovered final answer" },
+      ],
+      responseId: "resp_multi_reasoning_terminal_text",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal completed refusal recovery after streamed reasoning",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_before_refusal", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_before_refusal",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+      },
+      completed("resp_reasoning_terminal_refusal", [
+        {
+          id: "rs_before_refusal",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+        {
+          id: "msg_after_reasoning_refusal",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help with that." }],
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "thought" },
+        { type: "text_start", contentIndex: 1 },
+        { type: "text_end", contentIndex: 1, content: "I cannot help with that." },
+      ],
+      content: [
+        { type: "thinking", thinking: "thought", encrypted: false },
+        { type: "text", text: "I cannot help with that." },
+      ],
+      responseId: "resp_reasoning_terminal_refusal",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "streamed refusal uses the text delta lifecycle",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "in_progress",
+          content: [],
+        },
+      },
+      {
+        type: "response.content_part.added",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        part: { type: "refusal", refusal: "" },
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: "I cannot",
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: " help.",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help." }],
+        },
+      },
+      completed("resp_refusal"),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_delta", contentIndex: 0, delta: "I cannot" },
+        { type: "text_delta", contentIndex: 0, delta: " help." },
+        { type: "text_end", contentIndex: 0, content: "I cannot help." },
+      ],
+      content: [{ type: "text", text: "I cannot help." }],
+      responseId: "resp_refusal",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal null message after streamed reasoning is ignored",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_terminal_null", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_terminal_null",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+      },
+      completed("resp_reasoning_terminal_null", [
+        {
+          id: "rs_terminal_null",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+        {
+          id: "msg_after_reasoning_null",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: null,
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "thought" },
+      ],
+      content: [{ type: "thinking", thinking: "thought", encrypted: false }],
+      responseId: "resp_reasoning_terminal_null",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "terminal-only completed tool call recovery after streamed reasoning",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_before_tool", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_before_tool",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+      },
+      completed("resp_reasoning_terminal_tool", [
+        {
+          id: "rs_before_tool",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "thought" }],
+          content: [],
+        },
+        {
+          id: "fc_terminal",
+          call_id: "call_terminal",
+          type: "function_call",
+          name: "lookup",
+          arguments: '{"q":"x"}',
+          status: "completed",
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "thought" },
+        { type: "toolcall_start", contentIndex: 1 },
+        { type: "toolcall_end", contentIndex: 1 },
+      ],
+      content: [
+        { type: "thinking", thinking: "thought", encrypted: false },
+        {
+          type: "toolCall",
+          id: "call_terminal|fc_terminal",
+          name: "lookup",
+          arguments: { q: "x" },
+          partialJson: false,
+        },
+      ],
+      responseId: "resp_reasoning_terminal_tool",
+      stopReason: "toolUse",
       error: null,
     },
   },
@@ -613,13 +736,7 @@ const fixtures: ParityFixture[] = [
       {
         type: "response.output_item.done",
         output_index: 0,
-        item: {
-          id: "msg_no_part",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "compatible", annotations: [] }],
-        },
+        item: responseMessage("msg_no_part", "compatible"),
       },
       completed("resp_no_part"),
     ],
@@ -631,27 +748,6 @@ const fixtures: ParityFixture[] = [
       ],
       content: [{ type: "text", text: "compatible" }],
       responseId: "resp_no_part",
-      stopReason: "stop",
-      error: null,
-    },
-  },
-  {
-    name: "terminal-only null message content is ignored",
-    events: [
-      completed("resp_terminal_null", [
-        {
-          id: "msg_terminal_null",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: null,
-        },
-      ]),
-    ],
-    canonical: {
-      events: [],
-      content: [],
-      responseId: "resp_terminal_null",
       stopReason: "stop",
       error: null,
     },

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -7,18 +7,20 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   makeTestModel,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
   expectRecordFields,
   createMinimalRunAgentTurnParams,
+  makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: context failures", () => {
+describe("executeAgentTurn: context failures", () => {
   it("preserves the active session when embedded overflow recovery fails", async () => {
     state.isContextOverflowErrorMock.mockReturnValue(true);
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -32,10 +34,13 @@ describe("runAgentTurnWithFallback: context failures", () => {
 
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
+        followupRun,
         sessionCtx: {
           Provider: "webchat",
           MessageSid: "msg",
@@ -45,7 +50,7 @@ describe("runAgentTurnWithFallback: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");
@@ -75,10 +80,13 @@ describe("runAgentTurnWithFallback: context failures", () => {
 
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
+        followupRun,
         sessionCtx: {
           Provider: "webchat",
           MessageSid: "msg",
@@ -88,7 +96,7 @@ describe("runAgentTurnWithFallback: context failures", () => {
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
-      storePath: "/tmp/sessions.json",
+      storePath: makeTestSessionStorePath(),
     });
 
     expect(result.kind).toBe("final");
@@ -108,45 +116,6 @@ describe("runAgentTurnWithFallback: context failures", () => {
     expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      reason: "server_error" as const,
-      message: "upstream provider failed briefly",
-    },
-    {
-      reason: "timeout" as const,
-      message: "provider request timed out without status token",
-    },
-  ])(
-    "retries once for structured FailoverError $reason without leading HTTP status text",
-    async ({ reason, message }) => {
-      vi.useFakeTimers();
-      state.runEmbeddedAgentMock
-        .mockRejectedValueOnce(
-          new FailoverError(message, {
-            reason,
-            provider: "openai",
-            model: "gpt-5.5",
-          }),
-        )
-        .mockResolvedValueOnce({
-          payloads: [{ text: "recovered after transient failover" }],
-          meta: {},
-        });
-
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const resultPromise = runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
-      await vi.advanceTimersByTimeAsync(2_500);
-      const result = await resultPromise;
-
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-      expect(result.kind).toBe("success");
-      if (result.kind === "success") {
-        expect(result.runResult.payloads?.[0]?.text).toBe("recovered after transient failover");
-      }
-    },
-  );
-
   it("uses structured FailoverError context_overflow over non-overflow message text", async () => {
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
@@ -157,8 +126,8 @@ describe("runAgentTurnWithFallback: context failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "telegram",
@@ -182,7 +151,7 @@ describe("runAgentTurnWithFallback: context failures", () => {
   it("uses the built-in compaction failure hint when the fallback candidate throws", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("custom", "uncataloged-32k");
+      await params.run("custom", "uncataloged-32k", initialFallbackAttemptOptions(params));
       throw new Error("expected fallback candidate to throw");
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
@@ -203,8 +172,8 @@ describe("runAgentTurnWithFallback: context failures", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {

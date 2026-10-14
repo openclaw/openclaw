@@ -1,8 +1,8 @@
-// Sync Codex Model Prompt Fixture script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isRecord as isJsonObject } from "../packages/normalization-core/src/record-coerce.ts";
 import { CODEX_MODEL_PROMPT_FIXTURE_DIR } from "../test/helpers/agents/prompt-snapshot-paths.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -10,7 +10,6 @@ const PERSONALITY_PLACEHOLDER = "{{ personality }}";
 
 export { CODEX_MODEL_PROMPT_FIXTURE_DIR };
 
-type JsonObject = Record<string, unknown>;
 type CodexPromptPersonality = "default" | "friendly" | "pragmatic";
 
 type CodexModelCatalogModel = {
@@ -42,10 +41,6 @@ type CatalogPathResolution = {
 type WritableOutput = {
   write(chunk: string): unknown;
 };
-
-function isJsonObject(value: unknown): value is JsonObject {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isCodexModel(value: unknown): value is CodexModelCatalogModel {
   return isJsonObject(value) && typeof value.slug === "string";
@@ -81,19 +76,13 @@ function readModelsFromCatalog(value: unknown): CodexModelCatalogModel[] {
   return value.models.filter(isCodexModel);
 }
 
-function personalityKey(
-  personality: CodexPromptPersonality,
-): `personality_${CodexPromptPersonality}` {
-  return `personality_${personality}`;
-}
-
 export function renderCodexModelInstructions(params: {
   model: CodexModelCatalogModel;
   personality: CodexPromptPersonality;
 }): { instructions: string; field: string } {
   const template = params.model.model_messages?.instructions_template;
   if (template) {
-    const key = personalityKey(params.personality);
+    const key = `personality_${params.personality}` as const;
     const personalityMessage = params.model.model_messages?.instructions_variables?.[key] ?? "";
     return {
       instructions: template.replaceAll(PERSONALITY_PLACEHOLDER, personalityMessage),
@@ -157,12 +146,6 @@ function parsePersonality(value: string | undefined): CodexPromptPersonality {
   return "pragmatic";
 }
 
-function pushUnique(paths: string[], candidate: string) {
-  if (!paths.includes(candidate)) {
-    paths.push(candidate);
-  }
-}
-
 export function defaultCatalogPathCandidates(
   params: {
     env?: Record<string, string | undefined>;
@@ -171,15 +154,14 @@ export function defaultCatalogPathCandidates(
 ): string[] {
   const env = params.env ?? process.env;
   const homeDir = params.homeDir ?? os.homedir();
-  const candidates: string[] = [];
   const codexHome = env.CODEX_HOME?.trim() || path.join(homeDir, ".codex");
-  pushUnique(candidates, path.join(codexHome, "models_cache.json"));
-  pushUnique(candidates, path.join(homeDir, ".codex", "models_cache.json"));
-  pushUnique(
-    candidates,
-    path.join(homeDir, "code", "codex", "codex-rs", "models-manager", "models.json"),
-  );
-  return candidates;
+  return [
+    ...new Set([
+      path.join(codexHome, "models_cache.json"),
+      path.join(homeDir, ".codex", "models_cache.json"),
+      path.join(homeDir, "code", "codex", "codex-rs", "models-manager", "models.json"),
+    ]),
+  ];
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -206,13 +188,9 @@ export async function findDefaultCatalogPath(
   return { candidates };
 }
 
-function fixtureBaseName(params: { model: string; personality: CodexPromptPersonality }): string {
-  return `${params.model}.${params.personality}`;
-}
-
 async function writeFixture(params: { fixture: CodexModelPromptFixture; outputDir: string }) {
   await fs.mkdir(params.outputDir, { recursive: true });
-  const baseName = fixtureBaseName(params.fixture);
+  const baseName = `${params.fixture.model}.${params.fixture.personality}`;
   const promptPath = path.join(params.outputDir, `${baseName}.instructions.md`);
   const metadataPath = path.join(params.outputDir, `${baseName}.source.json`);
   await fs.writeFile(
@@ -265,7 +243,7 @@ export async function runCodexModelPromptFixtureSync(
     );
     return { status: "skipped" as const, candidates: defaultCatalog?.candidates ?? [] };
   }
-  const model = parseArgValue(argv, "--model") ?? "gpt-5.6-sol";
+  const model = parseArgValue(argv, "--model") ?? "gpt-6-astra";
   const personality = parsePersonality(parseArgValue(argv, "--personality"));
   const catalogGitHead = parseArgValue(argv, "--catalog-git-head");
   const catalogLabel = parseArgValue(argv, "--source-label");

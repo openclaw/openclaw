@@ -87,7 +87,7 @@ protocol ChatSpeechLocalSpeaking: AnyObject {
 /// gateway audio first, on-device synthesis as the fallback voice.
 @MainActor
 @Observable
-public final class OpenClawChatSpeechController {
+public final class OpenClawChatSpeechController: ChatMediaPlaybackOwner {
     public enum Phase: Equatable {
         case idle
         case preparing(UUID)
@@ -99,26 +99,27 @@ public final class OpenClawChatSpeechController {
     private let synthesize: OpenClawChatSpeechSynthesis
     private let clipPlayer: any ChatSpeechClipPlaying
     private let localSpeech: any ChatSpeechLocalSpeaking
+    private let playbackCoordinator: ChatMediaPlaybackCoordinator
     @ObservationIgnored private var playbackTask: Task<Void, Never>?
-    /// Monotonic token: completions from a superseded playback must not
-    /// clear the phase owned by a newer one.
-    @ObservationIgnored private var generation: UInt64 = 0
 
     public convenience init(synthesize: @escaping OpenClawChatSpeechSynthesis) {
         self.init(
             synthesize: synthesize,
             clipPlayer: ChatSpeechClipPlayer(),
-            localSpeech: ChatSpeechLocalSpeaker())
+            localSpeech: ChatSpeechLocalSpeaker(),
+            playbackCoordinator: .shared)
     }
 
     init(
         synthesize: @escaping OpenClawChatSpeechSynthesis,
         clipPlayer: any ChatSpeechClipPlaying,
-        localSpeech: any ChatSpeechLocalSpeaking)
+        localSpeech: any ChatSpeechLocalSpeaking,
+        playbackCoordinator: ChatMediaPlaybackCoordinator = .shared)
     {
         self.synthesize = synthesize
         self.clipPlayer = clipPlayer
         self.localSpeech = localSpeech
+        self.playbackCoordinator = playbackCoordinator
     }
 
     public var activeMessageID: UUID? {
@@ -146,11 +147,11 @@ public final class OpenClawChatSpeechController {
     }
 
     public func stop() {
-        self.generation &+= 1
         self.playbackTask?.cancel()
         self.playbackTask = nil
         self.clipPlayer.stop()
         self.localSpeech.stop()
+        self.playbackCoordinator.release(self)
         guard self.phase != .idle else { return }
         self.phase = .idle
         self.deactivateAudioSession()
@@ -160,48 +161,43 @@ public final class OpenClawChatSpeechController {
         self.stop()
         let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !spoken.isEmpty else { return }
-        self.generation &+= 1
-        let generation = self.generation
+        self.playbackCoordinator.activate(self)
         self.phase = .preparing(messageID)
         self.playbackTask = Task { [weak self] in
-            await self?.run(messageID: messageID, text: spoken, generation: generation)
+            await self?.run(messageID: messageID, text: spoken)
         }
     }
 
-    private func run(messageID: UUID, text: String, generation: UInt64) async {
-        let clip: OpenClawChatSpeechClip? = await {
-            do {
-                return try await self.synthesize(text)
-            } catch {
-                return nil
-            }
-        }()
-        guard self.generation == generation, !Task.isCancelled else { return }
+    private func run(messageID: UUID, text: String) async {
+        let clip = try? await self.synthesize(text)
+        guard !Task.isCancelled else { return }
 
         self.activateAudioSession()
         self.phase = .speaking(messageID)
         if let clip, !clip.data.isEmpty {
             let finished = await self.clipPlayer.play(clip: clip)
-            // stop() bumps the generation, so reaching this guard with a
-            // false result means the clip failed to decode/start, not that
-            // the user cancelled — fall through to the on-device voice.
-            guard self.generation == generation else { return }
+            guard !Task.isCancelled else { return }
             if finished {
-                self.finish(generation: generation)
+                self.finish()
                 return
             }
         }
         // Gateway clip unavailable or unplayable: on-device synthesis keeps
         // Listen working when no TTS provider is configured.
         _ = await self.localSpeech.speak(text: text)
-        self.finish(generation: generation)
+        self.finish()
     }
 
-    private func finish(generation: UInt64) {
-        guard self.generation == generation else { return }
+    private func finish() {
+        guard !Task.isCancelled else { return }
         self.playbackTask = nil
         self.phase = .idle
+        self.playbackCoordinator.release(self)
         self.deactivateAudioSession()
+    }
+
+    func stopForMediaPlaybackInterruption() {
+        self.stop()
     }
 
     private func activateAudioSession() {

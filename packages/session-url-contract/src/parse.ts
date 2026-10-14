@@ -1,3 +1,12 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import {
+  isReservedSessionRest,
+  normalizeControlUiBasePath,
+  parseShortSessionRef,
+} from "./grammar.js";
+
+export { matchControlUiCatalogSharePath, type ControlUiCatalogSharePathMatch } from "./share.js";
+
 export type ControlUiSessionPathTarget =
   | { namespace: "chat" | "dashboard"; kind: "main"; agentId: string }
   | {
@@ -5,45 +14,22 @@ export type ControlUiSessionPathTarget =
       kind: "short";
       agentId: string;
       shortId: string;
+      /** Exact decoded key candidate for route resolution after a short lookup misses. */
+      literalSessionKey: string;
+      /**
+       * Display-name slug that preceded the id, when the reference carried one. The id
+       * stays authoritative; this only breaks a tie between sessions whose ids share the
+       * given prefix, so a short link keeps resolving to one session.
+       */
+      slugHint?: string;
     }
   | {
       namespace: "chat" | "dashboard";
       kind: "literal";
       agentId: string;
       sessionKey: string;
+      slugCandidate?: string;
     };
-
-const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
-const VALID_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/iu;
-const INVALID_AGENT_ID_CHARS_RE = /[^a-z0-9_-]+/giu;
-const FIXED_RESERVED_SESSION_RESTS = new Set(["main", "global", "boot", "sessions"]);
-
-function optionalString(value: string | undefined | null): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed || null;
-}
-
-function normalizeAgentId(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "main";
-  }
-  if (VALID_AGENT_ID_RE.test(trimmed)) {
-    return trimmed.toLowerCase();
-  }
-  return (
-    trimmed
-      .toLowerCase()
-      .replace(INVALID_AGENT_ID_CHARS_RE, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 64) || "main"
-  );
-}
-
-function normalizeBasePath(basePath: string): string {
-  const trimmed = basePath.trim().replace(/^\/+|\/+$/gu, "");
-  return trimmed ? `/${trimmed}` : "";
-}
 
 function normalizePath(path: string): string {
   const trimmed = path.trim();
@@ -68,22 +54,6 @@ function decodePathSegment(segment: string): string | null {
   }
 }
 
-function isReservedSessionRest(rest: string, mainKey: string | undefined): boolean {
-  const normalized = rest.toLowerCase();
-  return (
-    FIXED_RESERVED_SESSION_RESTS.has(normalized) ||
-    normalized === (optionalString(mainKey)?.toLowerCase() ?? "main")
-  );
-}
-
-function literalSessionKey(agentId: string, restSegments: readonly string[]): string | null {
-  const normalizedAgentId = optionalString(agentId);
-  if (!normalizedAgentId || restSegments.length === 0 || restSegments.some((segment) => !segment)) {
-    return null;
-  }
-  return `agent:${normalizeAgentId(normalizedAgentId)}:${restSegments.join(":")}`;
-}
-
 export function parseControlUiSessionPath(
   pathname: string,
   basePath = "",
@@ -91,7 +61,7 @@ export function parseControlUiSessionPath(
 ): ControlUiSessionPathTarget | null {
   const normalizedPath = normalizePath(pathname);
   for (const namespace of ["chat", "dashboard"] as const) {
-    const prefix = `${normalizeBasePath(basePath)}/${namespace}/`;
+    const prefix = `${normalizeControlUiBasePath(basePath)}/${namespace}/`;
     if (!normalizedPath.startsWith(prefix)) {
       continue;
     }
@@ -106,28 +76,22 @@ export function parseControlUiSessionPath(
     }
     const forceLiteral = rawSegments[1] === "~key";
     const restSegments = rawSegments.slice(forceLiteral ? 2 : 1).map(decodePathSegment);
-    if (restSegments.some((segment) => segment === null)) {
+    if (restSegments.length === 0 || !restSegments.every((segment) => segment !== null)) {
       return null;
     }
-    const literalRestSegments = restSegments as string[];
-    const sessionKey = literalSessionKey(agentId, literalRestSegments);
-    if (!sessionKey) {
-      return null;
-    }
-    if (forceLiteral) {
+    const sessionKey = `agent:${agentId}:${restSegments.join(":")}`;
+    if (forceLiteral || restSegments.length !== 1) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
-    if (literalRestSegments.length !== 1) {
-      return { namespace, kind: "literal", agentId, sessionKey };
-    }
-    const segment = literalRestSegments[0] ?? "";
+    const segment = restSegments[0] ?? "";
     if (isReservedSessionRest(segment, mainKey)) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
-    const shortId = segment.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase();
-    return shortId
-      ? { namespace, kind: "short", agentId, shortId }
-      : { namespace, kind: "literal", agentId, sessionKey };
+    const shortRef = parseShortSessionRef(segment);
+    if (!shortRef) {
+      return { namespace, kind: "literal", agentId, sessionKey, slugCandidate: segment };
+    }
+    return { namespace, kind: "short", agentId, literalSessionKey: sessionKey, ...shortRef };
   }
   return null;
 }

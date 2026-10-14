@@ -1,19 +1,16 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Line plugin module implements setup core behavior.
 import type {
   ChannelSetupAdapter,
   ChannelSetupInput,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup";
-import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
 import {
-  DEFAULT_ACCOUNT_ID,
-  listLineAccountIds,
-  normalizeAccountId,
-  resolveLineAccount,
-  type LineConfig,
-} from "./setup-runtime-api.js";
+  createSetupInputPresenceValidator,
+  patchScopedAccountConfig,
+} from "openclaw/plugin-sdk/setup";
+import { hasLineCredentials } from "./account-helpers.js";
+import { resolveLineAccount } from "./accounts.js";
 
 type LineSetupInput = ChannelSetupInput & {
   channelAccessToken?: string;
@@ -28,62 +25,30 @@ export function patchLineAccountConfig(params: {
   clearFields?: string[];
   enabled?: boolean;
 }): OpenClawConfig {
-  const accountId = normalizeAccountId(params.accountId);
-  const lineConfig = (params.cfg.channels?.line ?? {}) as LineConfig;
-  const clearFields = params.clearFields ?? [];
-
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    const nextLine = { ...lineConfig } as Record<string, unknown>;
-    for (const field of clearFields) {
-      delete nextLine[field];
-    }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        line: {
-          ...nextLine,
-          ...(params.enabled ? { enabled: true } : {}),
-          ...params.patch,
-        },
-      },
-    };
-  }
-
-  const nextAccount = {
-    ...lineConfig.accounts?.[accountId],
-  } as Record<string, unknown>;
-  for (const field of clearFields) {
-    delete nextAccount[field];
-  }
-
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      line: {
-        ...lineConfig,
-        ...(params.enabled ? { enabled: true } : {}),
-        accounts: {
-          ...lineConfig.accounts,
-          [accountId]: {
-            ...nextAccount,
-            ...(params.enabled ? { enabled: true } : {}),
-            ...params.patch,
-          },
-        },
-      },
+  return patchScopedAccountConfig({
+    cfg: params.cfg,
+    channelKey: "line",
+    accountId: params.accountId,
+    patch: params.patch,
+    accountPatch: {
+      ...(params.enabled ? { enabled: true } : {}),
+      ...params.patch,
     },
-  };
+    ...(params.clearFields ? { clearFields: params.clearFields } : {}),
+    ensureChannelEnabled: Boolean(params.enabled),
+    ensureAccountEnabled: false,
+  });
 }
 
 export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
   return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
 }
 
-export { parseLineAllowFromId };
+const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
 
 export const lineSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: accountCredentialKeys,
+  namedAccountPromotionKeys: accountCredentialKeys,
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     patchLineAccountConfig({
@@ -110,46 +75,46 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     // Shipped alias: `--token` writes channelAccessToken; the explicit switch wins.
     const accessToken = typedInput.channelAccessToken ?? typedInput.token;
     const normalizedAccountId = normalizeAccountId(accountId);
-    if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
-      return patchLineAccountConfig({
-        cfg,
-        accountId: normalizedAccountId,
-        enabled: true,
-        clearFields: typedInput.useEnv
-          ? ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"]
-          : undefined,
-        patch: typedInput.useEnv
-          ? {}
-          : {
-              ...(typedInput.tokenFile
-                ? { tokenFile: typedInput.tokenFile }
-                : accessToken
-                  ? { channelAccessToken: accessToken }
-                  : {}),
-              ...(typedInput.secretFile
-                ? { secretFile: typedInput.secretFile }
-                : typedInput.channelSecret
-                  ? { channelSecret: typedInput.channelSecret }
-                  : {}),
-            },
-      });
+    const useEnv = normalizedAccountId === DEFAULT_ACCOUNT_ID && Boolean(typedInput.useEnv);
+    // A credential resolves from the inline value first and only then from its
+    // file, so writing one form has to retire the other. Leaving both behind
+    // makes a rotation onto a file a silent no-op: the stale inline value keeps
+    // winning and setup still reports success.
+    const credentials = [
+      {
+        fileKey: "tokenFile",
+        file: typedInput.tokenFile,
+        inlineKey: "channelAccessToken",
+        inline: accessToken,
+      },
+      {
+        fileKey: "secretFile",
+        file: typedInput.secretFile,
+        inlineKey: "channelSecret",
+        inline: typedInput.channelSecret,
+      },
+    ] as const;
+    const patch: Record<string, string> = {};
+    const retired: string[] = [];
+    for (const credential of credentials) {
+      if (credential.file) {
+        patch[credential.fileKey] = credential.file;
+        retired.push(credential.inlineKey);
+      } else if (credential.inline) {
+        patch[credential.inlineKey] = credential.inline;
+        retired.push(credential.fileKey);
+      }
     }
     return patchLineAccountConfig({
       cfg,
       accountId: normalizedAccountId,
       enabled: true,
-      patch: {
-        ...(typedInput.tokenFile
-          ? { tokenFile: typedInput.tokenFile }
-          : accessToken
-            ? { channelAccessToken: accessToken }
-            : {}),
-        ...(typedInput.secretFile
-          ? { secretFile: typedInput.secretFile }
-          : typedInput.channelSecret
-            ? { channelSecret: typedInput.channelSecret }
-            : {}),
-      },
+      clearFields: useEnv
+        ? ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"]
+        : retired.length > 0
+          ? retired
+          : undefined,
+      patch: useEnv ? {} : patch,
     });
   },
 };
@@ -186,9 +151,8 @@ export const lineSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use LINE environment credentials" },
+      envVars: ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"],
     },
   },
   legacyAdapter: lineSetupAdapter,
 });
-
-export { listLineAccountIds };

@@ -4,7 +4,12 @@
  * Collects operator/user allowlist sources and explains when no callable tools remain.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
+import {
+  resolveSkillWorkshopToolConstructionBlock,
+  type SkillWorkshopToolConstructionContext,
+} from "../skills/workshop/tool-availability.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
   label: string;
@@ -34,21 +39,35 @@ export function collectExplicitToolAllowlistSources(
 /** Build an actionable error when explicit allowlists remove every callable tool. */
 export function buildEmptyExplicitToolAllowlistError(params: {
   sources: ExplicitToolAllowlistSource[];
-  callableToolNames: string[];
+  hasCallableTools: boolean;
   toolsEnabled: boolean;
   disableTools?: boolean;
+  toolsAllowExplicitlyEmpty?: boolean;
+  skillWorkshop?: SkillWorkshopToolConstructionContext;
 }): Error | null {
-  const sources =
-    params.disableTools === true
-      ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
-      : params.sources;
-  const callableToolNames = normalizeToolList(params.callableToolNames);
-  if (sources.length === 0 || callableToolNames.length > 0) {
+  const toolsIntentionallyDisabled =
+    params.disableTools === true || params.toolsAllowExplicitlyEmpty === true;
+  const sources = toolsIntentionallyDisabled
+    ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
+    : params.sources;
+  if (sources.length === 0 || params.hasCallableTools) {
     return null;
   }
   const requested = sources
-    .map((source) => `${source.label}: ${source.entries.map(normalizeToolName).join(", ")}`)
+    .map((source) => `${source.label}: ${source.entries.map(normalizeToolPolicyName).join(", ")}`)
     .join("; ");
+  const workshopBlock =
+    params.skillWorkshop &&
+    sources.every((source) =>
+      isToolAllowedByPolicyName("skill_workshop", { allow: source.entries }),
+    )
+      ? resolveSkillWorkshopToolConstructionBlock(params.skillWorkshop)
+      : undefined;
+  if (params.toolsEnabled && !toolsIntentionallyDisabled && workshopBlock) {
+    return new Error(
+      `No callable tools remain after resolving explicit tool allowlist (${requested}); ${workshopBlock.detail} ${workshopBlock.fix}`,
+    );
+  }
   const reason =
     params.disableTools === true
       ? "tools are disabled for this run"

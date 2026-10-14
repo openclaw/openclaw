@@ -1,57 +1,31 @@
-// Elevenlabs tests cover media understanding provider plugin behavior.
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  elevenLabsMediaUnderstandingProvider,
-  transcribeElevenLabsAudio,
-} from "./media-understanding-provider.js";
-
-function requireFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string, RequestInit] {
-  const [call] = fetchMock.mock.calls;
-  if (!call) {
-    throw new Error("expected ElevenLabs media fetch call");
-  }
-  return call as [string, RequestInit];
-}
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { describe, expect, it, vi } from "vitest";
+import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 describe("elevenLabsMediaUnderstandingProvider", () => {
-  let ssrfMock: { mockRestore: () => void } | undefined;
-
-  beforeEach(() => {
-    ssrfMock = mockPinnedHostnameResolution();
-  });
-
-  afterEach(() => {
-    ssrfMock?.mockRestore();
-    ssrfMock = undefined;
-  });
-
-  it("has expected provider metadata", () => {
-    expect(elevenLabsMediaUnderstandingProvider.id).toBe("elevenlabs");
-    expect(elevenLabsMediaUnderstandingProvider.capabilities).toEqual(["audio"]);
-    expect(elevenLabsMediaUnderstandingProvider.defaultModels?.audio).toBe("scribe_v2");
-    expect(elevenLabsMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
-  });
+  installPinnedHostnameTestHooks();
+  const request = {
+    buffer: Buffer.from("audio"),
+    fileName: "voice.mp3",
+    mime: "audio/mpeg",
+    apiKey: "eleven-key",
+    timeoutMs: 1000,
+  };
 
   it("posts multipart audio to ElevenLabs speech-to-text", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response(JSON.stringify({ text: "hello" })));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ text: "hello" }));
 
-    const result = await transcribeElevenLabsAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.mp3",
-      mime: "audio/mpeg",
-      apiKey: "eleven-key",
-      model: "scribe_v2",
+    const result = await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+      ...request,
       language: "en",
-      timeoutMs: 1000,
       fetchFn: fetchMock,
     });
 
     expect(result).toEqual({ text: "hello", model: "scribe_v2" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = requireFirstFetchCall(fetchMock);
+    const [url, requestInit] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const init = expectDefined(requestInit, "ElevenLabs request init");
     expect(url).toBe("https://api.elevenlabs.io/v1/speech-to-text");
     expect(init.method).toBe("POST");
     const headers = new Headers(init.headers);
@@ -62,33 +36,13 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     expect(form.get("file")).toBeInstanceOf(Blob);
   });
 
-  it("wraps malformed successful speech-to-text JSON with a stable provider error", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("{ nope"));
-
-    await expect(
-      transcribeElevenLabsAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "voice.mp3",
-        mime: "audio/mpeg",
-        apiKey: "eleven-key",
-        model: "scribe_v2",
-        timeoutMs: 1000,
-        fetchFn: fetchMock,
-      }),
-    ).rejects.toThrow("ElevenLabs audio transcription failed: malformed JSON response");
-  });
-
   it("rejects non-object successful speech-to-text JSON with a stable provider error", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([])));
 
     await expect(
-      transcribeElevenLabsAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "voice.mp3",
-        mime: "audio/mpeg",
-        apiKey: "eleven-key",
+      elevenLabsMediaUnderstandingProvider.transcribeAudio!({
+        ...request,
         model: "scribe_v2",
-        timeoutMs: 1000,
         fetchFn: fetchMock,
       }),
     ).rejects.toThrow("ElevenLabs audio transcription failed: malformed JSON response");

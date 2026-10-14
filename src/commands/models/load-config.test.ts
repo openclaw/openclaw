@@ -1,5 +1,5 @@
-// Model load-config tests cover loading config used by model commands.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
@@ -9,8 +9,14 @@ const mocks = vi.hoisted(() => ({
   getModelsCommandSecretTargetIds: vi.fn(),
 }));
 
+// mock-isolation: Model-command fixtures control source and runtime snapshots without loading operator state.
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
   getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));
@@ -58,7 +64,7 @@ describe("models load-config", () => {
         },
       },
     };
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createTestRuntime();
 
     mockResolvedConfigFlow({ sourceConfig, diagnostics: ["diag-one", "diag-two"] });
 
@@ -86,6 +92,15 @@ describe("models load-config", () => {
 
     await expect(loadModelsConfig({ commandName: "models list" })).resolves.toBe(resolvedConfig);
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
+  });
+
+  it("can read core model config without loading plugin schemas", async () => {
+    const sourceConfig = { models: { providers: {} } };
+    mockResolvedConfigFlow({ sourceConfig, diagnostics: [] });
+
+    await loadModelsConfig({ commandName: "models status", skipPluginValidation: true });
+
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
 
   it("does not reread config when no source snapshot is pinned", async () => {

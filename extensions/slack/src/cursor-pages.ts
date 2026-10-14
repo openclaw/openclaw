@@ -1,6 +1,20 @@
+import type { WebClient } from "@slack/web-api";
+
 type SlackCursorResponse = {
   response_metadata?: { next_cursor?: string };
 };
+
+// Slack documents an empty cursor as the only normal termination signal. This
+// backstop is deliberately far above any plausible channel or user directory.
+const SLACK_CURSOR_PAGE_LIMIT = 10_000;
+
+export const fetchSlackChannelListPage = (client: WebClient, cursor?: string) =>
+  client.conversations.list({
+    types: "public_channel,private_channel",
+    exclude_archived: false,
+    limit: 1000,
+    cursor,
+  });
 
 export async function collectSlackCursorPages<
   TItem,
@@ -11,10 +25,21 @@ export async function collectSlackCursorPages<
 }): Promise<TItem[]> {
   const items: TItem[] = [];
   let cursor: string | undefined;
-  do {
+  const seenCursors = new Set<string>();
+
+  for (let pageCount = 1; pageCount <= SLACK_CURSOR_PAGE_LIMIT; pageCount += 1) {
     const response = await params.fetchPage(cursor);
     items.push(...params.collectPageItems(response));
-    cursor = response.response_metadata?.next_cursor?.trim() || undefined;
-  } while (cursor);
-  return items;
+    const nextCursor = response.response_metadata?.next_cursor?.trim() || undefined;
+    if (!nextCursor) {
+      return items;
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error(`Slack cursor pagination repeated a cursor after ${pageCount} pages`);
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  throw new Error(`Slack cursor pagination exceeded ${SLACK_CURSOR_PAGE_LIMIT} pages`);
 }

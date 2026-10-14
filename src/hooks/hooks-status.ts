@@ -1,10 +1,10 @@
-// Hook status helpers summarize configured, installed, and plugin-provided hooks.
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isHookConfigPathTruthy, isHookEnvSatisfied } from "./config.js";
+import { resolveHookKey } from "./frontmatter.js";
 import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import {
   resolveHookConfig,
@@ -14,8 +14,6 @@ import {
 } from "./policy.js";
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
-
-type HookStatusConfigCheck = RequirementConfigCheck;
 
 type HookInstallOption = {
   id: string;
@@ -42,11 +40,11 @@ export type HookStatusEntry = {
   enabledByConfig: boolean;
   requirementsSatisfied: boolean;
   loadable: boolean;
-  blockedReason?: HookEnableStateReason | "missing requirements";
+  blockedReason?: HookEnableStateReason | "missing requirements" | "no events defined";
   managedByPlugin: boolean;
   requirements: Requirements;
   missing: Requirements;
-  configChecks: HookStatusConfigCheck[];
+  configChecks: RequirementConfigCheck[];
   install: HookInstallOption[];
 };
 
@@ -56,17 +54,8 @@ export type HookStatusReport = {
   hooks: HookStatusEntry[];
 };
 
-function resolveHookKey(entry: HookEntry): string {
-  return entry.metadata?.hookKey ?? entry.hook.name;
-}
-
 function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
   const install = entry.metadata?.install ?? [];
-  if (install.length === 0) {
-    return [];
-  }
-
-  // For hooks, we just list all install options
   return install.map((spec, index) => {
     const id = (spec.id ?? `${spec.kind}-${index}`).trim();
     const bins = spec.bins ?? [];
@@ -93,7 +82,7 @@ function buildHookStatus(
   config?: OpenClawConfig,
   eligibility?: HookEligibilityContext,
 ): HookStatusEntry {
-  const hookKey = resolveHookKey(entry);
+  const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
   const enableState = resolveHookEnableState({ entry, config, hookConfig });
@@ -114,9 +103,11 @@ function buildHookStatus(
     });
 
   const enabledByConfig = enableState.enabled;
-  const loadable = enabledByConfig && requirementsSatisfied;
+  const hasEvents = events.length > 0;
+  const loadable = enabledByConfig && requirementsSatisfied && hasEvents;
   const blockedReason =
-    enableState.reason ?? (requirementsSatisfied ? undefined : "missing requirements");
+    enableState.reason ??
+    (!requirementsSatisfied ? "missing requirements" : hasEvents ? undefined : "no events defined");
 
   return {
     name: entry.hook.name,

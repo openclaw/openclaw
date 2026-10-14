@@ -3,14 +3,16 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
+import type {
+  PreparedAgentCredentialMode,
+  PreparedAgentCredentialModes,
+} from "./agent-auth-credential-modes.js";
+import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type { ApiKeyCredential, AuthStorageData } from "./sessions/auth-storage.js";
 
-// Converts auth-profile credentials into the compact credential map consumed by
-// agent runtimes. Secret refs can be represented by markers without reading
-// secret values.
-type AgentApiKeyCredential = { type: "api_key"; key: string };
 type AgentOAuthCredential = {
   type: "oauth";
   access: string;
@@ -19,7 +21,7 @@ type AgentOAuthCredential = {
 };
 
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
-type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
+type AgentCredential = ApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
 
 type ResolveAgentCredentialMapOptions = {
@@ -29,48 +31,75 @@ type ResolveAgentCredentialMapOptions = {
 
 const AGENT_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
 
-function hasConfiguredSecretRef(value: unknown): boolean {
-  return coerceSecretRef(value) !== null;
-}
-
-function secretRefPlaceholder(
-  options: ResolveAgentCredentialMapOptions | undefined,
-): AgentCredential | null {
-  if (options?.includeSecretRefPlaceholders === true) {
-    return { type: "api_key", key: AGENT_SECRET_REF_CONFIGURED_MARKER };
+/** Records only credential modes whose secret material is usable by a prepared runtime owner. */
+export function resolveUsableAgentCredentialModes(
+  credentials: Readonly<AuthStorageData>,
+): PreparedAgentCredentialModes {
+  const modes: Record<string, PreparedAgentCredentialMode> = {};
+  for (const [rawProvider, credential] of Object.entries(credentials)) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    if (
+      credential.type === "api_key" &&
+      credential.key &&
+      credential.key !== AGENT_SECRET_REF_CONFIGURED_MARKER
+    ) {
+      const native = credential.nativeAuth;
+      if (!native || normalizeProviderId(native.runtime) === provider) {
+        modes[provider] = native
+          ? Object.freeze({
+              source: "native",
+              mode: native.mode === "api-key" ? "api_key" : native.mode,
+            })
+          : "api_key";
+      }
+    } else if (
+      credential.type === "token" &&
+      credential.token &&
+      (credential.expires === undefined || credential.expires > Date.now())
+    ) {
+      modes[provider] = "token";
+    } else if (
+      credential.type === "oauth" &&
+      !isOAuthRefreshFence(credential) &&
+      credential.access &&
+      credential.refresh &&
+      credential.expires > 0
+    ) {
+      modes[provider] = "oauth";
+    }
   }
-  return null;
+  return Object.freeze(modes);
 }
 
 function convertAuthProfileCredentialToAgent(
   cred: AuthProfileCredential,
   options?: ResolveAgentCredentialMapOptions,
 ): AgentCredential | null {
-  if (cred.type === "api_key") {
-    const key = normalizeOptionalString(cred.key) ?? "";
-    if (!key) {
-      // A configured secret ref proves the credential exists, but this converter
-      // must not resolve or leak the actual secret value.
-      return hasConfiguredSecretRef(cred.keyRef) ? secretRefPlaceholder(options) : null;
-    }
-    return { type: "api_key", key };
-  }
-
-  if (cred.type === "token") {
-    if (cred.expires !== undefined) {
+  if (cred.type === "api_key" || cred.type === "token") {
+    if (cred.type === "token" && cred.expires !== undefined) {
       const expires = asDateTimestampMs(cred.expires);
       if (expires === undefined || Date.now() >= expires) {
         return null;
       }
     }
-    const token = normalizeOptionalString(cred.token) ?? "";
-    if (!token) {
-      return hasConfiguredSecretRef(cred.tokenRef) ? secretRefPlaceholder(options) : null;
+    const key = normalizeOptionalString(cred.type === "api_key" ? cred.key : cred.token);
+    if (!key) {
+      // A configured ref proves existence, never authority to resolve its secret here.
+      const ref = cred.type === "api_key" ? cred.keyRef : cred.tokenRef;
+      return parseSecretRef(ref) !== null && options?.includeSecretRefPlaceholders === true
+        ? { type: "api_key", key: AGENT_SECRET_REF_CONFIGURED_MARKER }
+        : null;
     }
-    return { type: "api_key", key: token };
+    return { type: "api_key", key };
   }
 
   if (cred.type === "oauth") {
+    if (isOAuthRefreshFence(cred)) {
+      return null;
+    }
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
     const expires = asDateTimestampMs(cred.expires);

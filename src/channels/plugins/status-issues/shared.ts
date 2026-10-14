@@ -1,23 +1,7 @@
-/**
- * Channel status issue helper utilities.
- *
- * Formats status metadata and finds enabled/configured account ids for diagnostics.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isRecord } from "../../../utils.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.public.js";
-export { isRecord };
+export { isRecord } from "../../../utils.js";
 
-/**
- * Normalizes optional string metadata in status issue helpers.
- */
-export function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
-}
-
-/**
- * Formats optional match metadata for status issue messages.
- */
 export function formatMatchMetadata(params: {
   matchKey?: unknown;
   matchSource?: unknown;
@@ -28,7 +12,7 @@ export function formatMatchMetadata(params: {
       : typeof params.matchKey === "number"
         ? String(params.matchKey)
         : undefined;
-  const matchSource = asString(params.matchSource);
+  const matchSource = normalizeOptionalString(params.matchSource);
   const parts = [
     matchKey ? `matchKey=${matchKey}` : null,
     matchSource ? `matchSource=${matchSource}` : null,
@@ -36,9 +20,6 @@ export function formatMatchMetadata(params: {
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
-/**
- * Appends formatted match metadata to a status issue message.
- */
 export function appendMatchMetadata(
   message: string,
   params: { matchKey?: unknown; matchSource?: unknown },
@@ -47,23 +28,17 @@ export function appendMatchMetadata(
   return meta ? `${message} (${meta})` : message;
 }
 
-/**
- * Resolves the account id for enabled, configured account snapshots.
- */
 export function resolveEnabledConfiguredAccountId(account: {
   accountId?: unknown;
   enabled?: unknown;
   configured?: unknown;
 }): string | null {
-  const accountId = asString(account.accountId) ?? "default";
+  const accountId = normalizeOptionalString(account.accountId) ?? "default";
   const enabled = account.enabled !== false;
   const configured = account.configured === true;
   return enabled && configured ? accountId : null;
 }
 
-/**
- * Collects status issues only for enabled account snapshots.
- */
 export function collectIssuesForEnabledAccounts<
   T extends { accountId?: unknown; enabled?: unknown },
 >(params: {
@@ -79,7 +54,7 @@ export function collectIssuesForEnabledAccounts<
     if (!account || account.enabled === false) {
       continue;
     }
-    const accountId = asString(account.accountId) ?? "default";
+    const accountId = normalizeOptionalString(account.accountId) ?? "default";
     params.collectIssues({ account, accountId, issues });
   }
   return issues;

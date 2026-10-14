@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
 import type { IrcIngressLifecycle } from "./irc-ingress.js";
-import type { RuntimeEnv } from "./runtime-api.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
@@ -27,38 +26,39 @@ const {
 });
 
 function installIrcRuntime() {
-  setIrcRuntime({
-    channel: {
-      pairing: {
-        readAllowFromStore: readAllowFromStoreMock,
-        upsertPairingRequest: upsertPairingRequestMock,
+  setIrcRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        pairing: {
+          readAllowFromStore: readAllowFromStoreMock,
+          upsertPairingRequest: upsertPairingRequestMock,
+        },
+        commands: {
+          shouldHandleTextCommands: shouldHandleTextCommandsMock,
+        },
+        text: {
+          hasControlCommand: hasControlCommandMock,
+        },
+        mentions: {
+          buildMentionRegexes: buildMentionRegexesMock,
+          matchesMentionPatterns: matchesMentionPatternsMock,
+        },
       },
-      commands: {
-        shouldHandleTextCommands: shouldHandleTextCommandsMock,
-      },
-      text: {
-        hasControlCommand: hasControlCommandMock,
-      },
-      mentions: {
-        buildMentionRegexes: buildMentionRegexesMock,
-        matchesMentionPatterns: matchesMentionPatternsMock,
-      },
-    },
-  } as never);
+    }),
+  );
 }
 
 function createRuntimeEnv() {
   return {
     log: vi.fn(),
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
+  };
 }
 
 function createAccount(overrides?: Partial<ResolvedIrcAccount>): ResolvedIrcAccount {
   return {
     accountId: "default",
     enabled: true,
-    server: "irc.example.com",
     nick: "OpenClaw",
     config: {
       dmPolicy: "pairing",
@@ -93,6 +93,23 @@ function resetInboundMocks() {
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
 }
 
+const openConfig = {
+  dmPolicy: "open",
+  allowFrom: ["*"],
+  groupPolicy: "allowlist",
+  groupAllowFrom: [],
+} satisfies ResolvedIrcAccount["config"];
+
+function receive(overrides: Partial<Parameters<typeof handleIrcInbound>[0]>) {
+  return handleIrcInbound({
+    message: createMessage(),
+    account: createAccount(),
+    config: { channels: { irc: {} } },
+    runtime: createRuntimeEnv(),
+    ...overrides,
+  });
+}
+
 describe("irc inbound behavior", () => {
   beforeEach(() => {
     resetInboundMocks();
@@ -104,11 +121,7 @@ describe("irc inbound behavior", () => {
       async () => {},
     );
 
-    await handleIrcInbound({
-      message: createMessage(),
-      account: createAccount(),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
+    await receive({
       sendReply,
     });
 
@@ -144,7 +157,7 @@ describe("irc inbound behavior", () => {
     shouldHandleTextCommandsMock.mockReturnValue(true);
     hasControlCommandMock.mockReturnValue(true);
 
-    await handleIrcInbound({
+    await receive({
       message: createMessage({
         target: "#ops",
         isGroup: true,
@@ -176,18 +189,8 @@ describe("irc inbound behavior", () => {
     const coreRuntime = createPluginRuntimeMock();
     setIrcRuntime(coreRuntime as never);
 
-    await handleIrcInbound({
-      message: createMessage(),
-      account: createAccount({
-        config: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
+    await receive({
+      account: createAccount({ config: openConfig }),
       sendReply: vi.fn(async () => {}),
     });
 
@@ -208,19 +211,8 @@ describe("irc inbound behavior", () => {
       onAdoptionFinalizing: vi.fn(),
       onAbandoned: vi.fn(async () => undefined),
     };
-
-    const result = await handleIrcInbound({
-      message: createMessage(),
-      account: createAccount({
-        config: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
+    const result = await receive({
+      account: createAccount({ config: openConfig }),
       turnAdoptionLifecycle,
       sendReply: vi.fn(async () => {}),
     });
@@ -239,12 +231,55 @@ describe("irc inbound behavior", () => {
     expect(result).toEqual({ kind: "completed" });
   });
 
+  it.each([
+    {
+      name: "mixed assistant text",
+      reply: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      expected: ["Done."],
+    },
+    {
+      name: "trace-only assistant text",
+      reply: "⚠️ 🛠️ `search repos (agent)` failed",
+      expected: [],
+    },
+    {
+      name: "ordinary assistant text",
+      reply: "The pipeline has 3 open deals.",
+      expected: ["The pipeline has 3 open deals."],
+    },
+  ])("sanitizes $name on the inbound reply path", async ({ reply, expected }) => {
+    const coreRuntime = createPluginRuntimeMock();
+    const sendReply = vi.fn<(target: string, text: string, replyToId?: string) => Promise<void>>(
+      async () => {},
+    );
+    const dispatchReply = coreRuntime.channel.inbound.dispatchReply as unknown as ReturnType<
+      typeof vi.fn<
+        (params: {
+          delivery: { deliver: (payload: { text: string }) => Promise<void> };
+        }) => Promise<void>
+      >
+    >;
+    dispatchReply.mockImplementation(
+      async (params: { delivery: { deliver: (payload: { text: string }) => Promise<void> } }) => {
+        await params.delivery.deliver({ text: reply });
+      },
+    );
+    setIrcRuntime(coreRuntime as never);
+
+    await receive({
+      account: createAccount({ config: openConfig }),
+      sendReply,
+    });
+
+    expect(sendReply.mock.calls.map((call) => call[1])).toEqual(expected);
+  });
+
   it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {
     const coreRuntime = createPluginRuntimeMock();
     const runtime = createRuntimeEnv();
     setIrcRuntime(coreRuntime as never);
 
-    await handleIrcInbound({
+    await receive({
       message: createMessage({
         target: "#ops",
         isGroup: true,
@@ -264,7 +299,6 @@ describe("irc inbound behavior", () => {
           },
         },
       }),
-      config: { channels: { irc: {} } } as CoreConfig,
       runtime,
       sendReply: vi.fn(async () => {}),
     });
@@ -282,12 +316,70 @@ describe("irc inbound behavior", () => {
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
 
+  it.each([
+    { label: "ASCII case folding", nick: "OpenClaw", text: "openclaw: hello", mentioned: true },
+    { label: "leading bracket", nick: "[Claw]", text: "[Claw]: hello", mentioned: true },
+    { label: "trailing hyphen", nick: "Claw-", text: "Claw-: hello", mentioned: true },
+    { label: "RFC1459 opening bracket", nick: "[Claw", text: "{claw: hello", mentioned: true },
+    { label: "RFC1459 opening brace", nick: "{Claw", text: "[claw: hello", mentioned: true },
+    { label: "RFC1459 closing bracket", nick: "Claw]", text: "claw}: hello", mentioned: true },
+    { label: "RFC1459 closing brace", nick: "Claw}", text: "claw]: hello", mentioned: true },
+    { label: "RFC1459 backslash", nick: "\\Claw", text: "|claw: hello", mentioned: true },
+    { label: "RFC1459 vertical bar", nick: "|Claw", text: "\\claw: hello", mentioned: true },
+    { label: "RFC1459 caret", nick: "^Claw", text: "~claw: hello", mentioned: true },
+    { label: "RFC1459 tilde", nick: "~Claw", text: "^claw: hello", mentioned: true },
+    { label: "ordinary nick suffix", nick: "Claw", text: "Clawbot: hello", mentioned: false },
+    { label: "ordinary nick prefix", nick: "Claw", text: "overClaw: hello", mentioned: false },
+    { label: "IRC nick punctuation suffix", nick: "Claw", text: "Claw-bot: hi", mentioned: false },
+    { label: "RFC1459 tilde nick suffix", nick: "Claw", text: "Claw~bot: hi", mentioned: false },
+    {
+      label: "punctuated nick inside a longer nick",
+      nick: "[Claw]",
+      text: "prefix[Claw]: hello",
+      mentioned: false,
+    },
+  ])(
+    "recognizes only complete IRC nickname mentions: $label",
+    async ({ nick, text, mentioned }) => {
+      const coreRuntime = createPluginRuntimeMock();
+      const runtime = createRuntimeEnv();
+      setIrcRuntime(coreRuntime as never);
+
+      await receive({
+        message: createMessage({
+          target: "#ops",
+          isGroup: true,
+          text,
+        }),
+        account: createAccount({
+          nick,
+          config: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "open",
+            groupAllowFrom: [],
+            groups: {
+              "#ops": { enabled: true, requireMention: true },
+            },
+          },
+        }),
+        runtime,
+        sendReply: vi.fn(async () => {}),
+      });
+
+      expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledTimes(mentioned ? 1 : 0);
+      if (!mentioned) {
+        expect(runtime.log).toHaveBeenCalledWith("irc: drop channel #ops (missing-mention)");
+      }
+    },
+  );
+
   it("drops a spoofed sender for a host-less nick!user DM allowlist entry", async () => {
     const coreRuntime = createPluginRuntimeMock();
     const runtime = createRuntimeEnv();
     setIrcRuntime(coreRuntime as never);
 
-    await handleIrcInbound({
+    await receive({
       message: createMessage({
         target: "alice",
         senderNick: "alice",
@@ -303,7 +395,6 @@ describe("irc inbound behavior", () => {
           groupAllowFrom: [],
         },
       }),
-      config: { channels: { irc: {} } } as CoreConfig,
       runtime,
       sendReply: vi.fn(async () => {}),
     });
@@ -317,35 +408,37 @@ describe("irc inbound behavior", () => {
     );
   });
 
-  it("admits a sender matching a full nick!user@host DM allowlist entry", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    const runtime = createRuntimeEnv();
-    setIrcRuntime(coreRuntime as never);
+  it.each(["alice!ident@example.com", "alice@example.com"])(
+    "admits a sender matching the host-bound DM allowlist entry %s",
+    async (entry) => {
+      const coreRuntime = createPluginRuntimeMock();
+      const runtime = createRuntimeEnv();
+      setIrcRuntime(coreRuntime as never);
 
-    await handleIrcInbound({
-      message: createMessage({
-        target: "alice",
-        senderNick: "alice",
-        senderUser: "ident",
-        senderHost: "example.com",
-        text: "hello",
-      }),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["alice!ident@example.com"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime,
-      sendReply: vi.fn(async () => {}),
-    });
+      await receive({
+        message: createMessage({
+          target: "alice",
+          senderNick: "alice",
+          senderUser: "ident",
+          senderHost: "example.com",
+          text: "hello",
+        }),
+        account: createAccount({
+          config: {
+            dmPolicy: "allowlist",
+            allowFrom: [entry],
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+          },
+        }),
+        runtime,
+        sendReply: vi.fn(async () => {}),
+      });
 
-    expect(
-      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
-        .mock.calls.length,
-    ).toBe(1);
-  });
+      expect(
+        (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length,
+      ).toBe(1);
+    },
+  );
 });

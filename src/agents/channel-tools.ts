@@ -4,10 +4,11 @@
  * guidance, and weakly-attached channel metadata for wrapped tools.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
-  resolveMessageActionDiscoveryForPlugin,
+  type MessageActionDiscoverySteps,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
   type PreparedMessageToolCatalog,
@@ -24,10 +25,11 @@ import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
-export { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tool-metadata.js";
+export { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 type ChannelMessageActionDiscoveryParams = {
   cfg?: OpenClawConfig;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
@@ -36,6 +38,7 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
@@ -43,11 +46,9 @@ type ChannelMessageActionDiscoveryParams = {
  * Get the list of supported message actions for a specific channel.
  * Returns an empty array if channel is not found or has no actions configured.
  */
-export function listChannelSupportedActions(
-  params: ChannelMessageActionDiscoveryParams & {
-    channel?: string;
-  },
-): ChannelMessageActionName[] {
+export function* listChannelSupportedActionsSteps(
+  params: ChannelMessageActionDiscoveryParams & { channel?: string },
+): MessageActionDiscoverySteps<ChannelMessageActionName[]> {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
     return [];
@@ -59,37 +60,13 @@ export function listChannelSupportedActions(
   if (!pluginActions?.actions) {
     return [];
   }
-  return resolveMessageActionDiscoveryForPlugin({
+  const discovered = yield {
     pluginId: pluginActions.pluginId,
     actions: pluginActions.actions,
     context: createMessageActionDiscoveryContext(params),
     includeActions: true,
-  }).actions;
-}
-
-/**
- * Get the list of all supported message actions across all configured channels.
- */
-export function listAllChannelSupportedActions(
-  params: ChannelMessageActionDiscoveryParams,
-): ChannelMessageActionName[] {
-  const actions = new Set<ChannelMessageActionName>();
-  const channels = params.preparedMessageToolCatalog?.channels ?? listChannelPlugins();
-  for (const plugin of channels) {
-    const channelActions = resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: createMessageActionDiscoveryContext({
-        ...params,
-        currentChannelProvider: plugin.id,
-      }),
-      includeActions: true,
-    }).actions;
-    for (const action of channelActions) {
-      actions.add(action);
-    }
-  }
-  return Array.from(actions);
+  };
+  return discovered.actions;
 }
 
 /** List agent tools contributed by registered channel plugins. */
@@ -126,7 +103,7 @@ export function resolveChannelMessageToolHints(params: {
   if (!resolve) {
     return [];
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const cfg = params.cfg ?? {};
   return normalizeStringEntries(resolve({ cfg, accountId: params.accountId }));
 }
 
@@ -141,18 +118,14 @@ export function resolveChannelPromptCapabilities(params: {
     return [];
   }
   const plugin = getChannelPlugin(channelId);
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
-  const capabilities = normalizePromptCapabilities(
-    plugin?.agentPrompt?.messageToolCapabilities?.({ cfg, accountId: params.accountId }),
+  const cfg = params.cfg ?? {};
+  const capabilities = normalizeStringEntries(
+    plugin?.agentPrompt?.messageToolCapabilities?.({ cfg, accountId: params.accountId }) ?? [],
   );
   if (channelPluginHasNativeApprovalPromptUi(plugin)) {
     capabilities.push(NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY);
   }
   return capabilities;
-}
-
-function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {
-  return normalizeStringEntries(capabilities ?? []);
 }
 
 /** Resolve optional channel reaction guidance for assistant replies. */
@@ -169,7 +142,7 @@ export function resolveChannelReactionGuidance(params: {
   if (!resolve) {
     return undefined;
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
+  const cfg = params.cfg ?? {};
   const resolved = resolve({ cfg, accountId: params.accountId });
   if (!resolved?.level) {
     return undefined;

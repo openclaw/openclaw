@@ -1,4 +1,3 @@
-// Migrate Hermes helper module supports helpers behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,11 +8,8 @@ import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
-import {
-  isRecord as sharedIsRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
 
 const HOME_SHORTHAND_RE = /^~(?=$|[\\/])/u;
@@ -22,12 +18,10 @@ const EDGE_DASHES_RE = /^-+|-+$/g;
 
 export function resolveHomePath(input: string): string {
   const value = input.trim();
-  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, os.homedir())) : value;
+  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, () => os.homedir())) : value;
 }
 
-export async function exists(filePath: string): Promise<boolean> {
-  return await pathExists(filePath);
-}
+export { pathExists as exists } from "openclaw/plugin-sdk/security-runtime";
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
   const stat = await fs.stat(dirPath).catch(() => undefined);
@@ -43,37 +37,23 @@ export async function readText(filePath: string | undefined): Promise<string | u
   return filePath ? await fs.readFile(filePath, "utf8").catch(() => undefined) : undefined;
 }
 
+export async function readJsonObject(
+  filePath: string | undefined,
+): Promise<Record<string, unknown>> {
+  const raw = await readText(filePath);
+  try {
+    return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
+  } catch {
+    return {};
+  }
+}
+
 export function parseEnv(content: string | undefined): Record<string, string> {
   return content ? parseDotenv(content) : {};
 }
 
 export function parseHermesConfig(content: string | undefined): Record<string, unknown> {
-  if (!content) {
-    return {};
-  }
-  const parsed = parseYaml(content);
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
-}
-
-export const isRecord = sharedIsRecord;
-
-export function childRecord(
-  root: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> {
-  const value = root?.[key];
-  return isRecord(value) ? value : {};
-}
-
-export const readString = normalizeOptionalString;
-
-export function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+  return content ? asNonArrayRecord(parseYaml(content)) : {};
 }
 
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {

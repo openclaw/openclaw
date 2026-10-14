@@ -1,6 +1,8 @@
-// Qa Lab tests cover canonical scenario lane matching behavior.
+// QA Lab tests cover canonical scenario lane matching behavior.
 import { describe, expect, it } from "vitest";
-import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
+import { resolveQaRunProfileExecutionSelection } from "./profile-planning.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
   describeQaProviderLaneMismatches,
   scenarioMatchesQaProviderLane,
@@ -8,28 +10,41 @@ import {
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 describe("QA scenario lane matching", () => {
-  const planningCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
-  const planningScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
-    [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
-      (coverageId) => planningCoverageIds.has(coverageId),
-    ),
-  );
+  it("excludes a mock-pinned Matrix scenario from a live profile execution", () => {
+    const scenario = readQaScenarioById("matrix-room-block-streaming");
 
-  it.each(planningScenarios)("selects $id for the GPT-5.6 Luna live lane", (scenario) => {
     expect(
-      scenarioMatchesQaProviderLane({
+      resolveQaRunProfileExecutionSelection({
+        scenarios: [scenario],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
+        resolveModuleFlowSupport: () => true,
+      }),
+    ).toEqual({
+      selectedScenarios: [],
+      excludedScenarios: [{ scenario, reasons: ["providerMode=mock-openai"] }],
+    });
+  });
+
+  it("rejects conflicting execution and config provider pins before selecting a lane", () => {
+    const scenario = requireFlowScenario(
+      makeQaSuiteTestScenario("conflicting-provider-modes", {
+        config: { requiredProviderMode: "live-frontier" },
+      }),
+    );
+    scenario.execution.providerMode = "mock-openai";
+
+    expect(() =>
+      describeQaProviderLaneMismatches({
         scenario,
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.6-luna",
       }),
-    ).toBe(true);
-    expect(
-      scenarioMatchesQaProviderLane({
-        scenario,
-        providerMode: "mock-openai",
-        primaryModel: "openai/gpt-5.6-luna",
-      }),
-    ).toBe(false);
+    ).toThrow(
+      "QA scenario conflicting-provider-modes declares conflicting provider modes: execution.providerMode=mock-openai, execution.config.requiredProviderMode=live-frontier",
+    );
   });
 
   it("reports every declared mismatch in one decision", () => {
@@ -38,6 +53,7 @@ describe("QA scenario lane matching", () => {
       runtimePairLane: "core",
       config: {
         requiredProviderMode: "live-frontier",
+        requiredChannelDriver: "live",
         requiredProvider: "claude-cli",
         requiredModel: "claude-sonnet-4-6",
         authMode: "subscription",
@@ -55,6 +71,7 @@ describe("QA scenario lane matching", () => {
       }),
     ).toEqual([
       "providerMode=live-frontier",
+      "channelDriver=live",
       "channel=matrix",
       "provider=claude-cli",
       "model=claude-sonnet-4-6",
@@ -62,33 +79,36 @@ describe("QA scenario lane matching", () => {
     ]);
   });
 
-  it("keeps provider contracts independent from the selected channel driver", () => {
-    const scenario = makeQaSuiteTestScenario("portable-telegram", {
-      channel: "telegram",
-      config: {
-        requiredProvider: "openai",
-        requiredModel: "gpt-5.6-luna",
-      },
+  it("keeps module-flow support independent from driver and channel constraints", () => {
+    const scenario = makeQaSuiteTestScenario("matrix-module", {
+      channel: "matrix",
+      flowKind: "module",
+      config: { requiredChannelDriver: "live" },
     });
 
     expect(
-      scenarioMatchesQaProviderLane({
+      describeQaProviderLaneMismatches({
         scenario,
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         channelDriver: "crabline",
         channel: "telegram",
       }),
-    ).toBe(true);
+    ).toEqual([
+      "channelDriver=live",
+      "channel=matrix",
+      "module flow unsupported by implementation=crabline:telegram",
+    ]);
     expect(
-      scenarioMatchesQaProviderLane({
+      describeQaProviderLaneMismatches({
         scenario,
         providerMode: "mock-openai",
-        primaryModel: "openai/gpt-5.6-luna",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         channelDriver: "live",
-        channel: "telegram",
+        channel: "matrix",
+        supportsModuleFlows: true,
       }),
-    ).toBe(true);
+    ).toEqual([]);
   });
 
   it("keeps the built-in driver bound to the qa-channel channel", () => {
@@ -103,51 +123,6 @@ describe("QA scenario lane matching", () => {
         primaryModel: "mock-openai/gpt-5.6-luna",
         channelDriver: "qa-channel",
         channel: "telegram",
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    { channelDriver: "qa-channel" as const, channel: undefined, matches: true },
-    { channelDriver: "crabline" as const, channel: "telegram", matches: true },
-    { channelDriver: "crabline" as const, channel: "discord", matches: false },
-  ])(
-    "matches channel streaming evidence for $channelDriver channel $channel: $matches",
-    ({ channelDriver, channel, matches }) => {
-      const scenario = readQaScenarioById("channel-message-flows");
-
-      expect(
-        scenarioMatchesQaProviderLane({
-          scenario,
-          providerMode: "mock-openai",
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          channelDriver,
-          channel,
-        }),
-      ).toBe(matches);
-    },
-  );
-
-  it("accepts a mock lane only when its selected provider and model satisfy the contract", () => {
-    const scenario = makeQaSuiteTestScenario("mock-anthropic", {
-      config: {
-        requiredProvider: "anthropic",
-        requiredModel: "claude-opus-4-8",
-      },
-    });
-
-    expect(
-      scenarioMatchesQaProviderLane({
-        scenario,
-        providerMode: "mock-openai",
-        primaryModel: "anthropic/claude-opus-4-8",
-      }),
-    ).toBe(true);
-    expect(
-      scenarioMatchesQaProviderLane({
-        scenario,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
       }),
     ).toBe(false);
   });

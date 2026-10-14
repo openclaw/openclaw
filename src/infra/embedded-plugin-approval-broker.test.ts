@@ -33,6 +33,7 @@ describe("EmbeddedPluginApprovalBroker", () => {
       "broker.listPending()[0] test invariant",
     );
 
+    expect(approval.approvalKind).toBe("plugin");
     expect(approval?.request.toolName).toBe("skill_workshop");
     expect(events[0]).toEqual({
       event: "plugin.approval.requested",
@@ -123,16 +124,43 @@ describe("EmbeddedPluginApprovalBroker", () => {
     });
   });
 
-  it("rejects pending approvals when stopped", async () => {
+  it("isolates failed listeners while stopping every pending request", async () => {
+    vi.useFakeTimers();
     const broker = new EmbeddedPluginApprovalBroker();
-    const resultPromise = broker.request({
+    const removedIds: string[] = [];
+    broker.subscribe((event) => {
+      if (event.event === "plugin.approval.removed") {
+        throw new Error("removal listener failed");
+      }
+    });
+    broker.subscribe((event) => {
+      if (event.event === "plugin.approval.removed") {
+        removedIds.push(event.payload.id);
+      }
+    });
+    const first = broker.request({
       request: requestPayload(),
       timeoutMs: 5_000,
     });
+    const second = broker.request({
+      request: requestPayload(),
+      timeoutMs: 5_000,
+    });
+    let stopError: unknown;
 
-    broker.stop(new Error("local TUI stopped"));
+    try {
+      broker.stop(new Error("local TUI stopped"));
+    } catch (error) {
+      stopError = error;
+    }
+    const settlementsPromise = Promise.allSettled([first, second]);
+    await vi.runAllTimersAsync();
+    const settlements = await settlementsPromise;
 
-    await expect(resultPromise).rejects.toThrow("local TUI stopped");
+    expect(stopError).toBeUndefined();
+    expect(settlements.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect(removedIds).toHaveLength(2);
+    expect(new Set(removedIds).size).toBe(2);
     expect(broker.listPending()).toEqual([]);
   });
 });

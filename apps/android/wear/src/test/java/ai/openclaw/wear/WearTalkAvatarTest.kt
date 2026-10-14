@@ -5,6 +5,7 @@ import ai.openclaw.wear.shared.WearRpcMethod
 import android.animation.ValueAnimator
 import android.content.Intent
 import android.os.Looper
+import android.os.Parcel
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -17,9 +18,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import com.google.android.gms.wearable.ChannelClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,11 +43,170 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowValueAnimator
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class WearTalkAvatarTest {
+  @Test
+  fun stopClosesLocalAudioBeforeStalledRpcWithoutTerminalEvent() =
+    runTest {
+      val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+      val client = fixture.client
+      fixture.activate()
+      // Exercise the real playback owner and capture teardown without a live microphone.
+      client.invokePrivate("writeOutput", fixture.attempt, pcm16Le(samplesForFrames(2), 20_000))
+      @Suppress("UNCHECKED_CAST")
+      val capture = client.talkTestField("_isCapturing") as MutableStateFlow<Boolean>
+      capture.value = true
+      val captureJob = Job()
+      client.setTalkTestField("captureJob", captureJob)
+      val stop = async(start = CoroutineStart.UNDISPATCHED) { client.stop() }
+      try {
+        assertTrue(fixture.rpcEntered.isCompleted)
+        assertFalse(stop.isCompleted)
+        fixture.mark("assert-local-stopped")
+        assertFalse("capture must stop before RPC reply", client.isCapturing.value)
+        assertFalse("playback must stop before RPC reply", client.isPlaying.value)
+        assertEquals(0f, client.mouthLevel.value, 0f)
+        assertFalse(captureJob.isActive)
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.output.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+        assertTrue(fixture.events.indexOfFirst { it.endsWith("channel-close") } < fixture.events.indexOfFirst { it.endsWith("rpc-enter") })
+        fixture.rpcReply.complete(Unit)
+        stop.await()
+        client.shutdown()
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+      } finally {
+        println(fixture.events.joinToString("\n"))
+        stop.cancel()
+        client.shutdown()
+      }
+    }
+
+  @Test
+  fun stopReleasesRecorderBeforeRpcEvenWhenCaptureJobHasNotRun() =
+    runTest {
+      val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+      val client = fixture.client
+      (client.talkTestField("scope") as CoroutineScope).cancel()
+      client.setTalkTestField("scope", CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)))
+      fixture.activate()
+      client.invokePrivate("startCapture", fixture.attempt)
+      val recorder = client.talkTestField("audioRecord") as android.media.AudioRecord
+      assertTrue(client.isCapturing.value)
+      val stop = async(start = CoroutineStart.UNDISPATCHED) { client.stop() }
+      try {
+        assertTrue(fixture.rpcEntered.isCompleted)
+        assertFalse(stop.isCompleted)
+        assertFalse(client.isCapturing.value)
+        assertEquals(android.media.AudioRecord.STATE_UNINITIALIZED, recorder.state)
+        assertEquals(null, client.talkTestField("audioRecord"))
+        testScheduler.runCurrent()
+        assertEquals(1, fixture.input.closes.get())
+      } finally {
+        stop.cancel()
+        client.shutdown()
+      }
+    }
+
+  @Test
+  fun shutdownClosesStreamsAndChannelBeforeQueuedScopeWorkCanRun() =
+    runTest {
+      val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+      val client = fixture.client
+      (client.talkTestField("scope") as CoroutineScope).cancel()
+      val cleanupScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+      client.setTalkTestField("scope", cleanupScope)
+      fixture.activate()
+      client.shutdown()
+      try {
+        assertFalse(cleanupScope.coroutineContext[Job]!!.isActive)
+        assertEquals("input close cannot be queued in a cancelled scope", 1, fixture.input.closes.get())
+        assertEquals(1, fixture.output.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+        client.shutdown()
+        client.disconnectLocal()
+        testScheduler.runCurrent()
+        assertEquals(1, fixture.input.closes.get())
+        assertEquals(1, fixture.channelCloses.get())
+      } finally {
+        println(fixture.events.joinToString("\n"))
+      }
+    }
+
+  @Test
+  fun shutdownWaitsForConcurrentLocalStreamClosureBeforeCancellingScope() {
+    val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+    val client = fixture.client
+    val closing = java.util.concurrent.CountDownLatch(1)
+    val releaseClose = java.util.concurrent.CountDownLatch(1)
+    val shutdownStarted = java.util.concurrent.CountDownLatch(1)
+    val shutdownFinished = java.util.concurrent.CountDownLatch(1)
+    val input =
+      object : java.io.InputStream() {
+        override fun read(): Int = -1
+
+        override fun close() {
+          closing.countDown()
+          check(releaseClose.await(2, java.util.concurrent.TimeUnit.SECONDS))
+          fixture.input.close()
+        }
+      }
+    client.invokePrivate("activate", fixture.attempt.copy(resources = fixture.attempt.resources.copy(input = input)))
+    val disconnect = kotlin.concurrent.thread { client.disconnectLocal() }
+    var shutdown: Thread? = null
+    try {
+      assertTrue(closing.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      shutdown =
+        kotlin.concurrent.thread {
+          shutdownStarted.countDown()
+          client.shutdown()
+          shutdownFinished.countDown()
+        }
+      assertTrue(shutdownStarted.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      assertFalse(shutdownFinished.await(100, java.util.concurrent.TimeUnit.MILLISECONDS))
+      assertTrue((client.talkTestField("scope") as CoroutineScope).coroutineContext[Job]!!.isActive)
+      releaseClose.countDown()
+      assertTrue(shutdownFinished.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      assertEquals(1, fixture.input.closes.get())
+      assertEquals(1, fixture.output.closes.get())
+      assertEquals(1, fixture.channelCloses.get())
+    } finally {
+      releaseClose.countDown()
+      disconnect.join(2_000)
+      shutdown?.join(2_000)
+      client.shutdown()
+    }
+  }
+
+  @Test
+  fun shutdownReleasesBlockedReaderAndStaleCallbacksCannotReopenAudio() {
+    val fixture = WearTalkTestFixture(RuntimeEnvironment.getApplication())
+    val client = fixture.client
+    fixture.activate()
+    client.invokePrivate("startReader", fixture.attempt)
+    try {
+      assertTrue(fixture.input.entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      client.shutdown()
+      assertTrue(fixture.input.released.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      client.invokePrivate("writeOutput", fixture.attempt, pcm16Le(samplesForFrames(1), 20_000))
+      client.invokePrivate("handleChannelFailure", fixture.attempt)
+      assertFalse(client.isPlaying.value)
+      assertFalse(client.channelFailed.value)
+      assertEquals(1, fixture.input.closes.get())
+      assertEquals(1, fixture.channelCloses.get())
+    } finally {
+      // Release the controlled blocking read even when the original regression fails.
+      fixture.input.released.countDown()
+      client.shutdown()
+    }
+  }
+
   @Test
   fun silenceKeepsTheAvatarMouthClosed() {
     val pcm = ByteArray(samplesForFrames(2) * 2)
@@ -73,13 +245,19 @@ class WearTalkAvatarTest {
       )
     val client = realtimeTalkClient()
     val queuedLevels = Channel<Float>(Channel.UNLIMITED)
-    client.setPrivateField("activeNodeId", "watch-a")
-    client.setPrivateField("mouthFrames", queuedLevels)
+    val attempt = realtimeAttempt(generation = 1L)
+    client.setTalkTestField("activeAttempt", attempt)
+    client.setTalkTestField("mouthFrames", queuedLevels)
 
     try {
-      val writeOutput = WearRealtimeTalkClient::class.java.getDeclaredMethod("writeOutput", ByteArray::class.java)
+      val writeOutput =
+        WearRealtimeTalkClient::class.java.getDeclaredMethod(
+          "writeOutput",
+          WearRealtimeTalkClient.ActiveAttempt::class.java,
+          ByteArray::class.java,
+        )
       writeOutput.isAccessible = true
-      chunks.forEach { chunk -> writeOutput.invoke(client, chunk) }
+      chunks.forEach { chunk -> writeOutput.invoke(client, attempt, chunk) }
       awaitPlaybackTeardown(client)
 
       val actualLevels =
@@ -90,6 +268,47 @@ class WearTalkAvatarTest {
     } finally {
       client.shutdown()
     }
+  }
+
+  @Test
+  fun staleAttemptCallbacksCannotMutateReplacement() {
+    val client = realtimeTalkClient()
+    val stale = realtimeAttempt(generation = 1L)
+    val replacement = realtimeAttempt(generation = 2L)
+
+    try {
+      client.invokePrivate("activate", stale)
+      client.invokePrivate("handleChannelFailure", stale)
+      assertTrue(client.channelFailed.value)
+      assertEquals(null, client.talkTestField("activeAttempt"))
+
+      client.invokePrivate("activate", replacement)
+      val replacementReader = Job()
+      client.setTalkTestField("readJob", replacementReader)
+      assertFalse(client.channelFailed.value)
+      client.invokePrivate("writeOutput", stale, pcm16Le(samplesForFrames(1), sample = 20_000))
+      client.invokePrivate("handleChannelFailure", stale)
+      client.invokePrivate("closeLocal", stale, false)
+
+      assertFalse(client.isPlaying.value)
+      assertFalse(client.channelFailed.value)
+      assertTrue(replacementReader.isActive)
+      assertSame(replacement, client.talkTestField("activeAttempt"))
+    } finally {
+      client.shutdown()
+    }
+  }
+
+  @Test
+  fun realtimeAudioPathUsesNegotiatedAttemptScope() {
+    assertEquals(
+      WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH,
+      wearRealtimeAudioChannelPath("attempt-7", attemptScopedAudio = false),
+    )
+    assertEquals(
+      WearProtocol.realtimeAudioChannelPath("attempt-7"),
+      wearRealtimeAudioChannelPath("attempt-7", attemptScopedAudio = true),
+    )
   }
 
   @Test
@@ -334,6 +553,13 @@ class WearTalkAvatarTest {
     assertEquals(WearAvatarMotionInputs(animationSeconds = 12.5f, mouthLevel = 1f), inputs)
   }
 
+  private fun pcm16LeMouthLevels(
+    pcm: ByteArray,
+  ): List<Float> =
+    Pcm16MouthLevelAccumulator().run {
+      append(pcm) + flush()
+    }
+
   private fun samplesForFrames(frameCount: Int): Int = WEAR_REALTIME_SAMPLE_RATE_HZ * MOUTH_FRAME_MILLIS / 1_000 * frameCount
 
   private fun pcm16Le(
@@ -360,6 +586,18 @@ class WearTalkAvatarTest {
     return WearRealtimeTalkClient(RuntimeEnvironment.getApplication(), WearGatewayRepository(requester))
   }
 
+  private fun realtimeAttempt(generation: Long): WearRealtimeTalkClient.ActiveAttempt =
+    WearRealtimeTalkClient.ActiveAttempt(
+      nodeId = "watch-a",
+      attemptId = "attempt-$generation",
+      resources =
+        WearRealtimeTalkClient.ChannelResources(
+          channel = FakeRealtimeChannel("watch-a", "channel-$generation"),
+          input = ByteArrayInputStream(byteArrayOf()),
+          output = ByteArrayOutputStream(),
+        ),
+    )
+
   private fun awaitPlaybackTeardown(client: WearRealtimeTalkClient) {
     ShadowSystemClock.advanceBy(Duration.ofSeconds(1L))
     val deadlineNanos = System.nanoTime() + 2_000_000_000L
@@ -378,14 +616,20 @@ class WearTalkAvatarTest {
       .invoke(null, scale)
   }
 
-  private fun Any.setPrivateField(
+  private fun WearRealtimeTalkClient.invokePrivate(
     name: String,
-    value: Any,
+    vararg args: Any,
   ) {
-    javaClass.getDeclaredField(name).apply {
-      isAccessible = true
-      set(this@setPrivateField, value)
-    }
+    javaClass.declaredMethods
+      .single { method ->
+        method.name == name &&
+          method.parameterTypes.size == args.size &&
+          method.parameterTypes.zip(args).all { (type, arg) ->
+            type.isAssignableFrom(arg.javaClass) ||
+              (type == Boolean::class.javaPrimitiveType && arg is Boolean)
+          }
+      }.apply { isAccessible = true }
+      .invoke(this, *args)
   }
 
   private companion object {
@@ -445,5 +689,23 @@ class WearTalkAvatarTest {
   private class TestLifecycleOwner : LifecycleOwner {
     val registry = LifecycleRegistry(this)
     override val lifecycle: Lifecycle = registry
+  }
+}
+
+private data class FakeRealtimeChannel(
+  private val nodeId: String,
+  private val label: String,
+) : ChannelClient.Channel {
+  override fun getNodeId(): String = nodeId
+
+  override fun getPath(): String = WearProtocol.realtimeAudioChannelPath("attempt-$label")
+
+  override fun describeContents(): Int = 0
+
+  override fun writeToParcel(
+    dest: Parcel,
+    flags: Int,
+  ) {
+    dest.writeString(label)
   }
 }

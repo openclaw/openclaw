@@ -1,5 +1,6 @@
 // Verifies bundled manifest contract resolution honors explicit plugin scopes.
 import { describe, expect, it, vi } from "vitest";
+import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,30 +29,20 @@ const bundledContractPlugin = {
 } satisfies PluginManifestRecord;
 
 describe("resolveEnabledBundledManifestContractPlugins", () => {
-  it("treats an explicit empty plugin scope as matching no contract owners", async () => {
+  it("treats an explicit empty plugin scope as matching no contract owners", () => {
     mocks.loadManifestContractSnapshot.mockReturnValue({
       plugins: [bundledContractPlugin],
     });
-    const { resolveEnabledBundledManifestContractPlugins } =
-      await import("./bundled-manifest-contract-plugins.js");
 
     expect(
       resolveEnabledBundledManifestContractPlugins({
         contract: "documentExtractors",
-        compatMode: {
-          enablement: "always",
-          vitest: true,
-        },
       }).map((plugin) => plugin.id),
     ).toStrictEqual(["document-extract"]);
     expect(
       resolveEnabledBundledManifestContractPlugins({
         onlyPluginIds: [],
         contract: "documentExtractors",
-        compatMode: {
-          enablement: "always",
-          vitest: true,
-        },
       }),
     ).toStrictEqual([]);
   });

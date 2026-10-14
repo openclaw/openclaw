@@ -1,46 +1,65 @@
 import { describe, expect, it, vi } from "vitest";
-import { defineChannelSetupContract } from "./setup-contract.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import {
+  defineChannelSetupContract,
+  resolveChannelSetupExecutionAdapter,
+} from "./setup-contract.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 
 describe("defineChannelSetupContract", () => {
-  it("requires field keys to match camelCased long flag names", () => {
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          credential: {
-            kind: "string",
-            cli: { flags: "--token <value>", description: "Credential" },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).toThrow('Channel setup field "credential" must match camelCased long flag name "token"');
+  it("keeps released adapters intact while preferring channel-owned contracts", () => {
+    const setup = { applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg };
+    const setupContract = defineChannelSetupContract({ fields: {}, adapter: setup });
 
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          apiToken: {
-            kind: "string",
-            cli: { flags: "--api-token <value>", description: "API token" },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).not.toThrow();
+    expect(resolveChannelSetupExecutionAdapter({ setup })).toBe(setup);
+    expect(resolveChannelSetupExecutionAdapter({ setup, setupContract })).toBe(setupContract);
+    expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
   });
 
-  it("publishes the validated map key over a field-owned key property", () => {
-    const contract = defineChannelSetupContract({
-      fields: {
-        apiToken: {
-          key: "credential",
-          kind: "string",
-          cli: { flags: "--api-token <value>", description: "API token" },
-        } as const,
-      },
-      adapter: { applyAccountConfig: ({ cfg }) => cfg },
+  it("keeps ignored aliases ineligible during cold channel-owned promotion", () => {
+    const defaultAccount = "work-phone";
+    const next = withPluginCache(createPluginCache(), () => {
+      const promotion = {
+        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+        singleAccountKeysToMove: ["account"],
+        namedAccountPromotionKeys: ["account"],
+      };
+      const plugin = {
+        setupContract: defineChannelSetupContract({
+          fields: {},
+          adapter: {
+            ...promotion,
+            applyAccountConfig: ({ cfg }) => cfg,
+          },
+        }),
+      };
+      const cfg: OpenClawConfig = {
+        channels: {
+          demo: {
+            account: "+12025550123",
+            defaultAccount,
+            accounts: {
+              "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+            },
+          },
+        },
+      };
+
+      return moveSingleAccountChannelSectionToDefaultAccount({
+        cfg,
+        channelKey: "demo",
+        setupSurface: resolveChannelSetupExecutionAdapter(plugin),
+      });
     });
 
-    expect(contract.metadata.fields[0]?.key).toBe("apiToken");
+    expect(next.channels?.demo).toEqual({
+      defaultAccount,
+      accounts: {
+        "Work Phone": { dmPolicy: "open", allowFrom: ["*"] },
+        default: { account: "+12025550123" },
+      },
+    });
   });
 
   it("requires negated flags to resolve to the same field key", () => {
@@ -193,43 +212,6 @@ describe("defineChannelSetupContract", () => {
     expect(contract.parseInput({ port: "8.5" })).toEqual({
       ok: false,
       error: "port must be a non-negative integer.",
-    });
-  });
-
-  it("projects serializable CLI metadata from the same field definition", () => {
-    const contract = defineChannelSetupContract({
-      fields: {
-        token: {
-          kind: "string",
-          sensitive: true,
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        mode: {
-          kind: "choice",
-          choices: ["socket", "http"],
-          cli: { flags: "--mode <mode>", description: "Connection mode" },
-        },
-      },
-      adapter: {
-        applyAccountConfig: ({ cfg }) => cfg,
-      },
-    });
-
-    expect(contract.metadata).toEqual({
-      fields: [
-        {
-          key: "token",
-          kind: "string",
-          sensitive: true,
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        {
-          key: "mode",
-          kind: "choice",
-          choices: ["socket", "http"],
-          cli: { flags: "--mode <mode>", description: "Connection mode" },
-        },
-      ],
     });
   });
 });

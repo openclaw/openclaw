@@ -11,12 +11,31 @@ struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
 
     var body: some View {
+        #if os(iOS) || os(macOS)
+        if self.block.language == "mermaid", self.block.isComplete {
+            ChatMermaidBlockView(source: self.block.code)
+        } else {
+            self.codeBody
+        }
+        #else
+        self.codeBody
+        #endif
+    }
+
+    private var codeBody: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let language = self.block.language {
-                Text(language)
-                    .font(OpenClawChatTypography.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                if let language = self.block.language {
+                    Text(language).font(OpenClawChatTypography.caption2)
+                }
+                Spacer(minLength: 0)
+                // Always visible: with no language the control is the header's only content, so a
+                // hover-only reveal would leave an empty strip. Keep the header caption-height; the
+                // control's larger hit target overflows into the block padding.
+                ChatCopyButton(text: self.block.code, label: "Copy code")
+                    .frame(height: 20)
             }
+            .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
                     .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
@@ -77,13 +96,15 @@ struct ChatMathBlockView: View {
     }
 }
 
-#if os(macOS)
 @MainActor
-private struct ChatMathPlatformView: NSViewRepresentable {
+private struct ChatMathPlatformView {
     let latex: String
     let fontSize: CGFloat
     let textColor: Color
+}
 
+#if os(macOS)
+extension ChatMathPlatformView: NSViewRepresentable {
     func makeNSView(context: Context) -> MTMathUILabel {
         MTMathUILabel()
     }
@@ -92,24 +113,13 @@ private struct ChatMathPlatformView: NSViewRepresentable {
         self.configure(view)
     }
 
-    private func configure(_ view: MTMathUILabel) {
-        view.displayErrorInline = false
-        view.labelMode = .display
-        view.textAlignment = .center
-        view.fontSize = self.fontSize
-        view.textColor = NSColor(self.textColor)
-        if view.latex != self.latex {
-            view.latex = self.latex
-        }
+    /// SwiftMath reports fittingSize on macOS; SwiftUI's default bridge can collapse it in split views.
+    func sizeThatFits(_ _: ProposedViewSize, nsView: MTMathUILabel, context _: Context) -> CGSize? {
+        nsView.fittingSize
     }
 }
 #else
-@MainActor
-private struct ChatMathPlatformView: UIViewRepresentable {
-    let latex: String
-    let fontSize: CGFloat
-    let textColor: Color
-
+extension ChatMathPlatformView: UIViewRepresentable {
     func makeUIView(context: Context) -> MTMathUILabel {
         MTMathUILabel()
     }
@@ -117,19 +127,21 @@ private struct ChatMathPlatformView: UIViewRepresentable {
     func updateUIView(_ view: MTMathUILabel, context: Context) {
         self.configure(view)
     }
+}
+#endif
 
+extension ChatMathPlatformView {
     private func configure(_ view: MTMathUILabel) {
         view.displayErrorInline = false
         view.labelMode = .display
         view.textAlignment = .center
         view.fontSize = self.fontSize
-        view.textColor = UIColor(self.textColor)
+        view.textColor = MTColor(self.textColor)
         if view.latex != self.latex {
             view.latex = self.latex
         }
     }
 }
-#endif
 
 @MainActor
 struct ChatMarkdownTableView: View {
@@ -194,9 +206,8 @@ struct ChatMarkdownListView: View {
     let list: ChatMarkdownList
     let context: ChatMarkdownRenderer.Context
     let variant: ChatMarkdownVariant
-    let font: Font
+    let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
-    let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 7) {
@@ -208,7 +219,8 @@ struct ChatMarkdownListView: View {
 
                     VStack(alignment: .leading, spacing: 7) {
                         if self.list.items[index].content.isEmpty {
-                            ChatMarkdownRenderer.styledText(" ", font: self.font)
+                            Text(verbatim: " ")
+                                .font(self.typography.proseFont)
                         } else {
                             ForEach(self.list.items[index].content.indices, id: \.self) { contentIndex in
                                 self.content(self.list.items[index].content[contentIndex])
@@ -230,14 +242,15 @@ struct ChatMarkdownListView: View {
         let marker = self.list.marker(for: item, at: index)
         HStack(spacing: 4) {
             if let text = marker.text {
-                ChatMarkdownRenderer.styledText(text, font: self.font)
+                Text(verbatim: text)
+                    .font(self.typography.proseFont)
                     .foregroundStyle(self.textColor)
                     .monospacedDigit()
                     .accessibilityLabel(self.markerAccessibilityLabel(at: index))
             }
             if let checkbox = marker.checkbox {
                 Image(systemName: checkbox == .checked ? "checkmark.square.fill" : "square")
-                    .font(self.font)
+                    .font(self.typography.proseFont)
                     .foregroundStyle(self.textColor)
                     .accessibilityLabel(Text(self.checkboxAccessibilityLabel(checkbox)))
             }
@@ -271,9 +284,8 @@ struct ChatMarkdownListView: View {
             text: markdown,
             context: self.context,
             variant: self.variant,
-            font: self.font,
-            textColor: self.textColor,
-            inlineMathTypography: self.inlineMathTypography)
+            typography: self.typography,
+            textColor: self.textColor)
     }
 
     func nestedListView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
@@ -281,9 +293,8 @@ struct ChatMarkdownListView: View {
             list: list,
             context: self.context,
             variant: self.variant,
-            font: self.font,
-            textColor: self.textColor,
-            inlineMathTypography: self.inlineMathTypography)
+            typography: self.typography,
+            textColor: self.textColor)
     }
 
     private func markerAccessibilityLabel(at index: Int) -> Text {

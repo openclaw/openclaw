@@ -1,4 +1,3 @@
-// Provider enable config helpers update provider allowlists and config enablement state.
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 
 type ProviderPluginConfig = {
@@ -33,7 +32,7 @@ export type PluginEnableResult<TConfig extends ProviderEnableConfigCarrier> = {
  * Enables provider plugins for provider contract setup without applying channel
  * normalization from the core plugin enable path.
  */
-export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier>(
+function enableProviderPluginInConfig<TConfig extends ProviderEnableConfigCarrier>(
   /** Provider setup config object to update without channel normalization. */
   cfg: TConfig,
   /** Provider plugin id to enable and allowlist. */
@@ -50,21 +49,22 @@ export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier
     return { config: cfg, enabled: false, reason: "blocked by denylist" };
   }
 
-  let next = {
+  const next = {
     ...cfg,
     plugins: {
       ...cfg.plugins,
       entries: {
         ...cfg.plugins?.entries,
         [pluginId]: {
-          ...(cfg.plugins?.entries?.[pluginId] as object | undefined),
+          ...cfg.plugins?.entries?.[pluginId],
           enabled: true,
         },
       },
     },
-  } as TConfig;
+  };
   // Provider setup owns plugin registry state only; allowlist updates stay in the
   // shared helper so deny/allow semantics match the core plugin enable path.
-  next = ensurePluginAllowlisted(next, pluginId);
-  return { config: next, enabled: true };
+  return { config: ensurePluginAllowlisted(next, pluginId), enabled: true };
 }
+
+export { enableProviderPluginInConfig as enablePluginInConfig };

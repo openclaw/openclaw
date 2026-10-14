@@ -1,80 +1,42 @@
-// Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   asFiniteNumber,
+  asNullableRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
+import { extractWikiLinks } from "./markdown-links.js";
 
-const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
-export const WIKI_RELATED_START_MARKER = "<!-- openclaw:wiki:related:start -->";
-export const WIKI_RELATED_END_MARKER = "<!-- openclaw:wiki:related:end -->";
+export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
+
+export const WIKI_PAGE_GROUPS = [
+  { kind: "source", dir: "sources", heading: "Sources" },
+  { kind: "entity", dir: "entities", heading: "Entities" },
+  { kind: "concept", dir: "concepts", heading: "Concepts" },
+  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
+  { kind: "report", dir: "reports", heading: "Reports" },
+] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
-export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
+export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
-type ParsedWikiMarkdown = {
+export type ParsedWikiMarkdown = {
   hasFrontmatter: boolean;
   frontmatter: Record<string, unknown>;
   body: string;
 };
 
-export type WikiClaimEvidence = {
-  kind?: string;
-  sourceId?: string;
-  path?: string;
-  lines?: string;
-  weight?: number;
-  confidence?: number;
-  privacyTier?: string;
-  note?: string;
-  updatedAt?: string;
-};
+export type WikiClaimEvidence = NonNullable<ReturnType<typeof normalizeWikiClaimEvidence>>;
+export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
+type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
+export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
 
-export type WikiClaim = {
-  id?: string;
-  text: string;
-  status?: string;
-  confidence?: number;
-  evidence: WikiClaimEvidence[];
-  updatedAt?: string;
-};
-
-type WikiPersonCard = {
-  canonicalId?: string;
-  handles: string[];
-  socials: string[];
-  emails: string[];
-  timezone?: string;
-  lane?: string;
-  askFor: string[];
-  avoidAskingFor: string[];
-  bestUsedFor: string[];
-  notEnoughFor: string[];
-  confidence?: number;
-  privacyTier?: string;
-  lastRefreshedAt?: string;
-};
-
-export type WikiRelationship = {
-  targetId?: string;
-  targetPath?: string;
-  targetTitle?: string;
-  kind?: string;
-  weight?: number;
-  confidence?: number;
-  evidenceKind?: string;
-  privacyTier?: string;
-  note?: string;
-  updatedAt?: string;
-};
-
-export type WikiPageFrontmatterError = {
+type WikiPageFrontmatterError = {
   relativePath: string;
   message: string;
 };
@@ -109,6 +71,7 @@ export type WikiPageSummary = {
   sourcePath?: string;
   bridgeRelativePath?: string;
   bridgeWorkspaceDir?: string;
+  bridgeAgentIds: string[];
   unsafeLocalConfiguredPath?: string;
   unsafeLocalRelativePath?: string;
   lastRefreshedAt?: string;
@@ -116,17 +79,11 @@ export type WikiPageSummary = {
 };
 
 type WikiPageSummaryScanResult =
-  | { status: "valid"; page: WikiPageSummary }
+  | { status: "valid"; page: WikiPageSummary; parsed: ParsedWikiMarkdown }
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
-const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
-const RELATED_BLOCK_PATTERN = new RegExp(
-  `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
-  "g",
-);
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -139,29 +96,15 @@ const WIKI_RESERVED_PAGE_STEMS = new Set(["index"]);
 const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
 const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 
-function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
-  let result = "";
-  let bytes = 0;
-  for (const char of value) {
-    const nextBytes = Buffer.byteLength(char);
-    if (bytes + nextBytes > maxBytes) {
-      break;
-    }
-    result += char;
-    bytes += nextBytes;
-  }
-  return result;
-}
-
 function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): string {
   if (Buffer.byteLength(raw) <= maxBytes) {
     return raw;
   }
   const suffix = createHash("sha1").update(raw).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
-  const truncated = truncateUtf8CodePointSafe(
-    raw,
-    maxBytes - Buffer.byteLength(`-${suffix}`),
-  ).replace(/-+$/g, "");
+  const truncated = truncateUtf8Prefix(raw, maxBytes - Buffer.byteLength(`-${suffix}`)).replace(
+    /-+$/g,
+    "",
+  );
   return `${truncated || fallback}-${suffix}`;
 }
 
@@ -199,19 +142,16 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const frontmatter = match[1];
-  if (frontmatter === undefined) {
-    return { hasFrontmatter: false, frontmatter: {}, body: content };
-  }
-  const parsed: unknown = YAML.parse(frontmatter);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const frontmatter = match[1]!;
+  const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
+  if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
     // so an edit cannot silently replace scalar or sequence frontmatter.
     throw new TypeError("Wiki frontmatter must be a YAML mapping");
   }
   return {
     hasFrontmatter: true,
-    frontmatter: parsed as Record<string, unknown>,
+    frontmatter: parsed,
     body: content.slice(match[0].length),
   };
 }
@@ -229,60 +169,45 @@ function extractTitleFromMarkdown(body: string): string | undefined {
   return normalizeOptionalString(match?.[1]);
 }
 
-export function normalizeSourceIds(value: unknown): string[] {
-  return normalizeSingleOrTrimmedStringList(value);
+function normalizeOptionalStringFields<K extends string>(
+  record: Record<string, unknown>,
+  keys: readonly K[],
+): Partial<Record<K, string>> {
+  const fields: Partial<Record<K, string>> = {};
+  for (const key of keys) {
+    const value = normalizeOptionalString(record[key]);
+    if (value) {
+      fields[key] = value;
+    }
+  }
+  return fields;
 }
 
-function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function normalizeWikiClaimEvidence(value: unknown) {
+  const record = asNullableRecord(value);
+  if (!record) {
     return null;
   }
-  const record = value as Record<string, unknown>;
-  const kind = normalizeOptionalString(record.kind);
-  const sourceId = normalizeOptionalString(record.sourceId);
-  const evidencePath = normalizeOptionalString(record.path);
-  const lines = normalizeOptionalString(record.lines);
-  const note = normalizeOptionalString(record.note);
-  const updatedAt = normalizeOptionalString(record.updatedAt);
-  const privacyTier = normalizeOptionalString(record.privacyTier);
-  const weight =
-    typeof record.weight === "number" && Number.isFinite(record.weight) ? record.weight : undefined;
-  const confidence = normalizeOptionalNumber(record.confidence);
-  if (
-    !kind &&
-    !sourceId &&
-    !evidencePath &&
-    !lines &&
-    !note &&
-    weight === undefined &&
-    confidence === undefined &&
-    !privacyTier &&
-    !updatedAt
-  ) {
-    return null;
-  }
-  return {
-    ...(kind ? { kind } : {}),
-    ...(sourceId ? { sourceId } : {}),
-    ...(evidencePath ? { path: evidencePath } : {}),
-    ...(lines ? { lines } : {}),
+  const weight = asFiniteNumber(record.weight);
+  const confidence = asFiniteNumber(record.confidence);
+  const evidence = {
+    ...normalizeOptionalStringFields(record, ["kind", "sourceId", "path", "lines"]),
     ...(weight !== undefined ? { weight } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
-    ...(privacyTier ? { privacyTier } : {}),
-    ...(note ? { note } : {}),
-    ...(updatedAt ? { updatedAt } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "note", "updatedAt"]),
   };
+  return Object.keys(evidence).length > 0 ? evidence : null;
 }
 
-export function normalizeWikiClaims(value: unknown): WikiClaim[] {
+export function normalizeWikiClaims(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
   }
   return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    const record = asNullableRecord(entry);
+    if (!record) {
       return [];
     }
-    const record = entry as Record<string, unknown>;
     const text = normalizeOptionalString(record.text);
     if (!text) {
       return [];
@@ -293,204 +218,77 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
           return normalized ? [normalized] : [];
         })
       : [];
-    const confidence =
-      typeof record.confidence === "number" && Number.isFinite(record.confidence)
-        ? record.confidence
-        : undefined;
+    const confidence = asFiniteNumber(record.confidence);
     return [
       {
-        ...(normalizeOptionalString(record.id) ? { id: normalizeOptionalString(record.id) } : {}),
+        ...normalizeOptionalStringFields(record, ["id"]),
         text,
-        ...(normalizeOptionalString(record.status)
-          ? { status: normalizeOptionalString(record.status) }
-          : {}),
+        ...normalizeOptionalStringFields(record, ["status"]),
         ...(confidence !== undefined ? { confidence } : {}),
         evidence,
-        ...(normalizeOptionalString(record.updatedAt)
-          ? { updatedAt: normalizeOptionalString(record.updatedAt) }
-          : {}),
+        ...normalizeOptionalStringFields(record, ["updatedAt"]),
       },
     ];
   });
 }
 
-function normalizeOptionalNumber(value: unknown): number | undefined {
-  return asFiniteNumber(value);
-}
-
-function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function normalizeWikiPersonCard(value: unknown) {
+  const record = asNullableRecord(value);
+  if (!record) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  const card: WikiPersonCard = {
-    ...(normalizeOptionalString(record.canonicalId)
-      ? { canonicalId: normalizeOptionalString(record.canonicalId) }
-      : {}),
+  const confidence = asFiniteNumber(record.confidence);
+  const card = {
+    ...normalizeOptionalStringFields(record, ["canonicalId"]),
     handles: normalizeSingleOrTrimmedStringList(record.handles),
     socials: normalizeSingleOrTrimmedStringList(record.socials),
     emails: normalizeSingleOrTrimmedStringList(record.emails ?? record.email),
-    ...(normalizeOptionalString(record.timezone)
-      ? { timezone: normalizeOptionalString(record.timezone) }
-      : {}),
-    ...(normalizeOptionalString(record.lane) ? { lane: normalizeOptionalString(record.lane) } : {}),
+    ...normalizeOptionalStringFields(record, ["timezone", "lane"]),
     askFor: normalizeSingleOrTrimmedStringList(record.askFor),
     avoidAskingFor: normalizeSingleOrTrimmedStringList(record.avoidAskingFor),
     bestUsedFor: normalizeSingleOrTrimmedStringList(record.bestUsedFor),
     notEnoughFor: normalizeSingleOrTrimmedStringList(record.notEnoughFor),
-    ...(normalizeOptionalNumber(record.confidence) !== undefined
-      ? { confidence: normalizeOptionalNumber(record.confidence) }
-      : {}),
-    ...(normalizeOptionalString(record.privacyTier)
-      ? { privacyTier: normalizeOptionalString(record.privacyTier) }
-      : {}),
-    ...(normalizeOptionalString(record.lastRefreshedAt)
-      ? { lastRefreshedAt: normalizeOptionalString(record.lastRefreshedAt) }
-      : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "lastRefreshedAt"]),
   };
-  const hasAnyValue =
-    Boolean(
-      card.canonicalId || card.timezone || card.lane || card.privacyTier || card.lastRefreshedAt,
-    ) ||
-    typeof card.confidence === "number" ||
-    card.handles.length > 0 ||
-    card.socials.length > 0 ||
-    card.emails.length > 0 ||
-    card.askFor.length > 0 ||
-    card.avoidAskingFor.length > 0 ||
-    card.bestUsedFor.length > 0 ||
-    card.notEnoughFor.length > 0;
+  const hasAnyValue = Object.values(card).some((field) =>
+    Array.isArray(field) ? field.length > 0 : field !== undefined,
+  );
   return hasAnyValue ? card : undefined;
 }
 
-function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
+function normalizeWikiRelationships(value: unknown) {
   if (!Array.isArray(value)) {
     return [];
   }
   return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    const record = asNullableRecord(entry);
+    if (!record) {
       return [];
     }
-    const record = entry as Record<string, unknown>;
-    const relationship: WikiRelationship = {
-      ...(normalizeOptionalString(record.targetId)
-        ? { targetId: normalizeOptionalString(record.targetId) }
-        : {}),
-      ...(normalizeOptionalString(record.targetPath)
-        ? { targetPath: normalizeOptionalString(record.targetPath) }
-        : {}),
-      ...(normalizeOptionalString(record.targetTitle)
-        ? { targetTitle: normalizeOptionalString(record.targetTitle) }
-        : {}),
-      ...(normalizeOptionalString(record.kind)
-        ? { kind: normalizeOptionalString(record.kind) }
-        : {}),
-      ...(normalizeOptionalNumber(record.weight) !== undefined
-        ? { weight: normalizeOptionalNumber(record.weight) }
-        : {}),
-      ...(normalizeOptionalNumber(record.confidence) !== undefined
-        ? { confidence: normalizeOptionalNumber(record.confidence) }
-        : {}),
-      ...(normalizeOptionalString(record.evidenceKind)
-        ? { evidenceKind: normalizeOptionalString(record.evidenceKind) }
-        : {}),
-      ...(normalizeOptionalString(record.privacyTier)
-        ? { privacyTier: normalizeOptionalString(record.privacyTier) }
-        : {}),
-      ...(normalizeOptionalString(record.note)
-        ? { note: normalizeOptionalString(record.note) }
-        : {}),
-      ...(normalizeOptionalString(record.updatedAt)
-        ? { updatedAt: normalizeOptionalString(record.updatedAt) }
-        : {}),
+    const weight = asFiniteNumber(record.weight);
+    const confidence = asFiniteNumber(record.confidence);
+    const relationship = {
+      ...normalizeOptionalStringFields(record, ["targetId", "targetPath", "targetTitle", "kind"]),
+      ...(weight !== undefined ? { weight } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
+      ...normalizeOptionalStringFields(record, [
+        "evidenceKind",
+        "privacyTier",
+        "note",
+        "updatedAt",
+      ]),
     };
-    const hasAnyValue = Object.keys(relationship).length > 0;
-    return hasAnyValue ? [relationship] : [];
+    return Object.keys(relationship).length > 0 ? [relationship] : [];
   });
 }
 
-function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string): string {
-  return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
-}
-
-type MarkdownAstNode = {
-  type?: string;
-  position?: {
-    start?: { offset?: number };
-    end?: { offset?: number };
-  };
-  children?: MarkdownAstNode[];
-};
-
-function maskMarkdownCode(markdown: string): string {
-  const masked = markdown.split("");
-  const visit = (node: MarkdownAstNode): void => {
-    if (node.type === "code" || node.type === "inlineCode") {
-      const start = node.position?.start?.offset;
-      const end = node.position?.end?.offset;
-      if (start !== undefined && end !== undefined) {
-        for (let index = start; index < end; index++) {
-          if (masked[index] !== "\n" && masked[index] !== "\r") {
-            masked[index] = " ";
-          }
-        }
-      }
-      return;
-    }
-    for (const child of node.children ?? []) {
-      visit(child);
-    }
-  };
-  visit(fromMarkdown(markdown) as MarkdownAstNode);
-  return masked.join("");
-}
-
-function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
-  const searchable = maskMarkdownCode(withoutRelatedBlock);
-  const links: string[] = [];
-  for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
-    const target = match[1]?.trim();
-    if (target) {
-      links.push(target);
-    }
-  }
-  for (const match of searchable.matchAll(MARKDOWN_LINK_PATTERN)) {
-    const rawTarget = match[1]?.trim();
-    if (!rawTarget || rawTarget.startsWith("#") || /^[a-z]+:/i.test(rawTarget)) {
-      continue;
-    }
-    const target = rawTarget.split("#")[0]?.split("?")[0]?.replace(/\\/g, "/").trim();
-    if (target) {
-      links.push(normalizeMarkdownLinkTarget(sourceRelativePath, target));
-    }
-  }
-  return links;
-}
-
-function normalizeMarkdownLines(markdown: string): string[] {
-  return markdown
-    .replace(/\r\n?/g, "\n")
-    .trimStart()
-    .split("\n")
-    .map((line) => line.trimEnd());
-}
-
 function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean {
-  const firstWrapperLineIndex = lines.findIndex(
-    (line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER,
-  );
-  if (firstWrapperLineIndex === -1 || !patterns[0]?.test(lines[firstWrapperLineIndex] ?? "")) {
-    return false;
-  }
-  const remainingLines = lines
-    .slice(firstWrapperLineIndex + 1)
-    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
-  if (patterns[1] && !patterns[1].test(remainingLines[0] ?? "")) {
+  if (!patterns[0]?.test(lines[0] ?? "") || (patterns[1] && !patterns[1].test(lines[1] ?? ""))) {
     return false;
   }
   let patternIndex = 2;
-  for (const line of remainingLines.slice(1)) {
+  for (const line of lines.slice(2)) {
     const pattern = patterns[patternIndex];
     if (!pattern) {
       return true;
@@ -500,10 +298,6 @@ function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean 
     }
   }
   return patternIndex === patterns.length;
-}
-
-function hasHumanNotesBlock(markdown: string): boolean {
-  return markdown.includes(HUMAN_START_MARKER) && markdown.includes(HUMAN_END_MARKER);
 }
 
 const SOURCE_CONTENT_HEADING = /(?:^|\r?\n)## Content\r?\n/u;
@@ -529,14 +323,34 @@ function afterSourceContentFence(page: string): number {
 function findNotesHumanBlock(page: string): { start: number; end: number } | null {
   const searchFrom = afterSourceContentFence(page);
   const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
-  if (start === -1) {
-    return null;
-  }
   const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
-  if (endMarker < start) {
-    return null;
+  if (start === -1 && endMarker < searchFrom) {
+    const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
+      page.slice(searchFrom),
+    );
+    if (!notesSection?.[1]?.trim()) {
+      return null;
+    }
+  }
+  if (start === -1 || endMarker < start) {
+    const missingMarker = start === -1 ? HUMAN_START_MARKER : HUMAN_END_MARKER;
+    throw new Error(
+      `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`,
+    );
   }
   return { start, end: endMarker + HUMAN_END_MARKER.length };
+}
+
+export function extractHumanNotesBlock(page: string): string | null {
+  const block = findNotesHumanBlock(page);
+  if (!block) {
+    return null;
+  }
+  const notes = page.slice(
+    block.start + HUMAN_START_MARKER.length,
+    block.end - HUMAN_END_MARKER.length,
+  );
+  return notes.trim() ? page.slice(block.start, block.end) : null;
 }
 
 export function preserveHumanNotesBlock(rendered: string, existing: string): string {
@@ -552,52 +366,45 @@ export function preserveHumanNotesBlock(rendered: string, existing: string): str
   );
 }
 
-function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
-  const lines = normalizeMarkdownLines(markdown);
-  const normalized = lines.join("\n");
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^# Memory Bridge(?:\s*\(|:)/u,
-      /^## Bridge Source\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "bridge";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^# Unsafe Local Import:/u,
-      /^## Unsafe Local Source\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "unsafe-local";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^#\s+\S/u,
-      /^## Source\s*$/u,
-      /^- Type: `local-file`\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "local-file";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
+const GENERATED_SOURCE_WRAPPERS: ReadonlyArray<{
+  kind: GeneratedSourceBody;
+  patterns: RegExp[];
+}> = [
+  {
+    kind: "bridge",
+    patterns: [/^# Memory Bridge(?:\s*\(|:)/u, /^## Bridge Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "unsafe-local",
+    patterns: [/^# Unsafe Local Import:/u, /^## Unsafe Local Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "local-file",
+    patterns: [/^#\s+\S/u, /^## Source\s*$/u, /^- Type: `local-file`\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "chatgpt-export",
+    patterns: [
       /^# ChatGPT Export:/u,
       /^## Source\s*$/u,
       /^- Conversation id: `[^`]+`\s*$/u,
       /^## Active Branch Transcript\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "chatgpt-export";
+    ],
+  },
+];
+
+function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
+  if (!markdown.includes(HUMAN_START_MARKER) || !markdown.includes(HUMAN_END_MARKER)) {
+    return undefined;
   }
-  return undefined;
+  const lines = markdown
+    .replace(/\r\n?/g, "\n")
+    .trimStart()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
+  return GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
+    ?.kind;
 }
 
 function detectUnmanagedRawSourceBody(markdown: string): boolean {
@@ -640,38 +447,25 @@ export function formatWikiLink(params: {
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
-  const fenceSize = Math.max(
-    3,
-    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length + 1),
-  );
+  let fenceSize = 3;
+  for (const match of content.matchAll(/`+/g)) {
+    fenceSize = Math.max(fenceSize, match[0].length + 1);
+  }
   const fence = "`".repeat(fenceSize);
   return `${fence}${infoString}\n${content}\n${fence}`;
 }
 
 function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
-  if (normalized.startsWith("entities/")) {
-    return "entity";
-  }
-  if (normalized.startsWith("concepts/")) {
-    return "concept";
-  }
-  if (normalized.startsWith("sources/")) {
-    return "source";
-  }
-  if (normalized.startsWith("syntheses/")) {
-    return "synthesis";
-  }
-  if (normalized.startsWith("reports/")) {
-    return "report";
-  }
-  return null;
+  return WIKI_PAGE_GROUPS.find((group) => normalized.startsWith(`${group.dir}/`))?.kind ?? null;
 }
 
 export function scanWikiPageSummary(params: {
   absolutePath: string;
   relativePath: string;
   raw: string;
+  /** Query readers do not need the compiler/lint link graph. */
+  includeLinks?: boolean;
 }): WikiPageSummaryScanResult {
   const kind = inferWikiPageKind(params.relativePath);
   if (!kind) {
@@ -707,6 +501,7 @@ export function scanWikiPageSummary(params: {
 
   return {
     status: "valid",
+    parsed,
     page: {
       absolutePath: params.absolutePath,
       relativePath: params.relativePath.split(path.sep).join("/"),
@@ -718,16 +513,15 @@ export function scanWikiPageSummary(params: {
       entityType: normalizeOptionalString(parsed.frontmatter.entityType),
       canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
       aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
-      sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
-      linkTargets: extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
+      sourceIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.sourceIds),
+      linkTargets:
+        params.includeLinks === false
+          ? []
+          : extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
       claims: normalizeWikiClaims(parsed.frontmatter.claims),
       contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
       questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
-      confidence:
-        typeof parsed.frontmatter.confidence === "number" &&
-        Number.isFinite(parsed.frontmatter.confidence)
-          ? parsed.frontmatter.confidence
-          : undefined,
+      confidence: asFiniteNumber(parsed.frontmatter.confidence),
       privacyTier: normalizeOptionalString(parsed.frontmatter.privacyTier),
       personCard: normalizeWikiPersonCard(parsed.frontmatter.personCard),
       relationships: normalizeWikiRelationships(parsed.frontmatter.relationships),
@@ -741,6 +535,7 @@ export function scanWikiPageSummary(params: {
       sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
       bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
       bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),
+      bridgeAgentIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bridgeAgentIds),
       unsafeLocalConfiguredPath: normalizeOptionalString(
         parsed.frontmatter.unsafeLocalConfiguredPath,
       ),
@@ -759,4 +554,3 @@ export function toWikiPageSummary(params: {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

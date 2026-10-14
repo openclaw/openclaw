@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv } from "../../test-support.js";
 import { stopBrowserControlService } from "../control-service.js";
@@ -55,7 +58,6 @@ describe("browser client fetch attachOnly diagnostics", () => {
               hung: {
                 cdpUrl: `http://127.0.0.1:${port}`,
                 attachOnly: true,
-                color: "#00AA00",
               },
             },
           },
@@ -68,6 +70,7 @@ describe("browser client fetch attachOnly diagnostics", () => {
     clearRuntimeConfigSnapshot();
 
     try {
+      await captureRuntimeConfigAsyncReader()();
       const thrown = await fetchBrowserJson("/tabs?profile=hung", { timeoutMs: 200 }).catch(
         (err: unknown) => err,
       );

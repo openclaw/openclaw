@@ -2,6 +2,8 @@
  * JSON parsing helpers that preserve integer literals larger than
  * Number.MAX_SAFE_INTEGER as strings before JSON.parse can round them.
  */
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+
 const MAX_SAFE_INTEGER_ABS_STR = String(Number.MAX_SAFE_INTEGER);
 
 function isAsciiDigit(ch: string | undefined): boolean {
@@ -65,17 +67,17 @@ function parseJsonNumberToken(
 
 function isUnsafeIntegerLiteral(token: string): boolean {
   const digits = token[0] === "-" ? token.slice(1) : token;
-  if (digits.length < MAX_SAFE_INTEGER_ABS_STR.length) {
-    return false;
-  }
-  if (digits.length > MAX_SAFE_INTEGER_ABS_STR.length) {
-    return true;
-  }
-  return digits > MAX_SAFE_INTEGER_ABS_STR;
+  return (
+    digits.length > MAX_SAFE_INTEGER_ABS_STR.length ||
+    (digits.length === MAX_SAFE_INTEGER_ABS_STR.length && digits > MAX_SAFE_INTEGER_ABS_STR)
+  );
 }
 
 /** Quotes integer literals above Number.MAX_SAFE_INTEGER before JSON.parse. */
 export function quoteUnsafeIntegerLiterals(input: string): string {
+  if (!/(?:^|\D)\d{16}/.test(input)) {
+    return input;
+  }
   let out = "";
   let inString = false;
   let escaped = false;
@@ -134,17 +136,10 @@ export function parseJsonObjectPreservingUnsafeIntegers(
 ): Record<string, unknown> | null {
   if (typeof value === "string") {
     try {
-      const parsed = parseJsonPreservingUnsafeIntegers(value);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
+      return asNullableRecord(parseJsonPreservingUnsafeIntegers(value));
     } catch {
       return null;
     }
-    return null;
   }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return null;
+  return asNullableRecord(value);
 }

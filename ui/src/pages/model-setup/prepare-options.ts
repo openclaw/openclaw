@@ -1,48 +1,49 @@
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 
-export type ModelSetupPrepareOption = {
-  id: "ollama" | "llama-cpp";
-  brandId?: string;
-  label: string;
-  hint?: string;
-  icon?: string;
-  website?: string;
-};
+export type ModelSetupPrepareOption = NonNullable<
+  SystemAgentSetupDetectResult["prepareOptions"]
+>[number];
+
+/** Keep discovery-only metadata out of activation RPC payloads. */
+export function candidateActivation({
+  kind,
+  modelRef,
+  modelTarget,
+}: Pick<SystemAgentSetupDetectResult["candidates"][number], "kind" | "modelRef" | "modelTarget">) {
+  return { kind, modelRef, ...(modelTarget ? { modelTarget } : {}) };
+}
+
+function providerAutoSetupKind(choiceId: string): `provider-auto:${string}` {
+  return `provider-auto:${encodeURIComponent(choiceId)}`;
+}
+
+export function preparedModelActivation(option: ModelSetupPrepareOption, modelRef: string) {
+  return {
+    kind: providerAutoSetupKind(option.id),
+    modelRef,
+    ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
+  };
+}
 
 export function listModelSetupPrepareOptions(
   result: SystemAgentSetupDetectResult,
 ): ModelSetupPrepareOption[] {
-  const prepareChoices: readonly ModelSetupPrepareOption[] = [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: t("modelSetup.prepare.ollamaLabel"),
-      hint: t("modelSetup.prepare.ollamaHint"),
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: t("modelSetup.prepare.llamaCppLabel"),
-      hint: t("modelSetup.prepare.llamaCppHint"),
-    },
-  ];
-  const presented = [
-    ...result.manualProviders,
-    ...(result.authOptions ?? []),
-    ...(result.recommendedInstalls ?? []),
-  ];
-  return prepareChoices
-    .filter(
-      (choice) =>
-        !result.candidates.some(
-          (candidate) =>
-            candidate.kind === `provider-auto:${choice.id}` ||
-            candidate.modelRef.startsWith(`${choice.id}/`),
-        ),
-    )
-    .map((choice) => {
-      const wire = presented.find((entry) => entry.id === choice.id);
-      return wire ? Object.assign({}, choice, wire, { id: choice.id }) : choice;
-    });
+  return (result.prepareOptions ?? []).filter(
+    (choice) =>
+      !result.candidates.some(
+        (candidate) =>
+          candidate.credentials !== false &&
+          (candidate.kind === providerAutoSetupKind(choice.id) ||
+            candidate.modelRef.startsWith(`${choice.brandId ?? choice.id}/`)),
+      ),
+  );
+}
+
+export function findPreparedModelCandidate(result: SystemAgentSetupDetectResult, choiceId: string) {
+  // Detection deliberately encodes the provider-auth choice ID in the kind;
+  // brandId owns the model-ref namespace and may differ.
+  return result.candidates.find(
+    (candidate) =>
+      candidate.kind === providerAutoSetupKind(choiceId) && candidate.credentials !== false,
+  );
 }

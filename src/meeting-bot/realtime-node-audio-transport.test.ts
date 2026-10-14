@@ -1,8 +1,14 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
-function createTransport(invoke: ReturnType<typeof vi.fn>) {
-  return createNodeMeetingRealtimeAudioTransport({
+function createTransport(
+  invoke: ReturnType<typeof vi.fn>,
+  options: { outputGenerationSupported?: boolean } = {},
+) {
+  const transport = createNodeMeetingRealtimeAudioTransport({
     runtime: { nodes: { invoke } } as never,
     nodeId: "node-1",
     bridgeId: "bridge-1",
@@ -11,6 +17,12 @@ function createTransport(invoke: ReturnType<typeof vi.fn>) {
     logScope: "[meeting]",
     logPrefix: "node",
   });
+  Reflect.set(
+    transport,
+    Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+    options.outputGenerationSupported === true,
+  );
+  return transport;
 }
 
 describe("node meeting realtime audio transport", () => {
@@ -91,5 +103,179 @@ describe("node meeting realtime audio transport", () => {
     });
 
     await transport.stop();
+  });
+
+  it("cannot verify stopped output from a pending input pull", async () => {
+    const pendingPull = createDeferredCore<{ base64: string }>();
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) =>
+      params.action === "pullAudio" ? pendingPull.promise : {},
+    );
+    const transport = createTransport(invoke);
+    const output = Buffer.alloc(80 * 240 * 2);
+    for (let sample = 0; sample < output.byteLength / 2; sample += 1) {
+      const amplitude = 400 + ((Math.floor(sample / 240) * 7919) % 12_000);
+      output.writeInt16LE(sample % 2 === 0 ? amplitude : -amplitude, sample * 2);
+    }
+    await transport.writeOutput(output);
+    const health = transport.getHealth?.();
+    const onAudio = vi.fn();
+    transport.startInput(onAudio);
+    await transport.stop();
+    pendingPull.resolve({ base64: output.toString("base64") });
+    await setImmediate();
+
+    expect(transport.getHealth?.()).toEqual(health);
+    expect(onAudio).not.toHaveBeenCalled();
+  });
+
+  it("fences output writes across clear and stop", async () => {
+    const invoke = vi.fn(async () => ({ ok: true }));
+    const transport = createTransport(invoke, { outputGenerationSupported: true });
+
+    await transport.writeOutput(Buffer.from([1, 2, 3]));
+    await transport.clearOutput();
+    await transport.writeOutput(Buffer.from([4, 5, 6]));
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: "pushAudio",
+          outputGeneration: 0,
+        }),
+      }),
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        params: {
+          action: "clearAudio",
+          bridgeId: "bridge-1",
+          outputGeneration: 1,
+        },
+      }),
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: "pushAudio",
+          outputGeneration: 1,
+        }),
+      }),
+    );
+
+    await transport.stop();
+    const invokeCountAfterStop = invoke.mock.calls.length;
+    await transport.writeOutput(Buffer.from([7, 8, 9]));
+    await transport.clearOutput();
+    expect(invoke).toHaveBeenCalledTimes(invokeCountAfterStop);
+  });
+
+  it("serializes output commands for legacy node hosts", async () => {
+    const pushStarted = createDeferredCore();
+    let releasePush: (() => void) | undefined;
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
+      if (params.action === "pushAudio") {
+        await new Promise<void>((resolve) => {
+          releasePush = resolve;
+          pushStarted.resolve();
+        });
+      }
+      return { ok: true };
+    });
+    const transport = createTransport(invoke);
+
+    const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
+    const clearing = transport.clearOutput();
+    await withTestTimeout(pushStarted.promise, 1_000, "legacy output push did not start");
+    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
+    await setImmediate();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        params: {
+          action: "pushAudio",
+          bridgeId: "bridge-1",
+          base64: Buffer.from([1, 2, 3]).toString("base64"),
+        },
+      }),
+    );
+
+    releasePush?.();
+    await Promise.all([pushing, clearing]);
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        params: {
+          action: "clearAudio",
+          bridgeId: "bridge-1",
+        },
+      }),
+    );
+
+    await transport.stop();
+  });
+
+  it("clears immediately when the node host supports output generations", async () => {
+    let releasePush: (() => void) | undefined;
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
+      if (params.action === "pushAudio") {
+        await new Promise<void>((resolve) => {
+          releasePush = resolve;
+        });
+      }
+      return { ok: true };
+    });
+    const transport = createTransport(invoke, { outputGenerationSupported: true });
+
+    const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledTimes(1);
+    });
+    await transport.clearOutput();
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        params: {
+          action: "clearAudio",
+          bridgeId: "bridge-1",
+          outputGeneration: 1,
+        },
+      }),
+    );
+
+    releasePush?.();
+    await pushing;
+    await transport.stop();
+  });
+
+  it("stops a legacy node host without waiting for blocked output", async () => {
+    const pushStarted = createDeferredCore();
+    let releasePush: (() => void) | undefined;
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
+      if (params.action === "pushAudio") {
+        await new Promise<void>((resolve) => {
+          releasePush = resolve;
+          pushStarted.resolve();
+        });
+      } else if (params.action === "stop") {
+        releasePush?.();
+      }
+      return { ok: true };
+    });
+    const transport = createTransport(invoke);
+
+    const pushing = transport.writeOutput(Buffer.from([1, 2, 3]));
+    const clearing = transport.clearOutput();
+    await withTestTimeout(pushStarted.promise, 1_000, "legacy output push did not start");
+    // Give an incorrectly unblocked clear a turn while pushAudio is still blocked.
+    await setImmediate();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await transport.stop();
+    await Promise.all([pushing, clearing]);
+
+    expect(invoke.mock.calls.map(([call]) => call.params.action)).toEqual(["pushAudio", "stop"]);
   });
 });

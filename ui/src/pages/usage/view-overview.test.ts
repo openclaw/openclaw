@@ -1,29 +1,12 @@
-/* @vitest-environment jsdom */
-
-import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
-import {
-  renderDailyChartCompact,
-  renderCostWindowComparison,
-  renderSessionsCard,
-  renderUsageInsights,
-} from "./view-overview.ts";
-
-const totals: UsageTotals = {
-  input: 100,
-  output: 40,
-  cacheRead: 300,
-  cacheWrite: 600,
-  totalTokens: 1040,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
+import { totals, dailyEntry } from "./usage-chart.test-support.ts";
+import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { SessionsCard } from "./view-sessions-card.tsx";
+import { createUsageOverview, createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
   messages: {
@@ -46,89 +29,68 @@ const aggregates = {
   daily: [],
 } as unknown as UsageAggregates;
 
-function dailyEntry(date: string, totalTokens: number, totalCost = 0): CostDailyEntry {
-  return {
-    ...totals,
-    date,
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost,
-  };
-}
-
-function renderDailyChart(
-  daily: CostDailyEntry[],
-  onSelectDay = vi.fn<(day: string, shiftKey: boolean) => void>(),
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(
-    renderDailyChartCompact(daily, [], "tokens", "total", () => {}, onSelectDay),
-    container,
-  );
-  return {
-    container,
-    onSelectDay,
-    bars: Array.from(container.querySelectorAll<HTMLElement>(".daily-bar-wrapper")),
-  };
-}
-
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
-function directText(element: Element | null | undefined): string | undefined {
-  return Array.from(element?.childNodes ?? [])
-    .filter((node) => node.nodeType === Node.TEXT_NODE)
-    .map((node) => node.textContent ?? "")
-    .join("")
-    .trim();
-}
-
-function getSummaryCards(container: HTMLElement): Array<{
-  title: string | undefined;
-  value: string | undefined;
-  sub: string | undefined;
-}> {
-  return Array.from(container.querySelectorAll(".usage-summary-card")).map((card) => ({
-    title: directText(card.querySelector(".usage-summary-title")),
-    value: card.querySelector(".usage-summary-value")?.textContent?.trim(),
-    sub: card.querySelector(".usage-summary-sub")?.textContent?.trim(),
-  }));
-}
-
-describe("renderUsageInsights", () => {
-  it("renders overview hints as focusable tooltip anchors", () => {
+describe("UsageInsights", () => {
+  it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
+    const [currentTotals, setCurrentTotals] = createSignal(totals);
+    const [currentAggregates, setCurrentAggregates] = createSignal({
+      ...aggregates,
+      byAgent: [
+        { agentId: "main", totals },
+        { agentId: "research", totals },
+      ],
+    });
 
-    render(
-      renderUsageInsights(
-        totals,
-        aggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          get totals() {
+            return currentTotals();
+          },
+          get aggregates() {
+            return currentAggregates();
+          },
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
+    const cacheCard = container
+      .querySelector("#usage-summary-hint-cache-hit-rate")
+      ?.closest(".usage-summary-card");
+    expect(cacheCard?.querySelector(".usage-summary-value")?.textContent).toBe("30.0%");
+    expect(cacheCard?.querySelector(".usage-summary-sub")?.textContent).toBe(
+      "300 cached · 1.0K prompt",
+    );
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
     expect(
       buttons.every(
         (button) =>
@@ -150,296 +112,82 @@ describe("renderUsageInsights", () => {
       }),
     ).toBe(true);
 
-    buttons[0]?.click();
-    expect(document.activeElement).toBe(buttons[0]);
-  });
+    await Promise.all(tooltips.map((tooltip) => tooltip.updateComplete));
+    const button = buttons[0]!;
+    const tooltip = button.closest("openclaw-tooltip")!;
+    button.click();
+    await tooltip.updateComplete;
+    const popup = tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]");
+    expect(popup).toBeTruthy();
+    expect(document.activeElement).toBe(button);
 
-  it("includes cache writes in cache-hit-rate denominator", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderUsageInsights(
-        totals,
-        aggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
-    );
-
-    expect(getSummaryCards(container).filter((card) => card.title === "Cache Hit Rate")).toEqual([
-      {
-        title: "Cache Hit Rate",
-        value: "30.0%",
-        sub: "300 cached · 1.0K prompt",
-      },
-    ]);
-  });
-
-  it("shows provider cost share when cost data is available", () => {
-    const container = document.createElement("div");
-    const costTotals = { ...totals, totalCost: 10 };
-    const costAggregates = {
-      ...aggregates,
-      byProvider: [
-        {
-          provider: "openai",
-          count: 3,
-          totals: { ...totals, totalCost: 7, totalTokens: 700 },
-        },
-      ],
-    } as UsageAggregates;
-
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
-    );
-
-    const providerCard = Array.from(container.querySelectorAll(".usage-insight-card")).find(
-      (card) => card.querySelector(".usage-insight-title")?.textContent === "Top Providers",
-    );
-    expect(providerCard?.textContent).toContain("70.0% of cost");
-  });
-
-  it("omits cost shares when category totals are not day-scoped", () => {
-    const container = document.createElement("div");
-    const costTotals = { ...totals, totalCost: 1 };
-    const costAggregates = {
-      ...aggregates,
-      byProvider: [
-        {
-          provider: "openai",
-          count: 3,
-          totals: { ...totals, totalCost: 10, totalTokens: 700 },
-        },
-      ],
-    } as UsageAggregates;
-
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        false,
-        [],
-        1,
-        1,
-      ),
-      container,
-    );
-
-    expect(container.textContent).not.toContain("1000.0% of cost");
+    setCurrentTotals((current) => ({ ...current, totalCost: 12 }));
+    setCurrentAggregates((current) => ({
+      ...current,
+      messages: { ...current.messages, total: 8 },
+    }));
+    flush();
+    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(button.closest("openclaw-tooltip")).toBe(tooltip);
+    expect(tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]")).toBe(popup);
+    expect(document.activeElement).toBe(button);
+    expect(
+      button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,
+    ).toBe("8");
   });
 });
 
-describe("renderDailyChartCompact", () => {
-  it("keeps day selection operable with mouse and keyboard", () => {
-    const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
-    const bar = expectDefined(bars[0], "daily usage bar");
-
-    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-
-    bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
-
-    const space = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: " ",
-      shiftKey: true,
+describe("usage overview presentation owners", () => {
+  it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
+    const container = document.createElement("div");
+    const onClearDays = vi.fn();
+    const onClearHours = vi.fn();
+    const onClearSessions = vi.fn();
+    const props = createUsageProps();
+    Object.assign(props.filters, {
+      selectedDays: ["2026-08-01"],
+      selectedHours: [8],
+      selectedSessions: ["agent:main:usage"],
     });
-    bar.dispatchEvent(space);
-    expect(space.defaultPrevented).toBe(true);
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-  });
-
-  it("labels the chart scale with the selected metric", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 2)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
+    Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
+    mountSolid(
+      () =>
+        renderFilterChips(
+          [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+          props,
+        ),
+      { container },
     );
+    flush();
 
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$2.00", "$1.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("labels the true midpoint of a compressed chart scale", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 100)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$100.00", "$25.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")?.textContent?.trim()).toBe("√");
-  });
-
-  it("preserves sub-cent values in chart scale labels", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 0.004), dailyEntry("2026-05-04", 1_000, 0.008)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.0080", "$0.0040", "$0.00"]);
-  });
-
-  it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
-    const container = document.createElement("div");
-    const microCostDay = {
-      ...dailyEntry("2026-05-04", 1_000, 0.00001),
-      inputCost: 0.000004,
-      outputCost: 0.000006,
-    };
-    render(
-      renderDailyChartCompact(
-        [microCostDay],
-        [],
-        "cost",
-        "by-type",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.000010", "$0.000005", "$0.00"]);
-    expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
-    expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
-    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
-    expect(tooltip?.content).toContain("$0.000010");
-    expect(tooltip?.content).toContain("Output $0.000006");
-    expect(tooltip?.content).toContain("Input $0.000004");
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("reserves the totals row when dense ranges hide bar totals", () => {
-    const container = document.createElement("div");
-    const daily = Array.from({ length: 15 }, (_, index) =>
-      dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, index + 1),
-    );
-    render(
-      renderDailyChartCompact(
-        daily,
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(15);
+    const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
+    expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
+      "Remove days filter",
+      "Remove hours filter",
+      "Remove session filter",
+    ]);
+    expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, null, "Usage thread"]);
+    chips.forEach((chip) => chip.querySelector<HTMLButtonElement>("button")?.click());
+    expect(onClearDays).toHaveBeenCalledOnce();
+    expect(onClearHours).toHaveBeenCalledOnce();
+    expect(onClearSessions).toHaveBeenCalledOnce();
   });
 });
 
 describe("renderCostWindowComparison", () => {
-  it("shows the selected range and shorter calendar periods", () => {
-    const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [
-          dailyEntry("2026-06-01", 100, 1),
-          dailyEntry("2026-06-25", 400, 4),
-          dailyEntry("2026-07-01", 500, 5),
-        ],
-        "2026-06-01",
-        "2026-07-01",
-      ),
-      container,
-    );
-
-    const cards = Array.from(container.querySelectorAll(".cost-window-card")).map((card) => ({
-      label: card.querySelector(".cost-window-card__label")?.textContent?.trim(),
-      value: card.querySelector(".cost-window-card__value")?.textContent?.trim(),
-    }));
-    expect(cards).toEqual([
-      { label: "Selected Range", value: "$10.00" },
-      { label: "Jul 1", value: "$5.00" },
-      { label: "Last 7 days", value: "$9.00" },
-      { label: "Last 30 days", value: "$9.00" },
-    ]);
-  });
-
   it("preserves sub-cent totals and daily averages", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [dailyEntry("2026-07-01", 300, 0.003)],
-        "2026-06-02",
-        "2026-07-01",
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderCostWindowComparison(
+          [dailyEntry("2026-07-01", 300, 0.003)],
+          "2026-06-02",
+          "2026-07-01",
+          "local",
+        ),
+      { container },
     );
+    flush();
 
     const range = container.querySelector(".cost-window-card--range");
     expect(range?.querySelector(".cost-window-card__value")?.textContent?.trim()).toBe("$0.0030");
@@ -447,60 +195,81 @@ describe("renderCostWindowComparison", () => {
   });
 });
 
-describe("renderSessionsCard", () => {
-  const noop = () => {};
+describe("SessionsCard", () => {
+  const session = (key: string, tokens = 100): UsageSessionEntry => ({
+    key,
+    label: key,
+    agentId: "main",
+    usage: { ...totals, totalTokens: tokens },
+  });
 
-  it("sorts cost by the selected day values when day filters are active", () => {
+  it("preserves sort focus while waiting for the server to reorder rows", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
+    const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
+      setDisplay((current) => ({ ...current, ...patch })),
+    );
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    mountSolid(
+      () =>
+        SessionsCard({
+          get sessions() {
+            return sessions();
+          },
+          usage,
+          totalSessions: 2,
+        }),
+      { container },
+    );
+    flush();
+    const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
+    select.focus();
+    select.value = "cost";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(onChange).toHaveBeenCalledWith({ sessionSort: "cost" });
+    expect(container.querySelector(".session-bar-title")?.textContent).toBe("Alpha");
+    setSessions([session("Beta"), session("Alpha")]);
+    flush();
+    expect(container.querySelector(".session-bar-title")?.textContent).toBe("Beta");
+    expect(container.querySelector(".sessions-sort select")).toBe(select);
+    expect(document.activeElement).toBe(select);
+  });
+
+  it("renders the server recent roster without changing its all-roster average", () => {
+    const base = createUsageProps();
+    const overview = createUsageOverview({
+      total: 2,
+      tableSessionCount: 100,
+      tableTotals: { tokens: 50000, cost: 100, errors: 7 },
+    });
+    const usage = {
+      ...base,
+      data: { ...base.data, overview },
+      display: {
+        ...base.display,
+        sessionsTab: "recent" as const,
+        recentSessions: ["A", "missing"],
+      },
+    };
     const container = document.createElement("div");
-    const sessions: UsageSessionEntry[] = [
-      {
-        key: "all-time-winner",
-        label: "All time winner",
-        updatedAt: 2,
-        usage: {
-          ...totals,
-          totalCost: 100,
-          totalTokens: 100,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 1, tokens: 1 }],
-        },
-      } as UsageSessionEntry,
-      {
-        key: "day-winner",
-        label: "Day winner",
-        updatedAt: 1,
-        usage: {
-          ...totals,
-          totalCost: 50,
-          totalTokens: 50,
-          dailyBreakdown: [{ date: "2026-02-05", cost: 10, tokens: 10 }],
-        },
-      } as UsageSessionEntry,
-    ];
-
-    render(
-      renderSessionsCard(
-        sessions,
-        [],
-        ["2026-02-05"],
-        false,
-        "cost",
-        "desc",
-        [],
-        "all",
-        noop,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
-      container,
+    mountSolid(
+      () =>
+        SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
+      { container },
     );
-
-    const titles = Array.from(container.querySelectorAll(".session-bar-title")).map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(titles.slice(0, 2)).toEqual(["Day winner", "All time winner"]);
+    flush();
+    expect(
+      [...container.querySelectorAll(".session-bar-title")].map((entry) => entry.textContent),
+    ).toEqual(["B", "A"]);
+    expect(container.querySelector(".sessions-card-stats")?.textContent).toContain("500 avg");
   });
 });

@@ -2,18 +2,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listSlackReactions } from "@openclaw/slack/api.js";
-import type { WebClient } from "@slack/web-api";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractGatewayMessageText } from "../../gateway-log-sentinel.js";
 import { formatApprovalResultValue } from "../shared/live-approval-result.js";
-import { asPlainRecord } from "./slack-live.config.js";
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   type SlackQaCodexApprovalMethod,
   type SlackQaCodexApprovalScenarioRun,
-  type SlackQaScenarioContext,
-  type SlackQaScenarioDefinition,
+  type SlackQaApprovalContext,
+  type SlackQaScenarioMetadata,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 export function resolveCodexFileApprovalTargetPath(token: string) {
   return path.join(os.homedir(), `.openclaw-qa-codex-file-approval-${token.toLowerCase()}.txt`);
@@ -76,6 +77,7 @@ export async function waitForSlackReaction(params: {
   sutUserId: string;
   timeoutMs: number;
 }) {
+  const { listSlackReactions } = loadSlackQaRuntime();
   const deadline = Date.now() + params.timeoutMs;
   while (true) {
     const reactions = await listSlackReactions(params.channelId, params.messageId, {
@@ -91,9 +93,7 @@ export async function waitForSlackReaction(params: {
     if (Date.now() >= deadline) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   throw new Error(
     `Slack message ${params.messageId} did not receive ${params.expectedReactionName} from ${params.sutUserId}`,
@@ -104,7 +104,7 @@ function assertCodexApprovalTranscriptSucceeded(
   messages: unknown,
   run: SlackQaCodexApprovalScenarioRun,
 ) {
-  const records = Array.isArray(messages) ? messages.map(asPlainRecord) : [];
+  const records = Array.isArray(messages) ? messages.map(asNonArrayRecord) : [];
   const assistantReply = records
     .toReversed()
     .find((message) => message.role === "assistant" && extractGatewayMessageText(message));
@@ -128,11 +128,11 @@ function assertCodexApprovalTranscriptSucceeded(
 }
 
 export async function assertCodexApprovalOperationSucceeded(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   run: SlackQaCodexApprovalScenarioRun;
   sessionKey: string;
 }) {
-  const history = asPlainRecord(
+  const history = asNonArrayRecord(
     await params.context.gateway.call(
       "chat.history",
       { sessionKey: params.sessionKey, limit: 24 },
@@ -168,13 +168,13 @@ function findPendingCodexPluginApprovalRecord(params: {
       ? "codex_command_approval"
       : "codex_file_approval";
   for (const entry of list) {
-    const record = asPlainRecord(entry);
+    const record = asNonArrayRecord(entry);
     if (record.id !== params.approvalId) {
       continue;
     }
-    const request = asPlainRecord(record.request);
+    const request = asNonArrayRecord(record.request);
     if (
-      request.pluginId === "openclaw-codex-app-server" &&
+      request.pluginId === "codex" &&
       request.title === expectedTitle &&
       request.toolName === expectedToolName &&
       request.sessionKey === params.sessionKey &&
@@ -192,7 +192,7 @@ export async function assertPendingCodexPluginApproval(params: {
   approvalId: string;
   appServerMethod: SlackQaCodexApprovalMethod;
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   sessionKey: string;
   sutAccountId: string;
 }) {
@@ -220,11 +220,11 @@ export async function assertPendingCodexPluginApproval(params: {
 
 export async function startCodexApprovalAgentRun(params: {
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   runId: string;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sessionKey: string;
   sutAccountId: string;
 }) {
@@ -258,14 +258,14 @@ export async function startCodexApprovalAgentRun(params: {
 }
 
 export function buildCodexApprovalSessionKey(params: {
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   token: string;
 }) {
   return `agent:qa:${params.scenario.id}-${params.token.toLowerCase()}`;
 }
 
 export async function waitForCodexApprovalAgentRun(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   runId: string;
   timeoutMs: number;
 }) {
@@ -283,7 +283,7 @@ export async function waitForCodexApprovalAgentRun(params: {
 }
 
 export async function quiesceCodexApprovalAgentRun(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   preserveDebugArtifacts: boolean;
   runId: string;
   sessionKey: string;

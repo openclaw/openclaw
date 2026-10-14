@@ -1,9 +1,14 @@
 // Channel test helper exports provide shared fixtures for plugin channel contract tests.
+export {
+  createAccountPolicyInheritanceCases,
+  validateTestChannelConfig,
+} from "./test-helpers/channel-config.js";
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
 export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
 export {
   expectChannelPluginContract,
   installChannelActionsContractSuite,
+  installChannelDmPolicyContractSuite,
   installChannelPluginContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
@@ -14,12 +19,14 @@ export {
   createOutboundTestPlugin,
   createTestRegistry,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
+  withPluginRuntimeRegistryScope,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
 export {
+  createTestInboundDebounceFlush,
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,
@@ -43,7 +50,6 @@ export {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "./test-helpers/subagent-hooks.js";
-export { assertBundledChannelEntries } from "./test-helpers/bundled-channel-entry.js";
 export {
   escapeRegExp,
   formatEnvelopeTimestamp,
@@ -51,3 +57,7 @@ export {
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
 export { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+export {
+  createNativeApprovalTestFixture,
+  createLocalApprovalPromptTestFixture,
+} from "./test-helpers/native-approval.js";

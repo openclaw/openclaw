@@ -1,716 +1,382 @@
-/** Config preflight for doctor: legacy config/state migration, recovery, and snapshot loading. */
-import fs from "node:fs/promises";
-import path from "node:path";
+/** Config preflight for Doctor: legacy migration, recovery, and snapshot loading. */
 import { note } from "../../packages/terminal-core/src/note.js";
-import type { PluginPayloadSmokeFailure } from "../cli/update-cli/plugin-payload-validation.js";
-import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
-import {
-  parseConfigJson5,
-  preserveConfigSnapshotAsClobbered,
-  readConfigFileSnapshot,
-  recoverConfigFromJsonRootSuffix,
-  recoverConfigFromLastKnownGood,
-} from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
-import { resolveCanonicalConfigPath } from "../config/paths.js";
-import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
+import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
-import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
-import {
-  buildDegradedPluginsFromVerificationFailures,
-  formatPluginVerificationDiagnostic,
-  setActiveDegradedPlugins,
-  type DegradedPlugin,
-} from "../plugins/runtime-degraded-state.js";
-import { ExitError } from "../runtime.js";
+import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  MigrationMessages,
+  PreparedPostSessionPluginMigration,
+} from "../infra/state-migrations.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveHomeDir } from "../utils.js";
-import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import {
+  createConfigPreflightSnapshotReader,
+  type ConfigPreflightSnapshotRead,
+} from "./config-preflight-snapshot.js";
+import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
+import {
+  createDoctorConfigRepairPlanner,
+  migrateLegacyDoctorConfig,
+  prepareDoctorConfigRecovery,
+} from "./doctor-config-preflight-legacy-config.js";
+import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
+import {
+  assertDoctorPreflightMigrationsComplete,
+  prepareDoctorMigrationPlugins,
+} from "./doctor-config-preflight-migrations.js";
+import {
+  createDoctorRehearsalSnapshotPreparation,
+  shouldSkipPluginValidationForDoctorConfigPreflight,
+} from "./doctor-config-preflight-plugin-index.js";
+import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
+import * as cronMigration from "./doctor-config-preflight.cron.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
+import { assertDoctorRetiredStateAdmission } from "./doctor-retired-state-admission.js";
+import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
-import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
+import { commitAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
+import type {
+  DoctorConfigPreflightOptions,
+  DoctorConfigPreflightResult,
+} from "./doctor/shared/config-migration-result.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
+import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
+import { shouldSkipLegacyUpdateDoctorConfigWrite } from "./doctor/shared/update-phase.js";
 
-const loadDoctorStateMigrations = createLazyRuntimeModule(
-  () => import("./doctor-state-migrations.js"),
-);
+const loadState = createLazyRuntimeModule(() => import("../infra/state-migrations.state-dir.js"));
+const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legacy-repair.js"));
 
-const loadLegacyCronRepair = createLazyRuntimeModule(
-  () => import("./doctor/cron/legacy-repair.js"),
-);
-const startupPreflightTraceStartedAt = performance.now();
-
-function withLegacyCronWebhook(
-  config: OpenClawConfig,
-  legacyConfig: OpenClawConfig | undefined,
-): OpenClawConfig {
-  const legacyCron = legacyConfig?.cron as Record<string, unknown> | undefined;
-  if (!legacyCron || !Object.hasOwn(legacyCron, "webhook")) {
-    return config;
-  }
-  return {
-    ...config,
-    cron: {
-      ...config.cron,
-      webhook: legacyCron.webhook,
-    },
-  } as OpenClawConfig;
-}
-
-async function measureStartupPreflightStep<T>(name: string, run: () => T | Promise<T>): Promise<T> {
-  if (!isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
-    return await run();
-  }
-  const startedAt = performance.now();
-  try {
-    return await run();
-  } finally {
-    const durationMs = performance.now() - startedAt;
-    const totalMs = performance.now() - startupPreflightTraceStartedAt;
-    process.stderr.write(
-      `[gateway] startup trace: cli.bootstrap.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-    );
-  }
-}
-
-async function maybeMigrateLegacyConfig(): Promise<string[]> {
-  const changes: string[] = [];
-  const home = resolveHomeDir();
-  if (!home) {
-    return changes;
-  }
-
-  const targetPath = resolveCanonicalConfigPath();
-  const targetDir = path.dirname(targetPath);
-  try {
-    await fs.access(targetPath);
-    return changes;
-  } catch {
-    // missing config
-  }
-
-  const legacyCandidates = [path.join(home, ".clawdbot", "clawdbot.json")];
-
-  let legacyPath: string | null = null;
-  for (const candidate of legacyCandidates) {
-    try {
-      await fs.access(candidate);
-      legacyPath = candidate;
-      break;
-    } catch {
-      // continue
-    }
-  }
-  if (!legacyPath) {
-    return changes;
-  }
-
-  await fs.mkdir(targetDir, { recursive: true });
-  try {
-    await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
-    changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
-  } catch {
-    // If it already exists, skip silently.
-  }
-
-  return changes;
-}
-
-export type DoctorConfigPreflightResult = {
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  baseConfig: OpenClawConfig;
-  cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
-};
-
-function collectDoctorLegacyIssues(
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-): LegacyConfigIssue[] {
-  if (!snapshot.exists) {
-    return [];
-  }
-  const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
-  const sourceRaw = snapshot.parsed ?? resolvedRaw;
-  return findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
-}
-
-function addDoctorLegacyIssues(
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-): Awaited<ReturnType<typeof readConfigFileSnapshot>> {
-  const legacyIssues = collectDoctorLegacyIssues(snapshot);
-  if (legacyIssues.length === 0) {
-    return snapshot;
-  }
-  return { ...snapshot, legacyIssues };
-}
-
-/** Returns true during updater-managed config rewrites where plugin validation may be stale. */
-export function shouldSkipPluginValidationForDoctorConfigPreflight(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS);
-}
-
-function noteStateMigrationResult(result: {
-  changes: string[];
-  warnings: string[];
-  notices?: string[];
-}): void {
-  if (result.changes.length > 0) {
-    note(result.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-  }
-  const notices = result.notices ?? [];
-  if (notices.length > 0) {
-    note(notices.map((entry) => `- ${entry}`).join("\n"), "Doctor notices");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
-  }
-}
-
-type StartupPluginVerificationDiagnostic = {
-  kind: "plugin-verification";
-  messages: string[];
-};
-
-type StartupPluginConvergenceResult = {
-  blockingDiagnostic: StartupPluginVerificationDiagnostic | null;
-  quarantinedPlugins: DegradedPlugin[];
-};
-
-async function planStartupPluginVerification(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}) {
-  const { planStartupPluginConvergence } = await measureStartupPreflightStep(
-    "plugin-plan-import",
-    () => import("./doctor/shared/startup-plugin-convergence-plan.js"),
-  );
-  return await measureStartupPreflightStep("plugin-plan", () =>
-    planStartupPluginConvergence({
-      config: params.cfg,
-      env: params.env,
-    }),
-  );
-}
-
-function buildStartupPluginQuarantine(params: {
-  cfg: OpenClawConfig;
-  failures: readonly PluginPayloadSmokeFailure[];
-}): DegradedPlugin[] {
-  return buildDegradedPluginsFromVerificationFailures(
-    params.failures.filter(
-      (failure) =>
-        Boolean(failure.installPath) &&
-        isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
-    ),
-  );
-}
-
-function isStartupPluginVerificationFailureActive(params: {
-  cfg: OpenClawConfig;
-  failure: PluginPayloadSmokeFailure;
-}): boolean {
-  return resolveEffectiveEnableState({
-    id: params.failure.pluginId,
-    origin: "global",
-    config: normalizePluginsConfig(params.cfg.plugins),
-    rootConfig: params.cfg,
-  }).enabled;
-}
-
-function formatStartupPluginSmokeFailure(failure: PluginPayloadSmokeFailure): string {
-  return `Plugin "${failure.pluginId}": ${formatPluginVerificationDiagnostic({
-    kind: "plugin-verification",
-    reason: failure.reason,
-    detail: failure.detail,
-    ...(failure.installPath ? { installPath: failure.installPath } : {}),
-  })}. Run \`openclaw update repair\` to retry plugin repair.`;
-}
-
-async function runStartupUpgradeConvergence(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): Promise<StartupPluginConvergenceResult> {
-  const plan = await planStartupPluginVerification(params);
-  if (!plan.required) {
-    return { blockingDiagnostic: null, quarantinedPlugins: [] };
-  }
-  const { runPostCorePluginConvergence } = await measureStartupPreflightStep(
-    "plugin-convergence-import",
-    () => import("../cli/update-cli/post-core-plugin-convergence.js"),
-  );
-  const convergence = await measureStartupPreflightStep("plugin-convergence", () =>
-    runPostCorePluginConvergence({
-      cfg: params.cfg,
-      env: params.env,
-      baselineInstallRecords: plan.installRecords,
-    }),
-  );
-  if (convergence.changes.length > 0) {
-    note(convergence.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-  }
-  const notices = convergence.notices ?? [];
-  if (notices.length > 0) {
-    note(
-      notices.map((notice) => `- ${notice.message} ${notice.guidance.join(" ")}`.trim()).join("\n"),
-      "Doctor notices",
-    );
-  }
-  const warnings = convergence.warnings.map((warning) =>
-    `${warning.message} ${warning.guidance.join(" ")}`.trim(),
-  );
-  if (warnings.length > 0) {
-    note(warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
-  }
-  const quarantinedPlugins = buildStartupPluginQuarantine({
-    cfg: params.cfg,
-    failures: convergence.smokeFailures,
-  });
-  const nonBlockingWarningKeys = new Set(
-    convergence.smokeFailures
-      .filter(
-        (failure) =>
-          Boolean(failure.installPath) ||
-          !isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
-      )
-      .map((failure) => JSON.stringify([failure.pluginId, `${failure.reason}: ${failure.detail}`])),
-  );
-  const blockingMessages = convergence.warnings
-    .filter(
-      (warning) =>
-        !warning.pluginId ||
-        !nonBlockingWarningKeys.has(JSON.stringify([warning.pluginId, warning.reason])),
-    )
-    .map((warning) => `${warning.message} ${warning.guidance.join(" ")}`.trim());
-  return {
-    blockingDiagnostic:
-      blockingMessages.length > 0
-        ? { kind: "plugin-verification", messages: blockingMessages }
-        : null,
-    quarantinedPlugins,
-  };
-}
-
-async function refreshStartupPluginQuarantine(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): Promise<StartupPluginConvergenceResult> {
-  const plan = await planStartupPluginVerification(params);
-  if (!plan.required) {
-    return { blockingDiagnostic: null, quarantinedPlugins: [] };
-  }
-  const { runActivePluginPayloadSmokeCheck } = await measureStartupPreflightStep(
-    "plugin-payload-verification-import",
-    () => import("../cli/update-cli/active-plugin-payload-validation.js"),
-  );
-  const smoke = await measureStartupPreflightStep("plugin-payload-verification", () =>
-    runActivePluginPayloadSmokeCheck({
-      cfg: params.cfg,
-      records: plan.installRecords,
-      env: params.env,
-    }),
-  );
-  const quarantinedPlugins = buildStartupPluginQuarantine({
-    cfg: params.cfg,
-    failures: smoke.failures,
-  });
-  const blockingFailures = smoke.failures.filter(
-    (failure) =>
-      !failure.installPath &&
-      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
-  );
-  if (quarantinedPlugins.length > 0) {
-    note(
-      quarantinedPlugins
-        .map(
-          (plugin) =>
-            `- ${formatStartupPluginSmokeFailure({
-              pluginId: plugin.pluginId,
-              reason: plugin.diagnostic.reason,
-              detail: plugin.diagnostic.detail,
-              ...(plugin.diagnostic.installPath
-                ? { installPath: plugin.diagnostic.installPath }
-                : {}),
-            })}`,
-        )
-        .join("\n"),
-      "Doctor warnings",
-    );
-  }
-  return {
-    blockingDiagnostic:
-      blockingFailures.length > 0
-        ? {
-            kind: "plugin-verification",
-            messages: blockingFailures.map(formatStartupPluginSmokeFailure),
-          }
-        : null,
-    quarantinedPlugins,
-  };
-}
-
-function formatStartupMigrationFailure(params: { warnings: string[]; blockers: string[] }): string {
-  const details = [
-    ...params.warnings.map((warning) => `- ${warning}`),
-    ...params.blockers.map((blocker) => `- ${blocker}`),
-  ];
-  return [
-    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
-    ...details,
-    'Run "openclaw doctor --fix" against the mounted state/config, then restart the container.',
-  ].join("\n");
-}
-
-function formatStartupPluginVerificationFailure(
-  diagnostic: StartupPluginVerificationDiagnostic,
-): string {
-  return [
-    "OpenClaw plugin verification failed; refusing to report the gateway ready.",
-    ...diagnostic.messages.map((message) => `- ${message}`),
-    "Resolve the plugin verification errors above, then restart the container.",
-  ].join("\n");
-}
-
-function throwStartupMigrationRefusal(message: string): never {
-  // ExitError bypasses entry.ts's generic failure formatter, so report the owned reason here.
-  console.error(message);
-  throw new ExitError(1, message);
-}
-
-function throwStartupMigrationGuardRejected(): never {
-  throw new Error(
-    "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
-  );
-}
-
-/**
- * Runs early doctor config checks before the main config repair flow.
- *
- * It may migrate legacy state/config paths, recover corrupt target config when requested, and
- * returns the best-effort config snapshot used by later doctor checks.
- */
+/** Preserve retired state inputs before the main Doctor config repair flow. */
 export async function runDoctorConfigPreflight(
-  options: {
-    migrateState?: boolean;
-    migrateLegacyConfig?: boolean;
-    repairPrefixedConfig?: boolean;
-    recoverCorruptTargetStore?: boolean;
-    invalidConfigNote?: string | false;
-    observe?: boolean;
-    /** Return false or reject on config drift; the preflight always unwinds owned resources. */
-    beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
-    requireStartupMigrationCheckpoint?: boolean;
-    /** Core state was proven absent before Gateway selection could create runtime files. */
-    skipPristineCoreStateMigrations?: boolean;
-    /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
-    skipPristineStartupStateMigrations?: boolean;
-    /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
-    doctorOnlyStateMigrations?: boolean;
-  } = {},
+  options: DoctorConfigPreflightOptions = {},
 ): Promise<DoctorConfigPreflightResult> {
+  await using snapshots = createConfigPreflightSnapshotReader();
+  let result: DoctorConfigPreflightResult;
+  // Reuse child imports for this state operation; every read still acquires fresh admission.
+  if (options.migrateState !== false && options.doctorOnlyStateMigrations === true) {
+    const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
+    result = await withSqliteReadOnlyWorkerScope(() =>
+      runDoctorConfigPreflightOperation(options, snapshots),
+    );
+  } else {
+    result = await runDoctorConfigPreflightOperation(options, snapshots);
+  }
+  return { ...result, pluginCache: await snapshots.takePluginCache(result.pluginMetadataSnapshot) };
+}
+
+async function runDoctorConfigPreflightOperation(
+  options: DoctorConfigPreflightOptions,
+  snapshots: ReturnType<typeof createConfigPreflightSnapshotReader>,
+): Promise<DoctorConfigPreflightResult> {
+  if (!options.retiredStateAdmitted) {
+    assertDoctorRetiredStateAdmission();
+  }
   const stateMigrationsRequested = options.migrateState !== false;
-  const startupCheckpoint =
-    options.requireStartupMigrationCheckpoint === true
-      ? await import("../infra/startup-migration-checkpoint.js")
-      : undefined;
-  let stateMigrations: Awaited<ReturnType<typeof loadDoctorStateMigrations>> | undefined;
-  let startupMigrationEnv = process.env;
-  let shouldRecordStartupCheckpoint = false;
-  let skipPristineStartupStateMigrations = options.skipPristineStartupStateMigrations === true;
-  let skipPristineCoreStateMigrations =
-    skipPristineStartupStateMigrations || options.skipPristineCoreStateMigrations === true;
-  let startupMigrationLease: StartupMigrationLease | undefined;
-  let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
-  let startupMigrationHeartbeatError: unknown;
-  const startupMigrationWarnings: string[] = [];
+  const skipLegacyParentConfigWrite = shouldSkipLegacyUpdateDoctorConfigWrite(process.env);
+  const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
+    measureDoctorConfigPreflightStep(name, run, options.measure);
+  if (stateMigrationsRequested) {
+    await measurePreflightStep("state-write-admission", () =>
+      assertOpenClawStateWriteAllowedAtPath({
+        databasePath: resolveOpenClawStateSqlitePath(process.env),
+        env: process.env,
+        recoverOrphanedSidecars: true,
+      }),
+    );
+  }
+  await measurePreflightStep("stale-update-runs", () =>
+    noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),
+  );
+  let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
+  const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
+  let postSessionPluginMigration: PreparedPostSessionPluginMigration | undefined;
+  let postSessionPluginMigrationPlanBound = false;
   let doctorMediaPersistenceAttempted = false;
-  const noteStartupStateMigrationResult = (result: {
-    changes: string[];
-    warnings: string[];
-    notices?: string[];
-  }) => {
-    startupMigrationWarnings.push(...result.warnings);
-    noteStateMigrationResult(result);
+  let configSnapshotRead: ConfigPreflightSnapshotRead | undefined;
+  const pluginMigrations = createDoctorPluginMigrationPreparation({
+    enabled: stateMigrationsRequested,
+    env: () => process.env,
+    report: (result) => noteDoctorStateMigrationResult(result),
+    recordReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
+    measure: measurePreflightStep,
+    runWithPluginMetadataSnapshot: (scope, run) => pluginMetadata.run(scope, run),
+    doctorOnlyStateMigrations: options.doctorOnlyStateMigrations === true,
+  });
+  await using pluginMetadata = createDoctorPluginMetadataSnapshotScope({
+    getBaseSnapshot: () => configSnapshotRead?.pluginMetadataSnapshot,
+    env: process.env,
+    getDeferredPluginIds: () => pluginMigrations.deferred().map((pending) => pending.pluginId),
+  });
+  const noteDoctorStateMigrationResult = (result: MigrationMessages) => {
+    pluginMigrations.observe(result);
+    noteDoctorMigrationResult(result, { prefix: "- " });
   };
-  try {
-    if (startupCheckpoint && !skipPristineStartupStateMigrations) {
-      // Capture pristine state before the Gateway's fresh-config guard can prepare runtime state.
-      const { planPristineStartupStateMigrations } = await measureStartupPreflightStep(
-        "pristine-state-plan-import",
-        () => import("./doctor/shared/pristine-startup-state.js"),
-      );
-      const pristineStatePlan = await measureStartupPreflightStep("pristine-state-plan", () =>
-        planPristineStartupStateMigrations(process.env),
-      );
-      skipPristineStartupStateMigrations = pristineStatePlan.skipAllStateMigrations;
-      skipPristineCoreStateMigrations ||= pristineStatePlan.skipCoreStateMigrations;
-    }
-    // The gateway uses this last-moment guard to ensure its prepared config did not change before
-    // any automatic migration mutates state. A rejected guard skips every state migration stage.
-    const stateMigrationsAllowed =
-      !stateMigrationsRequested ||
-      options.beforeStateMigrations === undefined ||
-      (await options.beforeStateMigrations());
-    if (startupCheckpoint && !stateMigrationsAllowed) {
-      throwStartupMigrationGuardRejected();
-    }
-    if (startupCheckpoint) {
-      // Later config reads can apply state selectors. Pin the accepted lease target for its lifetime.
-      startupMigrationEnv = cloneEnvWithPlatformSemantics(process.env);
-      shouldRecordStartupCheckpoint = startupCheckpoint.needsStartupMigrationCheckpoint({
-        env: startupMigrationEnv,
-      });
-      startupMigrationLease = shouldRecordStartupCheckpoint
-        ? startupCheckpoint.acquireStartupMigrationLease({ env: startupMigrationEnv })
-        : undefined;
-      if (startupMigrationLease) {
-        startupMigrationHeartbeat = setInterval(() => {
-          try {
-            startupMigrationLease?.heartbeat();
-          } catch (error) {
-            startupMigrationHeartbeatError = error;
-          }
-        }, 60_000);
-        startupMigrationHeartbeat.unref?.();
-      }
-    }
-    // A current version checkpoint proves this state root already completed every automatic
-    // migration. Keep repeated Gateway boots out of the legacy/plugin migration import graph.
-    stateMigrations =
-      stateMigrationsRequested &&
-      (!startupCheckpoint || shouldRecordStartupCheckpoint) &&
-      !skipPristineStartupStateMigrations
-        ? await measureStartupPreflightStep("state-migrations-import", loadDoctorStateMigrations)
-        : undefined;
-    if (stateMigrations && stateMigrationsAllowed) {
-      const { autoMigrateLegacyStateDir } = stateMigrations;
-      const stateDirResult = await measureStartupPreflightStep("state-dir-migrations", () =>
-        autoMigrateLegacyStateDir({ env: process.env }),
-      );
-      noteStartupStateMigrationResult(stateDirResult);
-    }
-
-    if (options.migrateLegacyConfig !== false) {
-      const legacyConfigChanges = await maybeMigrateLegacyConfig();
-      if (legacyConfigChanges.length > 0) {
-        note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-      }
-    }
-
-    const readOptions = {
-      ...(options.observe === false ? { observe: false } : {}),
-      skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
-    };
-    let snapshot = addDoctorLegacyIssues(
-      await measureStartupPreflightStep("config-snapshot", () =>
-        readConfigFileSnapshot(readOptions),
+  const getSnapshotPreparation = createDoctorRehearsalSnapshotPreparation(
+    noteDoctorStateMigrationResult,
+  );
+  const { planScopedConfigRepair, planAdmittedConfigRepair } = createDoctorConfigRepairPlanner({
+    options,
+    stateMigrationsRequested,
+    skipLegacyParentConfigWrite,
+    runWithPluginMetadataSnapshot: pluginMetadata.run,
+  });
+  const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
+    await measurePreflightStep("config-snapshot", async () =>
+      snapshots.read({
+        purpose: "doctor",
+        allowCurrentPluginMetadata,
+        includePluginMetadata: options.preparePluginMetadataSnapshot === true,
+        measure: options.measure,
+        observe: options.observe,
+        skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
+        prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
+        ...(await pluginMigrations.snapshotOptions()),
+      }),
+    );
+  const stateDirMigrations = stateMigrationsRequested
+    ? await measurePreflightStep("state-migrations-import", loadState)
+    : undefined;
+  if (stateDirMigrations) {
+    noteDoctorStateMigrationResult(
+      await measurePreflightStep("state-dir-migrations", () =>
+        stateDirMigrations.autoMigrateLegacyStateDir({ env: process.env }),
       ),
     );
-    if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
-      if (await recoverConfigFromJsonRootSuffix(snapshot)) {
-        note(
-          "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
-          "Config",
-        );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
-      } else if (
-        await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" })
-      ) {
-        note(
-          "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
-          "Config",
-        );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
-      }
-      if (
-        !snapshot.valid &&
-        typeof snapshot.raw === "string" &&
-        !parseConfigJson5(snapshot.raw).ok
-      ) {
-        const clobberedPath = await preserveConfigSnapshotAsClobbered(snapshot);
-        if (!clobberedPath) {
-          throw new Error(
-            `Config could not be parsed or recovered, and doctor could not preserve a .clobbered snapshot. The original remains unchanged at ${snapshot.path}; refusing to apply repairs.`,
-          );
-        }
-        throw new Error(
-          `Config could not be parsed or recovered. Original preserved at ${clobberedPath}. The current file remains unchanged; refusing to apply repairs.`,
-        );
-      }
+  }
+  await migrateLegacyDoctorConfig({
+    enabled: options.migrateLegacyConfig !== false,
+    measure: measurePreflightStep,
+  });
+  // State-root relocation can move the canonical plugin index before config-dependent imports.
+  configSnapshotRead = await readConfigSnapshotForPreflight(!stateDirMigrations);
+  const recovery = await prepareDoctorConfigRecovery({
+    enabled: options.repairPrefixedConfig === true && !skipLegacyParentConfigWrite,
+    snapshotRead: configSnapshotRead,
+    planRepair: planScopedConfigRepair,
+    readSnapshot: () => readConfigSnapshotForPreflight(false),
+  });
+  configSnapshotRead = recovery.snapshotRead;
+  let snapshot = configSnapshotRead.snapshot;
+  const rosterMigrationSource = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+  const activeConfigRepair = recovery.activeConfigRepair;
+  noteDoctorConfigPreflightIssues(snapshot, {
+    invalidConfigNote: options.invalidConfigNote,
+    activeRepair: activeConfigRepair !== null,
+  });
+  let baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+  let automaticConfigRepair = await planAdmittedConfigRepair(snapshot, activeConfigRepair);
+  if (options.doctorOnlyStateMigrations === true && stateDirMigrations) {
+    // Pending plugin obligations need current SQL even if a later repair fails.
+    const { prepareLegacyStateDatabaseSchema } =
+      await import("../infra/state-migrations.doctor.js");
+    const receipt =
+      options.stateSchemaPreparation ??
+      (await measurePreflightStep("state-schema", () =>
+        prepareLegacyStateDatabaseSchema(process.env),
+      ));
+    if (receipt.outcome !== "skipped") {
+      stateMigrationStepReceipts.push(receipt);
+      noteDoctorStateMigrationResult({
+        changes: receipt.changes,
+        warnings: receipt.warnings,
+        notices: receipt.notices,
+      });
+      throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
     }
-    const invalidConfigNote =
-      options.invalidConfigNote ?? "Config invalid; doctor will run with best-effort config.";
-    if (
-      invalidConfigNote &&
-      snapshot.exists &&
-      !snapshot.valid &&
-      snapshot.legacyIssues.length === 0
-    ) {
-      note(invalidConfigNote, "Config");
-      noteIncludeConfinementWarning(snapshot);
-    }
-
-    const warnings = snapshot.warnings ?? [];
-    if (warnings.length > 0) {
-      note(formatConfigIssueLines(warnings, "-").join("\n"), "Config warnings");
-    }
-
-    const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-    const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
-    const freshConfigGuardRequired = stateMigrations !== undefined || shouldRecordStartupCheckpoint;
-    const freshConfigGuardAllowed =
-      !freshConfigGuardRequired ||
-      !stateMigrationsAllowed ||
-      options.beforeStateMigrations === undefined ||
-      (await options.beforeStateMigrations(snapshot));
-    if (startupCheckpoint && !freshConfigGuardAllowed) {
-      throwStartupMigrationGuardRejected();
-    }
-    if (stateMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
-      const {
-        autoMigrateLegacyState,
-        autoMigrateLegacyPluginDoctorState,
-        autoMigrateLegacyTaskStateSidecars,
-      } = stateMigrations;
-      if (stateMigrationInput) {
-        const pluginDoctorOnlyConfig =
-          stateMigrationInput.pluginDoctorConfig ?? stateMigrationInput.cfg;
-        if (skipPristineCoreStateMigrations && pluginDoctorOnlyConfig) {
-          // Core state is absent, but plugin paths may own external migration state.
-          // Keep their doctor owner active without loading channel/session detectors.
-          noteStartupStateMigrationResult(
-            await autoMigrateLegacyPluginDoctorState({
-              config: pluginDoctorOnlyConfig,
-              env: process.env,
-            }),
-          );
-        } else if (stateMigrationInput.cfg) {
-          const {
-            collectCronCodexRuntimePolicyTargetsReadOnly,
-            repairLegacyCronStoreWithoutPrompt,
-          } = await loadLegacyCronRepair();
-          const cronResult = await repairLegacyCronStoreWithoutPrompt({
-            cfg: withLegacyCronWebhook(
-              stateMigrationInput.cfg,
-              stateMigrationInput.pluginDoctorConfig,
-            ),
-            migrateCodexModelRefs: false,
-          });
-          noteStartupStateMigrationResult(cronResult);
-          if (options.repairPrefixedConfig === true) {
-            const cronCodexPlan = await collectCronCodexRuntimePolicyTargetsReadOnly({
-              cfg: stateMigrationInput.cfg,
-            });
-            cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
-            noteStartupStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
-          }
-          const legacyStateResult = await autoMigrateLegacyState({
-            cfg: stateMigrationInput.cfg,
-            ...(stateMigrationInput.pluginDoctorConfig
-              ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
-              : {}),
-            env: process.env,
-            recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-            doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
-          });
-          doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
-          noteStartupStateMigrationResult(legacyStateResult);
-        } else if (stateMigrationInput.pluginDoctorConfig) {
-          noteStartupStateMigrationResult(
-            await autoMigrateLegacyPluginDoctorState({
-              config: stateMigrationInput.pluginDoctorConfig,
-              env: process.env,
-            }),
-          );
-          noteStartupStateMigrationResult(
-            await autoMigrateLegacyTaskStateSidecars({
-              env: process.env,
-            }),
-          );
-        }
-      } else {
-        noteStartupStateMigrationResult(
-          await autoMigrateLegacyTaskStateSidecars({
-            env: process.env,
-          }),
-        );
-      }
-    }
-    if (
-      stateMigrations &&
-      stateMigrationsAllowed &&
-      freshConfigGuardAllowed &&
-      options.doctorOnlyStateMigrations === true &&
-      !doctorMediaPersistenceAttempted
-    ) {
-      noteStartupStateMigrationResult(
-        stateMigrations.migrateLegacyMediaPersistence({ env: process.env }),
+  }
+  if (options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true) {
+    // Plugin and legacy-state repairs can inspect sessions during config preflight.
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    const repair = options.doctorOnlyStateMigrations === true && stateDirMigrations !== undefined;
+    const entryState = await measurePreflightStep("session-entry-state", () =>
+      repairLegacySessionEntryStates({
+        apply: repair,
+        cfg: automaticConfigRepair?.config ?? baseConfig,
+        env: process.env,
+        deferSchemaRepair: repair,
+      }),
+    );
+    if (!repair && entryState.found > 0) {
+      const { SessionStoreMigrationRequiredError } =
+        await import("../config/sessions/migration-required.js");
+      throw new SessionStoreMigrationRequiredError(
+        `Found ${entryState.found} session rows with legacy entry state. Run openclaw doctor --fix before further session inspection; no rows were changed.`,
       );
     }
-    if (startupCheckpoint) {
-      if (shouldRecordStartupCheckpoint) {
-        if (startupMigrationHeartbeatError) {
-          throw startupMigrationHeartbeatError instanceof Error
-            ? startupMigrationHeartbeatError
-            : new Error("OpenClaw startup migration lease heartbeat failed.");
-        }
-        if (startupMigrationWarnings.length > 0) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: startupMigrationWarnings,
-              blockers: [],
-            }),
-          );
-        }
-        if (!snapshot.valid) {
-          throwStartupMigrationRefusal(
-            formatStartupMigrationFailure({
-              warnings: [],
-              blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-            }),
-          );
-        }
-      }
-      // This state is established before the first Gateway plugin load and remains
-      // fixed for the boot. Refresh it on every process start because migration
-      // checkpoints do not persist plugin availability or quarantine state.
-      setActiveDegradedPlugins([]);
-      if (snapshot.valid) {
-        const pluginConvergence = shouldRecordStartupCheckpoint
-          ? await runStartupUpgradeConvergence({
-              cfg: baseConfig,
-              env: process.env,
-            })
-          : await refreshStartupPluginQuarantine({
-              cfg: baseConfig,
-              env: process.env,
-            });
-        setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
-        if (pluginConvergence.blockingDiagnostic) {
-          throwStartupMigrationRefusal(
-            formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
-          );
-        }
-      }
-      if (shouldRecordStartupCheckpoint) {
-        startupCheckpoint.recordSuccessfulStartupMigrations({
-          env: startupMigrationEnv,
-          lease: startupMigrationLease,
-        });
-      }
-    }
-
-    return {
-      snapshot,
-      baseConfig,
-      ...(cronCodexRuntimePolicyTargets.length > 0 ? { cronCodexRuntimePolicyTargets } : {}),
-    };
-  } finally {
-    if (startupMigrationHeartbeat) {
-      clearInterval(startupMigrationHeartbeat);
-    }
-    startupMigrationLease?.release();
   }
+  let postConvergenceStateConfig: OpenClawConfig | undefined;
+  if (stateDirMigrations) {
+    const refreshed = await prepareDoctorMigrationPlugins({
+      cfg: automaticConfigRepair?.config ?? baseConfig,
+      env: process.env,
+      retainedPluginIds: pluginMigrations.retainedPluginIds(),
+      measure: options.measure,
+      snapshotRead: { ...configSnapshotRead, snapshot },
+      readRefreshedSnapshot: () => readConfigSnapshotForPreflight(false),
+      onDeferredPlugins: (pending, inspection) =>
+        pluginMigrations.converged(
+          pending,
+          snapshot,
+          configSnapshotRead?.pluginMetadataSnapshot,
+          inspection,
+        ),
+    });
+    configSnapshotRead = refreshed;
+    pluginMetadata.invalidate();
+    snapshot = refreshed.snapshot;
+    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+    automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
+    // Core migrations use the validated runtime projection; plugins retain source locators.
+    postConvergenceStateConfig = automaticConfigRepair?.snapshot.config;
+  }
+  const stateMigrationInput = resolveStateMigrationConfigInput({
+    snapshot,
+    baseConfig,
+    postConvergenceConfig: postConvergenceStateConfig,
+  });
+  const rosterMigrationOwnerId = stateMigrationInput?.cfg
+    ? tryGetLegacyDefaultAgentId(stateMigrationInput.cfg)
+    : undefined;
+  if (stateDirMigrations) {
+    if (options.doctorOnlyStateMigrations === true && !stateMigrationInput?.cfg) {
+      const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
+        await import("../infra/state-migrations.exec-approvals.js");
+      const stateDir = resolveStateDir(process.env);
+      // Invalid config cannot drive the general graph; its root policy can still recover.
+      noteDoctorStateMigrationResult(
+        await measurePreflightStep("exec-approvals-migration", () =>
+          migrateLegacyExecApprovals({
+            detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+            stateDir,
+            env: process.env,
+          }),
+        ),
+      );
+    }
+    if (stateMigrationInput) {
+      // Retired cron.store selects a persisted SQLite partition. Preserve it in machine state
+      // before config repair removes the only custom-partition evidence.
+      if (stateMigrationInput.cfg) {
+        const { autoMigrateLegacyState } = await import("../infra/state-migrations.doctor.js");
+        const migrationConfig = stateMigrationInput.cfg;
+        const pluginDoctorConfig = stateMigrationInput.pluginDoctorConfig;
+        const { collectCronCodexRuntimePolicyTargetsReadOnly, repairLegacyCronStoreWithoutPrompt } =
+          await measurePreflightStep("cron-repair-import", loadCronRepair);
+        const cronResult = await measurePreflightStep("cron-repair", () =>
+          repairLegacyCronStoreWithoutPrompt({
+            cfg: cronMigration.withLegacyConfig(migrationConfig, pluginDoctorConfig),
+            migrateCodexModelRefs: false,
+          }),
+        );
+        noteDoctorStateMigrationResult(cronResult);
+        if (options.repairPrefixedConfig === true) {
+          const cronCodexPlan = await measurePreflightStep("cron-policy-scan", () =>
+            collectCronCodexRuntimePolicyTargetsReadOnly({ cfg: migrationConfig }),
+          );
+          cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
+          noteDoctorStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
+        }
+        const legacyStateResult = await measurePreflightStep("legacy-state-migrations", () =>
+          pluginMetadata.run({ config: pluginDoctorConfig ?? migrationConfig }, () =>
+            autoMigrateLegacyState({
+              cfg: migrationConfig,
+              sourceConfigBeforeMigrations: stateMigrationInput.sourceConfigBeforeMigrations,
+              ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
+              configIncludedPaths: snapshot.includedPaths ?? [],
+              env: process.env,
+              doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+              invocationPurpose: options.invocationPurpose,
+              ...(options.agentDatabaseMigrationDiscovery
+                ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
+                : {}),
+              beforeWorkspaceStateMigration: options.beforeWorkspaceStateMigration,
+              onStepReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
+            }),
+          ),
+        );
+        postSessionPluginMigration = legacyStateResult.postSessionPluginMigration;
+        postSessionPluginMigrationPlanBound = options.doctorOnlyStateMigrations === true;
+        doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
+        noteDoctorStateMigrationResult(legacyStateResult);
+        if (options.doctorOnlyStateMigrations === true) {
+          await assertDoctorPreflightMigrationsComplete({
+            cfg: migrationConfig,
+            stepReceipts: stateMigrationStepReceipts,
+            report: noteDoctorStateMigrationResult,
+          });
+        }
+      } else if (stateMigrationInput.pluginDoctorConfig) {
+        const pluginDoctorConfig = stateMigrationInput.pluginDoctorConfig;
+        await cronMigration.migrateRetainedStore({
+          config: pluginDoctorConfig,
+          env: process.env,
+          measure: measurePreflightStep,
+          report: noteDoctorStateMigrationResult,
+        });
+        await pluginMigrations.migrate(pluginDoctorConfig);
+      }
+    }
+  }
+  if (
+    stateDirMigrations &&
+    options.doctorOnlyStateMigrations === true &&
+    !doctorMediaPersistenceAttempted
+  ) {
+    const { migrateLegacyMediaPersistence } =
+      await import("../infra/state-migrations.media-persistence.js");
+    noteDoctorStateMigrationResult(
+      await measurePreflightStep("media-persistence-migration", () =>
+        migrateLegacyMediaPersistence({ env: process.env }),
+      ),
+    );
+    const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
+    await repairLegacySessionEntryStates({
+      apply: true,
+      cfg: automaticConfigRepair?.config ?? baseConfig,
+      env: process.env,
+    });
+  }
+  // Import retired locators before removing them from the authored config.
+  if (await pluginMigrations.complete()) {
+    configSnapshotRead = await readConfigSnapshotForPreflight(false);
+    snapshot = configSnapshotRead.snapshot;
+    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+    automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
+  }
+  if (automaticConfigRepair && !skipLegacyParentConfigWrite) {
+    modelBillingRouteMigrationSource ??=
+      snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+    await measurePreflightStep("automatic-config-repair", () =>
+      pluginMetadata.run({ config: automaticConfigRepair.config }, () =>
+        commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
+      ),
+    );
+    note(
+      `Migrated legacy config keys in the active openclaw.json:\n${automaticConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
+      "Doctor changes",
+    );
+    configSnapshotRead = await readConfigSnapshotForPreflight(false);
+    snapshot = configSnapshotRead.snapshot;
+    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+  }
+  const deferredPluginMigrations = pluginMigrations.deferred();
+  return {
+    snapshot,
+    baseConfig,
+    rosterMigrationSource,
+    ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
+    ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),
+    ...(modelBillingRouteMigrationSource ? { modelBillingRouteMigrationSource } : {}),
+    ...(configSnapshotRead.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: configSnapshotRead.pluginMetadataSnapshot }
+      : {}),
+    ...(cronCodexRuntimePolicyTargets.length > 0 ? { cronCodexRuntimePolicyTargets } : {}),
+    ...(stateMigrationStepReceipts.length > 0 ? { stateMigrationStepReceipts } : {}),
+    ...(postSessionPluginMigration ? { postSessionPluginMigration } : {}),
+    ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+  };
 }

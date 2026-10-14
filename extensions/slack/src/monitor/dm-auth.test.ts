@@ -1,7 +1,14 @@
 // Slack tests cover dm auth plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
+
+const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  upsertChannelPairingRequest: upsertChannelPairingRequestMock,
+}));
 
 function makeCtx(dmPolicy: SlackMonitorContext["dmPolicy"]): SlackMonitorContext {
   return {
@@ -28,6 +35,13 @@ function makeParams(
 }
 
 describe("authorizeSlackDirectMessage", () => {
+  beforeEach(() => {
+    upsertChannelPairingRequestMock.mockReset().mockResolvedValue({
+      code: "ABCDEFGH",
+      created: true,
+    });
+  });
+
   it("allows open DM policy when effective allowFrom includes wildcard", async () => {
     const params = makeParams("open");
     params.allowFromLower = ["*"];
@@ -52,14 +66,54 @@ describe("authorizeSlackDirectMessage", () => {
     });
   });
 
-  it("keeps allowlist DM policy gated by allowFrom", async () => {
+  it("allows bare user ids for workspace-install DMs", async () => {
     const params = makeParams("allowlist");
+    params.ctx.installationIdentity = { kind: "workspace", teamId: "T11111111" };
+    params.eventScope = { teamId: "T11111111", client: {} as never };
+    params.allowFromLower = ["u123"];
 
-    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(false);
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
 
-    expect(params.onUnauthorized).toHaveBeenCalledWith({
-      allowMatchMeta: "matchKey=none matchSource=none",
-      senderName: "Alice",
+    expect(params.onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("creates independent pairing requests for the same user in two Grid workspaces", async () => {
+    const pendingCodes = new Map<string, string>();
+    upsertChannelPairingRequestMock.mockImplementation(
+      async ({ accountId, id }: { accountId: string; id: string }) => {
+        const key = `${accountId}:${id}`;
+        const existingCode = pendingCodes.get(key);
+        if (existingCode) {
+          return { code: existingCode, created: false };
+        }
+        const code = `CODE${pendingCodes.size + 1}`;
+        pendingCodes.set(key, code);
+        return { code, created: true };
+      },
+    );
+    const first = makeParams("pairing");
+    first.eventScope = { teamId: "T11111111", client: {} as never };
+    const second = makeParams("pairing");
+    second.eventScope = { teamId: "T22222222", client: {} as never };
+
+    await expect(
+      Promise.all([authorizeSlackDirectMessage(first), authorizeSlackDirectMessage(second)]),
+    ).resolves.toEqual([false, false]);
+
+    expect(upsertChannelPairingRequestMock).toHaveBeenNthCalledWith(1, {
+      channel: "slack",
+      id: "team:T11111111:user:U123",
+      accountId: "workspace",
+      meta: { name: "Alice", teamId: "T11111111", senderId: "U123" },
     });
+    expect(upsertChannelPairingRequestMock).toHaveBeenNthCalledWith(2, {
+      channel: "slack",
+      id: "team:T22222222:user:U123",
+      accountId: "workspace",
+      meta: { name: "Alice", teamId: "T22222222", senderId: "U123" },
+    });
+    expect(first.sendPairingReply).toHaveBeenCalledTimes(1);
+    expect(second.sendPairingReply).toHaveBeenCalledTimes(1);
+    expect(pendingCodes.size).toBe(2);
   });
 });

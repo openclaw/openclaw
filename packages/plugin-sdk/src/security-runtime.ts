@@ -1,5 +1,3 @@
-// Public package facade for security runtime helpers.
-
 export {
   appendRegularFile,
   assertNoSymlinkParents,
@@ -47,6 +45,7 @@ export {
   SsrFBlockedError,
   statRegularFile,
   statRegularFileSync,
+  truncateSanitizedExternalContent,
   withTimeout,
   wrapExternalContent,
   wrapWebContent,

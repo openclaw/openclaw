@@ -1,4 +1,4 @@
-// QA Lab Anthropic Messages wire conversion and response events.
+import { createHash } from "node:crypto";
 import {
   type ResponsesInputItem,
   type StreamEvent,
@@ -6,31 +6,19 @@ import {
   type AnthropicMessage,
   type AnthropicMessagesRequest,
   type AnthropicStreamEvent,
+  type QaMockProviderFailure,
   countApproxTokens,
+  parseJsonObjectBody,
 } from "./mock-openai-contracts.js";
 
-// Anthropic Messages conversion preserves role and tool ordering while reusing
-// the shared Responses scenario dispatcher for provider parity.
-
-function normalizeAnthropicSystemToString(
+export function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],
 ): string | undefined {
-  if (typeof system === "string") {
-    return system.trim() || undefined;
-  }
-  if (Array.isArray(system)) {
-    const joined = system
-      .map((block) => (block?.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    return joined || undefined;
-  }
-  return undefined;
+  return stringifyToolResultContent(system).trim() || undefined;
 }
 
 function stringifyToolResultContent(
-  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"],
+  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"] | undefined,
 ): string {
   if (typeof content === "string") {
     return content;
@@ -44,43 +32,20 @@ function stringifyToolResultContent(
   return "";
 }
 
-export function convertAnthropicMessagesToResponsesInput(params: {
-  system?: AnthropicMessagesRequest["system"];
-  messages: AnthropicMessage[];
-}): ResponsesInputItem[] {
+export function convertAnthropicMessagesToResponsesInput(
+  messages: AnthropicMessage[],
+): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
-  const systemText = normalizeAnthropicSystemToString(params.system);
-  if (systemText) {
-    items.push({
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
-    });
-  }
-  for (const message of params.messages) {
-    const content = message.content;
-    if (typeof content === "string") {
-      items.push({
-        role: message.role,
-        content: [
-          message.role === "assistant"
-            ? { type: "output_text", text: content }
-            : { type: "input_text", text: content },
-        ],
-      });
-      continue;
-    }
+  for (const message of messages) {
+    const content =
+      typeof message.content === "string"
+        ? [{ type: "text" as const, text: message.content }]
+        : message.content;
     if (!Array.isArray(content)) {
       continue;
     }
-    // Buffer each block type so we can push in OpenAI-Responses order instead
-    // of the order they appear in the Anthropic content array. The parent
-    // role message must precede any function_call_output items from the same
-    // turn, otherwise extractToolOutput() (which scans for
-    // function_call_output AFTER the last user-role index) will not see the
-    // output and the downstream scenario dispatcher will behave as if no
-    // tool output was returned. Similarly, assistant tool_use blocks become
-    // function_call items that must follow the assistant text message they
-    // narrate.
+    // Role messages must precede tool calls and results, or the current-turn
+    // extractor will fence out the result as belonging to an older turn.
     const textPieces: Array<{ type: "input_text" | "output_text"; text: string }> = [];
     const imagePieces: Array<{ type: "input_image"; image_url: string }> = [];
     const toolResultItems: ResponsesInputItem[] = [];
@@ -102,90 +67,94 @@ export function convertAnthropicMessagesToResponsesInput(params: {
         continue;
       }
       if (block.type === "tool_result") {
-        const output = stringifyToolResultContent(block.content);
-        if (output.trim()) {
-          toolResultItems.push({
-            type: "function_call_output",
-            call_id: block.tool_use_id,
-            output,
-            ...(block.is_error === true ? { is_error: true } : {}),
-          });
-        }
+        toolResultItems.push({
+          type: "function_call_output",
+          call_id: block.tool_use_id,
+          output: stringifyToolResultContent(block.content),
+          ...(typeof block.is_error === "boolean" ? { is_error: block.is_error } : {}),
+        });
         continue;
       }
       if (block.type === "tool_use") {
-        // Mirror OpenAI's function_call output_item shape so downstream
-        // prompt extraction still sees "the assistant just emitted a tool
-        // call". The scenario dispatcher looks for tool_output on the next
-        // user turn, not the assistant's prior tool_use, so a minimal
-        // placeholder is enough.
         toolUseItems.push({
           type: "function_call",
           name: block.name,
           arguments: JSON.stringify(block.input ?? {}),
           call_id: block.id,
         });
-        continue;
       }
     }
     if (textPieces.length > 0 || imagePieces.length > 0) {
-      const combinedContent: Array<Record<string, unknown>> = [...textPieces, ...imagePieces];
-      items.push({ role: message.role, content: combinedContent });
+      items.push({ role: message.role, content: [...textPieces, ...imagePieces] });
     }
-    // Emit tool_use (assistant prior calls) and tool_result (user-side
-    // returns) AFTER the parent role message so extractLastUserText and
-    // extractToolOutput walk the array in the order they expect. For a
-    // tool_result-only user turn with no text/image blocks, the parent
-    // message is intentionally omitted — the function_call_output itself
-    // represents the user's "return the tool output" turn.
-    for (const toolUse of toolUseItems) {
-      items.push(toolUse);
-    }
-    for (const toolResult of toolResultItems) {
-      items.push(toolResult);
-    }
+    // A tool-result-only turn has no user message: it continues the active turn.
+    items.push(...toolUseItems, ...toolResultItems);
   }
   return items;
 }
 
-export type ExtractedAssistantOutput = {
+type ExtractedAssistantOutput = {
   text: string;
   toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
 };
 
-export function extractFinalAssistantOutputFromEvents(
-  events: StreamEvent[],
-): ExtractedAssistantOutput {
+const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
+const ANTHROPIC_TOOL_USE_ID_MAX_LENGTH = 64;
+
+export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] {
+  const adaptId = (id: string) =>
+    id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)
+      ? id
+      : `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
+  const adaptItem = (item: Record<string, unknown>) => {
+    if (
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
+      typeof item.call_id === "string"
+    ) {
+      return { ...item, call_id: adaptId(item.call_id) };
+    }
+    return item;
+  };
+
+  return events.map((event) => {
+    if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+      return { ...event, item: adaptItem(event.item) };
+    }
+    if (event.type === "response.custom_tool_call_input.delta") {
+      return { ...event, call_id: adaptId(event.call_id) };
+    }
+    if (event.type === "response.completed") {
+      return {
+        ...event,
+        response: {
+          ...event.response,
+          output: event.response.output.map(adaptItem),
+        },
+      };
+    }
+    return event;
+  });
+}
+
+export function extractAssistantOutputFromEvents(events: StreamEvent[]): ExtractedAssistantOutput {
   const toolCalls: ExtractedAssistantOutput["toolCalls"] = [];
   let text = "";
   for (const event of events) {
+    // Failed streams may never finish an output item; retain text emitted before failure.
+    if (event.type === "response.output_text.delta") {
+      text += event.delta;
+      continue;
+    }
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as {
-      type?: unknown;
-      name?: unknown;
-      call_id?: unknown;
-      id?: unknown;
-      arguments?: unknown;
-      content?: unknown;
-    };
+    const item = event.item;
     if (item.type === "function_call" && typeof item.name === "string") {
-      let input: Record<string, unknown> = {};
-      if (typeof item.arguments === "string" && item.arguments.trim()) {
-        try {
-          const parsed = JSON.parse(item.arguments) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            input = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // keep empty input on malformed args — mock dispatcher owns arg shape
-        }
-      }
       toolCalls.push({
         id: typeof item.call_id === "string" ? item.call_id : `toolu_mock_${toolCalls.length + 1}`,
         name: item.name,
-        input,
+        input:
+          typeof item.arguments === "string" ? (parseJsonObjectBody(item.arguments) ?? {}) : {},
       });
       continue;
     }
@@ -203,8 +172,8 @@ export function extractFinalAssistantOutputFromEvents(
 export function buildAnthropicMessageResponse(params: {
   model: string;
   extracted: ExtractedAssistantOutput;
-}): Record<string, unknown> {
-  const content: Array<Record<string, unknown>> = [];
+}) {
+  const content: Array<Extract<AnthropicMessageContentBlock, { type: "text" | "tool_use" }>> = [];
   if (params.extracted.text) {
     content.push({ type: "text", text: params.extracted.text });
   }
@@ -240,6 +209,41 @@ export function buildAnthropicMessageResponse(params: {
   };
 }
 
+function buildAnthropicMessageStart(message: ReturnType<typeof buildAnthropicMessageResponse>) {
+  return {
+    type: "message_start",
+    message: {
+      ...message,
+      content: [],
+      stop_reason: null,
+      usage: { input_tokens: message.usage.input_tokens, output_tokens: 0 },
+    },
+  };
+}
+
+function buildAnthropicContentBlockEvents(
+  index: number,
+  contentBlock: Record<string, unknown>,
+  deltas: Array<Record<string, unknown>>,
+): AnthropicStreamEvent[] {
+  return [
+    { type: "content_block_start", index, content_block: contentBlock },
+    ...deltas.map((delta) => ({ type: "content_block_delta", index, delta })),
+    { type: "content_block_stop", index },
+  ];
+}
+
+export function buildAnthropicFailureResponse(failure: QaMockProviderFailure) {
+  return {
+    type: "error",
+    error: {
+      type: failure.type,
+      ...(failure.code ? { code: failure.code } : {}),
+      message: failure.message,
+    },
+  };
+}
+
 const QA_ANTHROPIC_THINKING_ERROR_TEXT =
   "QA replay-safe read completed, but the provider stream failed after signed thinking.";
 const QA_ANTHROPIC_THINKING_ERROR_SIGNATURE = "qa_signed_thinking_block_91953";
@@ -261,53 +265,17 @@ export function buildAnthropicThinkingErrorResponse(params: {
 export function buildAnthropicThinkingErrorStreamEvents(params: {
   model: string;
 }): AnthropicStreamEvent[] {
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
   return [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 64,
-          output_tokens: 0,
-        },
-      },
-    },
-    {
-      type: "content_block_start",
-      index: 0,
-      content_block: {
-        type: "thinking",
-        thinking: "",
-        signature: "",
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "thinking_delta",
-        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "signature_delta",
-        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
-      },
-    },
-    {
-      type: "content_block_stop",
-      index: 0,
-    },
+    buildAnthropicMessageStart(
+      buildAnthropicMessageResponse({
+        model: params.model,
+        extracted: { text: "", toolCalls: [] },
+      }),
+    ),
+    ...buildAnthropicContentBlockEvents(0, { type: "thinking", thinking: "", signature: "" }, [
+      { type: "thinking_delta", thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT },
+      { type: "signature_delta", signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE },
+    ]),
     {
       type: "message_delta",
       delta: {},
@@ -326,94 +294,37 @@ export function buildAnthropicThinkingErrorStreamEvents(params: {
   ];
 }
 
-export function buildAnthropicMessageStreamEvents(params: {
-  model: string;
-  extracted: ExtractedAssistantOutput;
-}): AnthropicStreamEvent[] {
-  const approxInputTokens = 64;
-  const approxOutputTokens = Math.max(
-    16,
-    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
-  );
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
-  const events: AnthropicStreamEvent[] = [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: approxInputTokens,
-          output_tokens: 0,
-        },
-      },
-    },
-  ];
-  let index = 0;
-  if (params.extracted.text || params.extracted.toolCalls.length === 0) {
-    events.push({
-      type: "content_block_start",
-      index,
-      content_block: {
-        type: "text",
-        text: "",
-      },
-    });
-    if (params.extracted.text) {
-      events.push({
-        type: "content_block_delta",
+export function buildAnthropicMessageStreamEvents(
+  message: ReturnType<typeof buildAnthropicMessageResponse>,
+  failure?: QaMockProviderFailure,
+): AnthropicStreamEvent[] {
+  const events: AnthropicStreamEvent[] = [buildAnthropicMessageStart(message)];
+  for (const [index, block] of message.content.entries()) {
+    const delta = block.type === "text" ? block.text : JSON.stringify(block.input);
+    events.push(
+      ...buildAnthropicContentBlockEvents(
         index,
-        delta: {
-          type: "text_delta",
-          text: params.extracted.text,
-        },
-      });
-    }
-    events.push({
-      type: "content_block_stop",
-      index,
-    });
-    index += 1;
+        { ...block, ...(block.type === "text" ? { text: "" } : { input: {} }) },
+        delta
+          ? [
+              block.type === "text"
+                ? { type: "text_delta", text: delta }
+                : { type: "input_json_delta", partial_json: delta },
+            ]
+          : [],
+      ),
+    );
   }
-  for (const call of params.extracted.toolCalls) {
-    events.push({
-      type: "content_block_start",
-      index,
-      content_block: {
-        type: "tool_use",
-        id: call.id,
-        name: call.name,
-        input: {},
-      },
-    });
-    events.push({
-      type: "content_block_delta",
-      index,
-      delta: {
-        type: "input_json_delta",
-        partial_json: JSON.stringify(call.input ?? {}),
-      },
-    });
-    events.push({
-      type: "content_block_stop",
-      index,
-    });
-    index += 1;
+  if (failure) {
+    events.push(buildAnthropicFailureResponse(failure));
+    return events;
   }
   events.push({
     type: "message_delta",
     delta: {
-      stop_reason: params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn",
+      stop_reason: message.stop_reason,
     },
-    usage: {
-      input_tokens: approxInputTokens,
-      output_tokens: approxOutputTokens,
-    },
+    usage: message.usage,
   });
   events.push({
     type: "message_stop",

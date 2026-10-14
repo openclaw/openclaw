@@ -2,7 +2,7 @@
  * Brave web-search provider factory. It builds the agent tool definition and
  * lazy-loads HTTP execution only when a search is run.
  */
-import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SearchConfigRecord,
@@ -13,8 +13,8 @@ import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildBraveWebSearchProviderBase } from "../web-search-shared.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildBraveWebSearchProviderBase, resolveBraveMode } from "../web-search-shared.js";
 
 const loadBraveWebSearchRuntime = createLazyRuntimeModule(
   () => import("./brave-web-search-provider.runtime.js"),
@@ -64,16 +64,11 @@ const BraveSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-function resolveBraveMode(searchConfig?: Record<string, unknown>): "web" | "llm-context" {
-  const brave = isRecord(searchConfig?.brave) ? searchConfig.brave : undefined;
-  return brave?.mode === "llm-context" ? "llm-context" : "web";
-}
-
 function createBraveToolDefinition(
   searchConfig?: SearchConfigRecord,
   config?: Parameters<typeof isDiagnosticFlagEnabled>[1],
 ): WebSearchProviderToolDefinition {
-  const braveMode = resolveBraveMode(searchConfig);
+  const braveMode = resolveBraveMode(asOptionalRecord(searchConfig?.brave));
   const diagnosticsEnabled = isDiagnosticFlagEnabled("brave.http", config);
 
   return {
@@ -82,9 +77,13 @@ function createBraveToolDefinition(
         ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
         : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
     parameters: BraveSearchSchema,
-    execute: async (args) => {
+    execute: async (args, context) => {
+      context?.signal?.throwIfAborted();
       const { executeBraveSearch } = await loadBraveWebSearchRuntime();
-      return await executeBraveSearch(args, searchConfig, { diagnosticsEnabled });
+      return await executeBraveSearch(args, searchConfig, {
+        diagnosticsEnabled,
+        signal: context?.signal,
+      });
     },
   };
 }

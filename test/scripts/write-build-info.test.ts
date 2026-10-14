@@ -40,29 +40,7 @@ describe("write-build-info", () => {
       version: "2026.7.10",
       commit: "abcdef0123456789abcdef0123456789abcdef01",
       builtAt: "2026-07-10T12:34:56.000Z",
-    });
-  });
-
-  it("falls back to build-time Git and one current UTC timestamp for local builds", () => {
-    const rootDir = createPackage("2026.7.10-beta.1");
-    const execFileSync = vi.fn(() => "1234567890ABCDEF1234567890ABCDEF12345678\n");
-
-    expect(
-      resolveBuildInfo({
-        rootDir,
-        env: {},
-        execFileSync,
-        now: () => new Date("2026-07-10T01:02:03.456Z"),
-      }),
-    ).toEqual({
-      version: "2026.7.10-beta.1",
-      commit: "1234567890abcdef1234567890abcdef12345678",
-      builtAt: "2026-07-10T01:02:03.456Z",
-    });
-    expect(execFileSync).toHaveBeenCalledWith("git", ["rev-parse", "HEAD"], {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      buildId: "2026.7.10-abcdef012345-2026-07-10T12-34-56.000Z",
     });
   });
 
@@ -79,6 +57,20 @@ describe("write-build-info", () => {
         now: () => new Date("2026-07-10T01:02:03.000Z"),
       }).commit,
     ).toBeNull();
+  });
+
+  it("shares explicit release artifact identity with the Control UI", () => {
+    const rootDir = createPackage();
+    expect(
+      resolveBuildInfo({
+        rootDir,
+        env: {
+          GIT_COMMIT: "a".repeat(40),
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T01:02:03.000Z",
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
+        },
+      }).buildId,
+    ).toBe("2026.7.10-release-aaaaaaaaaaaa-2026-07-10T01-02-03.000Z");
   });
 
   it("preserves GIT_COMMIT then GIT_SHA explicit input precedence", () => {

@@ -1,23 +1,17 @@
-export type DockPanelSide = "bottom" | "left" | "right";
+export type DockPanelPlacement = "bottom" | "left" | "right" | "main";
 
-type DockPanelLayout<TDock extends DockPanelSide> = {
+type DockPanelLayout<TDock extends DockPanelPlacement> = {
   open: boolean;
   dock: TDock;
   height: number;
   width: number;
 };
 
-export type DockPanelLayoutStore<TDock extends DockPanelSide> = {
-  defaults: DockPanelLayout<TDock>;
-  minHeight: number;
-  minWidth: number;
-  maxHeight(): number;
-  maxWidth(): number;
-  load(): DockPanelLayout<TDock>;
-  save(layout: DockPanelLayout<TDock>): void;
-};
+export type DockPanelLayoutStore<TDock extends DockPanelPlacement> = ReturnType<
+  typeof createDockPanelLayout<TDock>
+>;
 
-type DockPanelLayoutOptions<TDock extends DockPanelSide> = {
+type DockPanelLayoutOptions<TDock extends DockPanelPlacement> = {
   storageKey: string;
   minHeight: number;
   minWidth: number;
@@ -27,7 +21,7 @@ type DockPanelLayoutOptions<TDock extends DockPanelSide> = {
   defaultWidth: number;
 };
 
-export function createDockPanelLayout<TDock extends DockPanelSide>(
+export function createDockPanelLayout<TDock extends DockPanelPlacement>(
   options: DockPanelLayoutOptions<TDock>,
 ) {
   const defaults: DockPanelLayout<TDock> = {
@@ -54,13 +48,13 @@ export function createDockPanelLayout<TDock extends DockPanelSide>(
     minWidth: options.minWidth,
     maxHeight,
     maxWidth,
-    load(): DockPanelLayout<TDock> {
+    load(this: void): DockPanelLayout<TDock> {
       try {
         const raw = globalThis.localStorage?.getItem(options.storageKey);
         if (!raw) {
           return { ...defaults };
         }
-        const parsed = JSON.parse(raw) as Partial<DockPanelLayout<DockPanelSide>>;
+        const parsed = JSON.parse(raw) as Partial<DockPanelLayout<DockPanelPlacement>>;
         return {
           open: Boolean(parsed.open),
           dock: options.supportedDocks.includes(parsed.dock as TDock)
@@ -73,7 +67,7 @@ export function createDockPanelLayout<TDock extends DockPanelSide>(
         return { ...defaults };
       }
     },
-    save(layout: DockPanelLayout<TDock>): void {
+    save(this: void, layout: DockPanelLayout<TDock>): void {
       try {
         globalThis.localStorage?.setItem(options.storageKey, JSON.stringify(layout));
       } catch {
@@ -82,3 +76,35 @@ export function createDockPanelLayout<TDock extends DockPanelSide>(
     },
   };
 }
+
+export const terminalPanelLayout = createDockPanelLayout({
+  storageKey: "openclaw.terminal.panel.v1",
+  minHeight: 140,
+  minWidth: 320,
+  defaultDock: "bottom",
+  supportedDocks: ["bottom", "right", "main"],
+  defaultHeight: 320,
+  defaultWidth: 520,
+});
+
+export const browserPanelLayout = createDockPanelLayout({
+  storageKey: "openclaw.browser.panel.v1",
+  minHeight: 240,
+  minWidth: 380,
+  defaultDock: "right",
+  supportedDocks: ["bottom", "right"],
+  defaultHeight: 420,
+  defaultWidth: 560,
+});
+
+export const assistantPanelLayout = createDockPanelLayout({
+  // Shipped key: operators' saved dock size and placement live here, so the
+  // legacy custodian spelling stays even though the dock is now shared.
+  storageKey: "openclaw.custodian.panel.v1",
+  minHeight: 240,
+  minWidth: 320,
+  defaultDock: "right",
+  supportedDocks: ["bottom", "right"],
+  defaultHeight: 420,
+  defaultWidth: 440,
+});

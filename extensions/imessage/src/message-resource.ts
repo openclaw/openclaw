@@ -20,8 +20,8 @@ type IMessageResourceAuthorizationParams = {
   chatContext: IMessageChatContext;
   cliPath: string;
   dbPath?: string;
-  hasExclusiveLocalDatabase: boolean;
   remoteHost?: string;
+  hasExclusiveLocalDatabase: boolean;
   messageId: string;
   conversationReadOrigin?: string;
 };
@@ -42,16 +42,17 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
   return sanitized.trim().slice(0, MAX_REPLY_TO_ID_LENGTH) || undefined;
 }
 
-export function resolveAuthorizedIMessageReplyReference(params: {
+export async function resolveAuthorizedIMessageReplyReference(params: {
   account: ResolvedIMessageAccount;
   target: IMessageTarget;
   cliPath: string;
   dbPath?: string;
+  remoteHost?: string;
   hasExclusiveLocalDatabase: boolean;
   service?: IMessageService;
   replyToId?: string;
   conversationReadOrigin?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!createActionGate(params.account.config.actions)("reply")) {
     return undefined;
   }
@@ -60,34 +61,34 @@ export function resolveAuthorizedIMessageReplyReference(params: {
     return undefined;
   }
   const chatContext = chatContextFromIMessageTarget(params.target, params.service);
-  const messageId = resolveIMessageMessageId(rawReplyToId, {
+  const messageId = await resolveIMessageMessageId(rawReplyToId, {
     requireKnownShortId: true,
     chatContext,
   });
-  authorizeIMessageResourceReference({
+  await authorizeIMessageResourceReference({
     accountId: params.account.accountId,
     chatContext,
     cliPath: params.cliPath,
     dbPath: params.dbPath,
     hasExclusiveLocalDatabase: params.hasExclusiveLocalDatabase,
-    remoteHost: params.account.config.remoteHost,
+    remoteHost: params.remoteHost ?? params.account.config.remoteHost,
     messageId,
     conversationReadOrigin: params.conversationReadOrigin,
   });
   return messageId;
 }
 
-export function authorizeIMessageResourceReference(
+export async function authorizeIMessageResourceReference(
   params: IMessageResourceAuthorizationParams,
-): void {
+): Promise<void> {
   const cacheContext = {
     ...params.chatContext,
     accountId: params.accountId,
   };
-  let cacheBinding = resolveIMessageCachedResourceBinding(params.messageId, cacheContext);
+  let cacheBinding = await resolveIMessageCachedResourceBinding(params.messageId, cacheContext);
   const normalizedMessageId = normalizeIMessageMessageGuidForLookup(params.messageId);
   if (cacheBinding === "unknown" && normalizedMessageId !== params.messageId.trim()) {
-    cacheBinding = resolveIMessageCachedResourceBinding(normalizedMessageId, cacheContext);
+    cacheBinding = await resolveIMessageCachedResourceBinding(normalizedMessageId, cacheContext);
   }
   if (cacheBinding === "match") {
     return;
@@ -97,7 +98,7 @@ export function authorizeIMessageResourceReference(
   }
 
   const providerBinding = params.hasExclusiveLocalDatabase
-    ? checkIMessageResourceBinding(params)
+    ? await checkIMessageResourceBinding(params)
     : "unavailable";
   if (providerBinding === "match") {
     return;

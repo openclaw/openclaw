@@ -1,9 +1,8 @@
-// Matrix plugin module implements setup bootstrap behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { hasExplicitMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { bootstrapMatrixVerification } from "./matrix/actions/verification.js";
-import { formatMatrixErrorMessage } from "./matrix/errors.js";
-import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 type MatrixSetupVerificationBootstrapResult = {
@@ -61,7 +60,7 @@ export async function maybeBootstrapNewEncryptedMatrixAccount(params: {
       success: false,
       recoveryKeyCreatedAt: null,
       backupVersion: null,
-      error: formatMatrixErrorMessage(err),
+      error: formatErrorMessage(err),
     };
   }
 }
@@ -72,14 +71,6 @@ export async function runMatrixSetupBootstrapAfterConfigWrite(params: {
   accountId: string;
   runtime: RuntimeEnv;
 }): Promise<void> {
-  const nextAccountConfig = resolveMatrixAccountConfig({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (nextAccountConfig.encryption !== true) {
-    return;
-  }
-
   const bootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
     previousCfg: params.previousCfg,
     cfg: params.cfg,

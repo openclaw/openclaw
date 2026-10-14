@@ -17,20 +17,21 @@ import { clearSessionStoreCacheForTest } from "../../config/sessions/store-write
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { APPROVALS_SCOPE } from "../method-scopes.js";
 import { startGatewayServer } from "../server.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "../test-helpers.listener.js";
 import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getFreeGatewayPort,
-} from "../test-helpers.e2e.js";
+  configureManualGatewayBackgroundEnv,
+  MANUAL_GATEWAY_ENV_KEYS,
+} from "../test-helpers.manual-gateway-env.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
+  ...MANUAL_GATEWAY_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_GATEWAY_PORT",
 ];
 
 describe("plugin.approval.request delivery routing (real gateway)", () => {
@@ -55,18 +56,21 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
 
-    const port = await getFreeGatewayPort();
+    const claim = await acquireGatewayE2ePortBlock();
     const token = "plugin-approval-turn-source-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+    const url = `ws://127.0.0.1:${claim.port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
-    server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
 
     // No operator approval client; only a requester with APPROVALS_SCOPE.
     // This is the state that triggers the no-route expiry in the unfixed code.

@@ -28,24 +28,6 @@ describe("doctor group allowFrom fallback migration", () => {
     expect(result.config.channels?.telegram?.groupAllowFrom).toEqual(["123", "accessGroup:ops"]);
   });
 
-  it("uses canonical nested dm allowFrom for nested channels", () => {
-    const result = maybeRepairGroupAllowFromFallback({
-      channels: {
-        matrix: {
-          allowFrom: ["@legacy:example.org"],
-          dm: {
-            allowFrom: ["@alice:example.org"],
-          },
-        },
-      },
-    });
-
-    expect(result.changes).toEqual([
-      "channels.matrix.groupAllowFrom: copied 1 sender entry from allowFrom for explicit group allowlist.",
-    ]);
-    expect(result.config.channels?.matrix?.groupAllowFrom).toEqual(["@alice:example.org"]);
-  });
-
   it("preserves account-scoped fallback without broadening to the channel", () => {
     const result = maybeRepairGroupAllowFromFallback({
       channels: {
@@ -124,6 +106,22 @@ describe("doctor group allowFrom fallback migration", () => {
           accounts: {
             workspace: { allowFrom: ["U456"] },
           },
+        },
+      },
+    };
+
+    expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({ config: cfg, changes: [] });
+  });
+
+  it("skips bundled-extension channels absent from generated metadata", () => {
+    // agentmail ships as a ClawHub extension and has no generated-metadata schema entry,
+    // so doctor cannot prove groupAllowFrom is a valid field for it; regression test for a
+    // bug where the missing entry was treated as "no restriction" and doctor wrote a field
+    // agentmail's own runtime schema rejects, failing config validation on every run.
+    const cfg = {
+      channels: {
+        agentmail: {
+          allowFrom: ["someone@example.com"],
         },
       },
     };

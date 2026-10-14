@@ -1,39 +1,40 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillProposalOrigin, SkillWorkshopRunOptions } from "../../skills/workshop/types.js";
+import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
+import type { AnyAgentTool } from "./common.js";
+import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
+/** Run-scoped Workshop authority chosen by the run owner, never by tool arguments. */
+export type SkillWorkshopRunOptions = {
+  /** Originating session of a background review; turns on the review guard. */
+  reviewOf?: string;
+  libraryAuthoring?: SkillLibraryAuthoringCapability;
+};
+
 export function createConfiguredSkillWorkshopTool(params: {
-  workspaceDir: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId: string;
   sessionKey?: string;
   runId?: string;
-  messageId?: string | number;
   run?: SkillWorkshopRunOptions;
-}) {
+}): AnyAgentTool {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const runId = normalizeOptionalString(params.runId);
-  const messageId = normalizeOptionalString(
-    params.messageId === undefined ? undefined : String(params.messageId),
+  const createWorkshop = () =>
+    createSkillWorkshopTool({
+      config: params.config,
+      agentId: params.agentId,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(runId ? { runId } : {}),
+      ...(params.run?.reviewOf ? { reviewOf: params.run.reviewOf } : {}),
+    });
+  const libraryAuthoring = params.run?.libraryAuthoring;
+  if (!libraryAuthoring) {
+    return createWorkshop();
+  }
+  return createLibrarySkillWorkshopTool(
+    libraryAuthoring,
+    libraryAuthoring.defaultTarget === "workspace" ? createWorkshop() : undefined,
   );
-  return createSkillWorkshopTool({
-    workspaceDir: params.workspaceDir,
-    config: params.config,
-    env: params.run?.env,
-    agentId: params.agentId,
-    origin:
-      params.run?.origin ??
-      ({
-        agentId: params.agentId,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(runId ? { runId } : {}),
-        ...(messageId ? { messageId } : {}),
-      } satisfies SkillProposalOrigin),
-    proposalOnly: params.run?.proposalOnly,
-    proposalMutationBudget:
-      params.run?.proposalMutationBudget ??
-      (params.run?.proposalOnly ? { remaining: 1 } : undefined),
-    proposalReviewCompletion: params.run?.proposalReviewCompletion,
-  });
 }

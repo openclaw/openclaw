@@ -9,8 +9,8 @@ async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<Ope
   if (config) {
     return config;
   }
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
+  const { captureRuntimeConfigAsyncReader } = await import("../config/config.js");
+  return await captureRuntimeConfigAsyncReader()();
 }
 
 export async function createChannelMcpRuntime(
@@ -61,8 +61,17 @@ export async function createChannelMcpRuntime(
       await bridge.start();
     },
     close: async () => {
-      await bridge.close();
-      await server.close();
+      // Both lifecycle owners must always close; one failure cannot strand the other.
+      const results = await Promise.allSettled([bridge.close(), server.close()]);
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "OpenClaw channel MCP shutdown failed");
+      }
     },
   };
 }

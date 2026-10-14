@@ -1,5 +1,6 @@
 // Tlon plugin module owns raw Urbit firehose durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -7,15 +8,15 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asNullableRecord as asRecord,
+  normalizeNullableString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
 
 const TLON_INGRESS_PAYLOAD_VERSION = 1;
 const TLON_INGRESS_POLL_INTERVAL_MS = 1_000;
-const TLON_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const TLON_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// Preserve the retired process-local guard's full 2,000-message key window.
-const TLON_INGRESS_TOMBSTONE_MAX_ENTRIES = 2_000;
 
 export type TlonIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -32,67 +33,47 @@ type TlonIngressBody = Omit<TlonIngressPayload, "version">;
 
 type TlonIngressRaw = { source: TlonIngressSource; event: unknown };
 
-type TlonIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
-
 type TlonIngressDispatch = (
   source: TlonIngressSource,
   event: unknown,
   lifecycle: TlonIngressLifecycle,
-) => Promise<TlonIngressDispatchResult | void> | TlonIngressDispatchResult | void;
+) =>
+  | Promise<ChannelIngressMonitorDeliveryResult | void>
+  | ChannelIngressMonitorDeliveryResult
+  | void;
 
-class TlonIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "tlon-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "TlonIngressPermanentError";
-  }
-}
-
-class TlonIngressShutdownError extends Error {
-  constructor() {
-    super("Tlon ingress stopped before dispatch adoption.");
-    this.name = "TlonIngressShutdownError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "tlon-auth">(
+  "TlonIngressPermanentError",
+  { withReason: true },
+);
 
 function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
-  const envelope = isRecord(event) ? event : null;
+  const envelope = asRecord(event);
   const nest = nonEmptyString(envelope?.nest);
-  const response = isRecord(envelope?.response) ? envelope.response : null;
-  const post = isRecord(response?.post) ? response.post : null;
-  const rPost = isRecord(post?.["r-post"]) ? post["r-post"] : null;
-  const set = isRecord(rPost?.set) ? rPost.set : null;
-  const reply = isRecord(rPost?.reply) ? rPost.reply : null;
-  const rReply = isRecord(reply?.["r-reply"]) ? reply["r-reply"] : null;
-  const replySet = isRecord(rReply?.set) ? rReply.set : null;
-  if (!nest || (!isRecord(set?.essay) && !isRecord(replySet?.memo))) {
+  const response = asRecord(envelope?.response);
+  const post = asRecord(response?.post);
+  const rPost = asRecord(post?.["r-post"]);
+  const set = asRecord(rPost?.set);
+  const reply = asRecord(rPost?.reply);
+  const rReply = asRecord(reply?.["r-reply"]);
+  const replySet = asRecord(rReply?.set);
+  if (!nest || (!asRecord(set?.essay) && !asRecord(replySet?.memo))) {
     return null;
   }
-  const eventId = nonEmptyString(isRecord(replySet?.memo) ? reply?.id : post?.id);
+  const eventId = nonEmptyString(asRecord(replySet?.memo) ? reply?.id : post?.id);
   return eventId ? { eventId, laneKey: `group:${nest}` } : null;
 }
 
 function inspectChatEvent(event: unknown): { eventId: string; laneKey: string } | null {
-  const envelope = isRecord(event) ? event : null;
-  const response = isRecord(envelope?.response) ? envelope.response : null;
-  const add = isRecord(response?.add) ? response.add : null;
-  const essay = isRecord(add?.essay) ? add.essay : null;
+  const envelope = asRecord(event);
+  const response = asRecord(envelope?.response);
+  const add = asRecord(response?.add);
+  const essay = asRecord(add?.essay);
   const eventId = nonEmptyString(envelope?.id);
   if (!essay || !eventId) {
     return null;
   }
-  const whom = isRecord(envelope?.whom) ? nonEmptyString(envelope.whom.ship) : null;
+  const whom = nonEmptyString(asRecord(envelope?.whom)?.ship);
   const peer = nonEmptyString(envelope?.whom) ?? whom ?? nonEmptyString(essay.author);
   return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
 }
@@ -159,16 +140,6 @@ function resolveTlonIngressNonRetryableFailure(error: unknown) {
   return null;
 }
 
-type TlonIngressMonitor = {
-  receive: (params: {
-    source: TlonIngressSource;
-    event: unknown;
-  }) => Promise<{ kind: "accepted" } | { kind: "ignored" }>;
-  start: () => void;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 export function createTlonIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<TlonIngressPayload>;
@@ -177,7 +148,7 @@ export function createTlonIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): TlonIngressMonitor {
+}) {
   const monitor = createChannelIngressMonitor<TlonIngressRaw, TlonIngressBody, TlonIngressPayload>({
     queue:
       options.queue ??
@@ -206,11 +177,11 @@ export function createTlonIngressMonitor(options: {
     },
     deliver: (raw, lifecycle) => options.dispatch(raw.source, raw.event, lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? TLON_INGRESS_POLL_INTERVAL_MS,
+    // Preserve the retired process-local guard's full 2,000-message key window.
     retention: {
-      pruneIntervalMs: TLON_INGRESS_PRUNE_INTERVAL_MS,
-      completedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: TLON_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
+      completedTtlMs: undefined,
+      completedMaxEntries: 2_000,
+      failedMaxEntries: 2_000,
     },
     // The Tlon firehose has always surfaced a failed append to its awaited callback.
     appendRetryDelaysMs: [0],
@@ -222,13 +193,16 @@ export function createTlonIngressMonitor(options: {
       onLog: (message) => options.runtime.log?.(`tlon ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-    createStoppedError: () => new TlonIngressShutdownError(),
+    createStoppedError: () => new Error("Tlon ingress stopped before dispatch adoption."),
     onError: (error) =>
       options.runtime.error?.(`tlon ingress drain failed: ${formatErrorMessage(error)}`),
   });
 
   return {
-    receive: async ({ source, event }) => {
+    receive: async ({
+      source,
+      event,
+    }: TlonIngressRaw): Promise<{ kind: "accepted" | "ignored" }> => {
       const result = await monitor.admit({ source, event });
       return { kind: result.kind === "durable" ? "accepted" : "ignored" };
     },

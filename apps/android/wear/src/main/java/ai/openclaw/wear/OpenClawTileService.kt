@@ -29,10 +29,8 @@ class OpenClawTileService :
     defaultColorScheme = openClawTileColorScheme,
   ) {
   override suspend fun MaterialScope.tileResponse(requestParams: RequestBuilders.TileRequest): TileBuilders.Tile {
-    val talkAction = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Voice)
-    val openAction = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Chat)
-    val talkClickable = clickable(action = talkAction, id = "talk_openclaw")
-    val openClickable = clickable(action = openAction, id = "open_openclaw")
+    val talkClickable = clickable(action = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Voice), id = "talk_openclaw")
+    val openClickable = clickable(action = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Chat), id = "open_openclaw")
     val layout =
       primaryLayout(
         titleSlot = { text(getString(R.string.app_name).layoutString) },
@@ -49,7 +47,14 @@ class OpenClawTileService :
                 protoLayoutResourceId = "openclaw_core_mascot",
               )
             },
-            labelContent = { text(getString(R.string.talk).uppercase().layoutString) },
+            labelContent = {
+              text(
+                wearUppercase(
+                  getString(R.string.talk),
+                  resources.configuration.locales[0],
+                ).layoutString,
+              )
+            },
             secondaryLabelContent = { text(getString(R.string.tile_phone_proxy).layoutString) },
           )
         },
@@ -83,7 +88,7 @@ private val openClawTileColorScheme =
     onSurfaceVariant = 0xFFA8A8A8.argb,
     outline = 0xFF3A3A3A.argb,
     outlineVariant = 0xFF242424.argb,
-    background = 0xFF030303.argb,
+    background = 0xFF000000.argb,
     onBackground = 0xFFF8F8F8.argb,
   )
 

@@ -1,14 +1,14 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 
 export const page = definePage({
-  id: "labs",
-  path: "/settings/labs",
+  ...routePageSpec("labs"),
   loader: (context: ApplicationContext) => context.runtimeConfig.ensureLoaded(),
   component: () =>
-    import("./labs-page.ts").then(() => ({
+    import("./labs-page.tsx").then((module) => ({
       header: true,
-      render: () => html`<openclaw-labs-page></openclaw-labs-page>`,
+      renderSolid: () => createComponent(module.LabsPage, {}),
     })),
 });

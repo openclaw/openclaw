@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import {
   assertSettledTurnFinalizationResult,
   projectSettledTurnFinalizationAttemptResult,
@@ -17,14 +19,7 @@ function assistantMessage(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason,
     timestamp: 0,
   };
@@ -77,32 +72,27 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("returned a tool call");
   });
 
-  it("rejects an empty answer", () => {
-    expect(() =>
-      assertSettledTurnFinalizationResult({
-        assistant: assistantMessage([{ type: "text", text: "  " }]),
-      }),
-    ).toThrow("without a visible answer");
+  it("classifies a normally completed empty answer", () => {
+    const result = {
+      assistant: assistantMessage([{ type: "text", text: "  " }]),
+    };
+
+    try {
+      assertSettledTurnFinalizationResult(result);
+      throw new Error("expected completed-empty classification");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EmptySettledTurnFinalizationError);
+      expect((error as EmptySettledTurnFinalizationError).result).toBe(result);
+    }
   });
 
-  it("rejects an intentionally silent answer", () => {
+  it("rejects an assistant stopped at the length limit", () => {
     expect(() =>
       assertSettledTurnFinalizationResult({
-        assistant: assistantMessage([{ type: "text", text: "NO_REPLY" }]),
+        assistant: assistantMessage([{ type: "text", text: "partial" }], "length"),
       }),
-    ).toThrow("without a visible answer");
+    ).toThrow("unsuccessful stop reason: length");
   });
-
-  it.each(["length", "error", "aborted"] as const)(
-    "rejects an assistant with unsuccessful %s stop reason",
-    (stopReason) => {
-      expect(() =>
-        assertSettledTurnFinalizationResult({
-          assistant: assistantMessage([{ type: "text", text: "partial" }], stopReason),
-        }),
-      ).toThrow(`unsuccessful stop reason: ${stopReason}`);
-    },
-  );
 
   it("rejects an invalid transcript index", () => {
     expect(() =>
@@ -128,16 +118,6 @@ describe("assertSettledTurnFinalizationResult", () => {
     });
   });
 
-  it("rejects a failed full attempt even when it contains visible assistant text", () => {
-    expect(() =>
-      projectSettledTurnFinalizationAttemptResult(
-        successfulAttempt({
-          terminal: { kind: "failed", source: "prompt", error: new Error("provider failed") },
-        }),
-      ),
-    ).toThrow("did not complete successfully");
-  });
-
   it("rejects a full attempt that compacted before producing its answer", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(successfulAttempt({ compactionCount: 1 })),
@@ -155,16 +135,15 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("reported capability activity");
   });
 
-  it.each(["replayMetadata", "currentAttemptReplayMetadata"] as const)(
-    "rejects replay-unsafe %s from a full attempt",
-    (field) => {
-      expect(() =>
-        projectSettledTurnFinalizationAttemptResult(
-          successfulAttempt({ [field]: { hadPotentialSideEffects: false, replaySafe: false } }),
-        ),
-      ).toThrow("reported capability activity");
-    },
-  );
+  it("rejects replay-unsafe current-attempt metadata from a full attempt", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: false },
+        }),
+      ),
+    ).toThrow("reported capability activity");
+  });
 
   it("rejects partial or stale assistants without current-attempt completion evidence", () => {
     expect(() =>

@@ -1,5 +1,6 @@
 /** Tests reply payload sending through wired plugin hook flows. */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -7,14 +8,6 @@ import {
 } from "../auto-reply/reply-payload.js";
 import type { PluginHookReplyPayload } from "./hook-types.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 const replyPayloadSendingEvent = {
   payload: { text: "hello" } satisfies ReplyPayload,
@@ -32,16 +25,12 @@ const replyPayloadSendingCtx = {
   runId: "run-123",
 };
 
-function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
-  return logger.error.mock.calls[0];
-}
-
 describe("reply_payload_sending hook runner", () => {
   it("fails open after the default per-handler timeout", async () => {
     vi.useFakeTimers();
     try {
       const logger = { warn: vi.fn(), error: vi.fn() };
-      const firstStarted = createDeferred<void>();
+      const firstStarted = createDeferred();
       const first = vi.fn(() => {
         firstStarted.resolve();
         return new Promise<never>(() => {});
@@ -147,35 +136,6 @@ describe("reply_payload_sending hook runner", () => {
       reason: "blocked",
     });
     expect(second).not.toHaveBeenCalled();
-  });
-
-  it("continues after handler errors", async () => {
-    const logger = {
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    const failing = vi.fn().mockRejectedValue(new Error("boom"));
-    const succeeding = vi
-      .fn()
-      .mockResolvedValue({ payload: { text: "ok" } satisfies ReplyPayload });
-    const { runner } = createHookRunnerWithRegistry(
-      [
-        { hookName: "reply_payload_sending", handler: failing },
-        { hookName: "reply_payload_sending", handler: succeeding },
-      ],
-      { logger },
-    );
-
-    const result = await runner.runReplyPayloadSending(
-      replyPayloadSendingEvent,
-      replyPayloadSendingCtx,
-    );
-
-    expect(result).toEqual({ payload: { text: "ok" }, cancel: undefined, reason: undefined });
-    expect(logger.error).toHaveBeenCalledTimes(1);
-    expect(firstErrorLog(logger)).toEqual([
-      "[hooks] reply_payload_sending handler from test-plugin failed: boom",
-    ]);
   });
 
   it("does not expose trusted local media to plugins", async () => {

@@ -1,29 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { recordChannelFeedbackEvent, runChannelFeedbackReflection } from "./feedback-reflection.js";
+import { runChannelFeedbackReflection } from "./feedback-reflection.js";
+import {
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+} from "./message-access/admission-evidence.js";
 
-const appendTranscriptEvent = vi.hoisted(() => vi.fn(async () => undefined));
-const dispatchChannelInboundTurn = vi.hoisted(() => vi.fn());
-const loadSessionEntry = vi.hoisted(() => vi.fn());
-const readSessionUpdatedAt = vi.hoisted(() => vi.fn());
+const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
 
-vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  appendTranscriptEvent,
-  loadSessionEntry,
-  loadSessionEntryReadOnly: loadSessionEntry,
-  readSessionUpdatedAt,
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: resolveStorePath,
 }));
-vi.mock("./turn/kernel.js", () => ({ dispatchChannelInboundTurn }));
+// mock-isolation: Persistence is exercised through the real feedback worker boundary.
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: vi.fn(),
+  readSessionUpdatedAtInWorker: vi.fn(async () => undefined),
+}));
+vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 
 const cfg = {} as OpenClawConfig;
 
 describe("channel feedback reflection", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("classifies internal reflection as explicitly unsupported provenance", async () => {
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
+      expect(
+        consumeChannelAdmissionEvidence(
+          readChannelContextAdmissionEvidence(plan.ctxPayload as object),
+        ),
+      ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
+      return { admission: { kind: "dispatch" }, dispatched: false };
+    });
+    await runChannelFeedbackReflection({
+      cfg,
+      channel: "msteams",
+      channelLabel: "Teams",
+      agentId: "main",
+      sessionKey: "agent:main:msteams:feedback-unsupported",
+      conversationId: "conversation-unsupported",
+      conversationKind: "direct",
+    });
+  });
+
   it("runs reflection in the original session and enforces cooldown", async () => {
-    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({
         text: JSON.stringify({
           learning: "Answer the direct question first.",
@@ -53,20 +75,23 @@ describe("channel feedback reflection", () => {
       userMessage: "Want a shorter version?",
       responseLength: 104,
     });
-    expect(dispatchChannelInboundTurn).toHaveBeenCalledWith(
+    expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
         channel: "msteams",
         route: { agentId: "main", sessionKey: params.sessionKey },
-        ctxPayload: expect.objectContaining({ ChatType: "group" }),
+        ctxPayload: expect.objectContaining({
+          ChatType: "group",
+          ConversationRouteContextObserved: false,
+        }),
       }),
     );
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({ status: "cooldown" });
-    expect(dispatchChannelInboundTurn).toHaveBeenCalledTimes(1);
+    expect(dispatchRoutedChannelTurn).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a plain-text reflection as internal learning", async () => {
-    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({ text: "Answer the direct question first." });
       return { admission: { kind: "dispatch" }, dispatched: true };
     });
@@ -92,7 +117,7 @@ describe("channel feedback reflection", () => {
   });
 
   it("does not treat structured follow-up values as directives", async () => {
-    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({
         text: JSON.stringify({ learning: "Be concise.", followUp: ["yes"] }),
       });
@@ -110,28 +135,5 @@ describe("channel feedback reflection", () => {
         conversationKind: "direct",
       }),
     ).resolves.toMatchObject({ status: "complete", followUp: false });
-  });
-
-  it("records feedback through the canonical transcript accessor", async () => {
-    loadSessionEntry.mockReturnValue({ sessionId: "session-1" });
-    const event = { type: "custom", event: "feedback", ts: 1 };
-
-    await expect(
-      recordChannelFeedbackEvent({
-        cfg,
-        agentId: "main",
-        sessionKey: "agent:main:msteams:feedback-2",
-        event,
-      }),
-    ).resolves.toBe(true);
-    expect(appendTranscriptEvent).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:msteams:feedback-2",
-        storePath: "/state/main/sessions.json",
-      },
-      event,
-    );
   });
 });

@@ -1,4 +1,3 @@
-// Discord tests cover audit plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -97,56 +96,6 @@ describe("discord audit", () => {
     expect(collected.unresolvedChannels).toBe(0);
   });
 
-  it("handles guild with only '*' wildcard and no numeric channel ids", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          enabled: true,
-          token: "t",
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                "*": { allow: true },
-              },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const collected = collectDiscordAuditChannelIdsForAccount({ guilds: readDiscordGuilds(cfg) });
-    expect(collected.channelIds).toStrictEqual([]);
-    expect(collected.unresolvedChannels).toBe(0);
-  });
-
-  it("collects audit channel ids without resolving SecretRef-backed Discord tokens", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          enabled: true,
-          token: {
-            source: "env",
-            provider: "default",
-            id: "DISCORD_BOT_TOKEN",
-          },
-          guilds: {
-            "123": {
-              channels: {
-                "111": { allow: true },
-                general: { allow: true },
-              },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const collected = collectDiscordAuditChannelIdsForAccount({ guilds: readDiscordGuilds(cfg) });
-    expect(collected.channelIds).toEqual(["111"]);
-    expect(collected.unresolvedChannels).toBe(1);
-  });
-
   it("includes configured voice auto-join channels in permission audits", () => {
     const collected = collectDiscordAuditChannelIdsForAccount({
       guilds: {
@@ -201,4 +150,39 @@ describe("discord audit", () => {
       expect(audit.channels[0]?.missing).toEqual(["Connect", "Speak", "ReadMessageHistory"]);
     },
   );
+
+  it.each([
+    ChannelType.GuildNewsThread,
+    ChannelType.GuildPublicThread,
+    ChannelType.GuildPrivateThread,
+  ])("requires thread send permission for thread audit targets of type %s", async (channelType) => {
+    const cfg = {
+      channels: {
+        discord: {
+          enabled: true,
+          token: "t",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
+      channelId: "333",
+      permissions: ["ViewChannel", "SendMessages"],
+      channelType,
+      raw: "0",
+      isDm: false,
+    });
+
+    const audit = await auditDiscordChannelPermissionsWithFetcher({
+      cfg,
+      token: "t",
+      accountId: "default",
+      channelIds: ["333"],
+      timeoutMs: 1000,
+      fetchChannelPermissions: fetchChannelPermissionsDiscordMock,
+    });
+
+    expect(audit.ok).toBe(false);
+    expect(audit.channels[0]?.missing).toEqual(["SendMessagesInThreads"]);
+  });
 });

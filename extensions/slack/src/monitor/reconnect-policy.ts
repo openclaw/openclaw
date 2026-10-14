@@ -1,10 +1,8 @@
-// Slack plugin module implements reconnect policy behavior.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 
 const SLACK_AUTH_ERROR_RE =
   /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token/i;
-const NO_ERROR_DETAIL = "no error detail";
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
   initialMs: 2_000,
@@ -13,7 +11,7 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   jitter: 0.25,
 } as const;
 
-type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
+type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start";
 
 type EmitterLike = {
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;
@@ -82,7 +80,7 @@ export function formatSlackSocketModeSharedConnectionWarning(activeConnections: 
   return [
     `slack socket mode reports ${activeConnections} active connections for this Slack app`,
     "Slack may deliver each event to any one connection",
-    "ensure every OpenClaw gateway sharing this app has equivalent routing and authorization, or use a separate Slack app per gateway, one relay ingress, or HTTP Request URLs behind a load balancer",
+    "check that every OpenClaw gateway sharing this app has equivalent routing and authorization, or use a separate Slack app per gateway, one relay ingress, or HTTP Request URLs behind a load balancer",
     `See ${SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL}`,
   ].join("; ");
 }
@@ -132,13 +130,11 @@ export function waitForSlackSocketDisconnect(
     const disconnectListener = () => resolveOnce({ event: "disconnect" });
     const startFailListener = (error?: unknown) =>
       resolveOnce({ event: "unable_to_socket_mode_start", error });
-    const errorListener = (error: unknown) => resolveOnce({ event: "error", error });
     const abortListener = () => resolveOnce({ event: "disconnect" });
 
     const cleanup = () => {
       emitter.off("disconnected", disconnectListener);
       emitter.off("unable_to_socket_mode_start", startFailListener);
-      emitter.off("error", errorListener);
       abortSignal?.removeEventListener("abort", abortListener);
     };
 
@@ -149,7 +145,6 @@ export function waitForSlackSocketDisconnect(
 
     emitter.on("disconnected", disconnectListener);
     emitter.on("unable_to_socket_mode_start", startFailListener);
-    emitter.on("error", errorListener);
     abortSignal?.addEventListener("abort", abortListener, { once: true });
   });
 }
@@ -159,9 +154,5 @@ export function waitForSlackSocketDisconnect(
  * Transient request and HTTP failures stay in OpenClaw's reconnect loop.
  */
 export function isNonRecoverableSlackAuthError(error: unknown): boolean {
-  return SLACK_AUTH_ERROR_RE.test(formatUnknownError(error, ""));
-}
-
-export function formatUnknownError(error: unknown, fallback = NO_ERROR_DETAIL): string {
-  return formatSlackError(error, fallback);
+  return SLACK_AUTH_ERROR_RE.test(formatSlackError(error, ""));
 }

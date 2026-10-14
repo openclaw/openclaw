@@ -17,6 +17,28 @@ export function normalizeOptionalString(value: unknown): string | undefined {
   return normalizeNullableString(value) ?? undefined;
 }
 
+/** Trims bounded string input and rejects blank, non-string, or overlong values. */
+export function normalizeBoundedOptionalString(
+  value: unknown,
+  maxLength: number,
+): string | undefined {
+  if (!Number.isInteger(maxLength) || maxLength < 0) {
+    return undefined;
+  }
+  const normalized = normalizeOptionalString(value);
+  return normalized && normalized.length <= maxLength ? normalized : undefined;
+}
+
+/** Requires non-blank string input while preserving its original whitespace. */
+export function readNonBlankString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/** Rejects only empty or non-string values while preserving whitespace. */
+export function readNonEmptyStringPreservingWhitespace(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 /** Stringifies primitive ids/flags before applying optional string normalization. */
 export function normalizeStringifiedOptionalString(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -45,15 +67,12 @@ export function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
 
-export type FastMode = boolean | "auto";
+export type FastMode = boolean | "auto" | "ultrafast";
 
 /** Parses loose boolean/fast-mode flags from strings or booleans. */
 export function normalizeFastMode(raw?: unknown): FastMode | undefined {
   if (typeof raw === "boolean") {
     return raw;
-  }
-  if (!raw) {
-    return undefined;
   }
   const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
@@ -61,6 +80,9 @@ export function normalizeFastMode(raw?: unknown): FastMode | undefined {
   }
   if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
     return true;
+  }
+  if (key === "ultrafast") {
+    return "ultrafast";
   }
   if (["auto", "automatic"].includes(key)) {
     return "auto";

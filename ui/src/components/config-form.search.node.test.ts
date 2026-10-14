@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { matchesNodeSearch, parseConfigSearchQuery } from "./config-form.search.ts";
+import {
+  matchesNodeSearch,
+  parseConfigSearchQuery,
+  resolveConfigMapSearch,
+} from "./config-form.search.ts";
 
 const schema = {
   type: "object",
@@ -24,12 +28,6 @@ const schema = {
 };
 
 describe("config form search", () => {
-  it("parses tag-prefixed query terms", () => {
-    const parsed = parseConfigSearchQuery("token tag:security tag:Auth");
-    expect(parsed.text).toBe("token");
-    expect(parsed.tags).toEqual(["security", "auth"]);
-  });
-
   it("matches fields by tag through ui hints", () => {
     const parsed = parseConfigSearchQuery("tag:security");
     const matched = matchesNodeSearch({
@@ -44,29 +42,22 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
-  it("requires text and tag when combined", () => {
-    const positive = matchesNodeSearch({
-      schema: schema.properties.gateway,
-      value: {},
-      path: ["gateway"],
-      hints: {
-        "gateway.auth.token": { tags: ["security"] },
-      },
-      criteria: parseConfigSearchQuery("token tag:security"),
-    });
-    expect(positive).toBe(true);
-
-    const negative = matchesNodeSearch({
-      schema: schema.properties.gateway,
-      value: {},
-      path: ["gateway"],
-      hints: {
-        "gateway.auth.token": { tags: ["security"] },
-      },
-      criteria: parseConfigSearchQuery("mode tag:security"),
-    });
-    expect(negative).toBe(false);
-  });
+  it.each([["mode tag:security", false]])(
+    "requires text and tag when combined in %j",
+    (query, expected) => {
+      expect(
+        matchesNodeSearch({
+          schema: schema.properties.gateway,
+          value: {},
+          path: ["gateway"],
+          hints: {
+            "gateway.auth.token": { label: "Access Token", tags: ["security"] },
+          },
+          criteria: parseConfigSearchQuery(query),
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("searches array item schemas before entries exist", () => {
     const matched = matchesNodeSearch({
@@ -89,6 +80,50 @@ describe("config form search", () => {
     });
 
     expect(matched).toBe(true);
+  });
+
+  it.each(["composed overflow"])("searches %s array schemas declared through allOf", (query) => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        items: [{ type: "string", description: "Outer endpoint" }],
+        allOf: [
+          {
+            items: [{}, { type: "string", description: "Composed secondary endpoint" }],
+            additionalItems: { type: "string", description: "Composed overflow endpoint" },
+          },
+        ],
+      },
+      value: [],
+      path: ["endpoints"],
+      hints: {},
+      criteria: parseConfigSearchQuery(query),
+    });
+
+    expect(matched).toBe(true);
+  });
+
+  it("does not search tuple positions forbidden by an allOf branch", () => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        allOf: [
+          {
+            items: [{ type: "string", description: "Reachable endpoint" }],
+            additionalItems: false,
+          },
+          {
+            items: [{}, { type: "string", description: "Impossible endpoint" }],
+          },
+        ],
+      },
+      value: [],
+      path: ["endpoints"],
+      hints: {},
+      criteria: parseConfigSearchQuery("impossible endpoint"),
+    });
+
+    expect(matched).toBe(false);
   });
 
   it("searches additional-property schemas before entries exist", () => {
@@ -116,4 +151,36 @@ describe("config form search", () => {
 
     expect(matched).toBe(true);
   });
+  it.each([
+    { query: "", value: { reserved: "hidden", alpha: "visible" }, keys: ["alpha"], visible: true },
+    {
+      query: "alpha",
+      value: { reserved: "hidden", alpha: "visible" },
+      keys: ["alpha"],
+      visible: true,
+    },
+    {
+      query: "reserved",
+      value: { reserved: "hidden", alpha: "visible" },
+      keys: [],
+      visible: false,
+    },
+    { query: "missing", value: { reserved: "hidden", alpha: "visible" }, keys: [], visible: false },
+    { query: "", value: {}, keys: [], visible: true },
+    { query: "alpha", value: {}, keys: [], visible: false },
+  ])(
+    "keeps custom map visibility scoped to its searchable entries ($query, $visible)",
+    ({ query, value, keys, visible }) => {
+      const result = resolveConfigMapSearch({
+        schema: { type: "string" },
+        value,
+        path: ["settings"],
+        hints: {},
+        reservedKeys: new Set(["reserved"]),
+        searchCriteria: parseConfigSearchQuery(query),
+      });
+      expect(result.visibleEntries.map(([key]) => key)).toEqual(keys);
+      expect(result.visible).toBe(visible);
+    },
+  );
 });

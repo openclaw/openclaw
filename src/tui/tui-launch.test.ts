@@ -21,8 +21,8 @@ import { launchTuiCli } from "./tui-launch.js";
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 
-function createChildProcess(): ChildProcess {
-  return new EventEmitter() as ChildProcess;
+function createChildProcess(pid?: number): ChildProcess {
+  return Object.assign(new EventEmitter(), { pid }) as ChildProcess;
 }
 
 function expectSpawned(expectedArgs: string[]): SpawnOptions {
@@ -43,6 +43,11 @@ describe("launchTuiCli", () => {
     process.argv[1] = "/repo/openclaw.mjs";
     process.execArgv.length = 0;
     spawnMock.mockReset();
+    const child = createChildProcess();
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
     detachMock.mockReset();
     pauseSpy = vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
     resumeSpy = vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
@@ -69,12 +74,6 @@ describe("launchTuiCli", () => {
       "9230",
       "--no-warnings",
     );
-    const child = createChildProcess();
-    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return child;
-    });
-
     await launchTuiCli({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
@@ -98,26 +97,7 @@ describe("launchTuiCli", () => {
     expect(options.stdio).toBe("inherit");
   });
 
-  it("passes local mode through to the relaunched TUI", async () => {
-    const child = createChildProcess();
-    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return child;
-    });
-
-    await launchTuiCli({ local: true, deliver: false });
-
-    const options = expectSpawned(["/repo/openclaw.mjs", "tui", "--local"]);
-    expect(options.stdio).toBe("inherit");
-  });
-
   it("passes initial message and timeout through to the relaunched TUI", async () => {
-    const child = createChildProcess();
-    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return child;
-    });
-
     await launchTuiCli({
       local: true,
       deliver: false,
@@ -138,12 +118,6 @@ describe("launchTuiCli", () => {
   });
 
   it("keeps parent stdin paused after the relaunched TUI exits", async () => {
-    const child = createChildProcess();
-    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return child;
-    });
-
     await launchTuiCli({ deliver: false });
 
     expect(pauseSpy).toHaveBeenCalledOnce();
@@ -152,32 +126,60 @@ describe("launchTuiCli", () => {
 
   it("launches compiled CLI shapes without repeating the current command", async () => {
     process.argv[1] = "setup";
-    const child = createChildProcess();
-    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return child;
-    });
-
     await launchTuiCli({ deliver: false });
 
     const options = expectSpawned(["tui"]);
     expect(options.stdio).toBe("inherit");
   });
 
-  it("pins the child gateway URL and config auth source through env without adding url argv", async () => {
+  it("passes gateway connection options as TUI arguments without mutating env", async () => {
+    await launchTuiCli({
+      deliver: false,
+      url: "ws://127.0.0.1:18789",
+      token: "resolved-token",
+    });
+
+    const options = expectSpawned([
+      "/repo/openclaw.mjs",
+      "tui",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "resolved-token",
+    ]);
+    expect(options.env).toBe(process.env);
+  });
+
+  it("rejects a spawn error when the child has no pid", async () => {
     const child = createChildProcess();
-    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
-      queueMicrotask(() => child.emit("exit", 0, null));
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => child.emit("error", new Error("spawn failed")));
       return child;
     });
 
-    await launchTuiCli(
-      { deliver: false },
-      { authSource: "config", gatewayUrl: "ws://127.0.0.1:18789" },
+    await expect(launchTuiCli({ deliver: false })).rejects.toThrow(
+      "failed to launch TUI: spawn failed",
     );
+    expect(detachMock).toHaveBeenCalledOnce();
+  });
 
-    const options = expectSpawned(["/repo/openclaw.mjs", "tui"]);
-    expect(options.env?.OPENCLAW_GATEWAY_URL).toBe("ws://127.0.0.1:18789");
-    expect(options.env?.OPENCLAW_TUI_SETUP_AUTH_SOURCE).toBe("config");
+  it("waits for terminal exit across repeated operational errors", async () => {
+    const child = createChildProcess(4242);
+    spawnMock.mockReturnValue(child);
+    let settled = false;
+
+    const launched = launchTuiCli({ deliver: false }).finally(() => {
+      settled = true;
+    });
+    child.emit("error", new Error("first signal delivery failed"));
+    child.emit("error", new Error("second signal delivery failed"));
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(detachMock).not.toHaveBeenCalled();
+
+    child.emit("exit", 0, null);
+    await expect(launched).resolves.toBeUndefined();
+    expect(detachMock).toHaveBeenCalledOnce();
   });
 });

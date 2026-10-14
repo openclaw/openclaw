@@ -1,15 +1,29 @@
 // Covers gateway-side cleanup when silent pairing supersedes stale sibling records.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
-  approveDevicePairing,
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/device-pairing-node.js";
+import {
   listDevicePairing,
   removePairedDeviceRole,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-apns.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";
+import {
+  acceptGatewayDeviceSourceAuthority,
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+  retainGatewayDeviceRevocation,
+} from "./device-revocation.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
 import { enqueuePendingNodeAction, listPendingNodeActions } from "./node-runtime-state.js";
 import {
@@ -21,20 +35,40 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "./node-wake-state.test-support.js";
+import { bindDeviceWorkerReconciliation } from "./worker-environments/device-provider.js";
 
+const pairingStateDirs: string[] = [];
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-pairing-prune-" });
 
 type BroadcastCall = { event: string; payload: Record<string, unknown> };
 type PruneContext = Parameters<typeof pruneSupersededSilentPairingsAfterApproval>[0]["context"];
 
-function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
+function createPruneContext(params?: {
+  connectedDeviceIds?: string[];
+  workerEnvironmentIds?: Record<string, readonly string[]>;
+}) {
   const broadcasts: BroadcastCall[] = [];
   const invalidated: string[] = [];
   const disconnected: string[] = [];
   const logs: string[] = [];
   const warnings: string[] = [];
   const clearedSurfaces: string[] = [];
+  const revokedWorkers: string[] = [];
+  const reconciledPlacements: string[] = [];
+  const order: string[] = [];
   const connected = new Set(params?.connectedDeviceIds ?? []);
+  const workerEnvironmentService = {} as NonNullable<PruneContext["workerEnvironmentService"]>;
+  bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
+    revokedWorkers.push(deviceId);
+    order.push(`worker:${deviceId}`);
+    return params?.workerEnvironmentIds?.[deviceId] ?? [];
+  });
+  const workerPlacementDispatchService = {
+    reconcileActive: async (environmentId: string) => {
+      reconciledPlacements.push(environmentId);
+      order.push(`placement:${environmentId}`);
+    },
+  } as NonNullable<PruneContext["workerPlacementDispatchService"]>;
   const context: PruneContext = {
     broadcast: (event, payload) => {
       broadcasts.push({ event, payload: payload as Record<string, unknown> });
@@ -46,10 +80,14 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
     hasConnectedClientsForDevice: (deviceId: string) => connected.has(deviceId),
     invalidateClientsForDevice: (deviceId: string) => {
       invalidated.push(deviceId);
+      order.push(`invalidate:${deviceId}`);
     },
     disconnectClientsForDevice: (deviceId: string) => {
       disconnected.push(deviceId);
+      order.push(`disconnect:${deviceId}`);
     },
+    workerEnvironmentService,
+    workerPlacementDispatchService,
     nodeRegistry: {
       updateSurface: (nodeId: string) => {
         clearedSurfaces.push(nodeId);
@@ -57,7 +95,19 @@ function createPruneContext(params?: { connectedDeviceIds?: string[] }) {
       },
     },
   };
-  return { broadcasts, invalidated, disconnected, logs, warnings, clearedSurfaces, context };
+  return {
+    broadcasts,
+    invalidated,
+    disconnected,
+    logs,
+    warnings,
+    clearedSurfaces,
+    revokedWorkers,
+    reconciledPlacements,
+    order,
+    context,
+    connectedDeviceIds: [...connected],
+  };
 }
 
 async function pairSilentDevice(params: {
@@ -98,6 +148,11 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
   });
 
   afterAll(async () => {
+    for (const stateDir of pairingStateDirs) {
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
+      );
+    }
     await suiteRootTracker.cleanup();
   });
 
@@ -105,8 +160,74 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     resetNodeWakeStateForTest();
   });
 
+  test("revokes the full batch before worker cleanup can wait or fail", async () => {
+    const baseDir = await suiteRootTracker.make("case");
+    pairingStateDirs.push(baseDir);
+    for (const deviceId of ["cli-first", "cli-second", "cli-anchor"]) {
+      await pairSilentDevice({
+        baseDir,
+        deviceId,
+        roles: ["operator"],
+        clientId: "cli",
+        clientMode: "cli",
+      });
+    }
+    const harness = createPruneContext();
+    const invalidate = harness.context.invalidateClientsForDevice;
+    harness.context.invalidateClientsForDevice = (deviceId, options) => {
+      invalidate?.(deviceId, options);
+      invalidateGatewayDeviceRevocation(harness.context, deviceId);
+    };
+    let connected = true;
+    const request = captureGatewayDeviceRevocation(
+      harness.context,
+      { deviceId: "cli-second", role: "operator" },
+      () => connected,
+      undefined,
+      { isCurrent: () => true, subscribe: () => () => {} },
+    );
+    expect(acceptGatewayDeviceSourceAuthority(request.isCurrent)).toBe(true);
+    const releaseRun = retainGatewayDeviceRevocation(request.isCurrent);
+    request.release();
+    connected = false;
+    expect(request.isCurrent()).toBe(true);
+
+    const entered = createDeferredCore();
+    const cleanup = createDeferredCore();
+    bindDeviceWorkerReconciliation(
+      expectDefined(harness.context.workerEnvironmentService, "worker environment service"),
+      async () => {
+        entered.resolve();
+        await cleanup.promise;
+        return [];
+      },
+    );
+    const pruning = pruneSupersededSilentPairingsAfterApproval({
+      deviceId: "cli-anchor",
+      context: harness.context,
+      connectedDeviceIds: harness.connectedDeviceIds,
+      baseDir,
+      nowMs: Date.now() + 120_000,
+    }).catch((error: unknown) => error);
+    try {
+      try {
+        await entered.promise;
+        expect(harness.invalidated).toEqual(["cli-first", "cli-second"]);
+        expect(request.isCurrent()).toBe(false);
+      } finally {
+        cleanup.reject(new Error("worker cleanup failed"));
+        await pruning;
+      }
+      await expect(pruning).resolves.toMatchObject({ message: "worker cleanup failed" });
+      expect(request.isCurrent()).toBe(false);
+    } finally {
+      releaseRun?.();
+    }
+  });
+
   test("retires stale node siblings across both pairing stores", async () => {
     const baseDir = await suiteRootTracker.make("case");
+    pairingStateDirs.push(baseDir);
     await pairSilentDevice({
       baseDir,
       deviceId: "node-stale",
@@ -162,10 +283,13 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     });
     const wakeLifecycle = captureNodeWakeLifecycle("node-stale");
 
-    const harness = createPruneContext();
+    const harness = createPruneContext({
+      workerEnvironmentIds: { "node-stale": ["environment-node-stale"] },
+    });
     const pruned = await pruneSupersededSilentPairingsAfterApproval({
       deviceId: anchor.deviceId,
       context: harness.context,
+      connectedDeviceIds: harness.connectedDeviceIds,
       baseDir,
       nowMs: Date.now() + 120_000,
     });
@@ -181,7 +305,15 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     expect(listPendingNodeActions({ nodeId: "node-stale", ttlMs: 60_000 })).toEqual([]);
     await expect(loadApnsRegistration("node-stale", baseDir)).resolves.toBeNull();
     expect(harness.invalidated).toEqual(["node-stale"]);
+    expect(harness.revokedWorkers).toEqual(["node-stale"]);
+    expect(harness.reconciledPlacements).toEqual(["environment-node-stale"]);
     expect(harness.disconnected).toEqual(["node-stale"]);
+    expect(harness.order).toEqual([
+      "invalidate:node-stale",
+      "worker:node-stale",
+      "placement:environment-node-stale",
+      "disconnect:node-stale",
+    ]);
     expect(harness.clearedSurfaces).toEqual(["node-stale"]);
     expect(harness.warnings).toEqual([]);
     expect(harness.broadcasts).toEqual([
@@ -194,6 +326,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
 
   test("keeps connected siblings and clears APNs for operator-only full prunes", async () => {
     const baseDir = await suiteRootTracker.make("case");
+    pairingStateDirs.push(baseDir);
     await pairSilentDevice({
       baseDir,
       deviceId: "cli-stale",
@@ -234,6 +367,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     const pruned = await pruneSupersededSilentPairingsAfterApproval({
       deviceId: anchor.deviceId,
       context: harness.context,
+      connectedDeviceIds: harness.connectedDeviceIds,
       baseDir,
       nowMs: Date.now() + 120_000,
     });

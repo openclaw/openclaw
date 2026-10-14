@@ -1,127 +1,151 @@
 // Outbound channel bootstrap lazily loads runtime plugins for selected channels
 // when only setup-shell metadata is active.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
-import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import {
-  getActivePluginChannelRegistry,
-  getActivePluginChannelRegistryVersion,
-  getActivePluginRegistry,
-  getActivePluginRegistryVersion,
-} from "../../plugins/runtime.js";
-import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
+  resolveAgentWorkspaceDir,
+  tryResolveAmbientOwnerAgentId,
+} from "../../agents/agent-scope.js";
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { resolveStateDir } from "../../config/state-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withActivatedPluginIds } from "../../plugins/activation-context.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
+import { resolveDiscoverableScopedChannelPluginIds } from "../../plugins/channel-plugin-ids.js";
+import { preparePersistedInstalledPluginIndexCacheEntry } from "../../plugins/installed-plugin-index-record-state.js";
+import { loadPluginRegistryHandle } from "../../plugins/loader.js";
+import { getPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import type { PluginRegistry } from "../../plugins/registry.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 
-const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
-let bootstrapRegistryGeneration: string | undefined;
-const bootstrapAttemptedChannelsByConfig = new Map<string, Set<DeliverableMessageChannel>>();
-
-function resolveBootstrapRegistryGeneration(): string {
-  return `${getActivePluginChannelRegistryVersion()}:${getActivePluginRegistryVersion()}`;
+function resolveSendCapableRegistry(
+  registry: PluginRegistry | null | undefined,
+  channel: string,
+): PluginRegistry | undefined {
+  const entry = registry?.channels?.find((candidate) => candidate?.plugin?.id === channel);
+  return registry && (entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text)
+    ? registry
+    : undefined;
 }
 
-function resolveBootstrapAttemptedChannels(cfg: OpenClawConfig): Set<DeliverableMessageChannel> {
-  const registryGeneration = resolveBootstrapRegistryGeneration();
-  if (registryGeneration !== bootstrapRegistryGeneration) {
-    bootstrapRegistryGeneration = registryGeneration;
-    bootstrapAttemptedChannelsByConfig.clear();
-  }
-  const configKey = resolveRuntimeConfigCacheKey(cfg);
-  const existing = bootstrapAttemptedChannelsByConfig.get(configKey);
-  if (existing) {
-    bootstrapAttemptedChannelsByConfig.delete(configKey);
-    bootstrapAttemptedChannelsByConfig.set(configKey, existing);
-    return existing;
-  }
-  // Agent-scoped configs may interleave within one registry generation. Keep a
-  // bounded LRU so one caller cannot evict another on every delivery attempt.
-  if (bootstrapAttemptedChannelsByConfig.size >= MAX_BOOTSTRAP_CONFIG_GENERATIONS) {
-    const oldestConfigKey = bootstrapAttemptedChannelsByConfig.keys().next().value;
-    if (oldestConfigKey !== undefined) {
-      bootstrapAttemptedChannelsByConfig.delete(oldestConfigKey);
-    }
-  }
-  const attemptedChannels = new Set<DeliverableMessageChannel>();
-  bootstrapAttemptedChannelsByConfig.set(configKey, attemptedChannels);
-  return attemptedChannels;
-}
-
-/** Clears the per-generation channel bootstrap retry guard for isolated tests. */
-export function resetOutboundChannelBootstrapStateForTests(): void {
-  bootstrapRegistryGeneration = undefined;
-  bootstrapAttemptedChannelsByConfig.clear();
-}
-
-function channelEntryCanSend(entry: PluginChannelRegistration | undefined): boolean {
-  return Boolean(entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text);
-}
-
-function findChannelEntry(
-  registry: ReturnType<typeof getActivePluginRegistry>,
-  channel: DeliverableMessageChannel,
-): PluginChannelRegistration | undefined {
-  return registry?.channels?.find((entry) => entry?.plugin?.id === channel);
-}
-
-function canResolveSendCapableChannel(channel: DeliverableMessageChannel): boolean {
-  const activeChannelRegistry = getActivePluginChannelRegistry();
-  const channelEntry = findChannelEntry(activeChannelRegistry, channel);
-  if (channelEntryCanSend(channelEntry)) {
-    return true;
-  }
-
-  const activeRegistry = getActivePluginRegistry();
-  if (activeRegistry && activeRegistry !== activeChannelRegistry) {
-    return channelEntryCanSend(findChannelEntry(activeRegistry, channel));
-  }
-  return false;
-}
-
-/** Loads runtime plugins on demand when a selected outbound channel has only a setup shell. */
-export function bootstrapOutboundChannelPlugin(params: {
-  channel: DeliverableMessageChannel;
+type OutboundChannelBootstrapParams = {
+  channel: string;
   cfg?: OpenClawConfig;
-}): void {
+  agentId?: string;
+};
+
+type OutboundChannelBootstrapPlan =
+  | { kind: "resolved"; registry: PluginRegistry | undefined }
+  | {
+      kind: "cold";
+      cfg: OpenClawConfig;
+      agentId: string | undefined;
+    };
+
+function resolveBootstrapPlan(
+  params: OutboundChannelBootstrapParams,
+): OutboundChannelBootstrapPlan {
   const cfg = params.cfg;
   if (!cfg) {
-    return;
+    return { kind: "resolved", registry: undefined };
   }
 
-  if (canResolveSendCapableChannel(params.channel)) {
-    return;
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scopedEntry = scopedRegistry?.channels?.find(
+    (entry) => entry?.plugin?.id === params.channel,
+  );
+  const activeRegistry = scopedEntry ? scopedRegistry : getActivePluginRegistry();
+  const activeSendRegistry = resolveSendCapableRegistry(activeRegistry, params.channel);
+  if (activeSendRegistry) {
+    return { kind: "resolved", registry: activeSendRegistry };
   }
 
-  const attemptedChannels = resolveBootstrapAttemptedChannels(cfg);
-  if (attemptedChannels.has(params.channel)) {
-    return;
-  }
-  attemptedChannels.add(params.channel);
+  // Outbound callers already know the admitted run owner. Preserve it here so
+  // explicit fleets do not fall back to forbidden ambient-agent selection.
+  // Agent-less sends route through the configured ambient owner (systemAgent,
+  // then the legacy default); ownerless fleets never throw — startup
+  // delivery recovery runs this path — and bootstrap with global-scope
+  // plugin discovery only.
+  const agentId = tryResolveAmbientOwnerAgentId(cfg, params.agentId);
+  return { kind: "cold", cfg, agentId };
+}
 
-  const autoEnabled = applyPluginAutoEnable({ config: cfg });
-  const defaultAgentId = resolveDefaultAgentId(autoEnabled.config);
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled.config, defaultAgentId);
+function loadBootstrapPlan(
+  channel: string,
+  plan: Extract<OutboundChannelBootstrapPlan, { kind: "cold" }>,
+  discovery?: { env: NodeJS.ProcessEnv; workspaceDir: string | undefined },
+): PluginRegistry | undefined {
+  const { cfg, agentId } = plan;
+  const env = discovery?.env;
+  const autoEnabled = applyPluginAutoEnable({ config: cfg, ...(env ? { env } : {}) });
+  const workspaceDir = discovery
+    ? discovery.workspaceDir
+    : agentId === undefined
+      ? undefined
+      : resolveAgentWorkspaceDir(cfg, agentId);
+  const pluginIds = resolveDiscoverableScopedChannelPluginIds({
+    config: autoEnabled.config,
+    activationSourceConfig: cfg,
+    channelIds: [channel],
+    workspaceDir,
+    env: env ?? process.env,
+  });
+  const activatedConfig =
+    withActivatedPluginIds({ config: autoEnabled.config, pluginIds }) ?? autoEnabled.config;
+  const activatedSourceConfig = withActivatedPluginIds({ config: cfg, pluginIds }) ?? cfg;
+  let sendRegistry: PluginRegistry | undefined;
   try {
-    resolveRuntimePluginRegistry({
-      config: autoEnabled.config,
-      activationSourceConfig: cfg,
+    const registry = loadPluginRegistryHandle({
+      config: activatedConfig,
+      activationSourceConfig: activatedSourceConfig,
       autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      onlyPluginIds: pluginIds,
       workspaceDir,
+      ...(env ? { env } : {}),
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },
     });
+    sendRegistry = resolveSendCapableRegistry(registry, channel);
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
   }
-  // A bootstrap can replace the registry itself. Adopt that generation without
-  // forgetting failures for interleaved configs; external replacements observed
-  // before the next attempt still clear the guard above.
-  bootstrapRegistryGeneration = resolveBootstrapRegistryGeneration();
-  if (!canResolveSendCapableChannel(params.channel)) {
-    // Loading can replace the active registry without making this channel usable.
-    // Carry the failure forward so polling callers wait for config or registry reload.
-    resolveBootstrapAttemptedChannels(cfg).add(params.channel);
+  return sendRegistry;
+}
+
+/** Loads runtime plugins on demand when a selected outbound channel has only a setup shell. */
+export function bootstrapOutboundChannelPlugin(
+  params: OutboundChannelBootstrapParams,
+): PluginRegistry | undefined {
+  const plan = resolveBootstrapPlan(params);
+  return plan.kind === "resolved" ? plan.registry : loadBootstrapPlan(params.channel, plan);
+}
+
+/** Prepares cold SQLite metadata before the shared bootstrap decision and loader. */
+export async function bootstrapOutboundChannelPluginAsync(
+  params: OutboundChannelBootstrapParams & { assertCurrent?: () => void },
+): Promise<PluginRegistry | undefined> {
+  params.assertCurrent?.();
+  const initial = resolveBootstrapPlan(params);
+  if (initial.kind === "resolved") {
+    return initial.registry;
   }
+  const cache = getPluginCache();
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  // Preparation and synchronous derivation must keep the same physical state root across awaits.
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const discovery = {
+    env,
+    workspaceDir:
+      initial.agentId === undefined
+        ? undefined
+        : resolveAgentWorkspaceDir(initial.cfg, initial.agentId, env),
+  };
+  return withPluginCache(cache, async () => {
+    const activateDiscovery = await prepareBundledDiscoveryMode(env);
+    await preparePersistedInstalledPluginIndexCacheEntry({ env });
+    params.assertCurrent?.();
+    activateDiscovery();
+    return loadBootstrapPlan(params.channel, initial, discovery);
+  });
 }

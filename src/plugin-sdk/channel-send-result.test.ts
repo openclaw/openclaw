@@ -36,24 +36,6 @@ describe("attachChannelToResult(s)", () => {
       { channel: "signal", messageId: "m2", timestamp: 2 },
     ]);
   });
-
-  it("keeps the explicitly attached channel authoritative", () => {
-    const providerResult = {
-      channel: "stale-provider-channel",
-      messageId: "m1",
-    };
-
-    expect(attachChannelToResult("configured-channel", providerResult)).toEqual({
-      channel: "configured-channel",
-      messageId: "m1",
-    });
-    expect(attachChannelToResults("configured-channel", [providerResult])).toEqual([
-      {
-        channel: "configured-channel",
-        messageId: "m1",
-      },
-    ]);
-  });
 });
 
 describe("buildChannelSendResult", () => {
@@ -73,10 +55,10 @@ describe("buildChannelSendResult", () => {
 
 describe("createEmptyChannelResult", () => {
   it("builds an empty outbound result with channel metadata", () => {
-    expect(createEmptyChannelResult("line", { chatId: "u1" })).toEqual({
+    expect(createEmptyChannelResult("line", { target: { kind: "chat", id: "u1" } })).toEqual({
       channel: "line",
       messageId: "",
-      chatId: "u1",
+      target: { kind: "chat", id: "u1" },
     });
   });
 });
@@ -85,7 +67,10 @@ describe("createAttachedChannelResultAdapter", () => {
   it("wraps outbound delivery and poll results", async () => {
     const adapter = createAttachedChannelResultAdapter({
       channel: "discord",
-      sendText: async () => ({ messageId: "m1", channelId: "c1" }),
+      sendText: async () => ({
+        messageId: "m1",
+        target: { kind: "channel", id: "c1" },
+      }),
       sendMedia: async () => ({ messageId: "m2" }),
       sendPoll: async () => ({ messageId: "m3", pollId: "p1" }),
     });
@@ -97,7 +82,7 @@ describe("createAttachedChannelResultAdapter", () => {
         expected: {
           channel: "discord",
           messageId: "m1",
-          channelId: "c1",
+          target: { kind: "channel", id: "c1" },
         },
       },
       {

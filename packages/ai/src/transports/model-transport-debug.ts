@@ -1,9 +1,5 @@
-/**
- * Environment-driven debug controls for model transport logging.
- *
- * Model adapters share these helpers so payload, SSE, and transport diagnostics
- * interpret OpenClaw debug environment variables consistently.
- */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 type SubsystemLogger = {
   info(message: string): void;
   debug(message: string): void;
@@ -16,12 +12,8 @@ type ModelPayloadDebugMode = "off" | "summary" | "tools" | "full-redacted";
 /** SSE debug detail levels accepted by `OPENCLAW_DEBUG_SSE`. */
 type ModelSseDebugMode = "off" | "events" | "peek";
 
-function normalizeEnv(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
 function isTruthyEnv(value: unknown): boolean {
-  const normalized = normalizeEnv(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   return (
     normalized.length > 0 &&
     normalized !== "0" &&
@@ -35,12 +27,9 @@ function isTruthyEnv(value: unknown): boolean {
 export function resolveModelPayloadDebugMode(
   env: ModelTransportDebugEnv = process.env,
 ): ModelPayloadDebugMode {
-  const normalized = normalizeEnv(env.OPENCLAW_DEBUG_MODEL_PAYLOAD);
-  if (normalized === "tools" || normalized === "full-redacted") {
+  const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_DEBUG_MODEL_PAYLOAD);
+  if (normalized === "tools" || normalized === "full-redacted" || normalized === "summary") {
     return normalized;
-  }
-  if (normalized === "summary") {
-    return "summary";
   }
   return "off";
 }
@@ -49,14 +38,11 @@ export function resolveModelPayloadDebugMode(
 export function resolveModelSseDebugMode(
   env: ModelTransportDebugEnv = process.env,
 ): ModelSseDebugMode {
-  const normalized = normalizeEnv(env.OPENCLAW_DEBUG_SSE);
+  const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_DEBUG_SSE);
   if (normalized === "peek") {
     return "peek";
   }
-  if (normalized === "events" || isTruthyEnv(normalized)) {
-    return "events";
-  }
-  return "off";
+  return isTruthyEnv(normalized) ? "events" : "off";
 }
 
 /** Returns whether any model transport debug channel is enabled. */
@@ -69,15 +55,30 @@ function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = process.env)
   );
 }
 
-function isModelFetchMetadataMessage(message: string): boolean {
-  return message.startsWith("[model-fetch]");
-}
-
-/** Emits model-fetch metadata at info level by default; other diagnostics require debug env. */
+/** Emits transport diagnostics at debug, promoted to info by explicit debug flags. */
 export function emitModelTransportDebug(log: SubsystemLogger, message: string): void {
-  if (isModelFetchMetadataMessage(message) || isModelTransportDebugEnabled()) {
+  if (isModelTransportDebugEnabled()) {
     log.info(message);
     return;
   }
   log.debug(message);
+}
+
+/** The requesting layer owns AbortError classification; deadlines remain failures here. */
+export function emitModelTransportError(
+  log: SubsystemLogger & { warn(message: string): void },
+  label: string,
+  detail: string,
+  signal?: AbortSignal,
+): void {
+  const aborted =
+    signal?.aborted === true &&
+    signal.reason instanceof Error &&
+    signal.reason.name === "AbortError";
+  const message = `[${label}] ${aborted ? "aborted" : "error"} ${detail}`;
+  if (aborted) {
+    emitModelTransportDebug(log, message);
+  } else {
+    log.warn(message);
+  }
 }

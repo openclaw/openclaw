@@ -1,7 +1,21 @@
-import fs from "node:fs";
-import path from "node:path";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 
 /** Boot-stable quarantine state for configured plugins whose payload failed verification. */
+
+export const PLUGIN_AVAILABILITY_POLICY = {
+  state: "configured-unavailable",
+  severity: "warning",
+  repairCommand: "openclaw doctor --fix",
+} as const;
+
+/** Availability findings share one disposition across startup and Doctor lint. */
+export function describePluginAvailabilityFailure(pluginId: string, detail: string) {
+  return {
+    source: pluginId,
+    severity: PLUGIN_AVAILABILITY_POLICY.severity,
+    message: `Plugin "${pluginId}" is unavailable: ${detail} Run \`${PLUGIN_AVAILABILITY_POLICY.repairCommand}\`.`,
+  };
+}
 
 export type PluginVerificationFailureReason =
   | "missing-install-path"
@@ -29,7 +43,7 @@ type PublicPluginVerificationDiagnostic = Pick<
 
 export type DegradedPlugin = {
   pluginId: string;
-  state: "configured-unavailable";
+  state: typeof PLUGIN_AVAILABILITY_POLICY.state;
   diagnostic: PluginVerificationDiagnostic;
 };
 
@@ -62,7 +76,7 @@ export function buildDegradedPluginsFromVerificationFailures(
     }
     degraded.set(failure.pluginId, {
       pluginId: failure.pluginId,
-      state: "configured-unavailable",
+      state: PLUGIN_AVAILABILITY_POLICY.state,
       diagnostic: {
         kind: "plugin-verification",
         reason: failure.reason,
@@ -101,14 +115,7 @@ export function pluginInstallPathMatchesRoot(
   if (!installPath) {
     return false;
   }
-  const canonicalize = (value: string) => {
-    try {
-      return fs.realpathSync(value);
-    } catch {
-      return path.resolve(value);
-    }
-  };
-  return canonicalize(installPath) === canonicalize(rootDir);
+  return resolveRealpathOrAbsolute(installPath) === resolveRealpathOrAbsolute(rootDir);
 }
 
 /** Matches install-record and discovered roots across symlink/path aliases. */

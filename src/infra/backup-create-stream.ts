@@ -1,31 +1,63 @@
-import fsSync, { createWriteStream, type Stats } from "node:fs";
+import fsSync, { createWriteStream, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
-import { Transform } from "node:stream";
+import { compose, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { createGzip } from "node:zlib";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
+
+/** Seal the manifest from observed entries after the single payload traversal. */
+export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManifest: () => Buffer) {
+  return compose(
+    payload,
+    async function* (source: AsyncIterable<Buffer>) {
+      // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
+      // Replace only that terminator; the payload headers and bytes stay intact.
+      let tail: Buffer = Buffer.alloc(0);
+      for await (const chunk of source) {
+        const length = Math.max(0, tail.length - Math.max(0, 1024 - chunk.length));
+        if (length) {
+          yield tail.subarray(0, length);
+        }
+        tail = length < tail.length ? Buffer.concat([tail.subarray(length), chunk]) : chunk;
+      }
+      if (tail.length > 1024) {
+        yield tail.subarray(0, -1024);
+      }
+      yield createManifest();
+    },
+    createGzip(),
+  );
+}
 
 type DestroyableArchiveStream = (NodeJS.ReadableStream | AsyncIterable<Uint8Array>) & {
   destroy(error?: Error): unknown;
 };
 
+type BackupArchiveProgress = {
+  bytes?: number;
+  entryPath?: string;
+  phase: "entry" | "output" | "raw" | "traversal";
+};
+
 export type BackupArchiveCleanupReceipt = {
   archivePath: string;
-  identity?: Stats;
+  identity?: BigIntStats;
 };
 
 export type PreparedBackupArchive = BackupArchiveCleanupReceipt & {
-  identity: Stats;
+  identity: BigIntStats;
 };
 
 // OpenClaw's one-user trust model treats hostile same-UID pathname rewrites as
 // trusted host mutation. Keep the check and unlink synchronous so cooperative
 // processes cannot interleave through an in-process await boundary.
 export function removePreparedBackupArchive(prepared: PreparedBackupArchive): boolean {
-  let currentIdentity: Stats;
+  let currentIdentity: BigIntStats;
   try {
-    currentIdentity = fsSync.lstatSync(prepared.archivePath);
+    currentIdentity = fsSync.lstatSync(prepared.archivePath, { bigint: true });
   } catch {
     return false;
   }
@@ -42,33 +74,58 @@ export function removePreparedBackupArchive(prepared: PreparedBackupArchive): bo
 
 export async function writeArchiveStreamToFile(params: {
   archivePath: string;
-  archiveStream: DestroyableArchiveStream;
-  idleTimeoutMs?: number;
-  onPartialArchive?: (receipt: BackupArchiveCleanupReceipt) => void;
+  createArchiveStream: (
+    reportProgress: (progress?: BackupArchiveProgress) => void,
+  ) => DestroyableArchiveStream;
+  onPartialArchive: (receipt: BackupArchiveCleanupReceipt) => void;
 }): Promise<PreparedBackupArchive> {
   // Own both stream lifecycles so a tar read error closes the output handle
   // before retry cleanup touches the partial archive. Exclusive creation also
   // refuses a pre-existing path instead of following a symlink.
-  const idleTimeoutMs = params.idleTimeoutMs ?? BACKUP_ARCHIVE_IDLE_TIMEOUT_MS;
   const controller = new AbortController();
-  let openedIdentity: Stats | undefined;
+  let archiveStream: DestroyableArchiveStream | undefined;
+  let openedIdentity: BigIntStats | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTimeoutError: Error | undefined;
-  const armIdleTimer = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
+  let lastEntryPath: string | undefined;
+  let lastProgress: BackupArchiveProgress | undefined;
+  const bytes = { output: 0, raw: 0 };
+  let settled = false;
+  const reportProgress = (progress?: BackupArchiveProgress) => {
+    // One archive owns this watchdog. Late producer callbacks must not refresh
+    // its timer after cleanup has completed.
+    if (settled) {
+      return;
     }
-    idleTimer = setTimeout(() => {
-      idleTimeoutError = new Error(
-        `Backup archive write stalled: no data produced for ${idleTimeoutMs}ms`,
-      );
-      params.archiveStream.destroy(idleTimeoutError);
-      controller.abort(idleTimeoutError);
-    }, idleTimeoutMs);
+    if (progress) {
+      lastProgress = progress;
+      if (progress.entryPath) {
+        lastEntryPath = progress.entryPath;
+      }
+      if (progress.bytes) {
+        const phase =
+          progress.phase === "output" ? "output" : progress.phase === "raw" ? "raw" : undefined;
+        if (phase) {
+          bytes[phase] += progress.bytes;
+        }
+      }
+    }
+    idleTimer =
+      idleTimer?.refresh() ??
+      setTimeout(() => {
+        const entrySuffix = lastEntryPath
+          ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
+          : "";
+        idleTimeoutError = new Error(
+          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${bytes.raw}, outputBytes=${bytes.output})`,
+        );
+        archiveStream?.destroy(idleTimeoutError);
+        controller.abort(idleTimeoutError);
+      }, BACKUP_ARCHIVE_IDLE_TIMEOUT_MS);
   };
   const progress = new Transform({
     transform(chunk, _encoding, callback) {
-      armIdleTimer();
+      reportProgress({ phase: "output", bytes: chunk.length });
       callback(null, chunk);
     },
   });
@@ -80,18 +137,19 @@ export async function writeArchiveStreamToFile(params: {
   });
   archiveWriteStream.once("open", (fileDescriptor) => {
     try {
-      openedIdentity = fsSync.fstatSync(fileDescriptor);
+      openedIdentity = fsSync.fstatSync(fileDescriptor, { bigint: true });
     } catch (error) {
       archiveWriteStream.destroy(error as Error);
     }
   });
   try {
-    const pipelinePromise = pipeline(params.archiveStream, progress, archiveWriteStream, {
+    archiveStream = params.createArchiveStream(reportProgress);
+    const pipelinePromise = pipeline(archiveStream, progress, archiveWriteStream, {
       signal: controller.signal,
     });
-    armIdleTimer();
+    reportProgress();
     await pipelinePromise;
-    const currentIdentity = await fs.lstat(params.archivePath);
+    const currentIdentity = await fs.lstat(params.archivePath, { bigint: true });
     if (
       !openedIdentity?.isFile() ||
       !currentIdentity.isFile() ||
@@ -102,23 +160,21 @@ export async function writeArchiveStreamToFile(params: {
     return { archivePath: params.archivePath, identity: currentIdentity };
   } catch (err) {
     archiveWriteStream.destroy();
-    let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = openedIdentity
-      ? { archivePath: params.archivePath, identity: openedIdentity }
-      : undefined;
-    if (!cleanupReceipt) {
+    let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = {
+      archivePath: params.archivePath,
+    };
+    if (openedIdentity) {
+      cleanupReceipt.identity = openedIdentity;
+    } else {
       try {
-        const currentIdentity = fsSync.lstatSync(params.archivePath);
-        cleanupReceipt = currentIdentity.isFile()
-          ? {
-              archivePath: params.archivePath,
-              identity: currentIdentity,
-            }
-          : { archivePath: params.archivePath };
+        const currentIdentity = fsSync.lstatSync(params.archivePath, { bigint: true });
+        if (currentIdentity.isFile()) {
+          cleanupReceipt.identity = currentIdentity;
+        }
       } catch (cleanupError) {
-        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
-          // Preserve the cleanup obligation even when the filesystem cannot
-          // supply an identity until a later outer-cleanup attempt.
-          cleanupReceipt = { archivePath: params.archivePath };
+        // Preserve unknown identities for a later outer-cleanup attempt.
+        if ((cleanupError as NodeJS.ErrnoException).code === "ENOENT") {
+          cleanupReceipt = undefined;
         }
       }
     }
@@ -127,27 +183,11 @@ export async function writeArchiveStreamToFile(params: {
       (!cleanupReceipt.identity ||
         !removePreparedBackupArchive(cleanupReceipt as PreparedBackupArchive))
     ) {
-      params.onPartialArchive?.(cleanupReceipt);
-    }
-    if (cleanupReceipt && !cleanupReceipt.identity) {
-      // The outer cleanup owns the retry because this scope cannot safely
-      // unlink a pathname whose identity is temporarily unavailable.
-      if (!params.onPartialArchive) {
-        try {
-          const currentIdentity = fsSync.lstatSync(cleanupReceipt.archivePath);
-          if (currentIdentity.isFile()) {
-            removePreparedBackupArchive({
-              archivePath: cleanupReceipt.archivePath,
-              identity: currentIdentity,
-            });
-          }
-        } catch {
-          // No outer owner was provided; preserve the original write error.
-        }
-      }
+      params.onPartialArchive(cleanupReceipt);
     }
     throw idleTimeoutError ?? err;
   } finally {
+    settled = true;
     if (idleTimer) {
       clearTimeout(idleTimer);
     }

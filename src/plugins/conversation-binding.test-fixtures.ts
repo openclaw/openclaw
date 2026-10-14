@@ -1,43 +1,18 @@
-/** Test-only reset for process-global plugin conversation binding state. */
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
 
-type PluginBindingGlobalState = {
-  fallbackNoticeBindingIds: Set<string>;
-  approvalsCache: unknown;
-  approvalsLoaded: boolean;
-  approvalsSaveChain: Promise<void>;
-};
-
-export function resetPluginConversationBindingStateForTest(): void {
-  resolveGlobalMap(Symbol.for("openclaw.pluginBindingPendingRequests")).clear();
-  const state = resolveGlobalSingleton<PluginBindingGlobalState>(
-    Symbol.for("openclaw.plugins.binding.global-state"),
-    () => ({
-      fallbackNoticeBindingIds: new Set(),
-      approvalsCache: null,
-      approvalsLoaded: false,
-      approvalsSaveChain: Promise.resolve(),
-    }),
-  );
-  state.approvalsCache = null;
-  state.approvalsLoaded = false;
-  state.approvalsSaveChain = Promise.resolve();
-  state.fallbackNoticeBindingIds.clear();
-}
-
-export function seedPluginConversationBindingApprovalForTest(params: {
+export async function seedPluginConversationBindingApprovalForTest(params: {
   pluginRoot: string;
   pluginId: string;
   pluginName?: string;
   channel: string;
   accountId: string;
   approvedAt?: number;
-}): void {
+}): Promise<void> {
   runOpenClawStateWriteTransaction(({ db }) => {
     const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
     executeSqliteQuerySync(
@@ -62,5 +37,46 @@ export function seedPluginConversationBindingApprovalForTest(params: {
     );
   });
   // Seeded rows must become visible even if another test loaded the process cache first.
-  resetPluginConversationBindingStateForTest();
+  await drainGlobalSingletonLifecycleState();
+}
+
+export function createDiscordCodexBindRequest(
+  conversationId: string,
+  summary: string,
+  accountId = "isolated",
+): Parameters<typeof import("./conversation-binding.js").requestPluginConversationBinding>[0] {
+  return {
+    pluginId: "codex",
+    pluginName: "Codex App Server",
+    pluginRoot: "/plugins/codex-a",
+    requestedBySenderId: "user-1",
+    conversation: {
+      channel: "discord",
+      accountId,
+      conversationId,
+    },
+    binding: { summary },
+  };
+}
+
+export function createTelegramCodexBindRequest(
+  conversationId: string,
+  threadId: string,
+  summary: string,
+  pluginRoot = "/plugins/codex-a",
+): Parameters<typeof import("./conversation-binding.js").requestPluginConversationBinding>[0] {
+  return {
+    pluginId: "codex",
+    pluginName: "Codex App Server",
+    pluginRoot,
+    requestedBySenderId: "user-1",
+    conversation: {
+      channel: "telegram",
+      accountId: "default",
+      conversationId,
+      parentConversationId: "-10099",
+      threadId,
+    },
+    binding: { summary },
+  };
 }

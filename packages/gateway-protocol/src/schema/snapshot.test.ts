@@ -1,4 +1,3 @@
-// Gateway Protocol snapshot schema tests cover optional presence identity.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { SnapshotSchema } from "./snapshot.js";
@@ -13,31 +12,14 @@ function snapshotWithPresence(presence: Record<string, unknown>) {
 }
 
 describe("SnapshotSchema", () => {
-  it("accepts a presence user identity", () => {
+  it.each(["accepting"])("accepts public suspension phase %s without lease tokens", (phase) => {
+    const snapshot = { ...snapshotWithPresence({ ts: 1 }), suspension: { phase } };
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
     expect(
-      Value.Check(
-        SnapshotSchema,
-        snapshotWithPresence({
-          ts: 1,
-          user: { id: "alice@example.com", email: "alice@example.com" },
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps presence user identity optional", () => {
-    expect(Value.Check(SnapshotSchema, snapshotWithPresence({ ts: 1 }))).toBe(true);
-  });
-
-  it("accepts optional watched session keys", () => {
-    expect(
-      Value.Check(
-        SnapshotSchema,
-        snapshotWithPresence({
-          ts: 1,
-          watchedSessions: ["agent:main:main", "agent:main:work"],
-        }),
-      ),
-    ).toBe(true);
+      Value.Check(SnapshotSchema, {
+        ...snapshot,
+        suspension: { phase, suspensionId: "private-token" },
+      }),
+    ).toBe(false);
   });
 });

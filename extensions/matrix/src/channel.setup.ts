@@ -1,20 +1,19 @@
-// Matrix plugin module implements channel.setup behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { matrixConfigAdapter } from "./config-adapter.js";
 import { MatrixChannelConfigSchema } from "./config-schema.js";
-import { resolveMatrixAccount, type ResolvedMatrixAccount } from "./matrix/accounts.js";
 import {
-  createMatrixSetupWizardProxy,
-  matrixSetupAdapter,
-  matrixSetupContract,
-} from "./setup-core.js";
+  resolveMatrixAccount,
+  resolveMatrixAccountAsync,
+  type ResolvedMatrixAccount,
+} from "./matrix/accounts.js";
+import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 
 const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
-  matrixSetupWizard: (await import("./setup-surface.js")).matrixSetupWizard,
+  matrixSetupWizard: (await import("./onboarding.js")).matrixOnboardingAdapter,
 }));
 
-export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
+export const matrixPluginBase = {
   id: "matrix",
   meta: {
     id: "matrix",
@@ -27,7 +26,6 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     quickstartAllowFrom: true,
   },
   setupWizard: matrixSetupWizard,
-  setup: matrixSetupAdapter,
   setupContract: matrixSetupContract,
   capabilities: {
     chatTypes: ["direct", "group", "thread"],
@@ -36,7 +34,7 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     threads: true,
     media: true,
   },
-  reload: { configPrefixes: ["channels.matrix"] },
+  reload: { configPrefixes: ["channels.matrix"], noopPrefixes: ["messages.ackReactionScope"] },
   configSchema: MatrixChannelConfigSchema,
   config: {
     ...matrixConfigAdapter,
@@ -49,6 +47,16 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           baseUrl: account.homeserver,
         },
       }),
-    hasConfiguredState: ({ cfg }) => resolveMatrixAccount({ cfg }).configured,
+  },
+} satisfies ChannelPlugin<ResolvedMatrixAccount>;
+
+export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
+  ...matrixPluginBase,
+  config: {
+    ...matrixPluginBase.config,
+    /** @deprecated Use hasConfiguredStateAsync; removed in the next Plugin SDK major. */
+    hasConfiguredState: ({ cfg, env }) => resolveMatrixAccount({ cfg, env }).configured,
+    hasConfiguredStateAsync: async ({ cfg, env }) =>
+      (await resolveMatrixAccountAsync({ cfg, env })).configured,
   },
 };

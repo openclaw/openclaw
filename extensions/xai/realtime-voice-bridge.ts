@@ -1,15 +1,14 @@
-import { randomUUID } from "node:crypto";
-import {
-  captureWsEvent,
-  createDebugProxyWebSocketAgent,
-  resolveDebugProxySettings,
-} from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import WebSocket from "ws";
+import {
+  RealtimeVoiceSessionLifecycle,
+  RealtimeVoiceWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
+import { resolveXaiRealtimeApiKey } from "./realtime-voice-auth.runtime.js";
 import {
   XAI_REALTIME_BASE_RECONNECT_DELAY_MS,
   XAI_REALTIME_CONNECT_TIMEOUT_MS,
@@ -19,47 +18,80 @@ import {
   XAI_REALTIME_MAX_RECONNECT_ATTEMPTS,
   XAI_REALTIME_WS_MAX_PAYLOAD_BYTES,
   readXaiRealtimeErrorDetail,
-  resolveXaiRealtimeApiKey,
+  serializeXaiRealtimeToolResult,
   toXaiRealtimeWsUrl,
   type XaiRealtimeEvent,
+  type XaiRealtimeVoiceBridgeConfig,
 } from "./realtime-voice-config.js";
-import { XaiRealtimeVoiceEvents } from "./realtime-voice-events.js";
+import { XaiRealtimeMalformedAudioError, XaiRealtimeVoiceEvents } from "./realtime-voice-events.js";
+import { XaiRealtimePlaybackMarkOverflowError } from "./realtime-voice-protocol.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
+import { WebSocket } from "./ws-runtime.js";
 
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation = false;
 
-  private ws: WebSocket | null = null;
-  private connected = false;
-  private sessionConfigured = false;
-  private intentionallyClosed = false;
-  private reconnectAttempts = 0;
-  private pendingAudio: Buffer[] = [];
+  private readonly transport: RealtimeVoiceWebSocketTransport<XaiRealtimeEvent>;
   private pendingToolResults: Array<{
     callId: string;
     result: unknown;
     options?: RealtimeVoiceToolResultOptions;
   }> = [];
   private pendingUserMessages: string[] = [];
-  private connectionUrl = "";
-  private readonly flowId = randomUUID();
   private sessionReadyFired = false;
-  private reconnectAbortController = new AbortController();
 
-  async connect(): Promise<void> {
-    this.intentionallyClosed = false;
-    if (this.reconnectAbortController.signal.aborted) {
-      this.reconnectAbortController = new AbortController();
-    }
-    this.reconnectAttempts = 0;
-    await this.doConnect();
+  constructor(config: XaiRealtimeVoiceBridgeConfig) {
+    super(config);
+    this.transport = new RealtimeVoiceWebSocketTransport<XaiRealtimeEvent>({
+      providerId: "xai",
+      label: "xAI realtime voice",
+      callbacks: config,
+      lifecycle: new RealtimeVoiceSessionLifecycle("xAI"),
+      resolveConnection: () => this.resolveConnectionParams(),
+      createSocket: ({ url, headers }) => {
+        const proxyAgent = proxyCaptureSdk.createDebugProxyWebSocketAgent(
+          proxyCaptureSdk.resolveDebugProxySettings(),
+        );
+        return new WebSocket(url, {
+          headers,
+          maxPayload: XAI_REALTIME_WS_MAX_PAYLOAD_BYTES,
+          ...(proxyAgent ? { agent: proxyAgent } : {}),
+        });
+      },
+      capture: proxyCaptureSdk.captureWsEventAsync,
+      onOpen: () => {
+        this.resetRealtimeSessionState({
+          preserveToolCallState: config.sessionResumption === true && this.conversationId !== null,
+        });
+        this.sendEvent(this.buildSessionUpdate());
+      },
+      onEvent: (event, connection) => this.handleEvent(event, connection),
+      onReset: () => this.resetTerminalState(),
+      startupError: (error) =>
+        error instanceof Error ? error : new Error(readXaiRealtimeErrorDetail(error)),
+      fatalEventError: (error) =>
+        error instanceof XaiRealtimeMalformedAudioError
+          ? { code: 1002, reason: "Malformed audio payload" }
+          : error instanceof XaiRealtimePlaybackMarkOverflowError
+            ? { code: 1002, reason: "Playback mark overflow" }
+            : undefined,
+      reconnectBlocked: () => this.reconnectBlockReason(),
+      maxReconnectAttempts: XAI_REALTIME_MAX_RECONNECT_ATTEMPTS,
+      reconnectDelayMs: XAI_REALTIME_BASE_RECONNECT_DELAY_MS,
+      connectTimeoutMs: XAI_REALTIME_CONNECT_TIMEOUT_MS,
+    });
+  }
+
+  connect(): Promise<void> {
+    return this.transport.connect();
   }
 
   sendAudio(audio: Buffer): void {
-    if (!this.connected || !this.sessionConfigured || this.ws?.readyState !== WebSocket.OPEN) {
-      if (this.pendingAudio.length < 320) {
-        this.pendingAudio.push(audio);
-      }
+    if (this.transport.lifecycle.phase() === "terminal") {
+      return;
+    }
+    if (!this.isConnected()) {
+      this.transport.lifecycle.enqueuePendingAudio(audio);
       return;
     }
     this.sendEvent({
@@ -73,7 +105,10 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   sendUserMessage(text: string): void {
-    if (!this.canSubmitInput()) {
+    if (this.transport.lifecycle.phase() === "terminal") {
+      return;
+    }
+    if (!this.isConnected()) {
       if (this.pendingUserMessages.length < XAI_REALTIME_MAX_PENDING_USER_MESSAGES) {
         this.pendingUserMessages.push(text);
       } else {
@@ -87,7 +122,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   triggerGreeting(instructions?: string): void {
-    if (this.isConnected() && this.ws) {
+    if (this.isConnected() && this.transport.socket) {
       this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the user.");
     }
   }
@@ -97,255 +132,62 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
-    if (!this.canSubmitToolResult()) {
-      if (this.pendingToolResults.length < XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
-        this.pendingToolResults.push({ callId, result, ...(options ? { options } : {}) });
-      } else {
-        this.config.onError?.(
-          new Error("xAI realtime voice pending tool result queue overflow during reconnect"),
-        );
+    if (this.transport.lifecycle.phase() === "terminal" || options?.willContinue === true) {
+      return;
+    }
+    if (!this.isConnected()) {
+      let serialized: string;
+      try {
+        serialized = serializeXaiRealtimeToolResult(result);
+      } catch (error) {
+        this.config.onError?.(error as Error);
+        throw error;
       }
+      if (this.pendingToolResults.length >= XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
+        const error = new Error(
+          "xAI realtime voice pending tool result queue overflow during reconnect",
+        );
+        this.config.onError?.(error);
+        throw error;
+      }
+      this.pendingToolResults.push({
+        callId,
+        result: JSON.parse(serialized) as unknown,
+        ...(options ? { options } : {}),
+      });
       return;
     }
     this.submitToolResultNow(callId, result, options);
   }
 
   close(): void {
-    this.intentionallyClosed = true;
-    // The bridge owns both its active socket and reconnect delay; canceling
-    // both keeps terminal close from retaining callbacks for the full backoff.
-    this.reconnectAbortController.abort();
-    this.connected = false;
-    this.sessionConfigured = false;
-    this.pendingToolResultAcks.clear();
-    if (this.ws) {
-      this.ws.close(1000, "Bridge closed");
-      this.ws = null;
-    }
+    this.transport.close();
   }
 
   isConnected(): boolean {
-    return this.connected && this.sessionConfigured;
+    return this.transport.isConnected();
   }
 
-  private async doConnect(): Promise<void> {
+  private async resolveConnectionParams(): Promise<{
+    url: string;
+    headers: Record<string, string>;
+  }> {
     const apiKey = this.config.resolveApiKey
       ? await this.config.resolveApiKey()
-      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg);
+      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg, this.config.agentId);
     const model = this.config.model ?? XAI_REALTIME_DEFAULT_MODEL;
     const url = toXaiRealtimeWsUrl(
       this.config.baseUrl,
       model,
       this.config.sessionResumption === true ? (this.conversationId ?? undefined) : undefined,
     );
-    const headers = {
-      Authorization: `Bearer ${apiKey}`,
-      ...xaiUserAgentHeaderFor(this.config.baseUrl),
+    return {
+      url,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        ...xaiUserAgentHeaderFor(this.config.baseUrl),
+      },
     };
-
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let startupFailureClosing = false;
-      const settleResolve = () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(connectTimeout);
-          resolve();
-        }
-      };
-      const settleReject = (error: Error) => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(connectTimeout);
-          reject(error);
-        }
-      };
-      const connectTimeout = setTimeout(() => {
-        if (!this.sessionConfigured && !this.intentionallyClosed) {
-          startupFailureClosing = true;
-          this.ws?.terminate();
-          settleReject(new Error("xAI realtime voice connection timeout"));
-        }
-      }, XAI_REALTIME_CONNECT_TIMEOUT_MS);
-
-      if (this.intentionallyClosed) {
-        settleResolve();
-        return;
-      }
-
-      this.connectionUrl = url;
-      const proxyAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-      const ws = new WebSocket(url, {
-        headers,
-        maxPayload: XAI_REALTIME_WS_MAX_PAYLOAD_BYTES,
-        ...(proxyAgent ? { agent: proxyAgent } : {}),
-      });
-      this.ws = ws;
-
-      const rejectStartup = (error: Error) => {
-        startupFailureClosing = true;
-        settleReject(error);
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.close(1000, "startup failed");
-        }
-      };
-
-      ws.on("open", () => {
-        // Resumed sessions replay prior items, so preserve unresolved tool calls until
-        // their outputs are accepted on the replacement socket.
-        this.resetRealtimeSessionState({
-          preserveToolCallState:
-            this.config.sessionResumption === true && this.conversationId !== null,
-        });
-        this.connected = true;
-        this.sessionConfigured = false;
-        captureWsEvent({
-          url,
-          direction: "local",
-          kind: "ws-open",
-          flowId: this.flowId,
-          meta: { provider: "xai", capability: "realtime-voice" },
-        });
-        this.sendEvent(this.buildSessionUpdate());
-      });
-
-      ws.on("message", (data: Buffer) => {
-        if (settled && !this.sessionConfigured) {
-          return;
-        }
-        captureWsEvent({
-          url,
-          direction: "inbound",
-          kind: "ws-frame",
-          flowId: this.flowId,
-          payload: data,
-          meta: { provider: "xai", capability: "realtime-voice" },
-        });
-        try {
-          const event = JSON.parse(data.toString()) as XaiRealtimeEvent;
-          if (event.type === "error" && !this.sessionConfigured) {
-            rejectStartup(new Error(readXaiRealtimeErrorDetail(event.error)));
-            return;
-          }
-          this.handleEvent(event);
-          if (event.type === "session.updated") {
-            settleResolve();
-          }
-        } catch (error) {
-          console.error("[xai] realtime event parse failed:", error);
-        }
-      });
-
-      ws.on("error", (error) => {
-        captureWsEvent({
-          url,
-          direction: "local",
-          kind: "error",
-          flowId: this.flowId,
-          errorText: error instanceof Error ? error.message : String(error),
-          meta: { provider: "xai", capability: "realtime-voice" },
-        });
-        if (!this.sessionConfigured) {
-          rejectStartup(error instanceof Error ? error : new Error(String(error)));
-          return;
-        }
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
-      });
-
-      ws.on("close", (code, reasonBuffer) => {
-        captureWsEvent({
-          url,
-          direction: "local",
-          kind: "ws-close",
-          flowId: this.flowId,
-          closeCode: typeof code === "number" ? code : undefined,
-          meta: {
-            provider: "xai",
-            capability: "realtime-voice",
-            reason:
-              Buffer.isBuffer(reasonBuffer) && reasonBuffer.length > 0
-                ? reasonBuffer.toString("utf8")
-                : undefined,
-          },
-        });
-        if (startupFailureClosing) {
-          if (this.ws === ws) {
-            this.connected = false;
-            this.sessionConfigured = false;
-          }
-          return;
-        }
-        const wasSessionConfigured = this.sessionConfigured;
-        this.connected = false;
-        this.sessionConfigured = false;
-        if (this.intentionallyClosed) {
-          settleResolve();
-          this.config.onClose?.("completed");
-          return;
-        }
-        if (!wasSessionConfigured && !settled) {
-          settleReject(new Error("xAI realtime voice connection closed before ready"));
-          return;
-        }
-        void this.attemptReconnect("websocket-close");
-      });
-    });
-  }
-
-  private async attemptReconnect(reason: string): Promise<void> {
-    if (this.intentionallyClosed) {
-      return;
-    }
-    const blocked = this.reconnectBlockReason();
-    if (blocked) {
-      this.config.onEvent?.({
-        direction: "client",
-        type: "session.reconnect.blocked",
-        detail: `reason=${reason} ${blocked}`,
-      });
-      this.config.onClose?.("error");
-      return;
-    }
-    if (this.reconnectAttempts >= XAI_REALTIME_MAX_RECONNECT_ATTEMPTS) {
-      this.config.onEvent?.({
-        direction: "client",
-        type: "session.reconnect.exhausted",
-        detail: `reason=${reason} attempts=${this.reconnectAttempts}`,
-      });
-      this.config.onClose?.("error");
-      return;
-    }
-    this.reconnectAttempts += 1;
-    const attempt = this.reconnectAttempts;
-    const delay = XAI_REALTIME_BASE_RECONNECT_DELAY_MS * 2 ** (attempt - 1);
-    this.config.onEvent?.({
-      direction: "client",
-      type: "session.reconnect.scheduled",
-      detail: `reason=${reason} attempt=${attempt} delayMs=${delay}`,
-    });
-    const reconnectSignal = this.reconnectAbortController.signal;
-    try {
-      await sleepWithAbort(delay, reconnectSignal);
-    } catch (error) {
-      if (!reconnectSignal.aborted) {
-        throw error;
-      }
-      return;
-    }
-    if (this.intentionallyClosed) {
-      return;
-    }
-    try {
-      await this.doConnect();
-      this.config.onEvent?.({
-        direction: "client",
-        type: "session.reconnect.ready",
-        detail: `reason=${reason} attempt=${attempt}`,
-      });
-    } catch (error) {
-      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
-      await this.attemptReconnect(reason);
-    }
   }
 
   private reconnectBlockReason(): string | undefined {
@@ -363,10 +205,15 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     return undefined;
   }
 
-  protected onSessionUpdated(): void {
-    this.sessionConfigured = true;
-    this.reconnectAttempts = 0;
-    for (const chunk of this.pendingAudio.splice(0)) {
+  protected acceptsEvent(connection: RealtimeVoiceSessionConnection): boolean {
+    return this.transport.lifecycle.acceptsEvents(connection);
+  }
+
+  protected onSessionUpdated(connection: RealtimeVoiceSessionConnection): void {
+    if (!this.transport.lifecycle.ready(connection)) {
+      return;
+    }
+    for (const chunk of this.transport.lifecycle.drainPendingAudio()) {
       this.sendAudio(chunk);
     }
     for (const pending of this.pendingToolResults.splice(0)) {
@@ -382,32 +229,13 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }
 
   protected sendEvent(event: unknown, detail?: string): void {
-    const ws = this.ws;
-    if (ws?.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    const type =
-      event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
-        ? (event as { type: string }).type
-        : "unknown";
-    this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
-    const payload = JSON.stringify(event);
-    captureWsEvent({
-      url: this.connectionUrl,
-      direction: "outbound",
-      kind: "ws-frame",
-      flowId: this.flowId,
-      payload,
-      meta: { provider: "xai", capability: "realtime-voice" },
-    });
-    ws.send(payload);
+    this.transport.send(event, detail);
   }
 
-  private canSubmitToolResult(): boolean {
-    return this.connected && this.sessionConfigured && this.ws?.readyState === WebSocket.OPEN;
-  }
-
-  private canSubmitInput(): boolean {
-    return this.connected && this.sessionConfigured && this.ws?.readyState === WebSocket.OPEN;
+  private resetTerminalState(): void {
+    this.pendingToolResults = [];
+    this.pendingUserMessages = [];
+    this.conversationId = null;
+    this.resetRealtimeSessionState();
   }
 }

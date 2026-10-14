@@ -10,6 +10,15 @@ enum GatewayDisplayState: Equatable {
 
 enum GatewayStatusBuilder {
     @MainActor
+    static func buildChat(appModel: NodeAppModel) -> GatewayDisplayState {
+        if appModel.isOperatorGatewayConnected || appModel.isLocalChatFixtureEnabled {
+            return .connected
+        }
+        let state = self.build(appModel: appModel)
+        return state == .connected ? .disconnected : state
+    }
+
+    @MainActor
     static func build(appModel: NodeAppModel) -> GatewayDisplayState {
         self.build(
             gatewayServerName: appModel.gatewayServerName,
@@ -22,13 +31,11 @@ enum GatewayStatusBuilder {
         lastGatewayProblem: GatewayConnectionProblem?,
         gatewayStatusText: String) -> GatewayDisplayState
     {
-        if gatewayServerName != nil { return .connected }
         if lastGatewayProblem != nil { return .error }
+        if gatewayServerName != nil { return .connected }
 
         let text = gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
+        if text.localizedCaseInsensitiveContains("connecting") {
             return .connecting
         }
 

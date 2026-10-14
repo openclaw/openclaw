@@ -1,3 +1,4 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type {
   WorkerInferenceCancelParams,
   WorkerInferenceCancelResult,
@@ -6,12 +7,7 @@ import type {
   WorkerInferenceTerminalOutcome,
   WorkerInferenceTerminalParams,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import {
-  type WorkerConnection,
-  WorkerConnectionInterruptedError,
-  WorkerConnectionStoppedError,
-  WorkerFencedError,
-} from "./worker-connection.js";
+import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { InferenceResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
 
@@ -66,17 +62,9 @@ export class WorkerInferenceProxyClient {
   constructor(private readonly connection: WorkerConnection) {
     this.unsubscribers = [
       connection.onReady(() => this.resume()),
-      connection.onStateChange((state) => {
-        if (state.kind === "fenced") {
-          this.rejectAllOperations(new WorkerFencedError(state.reason));
-        } else if (state.kind === "failed") {
-          this.rejectAllOperations(state.error);
-        } else if (state.kind === "stopped") {
-          this.rejectAllOperations(new WorkerConnectionStoppedError());
-        }
-      }),
-      connection.onInferenceEvent((frame) => this.handleEvent(frame.payload)),
-      connection.onInferenceTerminal((frame) => this.handleTerminal(frame.payload)),
+      connection.onTerminalError((error) => this.rejectAllOperations(error)),
+      connection.rpc.onInferenceEvent((frame) => this.handlePayload(frame.payload)),
+      connection.rpc.onInferenceTerminal((frame) => this.handlePayload(frame.payload)),
     ];
   }
 
@@ -109,7 +97,7 @@ export class WorkerInferenceProxyClient {
   }
 
   async cancel(params: WorkerInferenceCancelParams): Promise<WorkerInferenceCancelResult> {
-    const response = await this.connection.requestInferenceCancel(params);
+    const response = await this.connection.rpc.request("inference-cancel", params);
     if (response.ok) {
       return response.payload;
     }
@@ -126,10 +114,8 @@ export class WorkerInferenceProxyClient {
       unsubscribe();
     }
     for (const operation of this.operations.values()) {
-      operation.settled = true;
-      operation.reject(new Error("worker inference client disposed"));
+      this.rejectOperation(operation, new Error("worker inference client disposed"));
     }
-    this.operations.clear();
   }
 
   private resume(): void {
@@ -154,11 +140,15 @@ export class WorkerInferenceProxyClient {
     let interrupted = false;
     try {
       await this.connection.waitForReady();
-      const response = await this.connection.requestInferenceStart(operation.params, (frame) => {
-        if (frame.ok && frame.payload.status === "replayed") {
-          operation.lastSeq = 0;
-        }
-      });
+      const response = await this.connection.rpc.request(
+        "inference-start",
+        operation.params,
+        (frame) => {
+          if (frame.ok && frame.payload.status === "replayed") {
+            operation.lastSeq = 0;
+          }
+        },
+      );
       if (!response.ok) {
         fenceForOwnershipError(this.connection, response.error);
         this.rejectOperation(operation, new WorkerInferenceProxyError(response.error));
@@ -169,7 +159,7 @@ export class WorkerInferenceProxyClient {
       if (error instanceof WorkerConnectionInterruptedError) {
         interrupted = true;
       } else {
-        this.rejectOperation(operation, error instanceof Error ? error : new Error(String(error)));
+        this.rejectOperation(operation, toStringifiedError(error));
       }
     } finally {
       operation.startInFlight = false;
@@ -180,67 +170,36 @@ export class WorkerInferenceProxyClient {
     }
   }
 
-  private handleEvent(payload: WorkerInferenceEventParams): void {
+  private handlePayload(payload: WorkerInferenceEventParams | WorkerInferenceTerminalParams): void {
     const operation = this.operations.get(inferenceKey(payload));
-    if (!operation || operation.settled || !matchesInferenceIdentity(operation, payload)) {
+    if (
+      !operation ||
+      operation.settled ||
+      !matchesInferenceIdentity(operation, payload) ||
+      payload.seq <= operation.lastSeq
+    ) {
       return;
     }
-    this.applyEvent(operation, payload);
-  }
-
-  private applyEvent(operation: InferenceOperation, payload: WorkerInferenceEventParams): void {
-    if (payload.seq <= operation.lastSeq) {
-      return;
-    }
-    if (payload.seq !== operation.lastSeq + 1) {
-      try {
-        operation.handlers.onStreamGap?.({
-          expectedSeq: operation.lastSeq + 1,
-          receivedSeq: payload.seq,
-        });
-      } catch (error) {
-        this.rejectOperation(operation, error instanceof Error ? error : new Error(String(error)));
-        return;
-      }
-    }
-    operation.lastSeq = payload.seq;
+    // Report gaps before delivery so the stream adapter can tolerate missing blocks.
+    // Catch callbacks here; the frame dispatcher otherwise swallows listener errors.
     try {
-      operation.handlers.onEvent?.(payload);
-    } catch (error) {
-      this.rejectOperation(operation, error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  private handleTerminal(payload: WorkerInferenceTerminalParams): void {
-    const operation = this.operations.get(inferenceKey(payload));
-    if (!operation || operation.settled || !matchesInferenceIdentity(operation, payload)) {
-      return;
-    }
-    this.applyTerminal(operation, payload);
-  }
-
-  private applyTerminal(
-    operation: InferenceOperation,
-    payload: WorkerInferenceTerminalParams,
-  ): void {
-    if (payload.seq <= operation.lastSeq) {
-      return;
-    }
-    if (payload.seq !== operation.lastSeq + 1) {
-      try {
+      if (payload.seq !== operation.lastSeq + 1) {
         operation.handlers.onStreamGap?.({
           expectedSeq: operation.lastSeq + 1,
           receivedSeq: payload.seq,
         });
-      } catch (error) {
-        this.rejectOperation(operation, error instanceof Error ? error : new Error(String(error)));
-        return;
       }
+      operation.lastSeq = payload.seq;
+      if ("event" in payload) {
+        operation.handlers.onEvent?.(payload);
+      } else {
+        operation.settled = true;
+        this.operations.delete(inferenceKey(operation.params));
+        operation.resolve(payload.outcome);
+      }
+    } catch (error) {
+      this.rejectOperation(operation, toStringifiedError(error));
     }
-    operation.lastSeq = payload.seq;
-    operation.settled = true;
-    this.operations.delete(inferenceKey(operation.params));
-    operation.resolve(payload.outcome);
   }
 
   private rejectOperation(operation: InferenceOperation, error: Error): void {

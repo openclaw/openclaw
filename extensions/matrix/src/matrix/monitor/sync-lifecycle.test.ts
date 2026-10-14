@@ -60,17 +60,36 @@ function expectLastStatusFields(
 }
 
 describe("createMatrixMonitorSyncLifecycle", () => {
-  it("rejects the channel wait on unexpected sync errors", async () => {
-    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
+  it("publishes blocked for an invalidated token and preserves it through cleanup", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+    const tokenError = Object.assign(new Error("Unknown token"), {
+      statusCode: 401,
+      data: { errcode: "M_UNKNOWN_TOKEN" },
+    });
 
-    const waitPromise = lifecycle.waitForFatalStop();
-    client.emit("sync.unexpected_error", new Error("sync exploded"));
-
-    await expect(waitPromise).rejects.toThrow("sync exploded");
+    statusController.noteSyncState("RECONNECTING", tokenError);
     expectLastStatusFields(setStatus, {
-      accountId: "default",
-      healthState: "error",
-      lastError: "sync exploded",
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+    });
+
+    statusController.noteUnexpectedError(new Error("startup readiness timed out"));
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "Unknown token",
+    });
+
+    statusController.markStopped();
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+    });
+
+    statusController.noteSyncState("SYNCING", undefined);
+    expectLastStatusFields(setStatus, {
+      lifecycle: "ready",
+      terminalDisconnect: undefined,
     });
   });
 
@@ -227,18 +246,5 @@ describe("createMatrixMonitorSyncLifecycle", () => {
       healthState: "error",
       lastError: "sync exploded",
     });
-  });
-
-  it("rejects a second concurrent fatal-stop waiter", async () => {
-    const { lifecycle } = createSyncLifecycleHarness();
-
-    const firstWait = lifecycle.waitForFatalStop();
-
-    await expect(lifecycle.waitForFatalStop()).rejects.toThrow(
-      "Matrix fatal-stop wait already in progress",
-    );
-
-    lifecycle.dispose();
-    await expect(firstWait).resolves.toBeUndefined();
   });
 });

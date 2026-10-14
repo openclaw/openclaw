@@ -1,17 +1,22 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import { workerSshCommandOptions } from "./ssh.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+  AcceptedWorkspacePublicationIndeterminateError,
+  parseAcceptedWorkspaceSettlement,
+  type AcceptedWorkspaceSettlementOutcome,
+} from "./workspace-accepted-publication.js";
+import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import { serializeWorkspaceManifest } from "./workspace-manifest-worker.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { changedPaths, manifestNodes } from "./workspace-reconcile.js";
 import {
-  parseManifestRef,
+  captureRemoteWorkspaceManifest,
+  WORKER_WORKSPACE_RSYNC_DESTINATION,
+  workerAcceptedWorkspaceRsyncReceiverPath,
   workerWorkspaceCommandSucceeded,
   workspaceSyncError,
 } from "./workspace-sync-helpers.js";
@@ -20,13 +25,24 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
-const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
+function isIndeterminateWorkspaceCommandResult(result: SpawnResult): boolean {
+  return result.termination !== "exit" || result.code === 255;
+}
+
+function acceptedWorkspaceRollbackError(error: unknown, rollbackFailure: unknown): Error {
+  const rollbackError = new Error("Accepted workspace publication rollback failed", {
+    cause: error,
+  });
+  Object.defineProperty(rollbackError, "rollbackFailure", { value: rollbackFailure });
+  return rollbackError;
+}
 
 export async function recoverAcceptedWorkspacePublication(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   remoteWorkspaceDir: string;
 }) {
   const recovered = await params.runWorkspaceCommand({
+    transportRetry: "never",
     argv: [
       "node",
       "-e",
@@ -41,27 +57,32 @@ export async function recoverAcceptedWorkspacePublication(params: {
   }
 }
 
-function createAcceptedWorkspacePublisher(params: {
+export function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
-  runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
-  ownerSignal: AbortSignal;
-  rsyncSsh: string;
+  runRsync: (argv: (rsyncSsh: string) => string[]) => Promise<SpawnResult>;
   scpTarget: string;
+  receiverEntryPath: string;
   localPath: string;
   remoteWorkspaceDir: string;
   remoteManifest: WorkerWorkspaceManifest;
+  initialRemoteRef: string;
+  hashMemo: WorkspaceHashMemo;
+  metrics: WorkspaceReconcileMetrics;
 }) {
-  return async (accepted: {
+  let expectedRemoteRef = params.initialRemoteRef;
+  const publish = async (accepted: {
     manifestRef: string;
     manifest: WorkerWorkspaceManifest;
     conflictPaths: string[];
   }) => {
-    const acceptedRaw = serializeWorkerWorkspaceManifest(accepted.manifest);
-    const acceptedDigest = createHash("sha256").update(acceptedRaw).digest("hex");
+    const serialized = await serializeWorkspaceManifest(accepted.manifest);
+    const acceptedRaw = serialized.raw;
+    const acceptedDigest = serialized.manifestRef.slice("sha256:".length);
     if (`sha256:${acceptedDigest}` !== accepted.manifestRef) {
       throw new Error("Accepted workspace manifest does not match its reference");
     }
     const published = await params.runWorkspaceCommand({
+      transportRetry: "idempotent",
       argv: [
         "node",
         "-e",
@@ -78,20 +99,14 @@ function createAcceptedWorkspacePublisher(params: {
     }
 
     const verifyAcceptedWorkspace = async () => {
-      const verified = await params.runWorkspaceCommand({
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_MANIFEST_JS,
-          params.remoteWorkspaceDir,
-          accepted.manifest.baseCommit ?? "",
-          ...(accepted.manifest.baseCommit ? ["eligible", acceptedDigest] : []),
-        ],
+      const verifiedRef = await captureRemoteWorkspaceManifest({
+        runWorkspaceCommand: params.runWorkspaceCommand,
+        remoteWorkspaceDir: params.remoteWorkspaceDir,
+        baseCommit: accepted.manifest.baseCommit,
+        priorManifestDigests: accepted.manifest.baseCommit ? [acceptedDigest] : [],
+        hashMemo: params.hashMemo,
+        metrics: params.metrics,
       });
-      if (!workerWorkspaceCommandSucceeded(verified)) {
-        throw workspaceSyncError(verified);
-      }
-      const verifiedRef = parseManifestRef(verified.stdout.trim());
       if (verifiedRef !== accepted.manifestRef) {
         throw new Error(
           `Worker workspace does not match its accepted manifest: expected ${accepted.manifestRef}, got ${verifiedRef}`,
@@ -109,8 +124,12 @@ function createAcceptedWorkspacePublisher(params: {
     }
 
     const transactionNonce = randomBytes(16).toString("hex");
-    const transactionCommand = async (action: "apply" | "rollback" | "commit") =>
+    const transactionCommand = async (
+      action: "begin" | "apply" | "rollback" | "commit" | "settle",
+      input?: string,
+    ) =>
       await params.runWorkspaceCommand({
+        transportRetry: "never",
         argv: [
           "node",
           "-e",
@@ -119,20 +138,63 @@ function createAcceptedWorkspacePublisher(params: {
           params.remoteWorkspaceDir,
           transactionNonce,
         ],
+        ...(input === undefined ? {} : { input }),
       });
+    const settleIndeterminatePublication = async (
+      operation: "apply" | "commit",
+      publicationFailure: unknown,
+    ): Promise<AcceptedWorkspaceSettlementOutcome> => {
+      try {
+        const settled = await transactionCommand("settle");
+        if (!workerWorkspaceCommandSucceeded(settled)) {
+          throw workspaceSyncError(settled);
+        }
+        return parseAcceptedWorkspaceSettlement(settled.stdout);
+      } catch (observationFailure) {
+        throw new AcceptedWorkspacePublicationIndeterminateError(
+          operation,
+          publicationFailure,
+          observationFailure,
+        );
+      }
+    };
+    const requirePublicationCommand = async (
+      action: "apply" | "commit",
+      settle: (failure: unknown) => Promise<void>,
+    ): Promise<void> => {
+      let result: SpawnResult;
+      try {
+        result = await transactionCommand(action);
+      } catch (error) {
+        return await settle(error);
+      }
+      if (!workerWorkspaceCommandSucceeded(result)) {
+        const failure = workspaceSyncError(result);
+        if (!isIndeterminateWorkspaceCommandResult(result)) {
+          throw failure;
+        }
+        await settle(failure);
+      }
+    };
+    const finishIndeterminateCommit = async (commitFailure: unknown): Promise<void> => {
+      const outcome = await settleIndeterminatePublication("commit", commitFailure);
+      if (outcome === "committed") {
+        return;
+      }
+      if (outcome !== "applied") {
+        throw commitFailure;
+      }
+      await requirePublicationCommand("commit", async (observationFailure) => {
+        throw new AcceptedWorkspacePublicationIndeterminateError(
+          "commit",
+          commitFailure,
+          observationFailure,
+        );
+      });
+    };
     let transactionBegun = false;
     try {
-      const begun = await params.runWorkspaceCommand({
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
-          "begin",
-          params.remoteWorkspaceDir,
-          transactionNonce,
-        ],
-        input: JSON.stringify([...changed]),
-      });
+      const begun = await transactionCommand("begin", JSON.stringify([...changed]));
       if (!workerWorkspaceCommandSucceeded(begun)) {
         throw workspaceSyncError(begun);
       }
@@ -146,7 +208,7 @@ function createAcceptedWorkspacePublisher(params: {
       const transferPaths = [...changed].filter((entryPath) => acceptedNodes.has(entryPath));
       if (transferPaths.length > 0) {
         const temporaryDirectory = await fs.mkdtemp(
-          path.join(os.tmpdir(), "openclaw-worker-workspace-accepted-"),
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-accepted-"),
         );
         const transferListPath = path.join(temporaryDirectory, "transfer-list");
         try {
@@ -158,25 +220,24 @@ function createAcceptedWorkspacePublisher(params: {
           const localSource = params.localPath.endsWith(path.sep)
             ? params.localPath
             : `${params.localPath}${path.sep}`;
-          const transferred = await params.runTask(
-            [
-              "rsync",
-              "--archive",
-              "--checksum",
-              "--no-recursive",
-              "--from0",
-              `--files-from=${transferListPath}`,
-              "-e",
-              params.rsyncSsh,
-              "--",
-              localSource,
-              `${params.scpTarget}:${remoteStagingRoot}/`,
-            ],
-            workerSshCommandOptions({
-              timeoutMs: WORKSPACE_TIMEOUT_MS,
-              signal: params.ownerSignal,
-            }),
-          );
+          const transferred = await params.runRsync((rsyncSsh) => [
+            "rsync",
+            "--archive",
+            "--checksum",
+            "--no-recursive",
+            "--from0",
+            `--files-from=${transferListPath}`,
+            `--rsync-path=${workerAcceptedWorkspaceRsyncReceiverPath({
+              receiverEntryPath: params.receiverEntryPath,
+              remoteWorkspaceDir: params.remoteWorkspaceDir,
+              nonce: transactionNonce,
+            })}`,
+            "-e",
+            rsyncSsh,
+            "--",
+            localSource,
+            `${params.scpTarget}:${WORKER_WORKSPACE_RSYNC_DESTINATION}`,
+          ]);
           if (!workerWorkspaceCommandSucceeded(transferred)) {
             throw workspaceSyncError(transferred);
           }
@@ -185,49 +246,38 @@ function createAcceptedWorkspacePublisher(params: {
         }
       }
 
-      const applied = await transactionCommand("apply");
-      if (!workerWorkspaceCommandSucceeded(applied)) {
-        throw workspaceSyncError(applied);
-      }
+      await requirePublicationCommand("apply", async (applyFailure) => {
+        const outcome = await settleIndeterminatePublication("apply", applyFailure);
+        if (outcome !== "applied" && outcome !== "committed") {
+          throw applyFailure;
+        }
+      });
       await verifyAcceptedWorkspace();
-      const committed = await transactionCommand("commit");
-      if (!workerWorkspaceCommandSucceeded(committed)) {
-        throw workspaceSyncError(committed);
-      }
+      await requirePublicationCommand("commit", finishIndeterminateCommit);
     } catch (error) {
+      // Transport or settlement timeouts are observation evidence, never authority
+      // for an inverse operation; recovery owns restoring both sides.
+      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+        throw error;
+      }
       if (transactionBegun) {
-        const rolledBack = await transactionCommand("rollback");
-        if (!workerWorkspaceCommandSucceeded(rolledBack)) {
-          const rollbackError = new Error("Accepted workspace publication rollback failed", {
-            cause: error,
-          });
-          Object.defineProperty(rollbackError, "rollbackFailure", {
-            value: workspaceSyncError(rolledBack),
-          });
-          throw rollbackError;
+        try {
+          const rolledBack = await transactionCommand("rollback");
+          if (!workerWorkspaceCommandSucceeded(rolledBack)) {
+            throw workspaceSyncError(rolledBack);
+          }
+        } catch (rollbackFailure) {
+          throw acceptedWorkspaceRollbackError(error, rollbackFailure);
         }
       }
       throw error;
     }
   };
-}
-
-export function createAcceptedWorkspacePublisherFactory(
-  params: Omit<Parameters<typeof createAcceptedWorkspacePublisher>[0], "remoteManifest">,
-) {
-  return (remoteManifest: WorkerWorkspaceManifest, initialRemoteRef: string) => {
-    let expectedRemoteRef = initialRemoteRef;
-    const publish = createAcceptedWorkspacePublisher({ ...params, remoteManifest });
-    return {
-      expectedRemoteRef: () => expectedRemoteRef,
-      publishAcceptedManifest: async (accepted: {
-        manifestRef: string;
-        manifest: WorkerWorkspaceManifest;
-        conflictPaths: string[];
-      }) => {
-        await publish(accepted);
-        expectedRemoteRef = accepted.manifestRef;
-      },
-    };
+  return {
+    expectedRemoteRef: () => expectedRemoteRef,
+    publishAcceptedManifest: async (accepted: Parameters<typeof publish>[0]) => {
+      await publish(accepted);
+      expectedRemoteRef = accepted.manifestRef;
+    },
   };
 }

@@ -1,5 +1,3 @@
-/* Apps & extensions promo page — hero, card grid, and community pills. */
-
 .apps-hero {
   display: flex;
   flex-direction: column;
@@ -101,10 +99,13 @@
   padding: 14px;
 }
 
+/* Wrapping keeps the nowrap badge from squeezing the title into a mid-word
+   break on narrow cards: the badge drops to its own line instead. */
 .apps-card__title-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   min-width: 0;
 }
 
@@ -113,7 +114,11 @@
   color: var(--text);
 }
 
+/* Growing right-aligns an inline badge (title absorbs the slack) yet leaves
+   a wrapped badge left-aligned under the title. Basis must stay auto: a 0%
+   basis would let the badge share the line and squeeze the title again. */
 .apps-card__title {
+  flex: 1 1 auto;
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md, 15px);
@@ -121,7 +126,6 @@
 }
 
 .apps-card__badge {
-  margin-inline-start: auto;
   padding: 2px 9px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -147,18 +151,21 @@
 }
 
 .apps-card__cta {
+  padding: 6px 13px;
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.apps-card__cta,
+.apps-pill {
   display: inline-flex;
   align-items: center;
-  padding: 6px 13px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--card);
   color: var(--text);
-  font: inherit;
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  text-decoration: none;
-  cursor: pointer;
   transition:
     transform 140ms ease,
     background 140ms ease,
@@ -171,11 +178,11 @@
   color: var(--bg);
 }
 
-.apps-card__cta:hover {
+.apps-card__cta:hover,
+.apps-pill:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
   background: var(--bg-hover);
-  text-decoration: none;
 }
 
 .apps-card__cta--primary:hover {
@@ -183,7 +190,8 @@
   color: var(--bg);
 }
 
-.apps-card__cta:focus-visible {
+.apps-card__cta:focus-visible,
+.apps-pill:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -200,7 +208,7 @@
   background: none;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -222,33 +230,8 @@
 }
 
 .apps-pill {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
   padding: 8px 15px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  text-decoration: none;
-  transition:
-    transform 140ms ease,
-    background 140ms ease,
-    border-color 140ms ease;
-}
-
-.apps-pill:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
-  background: var(--bg-hover);
-  text-decoration: none;
-}
-
-.apps-pill:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .apps-pill__icon {

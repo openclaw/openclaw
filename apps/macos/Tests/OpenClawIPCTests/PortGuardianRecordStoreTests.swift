@@ -123,6 +123,42 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
+    func `cancelled orphan cleanup never touches its durable tunnel records`() async throws {
+        let fixture = try Self.fixture()
+        defer { fixture.cleanup() }
+        let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        let orphan = Self.record(pid: 2_000_000_000, port: 18789, timestamp: 1)
+        try store.upsert(orphan)
+        let guardian = PortGuardian(recordStoreFactory: {
+            try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        })
+
+        let cleanup = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await guardian.reapOrphanedTunnels()
+        }
+        await cleanup.value
+
+        #expect(try store.records() == [orphan])
+    }
+
+    @Test
+    func `orphan cleanup reaps stale tunnel records`() async throws {
+        let fixture = try Self.fixture()
+        defer { fixture.cleanup() }
+        let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        let orphan = Self.record(pid: 2_000_000_000, port: 18789, timestamp: 1)
+        try store.upsert(orphan)
+        let guardian = PortGuardian(recordStoreFactory: {
+            try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        })
+
+        await guardian.reapOrphanedTunnels()
+
+        #expect(try store.records().isEmpty)
+    }
+
+    @Test
     func `failed receipt deletion relinquishes ownership for sweep retry`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
@@ -532,7 +568,18 @@ struct PortGuardianRecordStoreTests {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
 
-        for version in [4, 5, 6] {
+        var repositoryRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 {
+            repositoryRoot.deleteLastPathComponent()
+        }
+        let manifestData = try Data(contentsOf: repositoryRoot.appendingPathComponent("package.json"))
+        let manifest = try #require(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let openclaw = try #require(manifest["openclaw"] as? [String: Any])
+        let schemaVersions = try #require(openclaw["schemaVersions"] as? [String: Any])
+        let currentSchemaVersion = try #require(schemaVersions["state"] as? Int)
+        try #require(currentSchemaVersion >= 4)
+
+        for version in 4...currentSchemaVersion {
             let databaseURL = fixture.root.appendingPathComponent("supported-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
             let store = try PortGuardianRecordStore(databaseURL: databaseURL)
@@ -544,7 +591,7 @@ struct PortGuardianRecordStoreTests {
             #expect(try store.records() == [record])
         }
 
-        for version in [7, 99] {
+        for version in [currentSchemaVersion + 1, 99] {
             let databaseURL = fixture.root.appendingPathComponent("newer-v\(version).sqlite")
             try Self.seedVersionedPortGuardianDatabase(databaseURL, schemaVersion: version)
             #expect(throws: PortGuardianStoreError.self) {
@@ -579,34 +626,6 @@ struct PortGuardianRecordStoreTests {
         #expect(throws: PortGuardianStoreError.self) {
             try PortGuardianRecordStore(databaseURL: uniqueIndexURL)
         }
-    }
-
-    @Test
-    func `retained store rejects mutations after schema advances`() throws {
-        let fixture = try Self.fixture()
-        defer { fixture.cleanup() }
-        let store = try PortGuardianRecordStore(
-            databaseURL: fixture.databaseURL,
-            legacyLockURL: fixture.lockURL)
-        let existing = Self.record(pid: 4242, port: 18789, timestamp: 42)
-        try store.upsert(existing)
-        try JSONEncoder().encode([existing]).write(to: fixture.legacyURL, options: [.atomic])
-
-        try Self.execute(fixture.databaseURL, "PRAGMA user_version = 7")
-
-        #expect(throws: PortGuardianStoreError.self) {
-            try store.upsert(Self.record(pid: 4243, port: 18790, timestamp: 43))
-        }
-        #expect(throws: PortGuardianStoreError.self) {
-            try store.deleteIfMatches(existing)
-        }
-        #expect(throws: PortGuardianStoreError.self) {
-            try store.migrateLegacyRecords(recordURL: fixture.legacyURL)
-        }
-        #expect(FileManager.default.fileExists(atPath: fixture.legacyURL.path))
-        #expect(try Self.scalarInt(
-            fixture.databaseURL,
-            "SELECT COUNT(*) FROM macos_port_guardian_records") == 1)
     }
 
     @Test

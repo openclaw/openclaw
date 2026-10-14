@@ -1,0 +1,172 @@
+import { createConfigIO } from "../config/io.factory.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import {
+  getSecretStoreExpiryDeadline,
+  purgeExpiredSecretStoreEntries,
+  subscribeSecretStoreChanges,
+} from "../secrets/store/secret-store.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
+import {
+  createGitHubOAuthLifecycle,
+  installActiveGitHubOAuthLifecycle,
+} from "./github-oauth-lifecycle.js";
+import { startGitHubPublicationDiscovery } from "./github-publication-discovery.js";
+import { createModelAccountConnectService } from "./model-account-connect.js";
+import {
+  broadcastChatMetadataChanged,
+  type createGatewayChatMetadataLifecycle,
+} from "./server-chat-metadata-lifecycle.js";
+import { attachSessionChangeEventLifetime } from "./server-methods/session-change-event.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+
+type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
+
+export async function attachInitialGatewayLifetimeSidecars(params: {
+  scheduler: GatewayScheduler;
+  chatMetadataLifecycle: GatewayChatMetadataLifecycle;
+  gatewayRequestContext: GatewayRequestContext;
+  flushPendingSessionsChangedEvents: (context?: object) => Promise<void>;
+  minimalTestGateway: boolean;
+  logWarning: (message: string) => void;
+  reconcileGitHubPublications?: () => Promise<void>;
+  publishSidecars: GatewaySidecarStopOwner["publish"];
+}): Promise<void> {
+  // Kernel preparation precedes HTTP/internal dispatch. Incognito has no restart inventory.
+  params.publishSidecars(
+    startIncognitoSessionLifetime({
+      scheduler: params.scheduler,
+      context: params.gatewayRequestContext,
+      logWarning: params.logWarning,
+    }),
+  );
+  await params.chatMetadataLifecycle.attachContext(
+    params.gatewayRequestContext,
+    params.publishSidecars,
+  );
+  if (!params.minimalTestGateway) {
+    const { startSessionCostUsageProjectionLifetime } =
+      await import("./session-cost-usage-lifetime.js");
+    params.publishSidecars(
+      startSessionCostUsageProjectionLifetime({
+        getConfig: params.gatewayRequestContext.getRuntimeConfig,
+        warn: params.logWarning,
+      }),
+    );
+  }
+  const modelAccountConnect = createModelAccountConnectService({
+    getConfig: params.gatewayRequestContext.getRuntimeConfig,
+    onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),
+  });
+  params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;
+  params.publishSidecars({
+    stop: async () => {
+      await modelAccountConnect.stop();
+      if (params.gatewayRequestContext.modelAccountConnectService === modelAccountConnect) {
+        delete params.gatewayRequestContext.modelAccountConnectService;
+      }
+    },
+  });
+  const githubOAuth = createGitHubOAuthLifecycle({
+    scheduler: params.scheduler,
+    getConfig: params.gatewayRequestContext.getRuntimeConfig,
+    getPersistedConfig: () => createConfigIO().loadConfigAsync(),
+    warn: params.logWarning,
+  });
+  params.gatewayRequestContext.githubOAuthService = githubOAuth;
+  const uninstallGitHubOAuth = installActiveGitHubOAuthLifecycle(githubOAuth);
+  if (!params.minimalTestGateway) {
+    params.publishSidecars(
+      startGitHubPublicationDiscovery({
+        scheduler: params.scheduler,
+        projection: getSessionRowProjection(params.gatewayRequestContext),
+      }),
+    );
+    githubOAuth.start();
+  }
+  params.publishSidecars({
+    stop: async () => {
+      uninstallGitHubOAuth();
+      await githubOAuth.stop();
+      if (params.gatewayRequestContext.githubOAuthService === githubOAuth) {
+        delete params.gatewayRequestContext.githubOAuthService;
+      }
+    },
+  });
+  if (!params.minimalTestGateway) {
+    const expiryScheduler = params.scheduler.scope();
+    let warned = false;
+    let running = false;
+    const scheduleExpiry = (atMs: number) => {
+      if (!expiryScheduler.signal.aborted) {
+        expiryScheduler.schedule({
+          id: "maintenance:secret-expiry",
+          atMs,
+          mode: "earliest",
+          run: sweep,
+        });
+      }
+    };
+    const sweep = async () => {
+      if (running) {
+        return;
+      }
+      running = true;
+      try {
+        await purgeExpiredSecretStoreEntries();
+        warned = false;
+        const next = getSecretStoreExpiryDeadline();
+        if (next !== null) {
+          scheduleExpiry(next ?? expiryScheduler.now());
+        }
+      } catch {
+        if (!warned) {
+          params.logWarning("Secret store expiry cleanup failed; will retry.");
+          warned = true;
+        }
+        scheduleExpiry(expiryScheduler.now() + 60_000);
+      } finally {
+        running = false;
+      }
+    };
+    const unsubscribe = subscribeSecretStoreChanges(() => scheduleExpiry(expiryScheduler.now()));
+    const unsubscribeLifecycle = registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (event.kind !== "opened") {
+        scheduleExpiry(expiryScheduler.now());
+      }
+    });
+    expiryScheduler.signal.addEventListener(
+      "abort",
+      () => {
+        unsubscribe();
+        unsubscribeLifecycle();
+      },
+      { once: true },
+    );
+    params.publishSidecars(expiryScheduler);
+    scheduleExpiry(expiryScheduler.now());
+  }
+  const reconcileGitHubPublications = params.reconcileGitHubPublications;
+  if (reconcileGitHubPublications) {
+    params.publishSidecars(
+      params.scheduler.schedule({
+        id: "maintenance:github-publication",
+        atMs: params.scheduler.now(),
+        everyMs: 60_000,
+        run: () =>
+          reconcileGitHubPublications().catch(() =>
+            params.logWarning("GitHub publication recovery failed; will retry."),
+          ),
+      }),
+    );
+  }
+  attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
+    params.publishSidecars({
+      stop: async () => {
+        await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
+      },
+    }),
+  );
+}

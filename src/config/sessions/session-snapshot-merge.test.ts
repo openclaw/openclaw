@@ -28,6 +28,37 @@ describe("session snapshot merge", () => {
     });
   });
 
+  it.each([undefined, "inherit"] as const)(
+    "preserves a required creation sandbox against a %s patch",
+    (sandbox) => {
+      const existing: SessionEntry = {
+        ...initial,
+        sandbox: "required",
+      };
+      const patch: Partial<SessionEntry> = {};
+      Object.assign(patch, { sandbox });
+
+      expect(mergeSessionEntry(existing, patch)).toMatchObject({ sandbox: "required" });
+    },
+  );
+
+  it("does not add a creation sandbox to an existing unstamped session", () => {
+    expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
+  });
+
+  it.each([undefined] as const)(
+    "retains creation surface %s through merge and transcript rollover",
+    (createdSurface) => {
+      const existing = { ...initial, createdSurface };
+      for (const surface of [undefined, "plugin-dock"] as const) {
+        expect(
+          mergeSessionEntry(existing, { sessionId: "new-transcript", createdSurface: surface })
+            .createdSurface,
+        ).toBe(createdSurface);
+      }
+    },
+  );
+
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const current = {
@@ -53,7 +84,11 @@ describe("session snapshot merge", () => {
       modelOverrideFallbackOriginModel: "claude-opus-4-6",
       authProfileOverride: "openai:fallback",
       authProfileOverrideSource: "auto",
-      fallbackNoticeSelectedModel: "openai/gpt-old",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-old",
+        activeModel: "openai/gpt-fallback",
+      },
     };
     const next = {
       ...initialOverride,
@@ -65,7 +100,7 @@ describe("session snapshot merge", () => {
       modelOverrideFallbackOriginModel: undefined,
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
-      fallbackNoticeSelectedModel: undefined,
+      fallbackNotice: undefined,
       liveModelSwitchPending: true,
     };
     const current: SessionEntry = {
@@ -75,7 +110,11 @@ describe("session snapshot merge", () => {
       modelOverrideSource: "user",
       authProfileOverride: "openai:user",
       authProfileOverrideSource: "user",
-      fallbackNoticeSelectedModel: "openai/gpt-new",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-new",
+        activeModel: "openai/gpt-fallback",
+      },
     };
 
     expect(mergeSessionSnapshotChanges({ initial: initialOverride, next, current })).toEqual(
@@ -152,10 +191,14 @@ describe("session snapshot merge", () => {
       modelOverrideSource: "user",
       modelProvider: "openai",
       model: "gpt-5.4",
-      fallbackNoticeSelectedModel: "openai/gpt-5.4",
-      fallbackNoticeActiveModel: "openai/gpt-5.4-mini",
-      fallbackNoticeReason: "rate_limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "openai/gpt-5.4-mini",
+        reason: "rate_limit",
+      },
       contextTokens: 100_000,
+      contextTokensSource: "resolved",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -182,10 +225,9 @@ describe("session snapshot merge", () => {
       modelOverride: "gpt-5.5",
       modelProvider: undefined,
       model: undefined,
-      fallbackNoticeSelectedModel: undefined,
-      fallbackNoticeActiveModel: undefined,
-      fallbackNoticeReason: undefined,
+      fallbackNotice: undefined,
       contextTokens: undefined,
+      contextTokensSource: undefined,
       contextBudgetStatus: undefined,
     };
     const current: SessionEntry = {
@@ -193,8 +235,13 @@ describe("session snapshot merge", () => {
       updatedAt: 3,
       modelProvider: "openai",
       model: "gpt-5.4-mini",
-      fallbackNoticeActiveModel: "openai/gpt-5.4-nano",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "openai/gpt-5.4-nano",
+      },
       contextTokens: 80_000,
+      contextTokensSource: "runtime",
     };
 
     const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
@@ -206,46 +253,10 @@ describe("session snapshot merge", () => {
     });
     expect(merged.modelProvider).toBeUndefined();
     expect(merged.model).toBeUndefined();
-    expect(merged.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(merged.fallbackNoticeActiveModel).toBeUndefined();
-    expect(merged.fallbackNoticeReason).toBeUndefined();
+    expect(merged.fallbackNotice).toBeUndefined();
     expect(merged.contextTokens).toBeUndefined();
+    expect(merged.contextTokensSource).toBeUndefined();
     expect(merged.contextBudgetStatus).toBeUndefined();
-  });
-
-  it("clears runtime metadata added concurrently for the previous model", () => {
-    const initialOverride: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
-    };
-    const next: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 2,
-      modelOverride: "gpt-5.5",
-    };
-    const current: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 3,
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      fallbackNoticeActiveModel: "openai/gpt-5.4-mini",
-      contextTokens: 80_000,
-    };
-
-    const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
-
-    expect(merged).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-      modelOverrideSource: "user",
-    });
-    expect(merged.modelProvider).toBeUndefined();
-    expect(merged.model).toBeUndefined();
-    expect(merged.fallbackNoticeActiveModel).toBeUndefined();
-    expect(merged.contextTokens).toBeUndefined();
   });
 
   it("does not reject a model switch after concurrent runtime metadata refresh", () => {
@@ -315,7 +326,11 @@ describe("session snapshot merge", () => {
       updatedAt: 2,
       modelProvider: "openai",
       model: "gpt-5.4",
-      fallbackNoticeSelectedModel: "openai/gpt-5.4",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "openai/gpt-5.4-mini",
+      },
       contextTokens: 100_000,
       thinkingLevel: "medium",
     };
@@ -379,10 +394,11 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("marks a claimed recovery healthy without erasing its owner aggregate", () => {
+  it("preserves the safe-tools guard when a newer recovery owner wins a stale clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
+      restartRecoveryForceSafeTools: true,
       mainRestartRecovery: {
         cycleId: "cycle-1",
         revision: 1,
@@ -393,6 +409,7 @@ describe("session snapshot merge", () => {
       ...initialRecovery,
       updatedAt: 2,
       abortedLastRun: false,
+      restartRecoveryForceSafeTools: undefined,
       mainRestartRecovery: undefined,
     };
     const current: SessionEntry = {
@@ -401,17 +418,50 @@ describe("session snapshot merge", () => {
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
         revision: 2,
-        foregroundClaims: {
-          lifecycleGeneration: "generation-1",
-          tokens: ["owner-1"],
-        },
       },
     };
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
-    expect(merged.abortedLastRun).toBe(false);
-    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
+    expect(merged.abortedLastRun).toBe(true);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("preserves recovery state when the safe-tools guard is acquired during fence cleanup", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      restartRecoveryRuns: [
+        { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-run", lifecycleGeneration: "generation-1" },
+      ],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+      },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      restartRecoveryForceSafeTools: undefined,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "generation-1" }],
+      restartRecoveryForceSafeTools: true,
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
+    expect(merged.restartRecoveryRuns).toEqual(current.restartRecoveryRuns);
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
@@ -450,7 +500,7 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toBeUndefined();
   });
 
-  it("preserves every concurrent owner while marking a recovered session healthy", () => {
+  it("preserves every concurrent owner and interruption until lifecycle settlement", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
@@ -481,7 +531,9 @@ describe("session snapshot merge", () => {
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
-    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.abortedLastRun).toBe(true);
+    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
     expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 

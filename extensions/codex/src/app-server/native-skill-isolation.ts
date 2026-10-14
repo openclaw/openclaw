@@ -1,0 +1,357 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { resolveRequiredHomeDir, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { CodexAppServerClient } from "./client.js";
+import type { CodexSkillsListResponse } from "./protocol-control-plane.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
+
+export type CodexNativeSkillIsolation = {
+  disabledUserSkillPaths: string[];
+  suppressNativeSkillInstructions: boolean;
+};
+
+const MAX_PERSONAL_SKILL_DIRECTORIES = 2_000;
+const MAX_PERSONAL_SKILL_DEPTH = 6;
+const MAX_PERSONAL_SKILL_ENTRIES = 10_000;
+const CODEX_VISUALIZE_PLUGIN_ID = "visualize@openai-bundled";
+const CODEX_VISUALIZE_LEGACY_PATH = "/plugins/cache/openai-bundled/visualize/";
+const DEFAULT_STATE_SKILL_DISCOVERY_UNAVAILABLE = Symbol(
+  "default-state-skill-discovery-unavailable",
+);
+// Keep one bounded workspace/environment snapshot per physical app-server client.
+const nativeSkillIsolationByClient = new WeakMap<
+  CodexAppServerClient,
+  {
+    revision: number;
+    snapshot?: {
+      key: string;
+      revision: number;
+      result: Promise<
+        CodexNativeSkillIsolation | undefined | typeof DEFAULT_STATE_SKILL_DISCOVERY_UNAVAILABLE
+      >;
+      settled: boolean;
+      signal?: AbortSignal;
+    };
+  }
+>();
+
+function isMissingPathError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function isUnsupportedCodexVisualizeSkill(skill: {
+  name: string;
+  path: string;
+  pluginId?: string | null;
+}): boolean {
+  if (skill.pluginId) {
+    return skill.pluginId === CODEX_VISUALIZE_PLUGIN_ID;
+  }
+  return (
+    (skill.name === "visualize" || skill.name === "visualize:visualize") &&
+    skill.path.replaceAll("\\", "/").includes(CODEX_VISUALIZE_LEGACY_PATH)
+  );
+}
+
+async function canonicalizeExistingPath(candidate: string): Promise<string> {
+  try {
+    return await fs.realpath(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
+}
+
+async function usesDefaultStateDir(): Promise<boolean> {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return true;
+  }
+  const home = resolveRequiredHomeDir();
+  const [stateDir, defaultStateDir] = await Promise.all([
+    canonicalizeExistingPath(resolveStateDir()),
+    canonicalizeExistingPath(path.join(home, ".openclaw")),
+  ]);
+  return stateDir === defaultStateDir;
+}
+
+async function collectPersonalSkillRealPaths(
+  homes: string[],
+  codexHome: string | undefined,
+): Promise<{ complete: boolean; skillPaths: Set<string> }> {
+  const realStateDir = await canonicalizeExistingPath(resolveStateDir());
+  const roots: Array<{ dir: string; onlyEscapedStateTargets: boolean }> = [];
+  for (const home of homes) {
+    for (const dir of [".agents", ".claude"]) {
+      roots.push({
+        dir: path.join(home, dir, "skills"),
+        onlyEscapedStateTargets: false,
+      });
+    }
+    const defaultCodexHome = path.join(home, ".codex");
+    const realDefaultCodexHome = await canonicalizeExistingPath(defaultCodexHome);
+    roots.push({
+      dir: path.join(defaultCodexHome, "skills"),
+      onlyEscapedStateTargets: isPathInside(realStateDir, realDefaultCodexHome),
+    });
+  }
+  const configuredCodexHome = codexHome?.trim() || process.env.CODEX_HOME?.trim();
+  if (configuredCodexHome) {
+    const realCodexHome = await canonicalizeExistingPath(configuredCodexHome);
+    const stateOwned = isPathInside(realStateDir, realCodexHome);
+    roots.push({
+      dir: path.join(configuredCodexHome, "skills"),
+      // Direct descendants of a state-owned Codex home belong to this isolated instance.
+      // Only realpath escapes cross back into operator-home state and must be disabled.
+      onlyEscapedStateTargets: stateOwned,
+    });
+  }
+  const skillPaths = new Set<string>();
+  let complete = true;
+  const seenDirectories = new Set<string>();
+  const queue = roots.map((root) => ({
+    dir: root.dir,
+    onlyEscapedStateTargets: root.onlyEscapedStateTargets,
+    depth: 0,
+  }));
+  let entryCount = 0;
+  const recordScanError = (error: unknown) => {
+    if (!isMissingPathError(error)) {
+      complete = false;
+    }
+  };
+  const recordSkillFile = async (filePath: string, onlyEscapedStateTargets: boolean) => {
+    try {
+      const skillRealPath = await fs.realpath(filePath);
+      if (!onlyEscapedStateTargets || !isPathInside(realStateDir, skillRealPath)) {
+        skillPaths.add(skillRealPath);
+      }
+    } catch (error) {
+      recordScanError(error);
+    }
+  };
+  for (const current of queue) {
+    let realDir: string;
+    try {
+      realDir = await fs.realpath(current.dir);
+    } catch (error) {
+      recordScanError(error);
+      continue;
+    }
+    if (seenDirectories.has(realDir)) {
+      continue;
+    }
+    seenDirectories.add(realDir);
+    if (seenDirectories.size > MAX_PERSONAL_SKILL_DIRECTORIES) {
+      complete = false;
+      break;
+    }
+    let directory: Awaited<ReturnType<typeof fs.opendir>>;
+    try {
+      directory = await fs.opendir(current.dir);
+    } catch (error) {
+      recordScanError(error);
+      continue;
+    }
+    try {
+      for await (const entry of directory) {
+        entryCount += 1;
+        if (entryCount > MAX_PERSONAL_SKILL_ENTRIES) {
+          complete = false;
+          queue.length = 0;
+          break;
+        }
+        if (entry.name.startsWith(".")) {
+          continue;
+        }
+        const entryPath = path.join(current.dir, entry.name);
+        let isFile = entry.isFile();
+        let isDirectory = entry.isDirectory();
+        if (entry.isSymbolicLink()) {
+          try {
+            const stat = await fs.stat(entryPath);
+            isFile = stat.isFile();
+            isDirectory = stat.isDirectory();
+          } catch (error) {
+            recordScanError(error);
+            continue;
+          }
+        }
+        if (entry.name === "SKILL.md" && isFile) {
+          await recordSkillFile(entryPath, current.onlyEscapedStateTargets);
+          continue;
+        }
+        if (isDirectory) {
+          if (current.depth >= MAX_PERSONAL_SKILL_DEPTH) {
+            complete = false;
+          } else {
+            queue.push({
+              dir: entryPath,
+              depth: current.depth + 1,
+              onlyEscapedStateTargets: current.onlyEscapedStateTargets,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      recordScanError(error);
+    }
+  }
+  return { complete, skillPaths };
+}
+
+/** Resolves native skill rules required by the OpenClaw thread boundary. */
+export async function resolveCodexNativeSkillIsolation(params: {
+  client: CodexAppServerClient;
+  codexHome?: string;
+  cwd: string;
+  home?: string;
+  userProfile?: string;
+  signal?: AbortSignal;
+}): Promise<CodexNativeSkillIsolation | undefined> {
+  params.signal?.throwIfAborted();
+  const key = JSON.stringify([
+    path.resolve(resolveStateDir()),
+    path.resolve(params.cwd),
+    params.codexHome?.trim() || process.env.CODEX_HOME?.trim() || "",
+    params.home?.trim() || process.env.HOME?.trim() || "",
+    params.userProfile?.trim() || process.env.USERPROFILE?.trim() || "",
+  ]);
+  let cache = nativeSkillIsolationByClient.get(params.client);
+  if (!cache) {
+    cache = { revision: 0 };
+    nativeSkillIsolationByClient.set(params.client, cache);
+    const clientCache = cache;
+    params.client.addNotificationHandler((notification) => {
+      if (notification.method === "skills/changed") {
+        clientCache.revision += 1;
+        clientCache.snapshot = undefined;
+      }
+    });
+  }
+  for (;;) {
+    params.signal?.throwIfAborted();
+    let snapshot = cache.snapshot;
+    if (snapshot?.key !== key || (!snapshot.settled && snapshot.signal !== params.signal)) {
+      snapshot = {
+        key,
+        revision: cache.revision,
+        result: resolveUncachedCodexNativeSkillIsolation(params),
+        settled: false,
+        signal: params.signal,
+      };
+      cache.snapshot = snapshot;
+    }
+    try {
+      const isolation = await snapshot.result;
+      snapshot.settled = true;
+      params.signal?.throwIfAborted();
+      // A notification can invalidate even a scan that has not settled yet.
+      if (snapshot.revision === cache.revision) {
+        if (isolation === DEFAULT_STATE_SKILL_DISCOVERY_UNAVAILABLE) {
+          cache.snapshot = undefined;
+          return undefined;
+        }
+        return isolation;
+      }
+    } catch (error) {
+      if (cache.snapshot === snapshot) {
+        cache.snapshot = undefined;
+      }
+      throw error;
+    }
+  }
+}
+
+async function resolveUncachedCodexNativeSkillIsolation(
+  params: Parameters<typeof resolveCodexNativeSkillIsolation>[0],
+): Promise<
+  CodexNativeSkillIsolation | undefined | typeof DEFAULT_STATE_SKILL_DISCOVERY_UNAVAILABLE
+> {
+  const defaultStateDir = await usesDefaultStateDir();
+  let response: CodexSkillsListResponse;
+  let skillPaths: Set<string>;
+  try {
+    response = await params.client.request(
+      "skills/list",
+      { cwds: [params.cwd], forceReload: true },
+      { signal: params.signal },
+    );
+    if (response.data.some((entry) => entry.errors.length > 0)) {
+      throw new Error("Codex native skill discovery returned errors");
+    }
+    skillPaths = new Set<string>();
+    for (const entry of response.data) {
+      for (const skill of entry.skills) {
+        if (isUnsupportedCodexVisualizeSkill(skill)) {
+          skillPaths.add(skill.path);
+        }
+      }
+    }
+  } catch (error) {
+    params.signal?.throwIfAborted();
+    if (!defaultStateDir) {
+      throw error;
+    }
+    return DEFAULT_STATE_SKILL_DISCOVERY_UNAVAILABLE;
+  }
+  if (defaultStateDir && skillPaths.size === 0) {
+    return undefined;
+  }
+  if (!defaultStateDir) {
+    const effectiveHome =
+      params.home?.trim() ||
+      process.env.HOME?.trim() ||
+      process.env.USERPROFILE?.trim() ||
+      os.homedir();
+    const homes = [effectiveHome];
+    if (process.platform === "win32") {
+      homes.push(params.userProfile?.trim() || os.homedir());
+    }
+    const personalSkills = await collectPersonalSkillRealPaths(
+      [...new Set(homes.map((home) => path.resolve(home)))],
+      params.codexHome,
+    );
+    for (const skillPath of personalSkills.skillPaths) {
+      skillPaths.add(skillPath);
+    }
+    // Codex also labels explicit plugin and extra roots as user scope. Preserve those on a
+    // complete provenance scan; fall back to all user paths only when personal-root proof failed.
+    if (!personalSkills.complete) {
+      for (const entry of response.data) {
+        for (const skill of entry.skills) {
+          if (skill.scope === "user") {
+            skillPaths.add(skill.path);
+          }
+        }
+      }
+    }
+  }
+  return {
+    disabledUserSkillPaths: [...skillPaths].toSorted((left, right) => left.localeCompare(right)),
+    suppressNativeSkillInstructions: !defaultStateDir,
+  };
+}
+
+/** Applies path-exact rules and non-default-state catalog isolation after caller config. */
+export function applyCodexNativeSkillIsolation(
+  config: JsonObject | undefined,
+  isolation: CodexNativeSkillIsolation | undefined,
+): JsonObject | undefined {
+  if (!isolation) {
+    return config;
+  }
+  const existingRules = config?.["skills.config"];
+  if (existingRules !== undefined && !Array.isArray(existingRules)) {
+    throw new Error("Codex thread skills.config must be an array");
+  }
+  const disabledRules: JsonValue[] = isolation.disabledUserSkillPaths.map((skillPath) => ({
+    path: skillPath,
+    enabled: false,
+  }));
+  return {
+    ...config,
+    ...(isolation.suppressNativeSkillInstructions ? { "skills.include_instructions": false } : {}),
+    "skills.config": [...(existingRules ?? []), ...disabledRules],
+  };
+}

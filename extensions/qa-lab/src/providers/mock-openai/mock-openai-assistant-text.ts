@@ -1,4 +1,4 @@
-// QA Lab mock provider assistant text fixtures.
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
@@ -13,31 +13,29 @@ import {
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
-  type MockScenarioState,
 } from "./mock-openai-contracts.js";
 import {
   extractExactReplyDirective,
   extractFinishExactlyDirective,
   extractExactMarkerDirective,
-  extractWhatsAppLocationMarkerDirective,
-  extractWhatsAppContactMarkerDirective,
-  extractWhatsAppStickerMarkerDirective,
-  shouldUseWhatsAppLocationMarker,
-  shouldUseWhatsAppContactMarker,
-  shouldUseWhatsAppStickerMarker,
-  extractToolErrorForNamedCall,
-  isHeartbeatPrompt,
+  resolveWhatsAppStructuredReply,
+  resolveHeartbeatPromptReply,
   readFirstMediaPath,
 } from "./mock-openai-directives.js";
 import {
   extractLastUserText,
+  extractMockSubagentContext,
+  splitMockConversationContext,
   extractToolOutput,
   extractLatestToolOutput,
+  buildSlackMpimHistoryReply,
   extractAllUserTexts,
+  extractUserTurnTexts,
   extractAllRequestTexts,
-  extractLatestImageUserTurn,
+  extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
+import { readMockSubagentCompletion } from "./mock-openai-subagent-completion.js";
 import {
   extractRememberedFact,
   extractOrbitCode,
@@ -46,12 +44,101 @@ import {
   extractSnackPreference,
   isSnackRecallPrompt,
 } from "./mock-openai-tooling.js";
-export function buildAssistantText(
+
+function readCompletedImageGenerationMediaPath(prompt: string): string | undefined {
+  const eventStart = prompt.lastIndexOf("[Internal task completion event]");
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = prompt.slice(eventStart);
+  if (
+    !/^source:\s*image_generation\s*$/im.test(completionEvent) ||
+    !/^status:\s*completed successfully\s*$/im.test(completionEvent)
+  ) {
+    return undefined;
+  }
+  return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
+}
+
+export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
+
+function isCompactionRetryWritePatch(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const lines = value.split(/\r?\n/);
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    if (
+      lines[index] !== "--- compaction-retry-summary.txt" ||
+      lines[index + 1] !== "+++ compaction-retry-summary.txt"
+    ) {
+      continue;
+    }
+    let sectionEnd = lines.length;
+    for (let candidate = index + 2; candidate < lines.length - 1; candidate += 1) {
+      if (lines[candidate]?.startsWith("--- ") && lines[candidate + 1]?.startsWith("+++ ")) {
+        sectionEnd = candidate;
+        break;
+      }
+    }
+    if (lines.slice(index + 2, sectionEnd).includes("+Replay safety: unsafe after write.")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boolean {
+  if (
+    /^Successfully wrote \d+ bytes to compaction-retry-summary\.txt\.?$/i.test(toolOutput.trim())
+  ) {
+    return true;
+  }
+  const parsed = parseToolOutputJson(toolOutput);
+  if (!parsed || parsed.status !== "completed" || parsed.replaySafe !== false) {
+    return false;
+  }
+  const result = asOptionalRecord(parsed.value);
+  return (
+    result?.changed === true &&
+    result.created === true &&
+    result.firstChangedLine === 1 &&
+    isCompactionRetryWritePatch(result.patch)
+  );
+}
+
+export function readForkedContextCompletion(input: ResponsesInputItem[]) {
+  const completion = readMockSubagentCompletion(input, "qa-fork-context");
+  if (!completion) {
+    return undefined;
+  }
+  const result = /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/m.exec(completion.result);
+  return completion.ok && result ? result[0] : "FORKED-CONTEXT-MISSING-RESULT";
+}
+
+export function buildImageInspectionReply(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
-  scenarioState: MockScenarioState,
 ) {
+  const request = extractCurrentImageRequest(input, body);
+  if (request.imageInputCount > 0) {
+    if (/roundtrip image inspection check/i.test(request.text)) {
+      return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
+    }
+    if (/image understanding check/i.test(request.text)) {
+      return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
+    }
+  }
+  return undefined;
+}
+
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
+  const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
+  if (completedImageMediaPath) {
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =
     toolOutput ||
@@ -71,7 +158,7 @@ export function buildAssistantText(
         .filter((value): value is string => typeof value === "string")
         .join("\n")
     : "";
-  const userTexts = extractAllUserTexts(input);
+  const userTexts = extractUserTurnTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
@@ -82,12 +169,7 @@ export function buildAssistantText(
         ? JSON.stringify(toolJson.results)
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath =
-    typeof toolJson?.details === "object" &&
-    toolJson.details !== null &&
-    !Array.isArray(toolJson.details)
-      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
-      : "";
+  const mediaPath = readFirstMediaPath(asOptionalRecord(toolJson?.details)?.media);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserText = userTexts.join("\n");
@@ -96,31 +178,24 @@ export function buildAssistantText(
   const userExactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
-  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
-    ? extractWhatsAppLocationMarkerDirective(allInputText)
-    : "";
-  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
-    ? extractWhatsAppContactMarkerDirective(allInputText)
-    : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
-    ? extractWhatsAppStickerMarkerDirective(allInputText)
-    : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
-  const sessionsSpawnError = extractToolErrorForNamedCall({
-    input,
-    name: "sessions_spawn",
-    toolJson,
-  });
+  const toolError = typeof toolJson?.error === "string" ? toolJson.error.trim() : "";
 
+  const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
+  if (slackMpimHistoryReply !== undefined) {
+    return slackMpimHistoryReply;
+  }
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
   }
-  if (sessionsSpawnError) {
-    return `Protocol note: sessions_spawn failed: ${sessionsSpawnError}`;
+  if (
+    toolError &&
+    input.some((item) => item.type === "function_call" && item.name === "sessions_spawn")
+  ) {
+    return `Protocol note: sessions_spawn failed: ${toolError}`;
   }
   if (/remember this fact/i.test(prompt) && exactReplyDirective) {
     return exactReplyDirective;
@@ -131,44 +206,26 @@ export function buildAssistantText(
   if (/memory unavailable check/i.test(prompt)) {
     return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
   }
-  if (isHeartbeatPrompt(prompt)) {
-    return "HEARTBEAT_OK";
+  const heartbeatReply = resolveHeartbeatPromptReply(prompt);
+  if (heartbeatReply) {
+    return heartbeatReply;
   }
-  if (
-    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
-  ) {
-    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
+  const imageReply = buildImageInspectionReply(input, body);
+  if (imageReply) {
+    return imageReply;
   }
-  if (
-    /image understanding check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
-  ) {
-    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
+  const whatsAppStructuredReply = resolveWhatsAppStructuredReply(prompt, input, allInputText);
+  if (whatsAppStructuredReply) {
+    return whatsAppStructuredReply;
   }
-  if (whatsAppLocationMarker) {
-    return whatsAppLocationMarker;
+  const promptMarkerReply = promptExactMarkerDirective ?? promptExactReplyDirective;
+  if (/\bmarker\b/i.test(prompt) && promptMarkerReply) {
+    return promptMarkerReply;
   }
-  if (whatsAppContactMarker) {
-    return whatsAppContactMarker;
-  }
-  if (whatsAppStickerMarker) {
-    return whatsAppStickerMarker;
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
-    return promptExactMarkerDirective;
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
-    return userExactMarkerDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
-    return userExactReplyDirective;
+  const historyMarkerReply =
+    promptExactReplyDirective ?? userExactMarkerDirective ?? userExactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && historyMarkerReply) {
+    return historyMarkerReply;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -183,6 +240,9 @@ export function buildAssistantText(
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
   if (isSnackRecallPrompt(prompt) && snackPreference) {
+    if (prompt.includes("Reply with only the snack preference, verbatim")) {
+      return snackPreference;
+    }
     return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
   }
   if (isSnackRecallPrompt(prompt)) {
@@ -205,40 +265,24 @@ export function buildAssistantText(
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
   }
-  if (toolOutput && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
+  if (/repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
-    if (
+    const complete =
       /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
-      /status:\s*complete/i.test(repoEvidenceText)
-    ) {
-      return [
-        "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
-        "Wrote: repo-contract-summary.txt",
-        "Status: complete",
-      ].join("\n");
-    }
+      /status:\s*complete/i.test(repoEvidenceText);
     return [
       "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
       "Wrote: repo-contract-summary.txt",
-      "Status: blocked",
+      `Status: ${complete ? "complete" : "blocked"}`,
     ].join("\n");
   }
   if (toolOutput && /personal task followthrough check/i.test(allInputText)) {
-    const taskEvidenceText = scenarioToolOutput;
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
-      return [
-        "Pending: maintainer feedback before publishing",
-        "Blocked: publishing needs explicit user approval",
-        "Done: local evidence captured in personal-task-status.txt",
-      ].join("\n");
-    }
     return [
       "Pending: maintainer feedback before publishing",
       "Blocked: publishing needs explicit user approval",
-      "Done: blocked until personal-task-status.txt exists",
+      /successfully (?:wrote|created|updated|replaced)/i.test(scenarioToolOutput)
+        ? "Done: local evidence captured in personal-task-status.txt"
+        : "Done: blocked until personal-task-status.txt exists",
     ].join("\n");
   }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
@@ -281,34 +325,25 @@ export function buildAssistantText(
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
   }
-  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
-    return "FORKED-CONTEXT-ALPHA";
+  const forkTask = extractMockSubagentContext(input);
+  if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
+    const parent = forkTask.inheritedUserTexts.findLast((text) =>
+      /forked subagent context qa check/i.test(text),
+    );
+    const inheritedCode =
+      /The visible code in this current conversation is (FORKED-CONTEXT-[A-Z0-9-]+)\./.exec(
+        parent ?? "",
+      )?.[1];
+    return inheritedCode && !forkTask.task.includes(inheritedCode)
+      ? `FORKED-CONTEXT-CHILD: ${inheritedCode}`
+      : "FORKED-CONTEXT-MISSING-HISTORY";
   }
-  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return fanoutCompleteReply;
+  const forkCompletion = readForkedContextCompletion(input);
+  if (forkCompletion) {
+    return forkCompletion;
   }
-  if (
-    /forked subagent context qa check/i.test(prompt) &&
-    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
-  ) {
-    return [
-      "Worked",
-      "- FORKED-CONTEXT-ALPHA",
-      "Evidence",
-      "- The forked child recovered the visible code from requester transcript context.",
-      "Blocked",
-      "- None.",
-    ].join("\n");
-  }
-  if (
-    toolOutput &&
-    (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
-      /subagent handoff/i.test(allInputText))
-  ) {
-    const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
-    return `Delegated task:\n- Inspect the QA workspace via a bounded subagent.\nResult:\n- ${compact}\nEvidence:\n- The child result was folded back into the main thread exactly once.`;
+  if (/forked subagent context qa check/i.test(splitMockConversationContext(prompt).current)) {
+    return "Waiting for the forked child to recover the visible code.";
   }
   if (toolOutput && /worked, failed, blocked|worked\/failed\/blocked|follow-up/i.test(prompt)) {
     return `Worked:\n- Read seeded QA material.\n- Expanded the report structure.\nFailed:\n- None observed in mock mode.\nBlocked:\n- No live provider evidence in this lane.\nFollow-up:\n- Re-run with a real model for qualitative coverage.`;
@@ -324,13 +359,8 @@ export function buildAssistantText(
     (/compaction retry mutating tool check/i.test(allInputText) ||
       /compaction-retry-summary\.txt/i.test(toolOutput))
   ) {
-    if (
-      toolOutput.includes("Replay safety: unsafe after write.") ||
-      /compaction-retry-summary\.txt/i.test(toolOutput) ||
-      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
-      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
-    ) {
-      return "Protocol note: replay unsafe after write.";
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return QA_COMPACTION_RETRY_FINAL_MARKER;
     }
     return "";
   }
@@ -343,6 +373,22 @@ export function buildAssistantText(
     .filter(Boolean)
     .join(",");
   const askUserNote = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=single\b/i.test(allInputText) &&
+    askUserDeploy
+  ) {
+    return `ASK-USER-SINGLE-OK | deploy=${askUserDeploy}`;
+  }
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=multi\b/i.test(allInputText) &&
+    askUserChecks
+  ) {
+    return `ASK-USER-MULTI-OK | checks=${askUserChecks}`;
+  }
   if (
     toolOutput &&
     /"status"\s*:\s*"answered"/.test(askUserResult) &&

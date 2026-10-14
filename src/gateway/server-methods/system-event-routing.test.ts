@@ -7,13 +7,16 @@ import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
 } from "../../../packages/gateway-protocol/src/schema.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   requestHeartbeat: vi.fn(),
-  loadGatewaySessionRow: vi.fn(),
+  loadGatewaySessionEntryReadOnly: vi.fn(),
 }));
 
 vi.mock("../../infra/heartbeat-wake.js", async (importOriginal) => ({
@@ -23,7 +26,13 @@ vi.mock("../../infra/heartbeat-wake.js", async (importOriginal) => ({
 
 vi.mock("../session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionRow: mocks.loadGatewaySessionRow,
+  loadGatewaySessionEntryReadOnlyAsync: mocks.loadGatewaySessionEntryReadOnly,
+}));
+
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    mocks.loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }),
 }));
 
 import { systemHandlers } from "./system.js";
@@ -36,13 +45,13 @@ describe("system-event routing", () => {
   afterEach(() => {
     resetSystemEventsForTest();
     mocks.requestHeartbeat.mockReset();
-    mocks.loadGatewaySessionRow.mockReset();
+    mocks.loadGatewaySessionEntryReadOnly.mockReset();
   });
 
   it("queues and immediately wakes the requested session", async () => {
     const respond = vi.fn();
     const sessionKey = "agent:main:main";
-    mocks.loadGatewaySessionRow.mockReturnValue({ key: sessionKey, archived: false });
+    mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry: { sessionId: "session" } });
     const request = {
       params: {
         text: "OpenClaw updated. Welcome the user back.",
@@ -51,10 +60,8 @@ describe("system-event routing", () => {
       },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        publishPresence: vi.fn(),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -74,6 +81,111 @@ describe("system-event routing", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("wakes an unbound memory session and observes its next committed archive", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/system-event-memory" };
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const sessionKey = "agent:main:dashboard:incognito-wake";
+    const authority = { assertCurrent() {}, authorize() {} };
+    const binding = await acquireSessionActorStorage(
+      {
+        agentId: "main",
+        sessionKey,
+        env,
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+      },
+      { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+    );
+    if (!binding) {
+      throw new Error("Memory session fixture was not acquired");
+    }
+    try {
+      expect(
+        await binding.actor.storage.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: { sessionId: "memory-wake", updatedAt: 1, incognito: true },
+            },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+      const respond = vi.fn();
+      const request = {
+        params: { text: "Synthetic memory wake", sessionKey, wake: true },
+        respond,
+        context: {
+          publishPresence: vi.fn(),
+          getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
+        },
+      } as unknown as GatewayRequestHandlerOptions;
+      const handler = expectDefined(systemHandlers["system-event"], "system-event handler missing");
+      await handler(request);
+      expect(respond).toHaveBeenLastCalledWith(true, { ok: true }, undefined);
+      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+      expect(mocks.loadGatewaySessionEntryReadOnly).not.toHaveBeenCalled();
+      expect(
+        await binding.actor.storage.mutate(
+          {
+            type: "session.entry.patch",
+            input: {
+              operation: { kind: "fields", patch: { archivedAt: 2 } },
+            },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+      await handler(request);
+      expect(respond).toHaveBeenLastCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: `Unknown or archived session "${sessionKey}"`,
+        }),
+      );
+      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+    } finally {
+      await binding.actor.release();
+      memorySessionActorOwners.reset();
+      vi.unstubAllEnvs();
+    }
+  });
+  it("keeps ambient explicit-owner events on the global session queue", async () => {
+    const respond = vi.fn();
+    const request = {
+      params: { text: "Wake the system owner.", wake: true },
+      respond,
+      context: {
+        publishPresence: vi.fn(),
+        getRuntimeConfig: vi.fn(() => ({
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, molty: {} },
+          },
+        })),
+      },
+    } as unknown as GatewayRequestHandlerOptions;
+
+    await expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    )(request);
+
+    expect(peekSystemEvents("agent:main:global")).toEqual(["Wake the system owner."]);
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      agentId: "main",
+      sessionKey: "global",
+      heartbeat: { target: "last" },
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
   it("rejects immediate wakes for unconfigured agents", async () => {
     const respond = vi.fn();
     const request = {
@@ -84,10 +196,8 @@ describe("system-event routing", () => {
       },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        publishPresence: vi.fn(),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -105,38 +215,41 @@ describe("system-event routing", () => {
     );
   });
 
-  it("rejects immediate wakes for missing sessions", async () => {
-    const respond = vi.fn();
-    const sessionKey = "agent:main:missing";
-    mocks.loadGatewaySessionRow.mockReturnValue(null);
-    const request = {
-      params: {
-        text: "OpenClaw updated. Welcome the user back.",
-        sessionKey,
-        wake: true,
-      },
-      respond,
-      context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
+  it.each([undefined, 0, 1])(
+    "rejects immediate wakes for missing or archived sessions (%s)",
+    async (archivedAt) => {
+      const respond = vi.fn();
+      const sessionKey = "agent:main:missing";
+      mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({
+        entry: archivedAt === undefined ? undefined : { sessionId: "archived-session", archivedAt },
+      });
+      const request = {
+        params: {
+          text: "OpenClaw updated. Welcome the user back.",
+          sessionKey,
+          wake: true,
+        },
+        respond,
+        context: {
+          publishPresence: vi.fn(),
+          getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
+        },
+      } as unknown as GatewayRequestHandlerOptions;
 
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
+      await expectDefined(
+        systemHandlers["system-event"],
+        'systemHandlers["system-event"] test invariant',
+      )(request);
 
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: `Unknown or archived session "${sessionKey}"` }),
-    );
-  });
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+      expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: `Unknown or archived session "${sessionKey}"` }),
+      );
+    },
+  );
 
   it("rejects wake requests mixed with node presence events", async () => {
     const respond = vi.fn();
@@ -150,10 +263,8 @@ describe("system-event routing", () => {
       },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        publishPresence: vi.fn(),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -163,7 +274,7 @@ describe("system-event routing", () => {
     )(request);
 
     expect(peekSystemEvents(sessionKey)).toEqual([]);
-    expect(mocks.loadGatewaySessionRow).not.toHaveBeenCalled();
+    expect(mocks.loadGatewaySessionEntryReadOnly).not.toHaveBeenCalled();
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -179,10 +290,8 @@ describe("system-event routing", () => {
       'systemHandlers["system-event"] test invariant',
     );
     const context = {
-      broadcast: vi.fn(),
-      incrementPresenceVersion: vi.fn(() => 1),
-      getHealthVersion: vi.fn(() => 1),
-      getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+      publishPresence: vi.fn(),
+      getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
     };
 
     await handler({

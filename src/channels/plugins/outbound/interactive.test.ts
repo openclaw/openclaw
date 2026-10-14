@@ -1,12 +1,17 @@
 // Interactive outbound tests cover channel outbound interactive payload construction.
 import { describe, expect, it } from "vitest";
-import { renderMessagePresentationChartFallbackText } from "../../../interactive/payload.js";
+import {
+  renderMessagePresentationChartFallbackText,
+  renderMessagePresentationFallbackText,
+  normalizeMessagePresentation,
+  type MessagePresentation,
+} from "../../../interactive/payload.js";
 import {
   adaptMessagePresentationForChannel,
   applyPresentationActionLimits,
   presentationPageSize,
   reduceInteractiveReply,
-} from "./interactive.js";
+} from "../../../plugin-sdk/interactive-runtime.js";
 
 describe("reduceInteractiveReply", () => {
   it("walks authored blocks in order", () => {
@@ -34,6 +39,27 @@ describe("reduceInteractiveReply", () => {
 });
 
 describe("presentation capability limits", () => {
+  it("drops model-picker actions until a channel integration opts in", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Model",
+          action: {
+            type: "model-picker",
+            version: 1,
+            snapshotToken: "snapshot_1",
+            intent: "choose-model",
+            providerToken: "provider_1",
+            modelToken: "model_1",
+          },
+        },
+      ],
+      { buttons: true },
+    );
+
+    expect(buttons).toEqual([]);
+  });
+
   it("keeps highest-priority buttons inside action capacity", () => {
     const buttons = applyPresentationActionLimits(
       [
@@ -334,7 +360,7 @@ describe("presentation capability limits", () => {
           placeholder: "Enviro",
           options: [{ label: "Canary", value: "canary" }],
         },
-        { type: "context", text: "Environment target:\n- Produc" },
+        { type: "context", text: "Environment target:\n- Production cluster" },
       ],
     });
   });
@@ -375,8 +401,72 @@ describe("presentation capability limits", () => {
     });
 
     expect(presentation.blocks).toEqual([
-      { type: "context", text: "Actions:\n- Approve\n- Rollback" },
-      { type: "context", text: "Environment:\n- Canary\n- Product" },
+      { type: "context", text: "Actions:\n- Approve deployment\n- Rollback deployment" },
+      { type: "context", text: "Environment:\n- Canary cluster\n- Production cluster" },
+    ]);
+  });
+
+  it("keeps dropped command buttons actionable without exposing private callbacks", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "keep" },
+              { label: "Deploy", action: { type: "command", command: "/deploy production" } },
+              {
+                label: "Approval",
+                action: {
+                  type: "approval",
+                  approvalId: "approval:private-transport-token",
+                  approvalKind: "exec",
+                  decision: "allow-once",
+                },
+              },
+              {
+                label: "Opaque",
+                action: { type: "callback", value: "private-callback-token" },
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: { limits: { actions: { maxActions: 1 } } },
+    });
+
+    expect(presentation.blocks).toEqual([
+      { type: "buttons", buttons: [{ label: "Keep", value: "keep" }] },
+      {
+        type: "context",
+        text: "Actions:\n- Deploy: `/deploy production`\n- Approval\n- Opaque",
+      },
+    ]);
+  });
+
+  it("keeps unavailable typed select commands actionable without exposing callback values", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Environment",
+            options: [
+              { label: "Canary", action: { type: "command", command: "/deploy canary" } },
+              { label: "Production", action: { type: "command", command: "/deploy production" } },
+              { label: "Opaque", action: { type: "callback", value: "private-callback-token" } },
+            ],
+          },
+        ],
+      },
+      capabilities: { selects: false },
+    });
+
+    expect(presentation.blocks).toEqual([
+      {
+        type: "context",
+        text: "Environment:\n- Canary: `/deploy canary`\n- Production: `/deploy production`\n- Opaque",
+      },
     ]);
   });
 
@@ -515,7 +605,7 @@ describe("presentation capability limits", () => {
     });
 
     expect(presentation.blocks).toEqual([
-      { type: "text", text: "Actions:\n- Appr" },
+      { type: "text", text: "Actions:\n- Approve" },
       { type: "text", text: "Target:\n- Canary" },
       { type: "text", text: "Muted details" },
     ]);
@@ -556,7 +646,83 @@ describe("presentation capability limits", () => {
     ]);
   });
 
-  it("applies advertised text limits to titles, text, context, and generated fallback", () => {
+  it("splits unsupported button fallbacks without losing action labels", () => {
+    const labels = ["Approve production", "Rollback release", "Show audit trail"];
+    const maxLength = 24;
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: labels.map((label, index) => ({ label, value: `action-${index}` })),
+          },
+        ],
+      },
+      capabilities: {
+        buttons: false,
+        context: false,
+        limits: {
+          actions: { maxLabelLength: 4 },
+          text: { maxLength, encoding: "characters" },
+        },
+      },
+    });
+
+    const fallback = presentation.blocks.map((block) => {
+      expect(block.type).toBe("text");
+      return block.type === "text" ? block.text : "";
+    });
+    expect(fallback.length).toBeGreaterThan(1);
+    expect(fallback.every((value) => Array.from(value).length <= maxLength)).toBe(true);
+    expect(fallback.join("")).toBe(`Actions:\n${labels.map((label) => `- ${label}`).join("\n")}`);
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      `Actions:\n${labels.map((label) => `- ${label}`).join("\n")}`,
+    );
+  });
+
+  it("splits overflow select fallbacks without losing unavailable options", () => {
+    const maxLength = 18;
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Deployment target",
+            options: [
+              { label: "Canary", value: "canary" },
+              { label: "Production cluster", value: "production" },
+              { label: "Rollback environment", value: "rollback" },
+            ],
+          },
+        ],
+      },
+      capabilities: {
+        limits: {
+          selects: { maxOptions: 1, maxLabelLength: 4 },
+          text: { maxLength, encoding: "characters" },
+        },
+      },
+    });
+
+    expect(presentation.blocks[0]).toMatchObject({
+      type: "select",
+      options: [{ label: "Cana", value: "canary" }],
+    });
+    const fallback = presentation.blocks.slice(1).map((block) => {
+      expect(block.type).toBe("context");
+      return block.type === "context" ? block.text : "";
+    });
+    expect(fallback.length).toBeGreaterThan(1);
+    expect(fallback.every((value) => Array.from(value).length <= maxLength)).toBe(true);
+    expect(fallback.join("")).toBe(
+      "Deployment target:\n- Production cluster\n- Rollback environment",
+    );
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      "Depl:\n- Cana\n\nDeployment target:\n- Production cluster\n- Rollback environment",
+    );
+  });
+
+  it("splits titles, text, context, and generated fallback without losing content", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
         title: "abcdef",
@@ -585,43 +751,85 @@ describe("presentation capability limits", () => {
     expect(presentation).toEqual({
       title: "abcde",
       blocks: [
+        { type: "text", text: "f" },
         { type: "text", text: "hello" },
+        { type: "text", text: " worl" },
+        { type: "text", text: "d" },
         { type: "context", text: "abcde" },
+        { type: "context", text: "f" },
         { type: "context", text: "Actio" },
+        { type: "context", text: "ns:\n" },
+        { type: "context", text: "- Dep" },
+        { type: "context", text: "loy" },
       ],
     });
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      "abcdef\n\nhello world\n\nabcdef\n\nActions:\n- Deploy",
+    );
   });
 
-  it("does not split code points when applying utf8 byte text limits", () => {
+  it.each([
+    { encoding: "characters" as const, length: (text: string) => Array.from(text).length },
+    { encoding: "utf8-bytes" as const, length: (text: string) => Buffer.byteLength(text, "utf8") },
+    { encoding: "utf16-units" as const, length: (text: string) => text.length },
+  ])("preserves authored Unicode content under $encoding limits", ({ encoding, length }) => {
+    const text = `${"😀".repeat(64)} split \n${"e\u0301 ".repeat(24)}last`;
+    const original = {
+      title: text,
+      blocks: [
+        { type: "text" as const, text },
+        { type: "context" as const, text },
+      ],
+    };
+    const capabilities = { context: false, limits: { text: { maxLength: 6, encoding } } };
     const presentation = adaptMessagePresentationForChannel({
-      presentation: {
-        blocks: [{ type: "text", text: "abc😀def" }],
-      },
-      capabilities: {
-        limits: {
-          text: {
-            maxLength: 6,
-            encoding: "utf8-bytes",
-          },
-        },
-      },
+      presentation: original,
+      capabilities,
     });
-
-    expect(presentation.blocks).toEqual([{ type: "text", text: "abc" }]);
+    expect(length(presentation.title ?? "")).toBeLessThanOrEqual(6);
+    for (const block of presentation.blocks) {
+      expect(block.type).toBe("text");
+      if (block.type === "text") {
+        expect(length(block.text)).toBeLessThanOrEqual(6);
+        expect(Buffer.from(block.text, "utf8").toString("utf8")).toBe(block.text);
+      }
+    }
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      renderMessagePresentationFallbackText({ presentation: original }),
+    );
+    expect(
+      renderMessagePresentationFallbackText({
+        presentation: normalizeMessagePresentation(
+          adaptMessagePresentationForChannel({ presentation, capabilities }),
+        ),
+      }),
+    ).toBe(renderMessagePresentationFallbackText({ presentation: original }));
+    expect(adaptMessagePresentationForChannel({ presentation: original })).toEqual(original);
   });
 
-  it("does not split code points when applying label limits", () => {
+  it.each([
+    {
+      sample: "astral labels",
+      labels: ["😀😀😀", "🚀🚀🚀", "👍👍👍"] as const,
+      prefixes: ["😀😀", "🚀🚀", "👍👍"],
+    },
+    {
+      sample: "long labels with isolated surrogates",
+      labels: ["A\uD800B".repeat(24), "\uDC00AB".repeat(24), "😀\uD800Z".repeat(24)] as const,
+      prefixes: ["A\uD800", "\uDC00A", "😀\uD800"],
+    },
+  ])("preserves code-point prefixes for $sample", ({ labels, prefixes }) => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
         blocks: [
           {
             type: "buttons",
-            buttons: [{ label: "😀😀😀", value: "ok" }],
+            buttons: [{ label: labels[0], value: "ok" }],
           },
           {
             type: "select",
-            placeholder: "🚀🚀🚀",
-            options: [{ label: "👍👍👍", value: "yes" }],
+            placeholder: labels[1],
+            options: [{ label: labels[2], value: "yes" }],
           },
         ],
       },
@@ -640,41 +848,92 @@ describe("presentation capability limits", () => {
     expect(presentation.blocks).toEqual([
       {
         type: "buttons",
-        buttons: [{ label: "😀😀", value: "ok" }],
+        buttons: [{ label: prefixes[0], value: "ok" }],
       },
       {
         type: "select",
-        placeholder: "🚀🚀",
-        options: [{ label: "👍👍", value: "yes" }],
+        placeholder: prefixes[1],
+        options: [{ label: prefixes[2], value: "yes" }],
       },
     ]);
   });
 
-  it("preserves link buttons by dropping only over-limit callback values", () => {
+  it("keeps local row limits when the raw button count fits the global capacity", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
         blocks: [
+          { type: "buttons", buttons: [{ label: "One", value: "one" }] },
+          { type: "buttons", buttons: [{ label: "Two", value: "two" }] },
           {
             type: "buttons",
-            buttons: [{ label: "Open report", value: "x".repeat(20), url: "https://example.test" }],
+            buttons: [
+              { label: "Three", value: "three", priority: 10 },
+              { label: "Four", value: "four", priority: 10 },
+            ],
           },
         ],
       },
-      capabilities: {
-        limits: {
-          actions: {
-            maxValueBytes: 4,
-          },
-        },
-      },
+      capabilities: { limits: { actions: { maxActionsPerRow: 2, maxRows: 2 } } },
     });
 
-    expect(presentation.blocks).toEqual([
-      {
+    expect(presentation).toStrictEqual({
+      blocks: [
+        { type: "buttons", buttons: [{ label: "One", value: "one" }] },
+        { type: "buttons", buttons: [{ label: "Two", value: "two" }] },
+        { type: "context", text: "Actions:\n- Three\n- Four" },
+      ],
+    });
+  });
+
+  it("adapts repeated button occurrences independently and rereads changed input", () => {
+    const button = { label: "😀 more", value: "first", style: "primary" as const };
+    const block = { type: "buttons" as const, buttons: [button, button] };
+    const presentation: MessagePresentation = { blocks: [block, block] };
+    const actions = {
+      maxActions: 4,
+      maxActionsPerRow: 2,
+      maxRows: 2,
+      maxLabelLength: 1,
+      supportsStyles: false,
+    };
+    const first = adaptMessagePresentationForChannel({
+      presentation,
+      capabilities: { limits: { actions } },
+    });
+    const expectedFirst = {
+      blocks: Array.from({ length: 2 }, () => ({
         type: "buttons",
-        buttons: [{ label: "Open report", url: "https://example.test" }],
-      },
-    ]);
+        buttons: [
+          { label: "😀", value: "first" },
+          { label: "😀", value: "first" },
+        ],
+      })),
+    };
+
+    expect(first).toStrictEqual(expectedFirst);
+    const copies = first.blocks.flatMap((entry) => (entry.type === "buttons" ? entry.buttons : []));
+    expect(new Set(copies).size).toBe(4);
+    expect(copies).not.toContain(button);
+    expect(button).toStrictEqual({ label: "😀 more", value: "first", style: "primary" });
+
+    button.label = "Updated";
+    button.value = "second";
+    actions.maxLabelLength = 2;
+    const second = adaptMessagePresentationForChannel({
+      presentation,
+      capabilities: { limits: { actions } },
+    });
+
+    expect(second).toStrictEqual({
+      blocks: Array.from({ length: 2 }, () => ({
+        type: "buttons",
+        buttons: [
+          { label: "Up", value: "second" },
+          { label: "Up", value: "second" },
+        ],
+      })),
+    });
+    expect(first).toStrictEqual(expectedFirst);
   });
 
   it("applies button priority across the shared action budget", () => {
@@ -770,52 +1029,81 @@ describe("presentation capability limits", () => {
     ]);
   });
 
-  it("reserves action row capacity for select blocks", () => {
+  it.each([false, true])(
+    "reserves a select row with rejected leading options: %s",
+    (hasRejected) => {
+      const presentation = adaptMessagePresentationForChannel({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "One", value: "one" },
+                { label: "Two", value: "two" },
+                { label: "Three", value: "three" },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "Extra",
+              options: [
+                ...(hasRejected ? [{ label: "Rejected", value: "too-long" }] : []),
+                { label: "Four", value: "four" },
+              ],
+            },
+          ],
+        },
+        capabilities: {
+          limits: {
+            actions: {
+              maxActionsPerRow: 2,
+              maxRows: 2,
+            },
+            selects: {
+              maxOptions: 1,
+              maxValueBytes: 4,
+            },
+          },
+        },
+      });
+
+      expect(presentation.blocks).toEqual([
+        {
+          type: "buttons",
+          buttons: [
+            { label: "One", value: "one" },
+            { label: "Two", value: "two" },
+          ],
+        },
+        { type: "context", text: "Actions:\n- Three" },
+        {
+          type: "select",
+          placeholder: "Extra",
+          options: [{ label: "Four", value: "four" }],
+        },
+        ...(hasRejected ? [{ type: "context", text: "Extra:\n- Rejected" }] : []),
+      ]);
+    },
+  );
+
+  it("preserves authored button precedence when only action rows are bounded", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
         blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "One", value: "one" },
-              { label: "Two", value: "two" },
-              { label: "Three", value: "three" },
-            ],
-          },
+          { type: "buttons", buttons: [{ label: "First", value: "first" }] },
           {
             type: "select",
-            placeholder: "Extra",
-            options: [{ label: "Four", value: "four" }],
+            placeholder: "Target",
+            options: [{ label: "Later", value: "later" }],
           },
         ],
       },
-      capabilities: {
-        limits: {
-          actions: {
-            maxActionsPerRow: 2,
-            maxRows: 2,
-          },
-          selects: {
-            maxOptions: 25,
-          },
-        },
-      },
+      capabilities: { limits: { actions: { maxRows: 1 } } },
     });
 
     expect(presentation.blocks).toEqual([
-      {
-        type: "buttons",
-        buttons: [
-          { label: "One", value: "one" },
-          { label: "Two", value: "two" },
-        ],
-      },
-      { type: "context", text: "Actions:\n- Three" },
-      {
-        type: "select",
-        placeholder: "Extra",
-        options: [{ label: "Four", value: "four" }],
-      },
+      { type: "buttons", buttons: [{ label: "First", value: "first" }] },
+      { type: "context", text: "Target:\n- Later" },
     ]);
   });
 

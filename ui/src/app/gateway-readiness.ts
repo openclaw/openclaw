@@ -1,5 +1,18 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationGateway } from "./context.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./context.ts";
+
+export function readSuspensionPhase(
+  payload: unknown,
+): ApplicationGatewaySnapshot["suspensionPhase"] {
+  const phase = asOptionalRecord(payload)?.phase;
+  return phase === "accepting" ||
+    phase === "preparing" ||
+    phase === "draining" ||
+    phase === "prepared"
+    ? phase
+    : undefined;
+}
 
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
@@ -12,12 +25,13 @@ export function waitForGatewayClient(
   signal: AbortSignal,
 ): Promise<GatewayBrowserClient> {
   const current = gateway.snapshot.client;
+  if (signal.aborted) {
+    return Promise.reject(abortError(signal));
+  }
   if (current && gateway.snapshot.phase === "connected") {
     return Promise.resolve(current);
   }
   return new Promise((resolve, reject) => {
-    let unsubscribe: () => void = () => undefined;
-    let settled = false;
     const cleanup = () => {
       unsubscribe();
       signal.removeEventListener("abort", onAbort);
@@ -26,19 +40,13 @@ export function waitForGatewayClient(
       cleanup();
       reject(abortError(signal));
     };
-    unsubscribe = gateway.subscribe((snapshot) => {
+    // The Gateway owner registers listeners without synchronous replay.
+    const unsubscribe = gateway.subscribe((snapshot) => {
       if (snapshot.phase === "connected" && snapshot.client) {
-        settled = true;
         cleanup();
         resolve(snapshot.client);
       }
     });
-    if (settled) {
-      unsubscribe();
-    }
     signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
   });
 }

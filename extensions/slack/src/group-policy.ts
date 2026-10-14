@@ -1,4 +1,3 @@
-// Slack plugin module implements group policy behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -9,14 +8,51 @@ import {
   type ScopeNode,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
+import { buildChannelKeyCandidates } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
+import { getSlackChannelPolicyKeys } from "./channel-policy-state.js";
+import { getSlackInstallationKind } from "./installation-identity-state.js";
 
 type SlackChannelPolicyEntry = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
+
+export function buildSlackChannelIdCandidates(
+  channelId: string | null | undefined,
+  teamId?: string | null,
+  options?: { allowUnscoped?: boolean },
+): string[] {
+  const trimmedId = channelId?.trim();
+  if (!trimmedId) {
+    return [];
+  }
+  const lowercaseId = trimmedId.toLowerCase();
+  const uppercaseId = trimmedId.toUpperCase();
+  const exactTeamId = teamId || undefined;
+  const lowercaseTeamId = exactTeamId?.toLowerCase();
+  const uppercaseTeamId = exactTeamId?.toUpperCase();
+  // Inbound Slack IDs are uppercase, but persisted session group IDs are lowercase.
+  const scopedCandidates = buildChannelKeyCandidates(
+    exactTeamId ? `team:${exactTeamId}:channel:${trimmedId}` : undefined,
+    lowercaseTeamId ? `team:${lowercaseTeamId}:channel:${lowercaseId}` : undefined,
+    uppercaseTeamId ? `team:${uppercaseTeamId}:channel:${uppercaseId}` : undefined,
+  );
+  if (exactTeamId && options?.allowUnscoped !== true) {
+    return scopedCandidates;
+  }
+  return buildChannelKeyCandidates(
+    ...scopedCandidates,
+    trimmedId,
+    lowercaseId,
+    uppercaseId,
+    `channel:${trimmedId}`,
+    `channel:${lowercaseId}`,
+    `channel:${uppercaseId}`,
+  );
+}
 
 export function buildSlackChannelPolicyScope<T extends ScopeNode>(params: {
   channels?: Record<string, T>;
@@ -46,17 +82,20 @@ function resolveSlackGroupPolicyScope(params: ChannelGroupContext) {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
   );
-  const channels = mergeSlackAccountConfig(params.cfg, accountId).channels as
-    | Record<string, SlackChannelPolicyEntry>
-    | undefined;
-  const channelId = params.groupId?.trim();
-  const channelName = params.groupChannel?.replace(/^#/, "");
-  const candidates = [
-    channelId,
+  const slack = mergeSlackAccountConfig(params.cfg, accountId);
+  const channels = slack.channels as Record<string, SlackChannelPolicyEntry> | undefined;
+  const channelName =
+    slack.dangerouslyAllowNameMatching === true
+      ? params.groupChannel?.replace(/^#/, "")
+      : undefined;
+  const allowUnscoped = getSlackInstallationKind(accountId) !== "enterprise";
+  const candidates = buildChannelKeyCandidates(
+    ...buildSlackChannelIdCandidates(params.groupId, params.groupSpace, { allowUnscoped }),
+    ...getSlackChannelPolicyKeys(accountId, params.groupId),
     channelName ? `#${channelName}` : undefined,
     channelName,
     normalizeHyphenSlug(channelName),
-  ].filter((candidate): candidate is string => Boolean(candidate));
+  );
   return buildSlackChannelPolicyScope({ channels, candidates });
 }
 

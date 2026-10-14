@@ -1,60 +1,63 @@
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability } from "./index.ts";
+import { fetchPagedSessionRows } from "./paged-session-rows.ts";
+import type { SessionListSnapshot } from "./session-capability.ts";
 
-const MAX_CHILD_SESSION_LIST_PASSES = 4;
+// Matches the Gateway default and covers the default 50-child Swarm roster.
+// Custom larger groups keep paging through the bounded retry loop below.
+const CHILD_SESSION_LIST_PAGE_SIZE = 100;
+
+export function childSessionListQuery(parentKey: string, pageSize = CHILD_SESSION_LIST_PAGE_SIZE) {
+  return {
+    spawnedBy: parentKey,
+    limit: pageSize,
+    includeGlobal: false,
+    includeUnknown: false,
+    configuredAgentsOnly: true,
+  };
+}
 
 export async function fetchChildSessionRows(params: {
-  sessions: SessionCapability;
+  sessions: Pick<SessionCapability, "refreshList" | "listSnapshot">;
   parentKey: string;
+  agentId?: string;
   isCurrent: () => boolean;
-  pageSize?: number;
+  initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const rowsByKey = new Map<string, GatewaySessionRow>();
-  const pageSize = params.pageSize ?? 20;
-  for (let pass = 0; pass < MAX_CHILD_SESSION_LIST_PASSES; pass += 1) {
-    const seenOffsets = new Set<number>();
-    const rowsBeforePass = rowsByKey.size;
-    let expectedTotal: number | undefined;
-    let offset = 0;
-    while (!seenOffsets.has(offset)) {
-      seenOffsets.add(offset);
-      const result = await params.sessions.list({
-        spawnedBy: params.parentKey,
-        ...(offset > 0 ? { offset } : {}),
-        limit: pageSize,
-        includeGlobal: false,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-      });
-      if (!params.isCurrent()) {
-        return null;
-      }
-      if (!result) {
-        throw new Error("child session list returned no result");
-      }
-      expectedTotal = result.totalCount;
-      const runtimeSampledAt = Date.now();
-      for (const row of result.sessions) {
-        // A later pass is a fresher server observation even when the row moved
-        // across an updatedAt-sorted offset boundary.
-        rowsByKey.set(row.key, { ...row, runtimeSampledAt });
-      }
-      const hasMore =
-        result.hasMore ??
-        (typeof result.totalCount === "number" &&
-          offset + result.sessions.length < result.totalCount);
-      const nextOffset = result.nextOffset ?? offset + result.sessions.length;
-      if (!hasMore || nextOffset <= offset) {
-        break;
-      }
-      offset = nextOffset;
+  const query = {
+    ...childSessionListQuery(params.parentKey),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
+  let pagination: SessionListSnapshot["pagination"];
+  const readResult = () => {
+    const snapshot = params.sessions.listSnapshot(query);
+    if (snapshot.error) {
+      throw new Error(snapshot.error);
     }
-    const addedThisPass = rowsByKey.size - rowsBeforePass;
-    if (addedThisPass === 0 || expectedTotal === undefined || rowsByKey.size >= expectedTotal) {
-      break;
+    pagination = snapshot.pagination;
+    return snapshot.result;
+  };
+  if (params.initialResult) {
+    // Observation callbacks run before their first read settles. Join that
+    // owner before appending; a concurrent append does not queue another page.
+    await params.sessions.refreshList(query);
+    if (!params.isCurrent()) {
+      return null;
     }
-    // updatedAt ordering can move a child across an offset boundary while paging.
-    // Repeat from zero until the deduplicated roster reaches the latest total.
   }
-  return [...rowsByKey.values()];
+  return fetchPagedSessionRows({
+    list: async (offset) => {
+      await params.sessions.refreshList({
+        ...query,
+        ...(offset > 0 ? { offset, append: true } : {}),
+      });
+      return readResult();
+    },
+    initialResult: params.initialResult ? readResult() : undefined,
+    resultKind: "window",
+    windowPagination: () => pagination,
+    isCurrent: params.isCurrent,
+    missingResultError: "child session list returned no result",
+    incompletePaginationError: "The child session list kept changing. Try again.",
+  });
 }

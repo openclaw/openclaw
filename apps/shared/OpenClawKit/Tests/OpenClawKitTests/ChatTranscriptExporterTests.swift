@@ -1,8 +1,73 @@
+import Foundation
 import Testing
 @testable import OpenClawChatUI
 
 @Suite("ChatTranscriptExporter")
 struct ChatTranscriptExporterTests {
+    @Test func `exports system transcript rows without leaking internal prompts`() throws {
+        let wire = Data(#"""
+        [
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "[System] Resume the interrupted turn with private context."}],
+            "timestamp": 0,
+            "provenance": {"kind": "internal_system", "sourceTool": "main_session_restart_recovery"}
+          },
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "[System] Gateway restarted after an update."}],
+            "timestamp": 500,
+            "provenance": {"kind": "internal_system", "sourceTool": "restart-sentinel"}
+          },
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "Context first line.\nContext last line."}],
+            "timestamp": 600,
+            "provenance": {"kind": "internal_system", "sourceTool": "cli_harness_context"}
+          },
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "Task first line.\nTask last line."}],
+            "timestamp": 700,
+            "provenance": {"kind": "internal_system", "sourceTool": "claude_cli_task_notification"}
+          },
+          {
+            "role": "system",
+            "content": [],
+            "timestamp": 1000,
+            "__openclaw": {"kind": "compaction", "id": "compact-1", "tokensBefore": 25000, "tokensAfter": 12500}
+          },
+          {
+            "role": "system",
+            "content": [],
+            "timestamp": 2000,
+            "__openclaw": {"kind": "reset", "id": "reset-1"}
+          },
+          {
+            "role": "system",
+            "content": [{"type": "text", "text": "Unknown marker body"}],
+            "timestamp": 3000,
+            "__openclaw": {"kind": "future-marker", "id": "future-1"}
+          }
+        ]
+        """#.utf8)
+        let messages = try JSONDecoder().decode([OpenClawChatMessage].self, from: wire)
+
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: "System events",
+            sessionKey: "agent:main",
+            messages: messages)
+
+        #expect(!markdown.contains("private context"))
+        #expect(markdown.contains("System · restart recovery"))
+        #expect(markdown.contains("[System · gateway restarted] Gateway restarted after an update."))
+        #expect(markdown.contains("[System · injected context] Context first line.\nContext last line."))
+        #expect(markdown.contains("[System · background task] Task first line.\nTask last line."))
+        #expect(markdown.contains("[Compacted history · saved 12.5k tokens]"))
+        #expect(markdown.contains("[Session reset — The earlier conversation was cleared.]"))
+        #expect(!markdown.contains("Unknown marker body"))
+    }
+
     @Test func `formats visible messages and attachments`() {
         let messages = [
             self.message(role: "system", text: "Hidden setup", timestamp: 0),
@@ -64,7 +129,10 @@ struct ChatTranscriptExporterTests {
         """)
     }
 
-    @Test(arguments: ["file", "attachment", "image", "audio", "FILE", "ATTACHMENT", "IMAGE", "AuDiO"])
+    @Test(arguments: [
+        "file", "attachment", "image", "audio", "video",
+        "FILE", "ATTACHMENT", "IMAGE", "AuDiO", "ViDeO",
+    ])
     func `classifies gateway media and historical file attachments consistently`(type: String) {
         let content = OpenClawChatMessageContent(
             type: type,
@@ -99,17 +167,18 @@ struct ChatTranscriptExporterTests {
         #expect(!content.isInlineAttachment)
     }
 
-    @Test(arguments: ["user", "assistant"], ["image", "audio", "IMAGE", "AuDiO"])
+    @Test(arguments: ["user", "assistant"], ["image", "audio", "video", "IMAGE", "AuDiO", "ViDeO"])
     func `exports canonical media-only messages`(role: String, type: String) {
         let isAudio = type.lowercased() == "audio"
-        let filename = isAudio ? "voice-note.m4a" : "photo.png"
+        let isVideo = type.lowercased() == "video"
+        let filename = isAudio ? "voice-note.m4a" : isVideo ? "clip.mp4" : "photo.png"
         let message = OpenClawChatMessage(
             role: role,
             content: [
                 OpenClawChatMessageContent(
                     type: type,
                     text: nil,
-                    mimeType: isAudio ? "audio/mp4" : "image/png",
+                    mimeType: isAudio ? "audio/mp4" : isVideo ? "video/mp4" : "image/png",
                     fileName: filename,
                     content: nil),
             ],

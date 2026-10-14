@@ -1,4 +1,8 @@
 import type { RouteMatch, Router, RouterState } from "@openclaw/uirouter";
+import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../lib/gateway-availability.ts";
 
 const DEFAULT_PENDING_DELAY_MS = 1_000;
 
@@ -17,16 +21,17 @@ export type RouterOutletSnapshot<
   TModule = unknown,
   TData = unknown,
 > = RouterOutletStateSlice<TRouteId, TModule, TData> & {
+  settled: RouteMatch<TRouteId, TModule, TData> | undefined;
   showPending: boolean;
+  startupPending?: boolean;
 };
 
-type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
+export type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => void;
-};
-
-type RouterOutletControllerOptions = {
-  pendingDelayMs?: number;
+  onNotFound?: () => boolean | void;
+  notFoundRecoveryReady?: boolean;
+  retryContext?: TLoadContext;
+  retryEnabled?: boolean;
 };
 
 export function selectRenderedRouteMatch<TRouteId extends string, TModule, TData>(
@@ -48,17 +53,6 @@ function selectRouterOutletState<TRouteId extends string, TModule, TData>(
   };
 }
 
-function equalRouterOutletState(
-  previous: RouterOutletStateSlice,
-  next: RouterOutletStateSlice,
-): boolean {
-  return (
-    previous.status === next.status &&
-    previous.active === next.active &&
-    previous.pending === next.pending
-  );
-}
-
 function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSnapshot<
   TRouteId,
   TModule,
@@ -68,6 +62,7 @@ function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSn
     status: "idle",
     active: undefined,
     pending: undefined,
+    settled: undefined,
     showPending: false,
   };
 }
@@ -84,38 +79,57 @@ export class RouterOutletController<
   TData = unknown,
 > {
   private router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  private onNotFound?: () => void;
+  private onNotFound?: () => boolean | void;
   private connected = false;
   private unsubscribe?: () => void;
   private selection: RouterOutletStateSlice<TRouteId, TModule, TData> = idleSnapshot();
   private snapshotValue: RouterOutletSnapshot<TRouteId, TModule, TData> = idleSnapshot();
+  private settled?: RouteMatch<TRouteId, TModule, TData>;
   private pendingMatchId?: string;
   private pendingTimer?: ReturnType<typeof globalThis.setTimeout>;
   private showPending = false;
   private notFoundActive = false;
-  private notFoundQueued = false;
+  private notFoundDeclined = false;
   private notFoundGeneration = 0;
-  private readonly pendingDelayMs: number;
+  private notFoundRecoveryReady = true;
+  private retryContext?: TLoadContext;
+  private retryEnabled = true;
+  private startupMatchId?: string;
+  private startupAttempt = 0;
+  private startupTimer?: ReturnType<typeof globalThis.setTimeout>;
 
-  constructor(
-    private readonly invalidate: () => void,
-    options: RouterOutletControllerOptions = {},
-  ) {
-    this.pendingDelayMs = options.pendingDelayMs ?? DEFAULT_PENDING_DELAY_MS;
-  }
+  constructor(private readonly invalidate: () => void) {}
 
   get snapshot(): RouterOutletSnapshot<TRouteId, TModule, TData> {
     return this.snapshotValue;
   }
 
   setInputs(inputs: RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>): void {
+    if (
+      this.retryContext !== inputs.retryContext ||
+      this.retryEnabled !== (inputs.retryEnabled ?? true)
+    ) {
+      this.clearStartupRetry();
+    }
+    this.retryContext = inputs.retryContext;
+    this.retryEnabled = inputs.retryEnabled ?? true;
     this.onNotFound = inputs.onNotFound;
+    const nextNotFoundRecoveryReady = inputs.notFoundRecoveryReady ?? true;
+    const recoveryBecameReady =
+      !this.notFoundRecoveryReady && nextNotFoundRecoveryReady && this.notFoundDeclined;
+    this.notFoundRecoveryReady = nextNotFoundRecoveryReady;
     if (this.router === inputs.router) {
+      this.updateStartupRetry();
+      if (recoveryBecameReady && this.selection.status === "notFound") {
+        this.cancelNotFoundEffect();
+        this.updateNotFoundEffect(this.selection.status);
+      }
       return;
     }
 
     this.detachSource();
     this.router = inputs.router;
+    this.settled = undefined;
     if (this.connected) {
       this.attachSource();
       return;
@@ -123,8 +137,7 @@ export class RouterOutletController<
     const selection = inputs.router
       ? selectRouterOutletState(inputs.router.getState())
       : idleSnapshot<TRouteId, TModule, TData>();
-    this.selection = selection;
-    this.publish({ ...selection, showPending: false });
+    this.applySelection(selection);
   }
 
   connect(): void {
@@ -148,14 +161,18 @@ export class RouterOutletController<
 
   private attachSource(notify = true): void {
     const router = this.router;
-    if (!router || this.unsubscribe) {
+    if (this.unsubscribe) {
+      return;
+    }
+    if (!router) {
+      this.applySelection(idleSnapshot<TRouteId, TModule, TData>(), notify);
       return;
     }
     this.applySelection(selectRouterOutletState(router.getState()), notify);
-    this.unsubscribe = router.subscribeSelector(
-      selectRouterOutletState,
-      (selection) => this.applySelection(selection),
-      equalRouterOutletState,
+    // An earlier subscriber can navigate during this notification. Read the
+    // current route so its superseded not-found snapshot cannot trigger recovery.
+    this.unsubscribe = router.subscribe(() =>
+      this.applySelection(selectRouterOutletState(router.getState())),
     );
   }
 
@@ -166,6 +183,7 @@ export class RouterOutletController<
     this.pendingMatchId = undefined;
     this.showPending = false;
     this.cancelNotFoundEffect();
+    this.clearStartupRetry();
   }
 
   private applySelection(
@@ -173,6 +191,22 @@ export class RouterOutletController<
     notify = true,
   ): void {
     this.selection = selection;
+    if (selection.status === "idle" || selection.status === "notFound") {
+      this.settled = undefined;
+    } else {
+      const rendered = selectRenderedRouteMatch(selection.active, selection.pending);
+      if (rendered?.status === "success") {
+        this.settled = rendered;
+      } else if (
+        rendered?.status === "error" ||
+        rendered?.status === "notFound" ||
+        rendered?.status === "redirected"
+      ) {
+        // Terminal destinations replace the previous page. A later retry must
+        // not recreate its disposed draft from a historical successful match.
+        this.settled = undefined;
+      }
+    }
     const pending = selection.pending;
     const coldPending =
       pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
@@ -185,39 +219,80 @@ export class RouterOutletController<
       this.clearPendingTimer();
       this.pendingMatchId = pending.id;
       this.showPending = false;
-      this.schedulePendingFallback(pending.id);
+      this.schedulePendingFallback();
     } else if (this.connected && !this.showPending && this.pendingTimer === undefined) {
-      this.schedulePendingFallback(pending.id);
+      this.schedulePendingFallback();
     }
 
-    this.publish({ ...selection, showPending: this.showPending }, notify);
+    this.updateStartupRetry();
+    this.publish(
+      {
+        ...selection,
+        settled: this.settled,
+        showPending: this.showPending,
+        startupPending: this.startupMatchId !== undefined,
+      },
+      notify,
+    );
     this.updateNotFoundEffect(selection.status);
   }
 
-  private schedulePendingFallback(matchId: string): void {
+  private schedulePendingFallback(): void {
     if (!this.connected) {
       return;
     }
     this.pendingTimer = globalThis.setTimeout(() => {
       this.pendingTimer = undefined;
-      const pending = this.selection.pending;
-      const stillCold =
-        pending?.id === matchId &&
-        pending.status === "pending" &&
-        pending.module === undefined &&
-        pending.error === undefined &&
-        !this.selection.active;
-      if (!this.connected || this.pendingMatchId !== matchId || !stillCold) {
-        return;
-      }
+      // Selection changes and disconnect synchronously cancel this timer.
       this.showPending = true;
-      this.publish({ ...this.selection, showPending: true });
-    }, this.pendingDelayMs);
+      this.publish({ ...this.selection, settled: this.settled, showPending: true });
+    }, DEFAULT_PENDING_DELAY_MS);
+  }
+
+  private updateStartupRetry(): void {
+    // A new destination cancels the old retry even while its module is still loading.
+    const match = this.selection.pending ?? this.selection.active;
+    if (match?.id !== this.startupMatchId) {
+      this.clearStartupRetry();
+    }
+    if (!this.connected || !this.retryEnabled || this.retryContext === undefined || !match) {
+      this.clearStartupRetry();
+      return;
+    }
+    if (match.status === "pending" || match.isFetching) {
+      globalThis.clearTimeout(this.startupTimer);
+      this.startupTimer = undefined;
+      return;
+    }
+    if (!isAgentDatabaseInspectionPendingError(match.error)) {
+      this.clearStartupRetry();
+      return;
+    }
+    this.startupMatchId = match.id;
+    if (this.startupTimer !== undefined) {
+      return;
+    }
+    const retryContext = this.retryContext;
+    this.startupTimer = globalThis.setTimeout(
+      () => {
+        this.startupTimer = undefined;
+        // Input changes, route replacement and disconnect cancel the retry.
+        void this.router?.revalidate(retryContext, match.routeId).catch(() => undefined);
+      },
+      resolveGatewayReadRetryDelayMs(match.error, this.startupAttempt++),
+    );
+  }
+
+  private clearStartupRetry(): void {
+    globalThis.clearTimeout(this.startupTimer);
+    this.startupTimer = undefined;
+    this.startupMatchId = undefined;
+    this.startupAttempt = 0;
   }
 
   private updateNotFoundEffect(status: RouterOutletStateSlice["status"]): void {
     if (status !== "notFound") {
-      if (this.notFoundActive || this.notFoundQueued) {
+      if (this.notFoundActive) {
         this.cancelNotFoundEffect();
       }
       return;
@@ -227,7 +302,6 @@ export class RouterOutletController<
     }
 
     this.notFoundActive = true;
-    this.notFoundQueued = true;
     const generation = ++this.notFoundGeneration;
     queueMicrotask(() => {
       if (
@@ -237,15 +311,18 @@ export class RouterOutletController<
       ) {
         return;
       }
-      this.notFoundQueued = false;
-      this.onNotFound?.();
+      // A disconnected shell declines transiently. Keep the latch until its
+      // readiness input changes so unrelated renders cannot spin retries.
+      if (this.onNotFound?.() === false) {
+        this.notFoundDeclined = true;
+      }
     });
   }
 
   private cancelNotFoundEffect(): void {
     this.notFoundGeneration += 1;
     this.notFoundActive = false;
-    this.notFoundQueued = false;
+    this.notFoundDeclined = false;
   }
 
   private publish(snapshot: RouterOutletSnapshot<TRouteId, TModule, TData>, notify = true): void {
@@ -254,7 +331,9 @@ export class RouterOutletController<
       previous.status === snapshot.status &&
       previous.active === snapshot.active &&
       previous.pending === snapshot.pending &&
-      previous.showPending === snapshot.showPending
+      previous.settled === snapshot.settled &&
+      previous.showPending === snapshot.showPending &&
+      previous.startupPending === snapshot.startupPending
     ) {
       return;
     }

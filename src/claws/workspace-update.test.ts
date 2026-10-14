@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
@@ -12,8 +12,12 @@ import { buildClawUpdatePlan } from "./update-plan.js";
 import { applyClawWorkspaceUpdate } from "./workspace-update.js";
 import { readClawWorkspaceFiles } from "./workspace.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 describe("applyClawWorkspaceUpdate", () => {
   it("applies add/change/remove actions and can roll them back with provenance", async () => {
@@ -24,7 +28,14 @@ describe("applyClawWorkspaceUpdate", () => {
     await mkdir(targetRoot);
     await writeFile(join(currentRoot, "SOUL.md"), "current soul\n", "utf8");
     await writeFile(join(currentRoot, "OLD.md"), "old\n", "utf8");
-    await writeFile(join(targetRoot, "SOUL.md"), "target soul\n", "utf8");
+    const targetSoul = Buffer.from("target soul\n");
+    await writeFile(
+      join(targetRoot, "CLAW.md"),
+      Buffer.concat([
+        Buffer.from("---\nschemaVersion: 1\nagent: { id: worker }\n---\n"),
+        targetSoul,
+      ]),
+    );
     await writeFile(join(targetRoot, "NEW.md"), "new\n", "utf8");
 
     const currentParsed = parseClawManifest({
@@ -39,7 +50,6 @@ describe("applyClawWorkspaceUpdate", () => {
       schemaVersion: 1,
       agent: { id: "worker" },
       workspace: {
-        bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
         files: [{ source: "NEW.md", path: "NEW.md" }],
       },
     });
@@ -60,7 +70,7 @@ describe("applyClawWorkspaceUpdate", () => {
       ...currentSource,
       version: "2.0.0",
       packageRoot: targetRoot,
-      manifestPath: join(targetRoot, "openclaw.claw.json"),
+      manifestPath: join(targetRoot, "CLAW.md"),
       integrity: "sha256:target",
     };
     const workspace = join(root, "workspace");
@@ -71,16 +81,20 @@ describe("applyClawWorkspaceUpdate", () => {
       context: { workspace },
     });
     let config: OpenClawConfig = {};
-    await applyClawAddPlan(currentAddPlan, {
+    const added = await applyClawAddPlan(currentAddPlan, {
       env,
+      nowMs: 10,
       consentPlanIntegrity: currentAddPlan.planIntegrity,
       commitConfig: async (transform) => {
         config = transform(config);
       },
     });
+    expect(added).toMatchObject({ status: "complete" });
+    const originalFiles = readClawWorkspaceFiles("worker", { env });
     const updatePlan = await buildClawUpdatePlan({
       agentId: "worker",
       targetManifest: targetParsed.manifest,
+      targetClawMarkdownBody: targetSoul,
       targetSource,
       config,
       sourceMcpServers: {},
@@ -88,9 +102,11 @@ describe("applyClawWorkspaceUpdate", () => {
     });
     const targetAddPlan = await buildClawAddPlan({
       manifest: targetParsed.manifest,
+      clawMarkdownBody: targetSoul,
       source: targetSource,
       context: { agentId: "worker", workspace },
     });
+    expect(JSON.stringify(updatePlan)).not.toContain("target soul");
 
     const execution = await applyClawWorkspaceUpdate(updatePlan, targetAddPlan, {
       env,
@@ -100,9 +116,9 @@ describe("applyClawWorkspaceUpdate", () => {
     await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("target soul\n");
     await expect(readFile(join(workspace, "NEW.md"), "utf8")).resolves.toBe("new\n");
     await expect(access(join(workspace, "OLD.md"))).rejects.toThrow();
-    expect(readClawWorkspaceFiles("worker", { env }).map((record) => record.path)).toEqual([
-      "NEW.md",
-      "SOUL.md",
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual([
+      expect.objectContaining({ path: "NEW.md", sourcePath: "NEW.md" }),
+      expect.objectContaining({ path: "SOUL.md", sourcePath: "CLAW.md" }),
     ]);
 
     await execution.rollback();
@@ -110,10 +126,7 @@ describe("applyClawWorkspaceUpdate", () => {
     await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("current soul\n");
     await expect(readFile(join(workspace, "OLD.md"), "utf8")).resolves.toBe("old\n");
     await expect(access(join(workspace, "NEW.md"))).rejects.toThrow();
-    expect(readClawWorkspaceFiles("worker", { env }).map((record) => record.path)).toEqual([
-      "OLD.md",
-      "SOUL.md",
-    ]);
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual(originalFiles);
 
     await rm(join(workspace, "OLD.md"));
     await expect(

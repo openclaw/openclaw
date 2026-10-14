@@ -8,14 +8,20 @@ import {
 } from "../plugins/install-paths.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
-  readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsAsync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "../plugins/managed-npm-retention.js";
+import {
+  createPluginCache,
+  runOutsidePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairStaleManagedNpmInstallGenerations } from "./doctor-plugin-generations.js";
@@ -24,10 +30,6 @@ import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 const PACKAGE_NAME = "@proof/openclaw-generation";
 const PLUGIN_ID = "generation-proof";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function makeStateDir(): string {
-  return tempDirs.make("openclaw-doctor-plugin-generation-");
-}
 
 function writeManagedFlat(stateDir: string, version: string): string {
   const npmDir = path.join(stateDir, "npm");
@@ -70,12 +72,58 @@ afterEach(() => {
 });
 
 describe("doctor managed npm generation repair", () => {
+  it.each([false, true])(
+    "does not restore repaired records (independent writer: %s)",
+    async (independentWriter) => {
+      const stateDir = tempDirs.make("openclaw-doctor-plugin-scope-");
+      const env = {
+        ...process.env,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      await seedInstalledPluginIndex(
+        {
+          stale: {
+            source: "path",
+            installPath: path.join(stateDir, "removed-plugin"),
+            sourcePath: path.join(stateDir, "removed-plugin"),
+          },
+        },
+        { stateDir, candidates: [] },
+      );
+
+      await withPluginCache(createPluginCache(), async () => {
+        expect(await loadInstalledPluginIndexInstallRecords({ stateDir })).toHaveProperty("stale");
+        const write = () =>
+          withPluginCache(createPluginCache(), () =>
+            seedInstalledPluginIndex({}, { stateDir, candidates: [] }),
+          );
+        await (independentWriter ? runOutsidePluginCache(write) : write());
+        const retained = await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir });
+        if (independentWriter) {
+          expect(retained).toHaveProperty("stale");
+        } else {
+          expect(retained).toEqual({});
+        }
+
+        await maybeRepairPluginRegistryState({
+          config: {},
+          env,
+          prompter: { shouldRepair: true },
+          stateDir,
+        });
+      });
+
+      expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir })).toEqual({});
+    },
+  );
+
   it("retires the stale flat install and prunes it after gateway shutdown", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
     const npmDir = path.join(stateDir, "npm");
     const activePackageDir = writeManagedGeneration(stateDir, "2026.7.1");
     const stalePackageDir = writeManagedFlat(stateDir, "2026.6.11");
-    await writePersistedInstalledPluginIndexInstallRecords(
+    await seedInstalledPluginIndex(
       {
         [PLUGIN_ID]: {
           source: "npm",
@@ -111,14 +159,14 @@ describe("doctor managed npm generation repair", () => {
   });
 
   it("persists the recency fallback when no authoritative record exists", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
     const activePackageDir = writeManagedGeneration(stateDir, "1.0.0");
     const stalePackageDir = writeManagedFlat(stateDir, "9.0.0");
     const activeTimestamp = new Date("2026-01-02T00:00:00.000Z");
     const staleTimestamp = new Date("2026-01-01T00:00:00.000Z");
     setInstallTimestamp(activePackageDir, activeTimestamp);
     setInstallTimestamp(stalePackageDir, staleTimestamp);
-    await writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, candidates: [] });
+    await seedInstalledPluginIndex({}, { stateDir, candidates: [] });
     vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
     await maybeRepairPluginRegistryState({
@@ -133,7 +181,7 @@ describe("doctor managed npm generation repair", () => {
       stateDir,
     });
 
-    const persisted = await readPersistedInstalledPluginIndexInstallRecords({ stateDir });
+    const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir });
     expect(persisted?.[PLUGIN_ID]?.installPath).toBe(activePackageDir);
     expect(hasRetainedManagedNpmInstallMarker(stalePackageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);

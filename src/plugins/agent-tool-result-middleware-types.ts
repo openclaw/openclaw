@@ -1,9 +1,9 @@
-// Defines plugin middleware contracts for agent tool results.
-import type { AgentToolResult } from "../agents/runtime/index.js";
+import type { AgentToolResult } from "../../packages/agent-core/src/types.js";
+import type { PluginToolMatcher } from "./hook-types.js";
 
 export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;
 
-export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex";
+export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex" | "agentsapi";
 
 export type AgentToolResultMiddlewareEvent = {
   threadId?: string;
@@ -34,5 +34,12 @@ export type AgentToolResultMiddleware = (
 ) => Promise<AgentToolResultMiddlewareResult | void> | AgentToolResultMiddlewareResult | void;
 
 export type AgentToolResultMiddlewareOptions = {
+  matcher?: PluginToolMatcher;
+  /** Defaults to the plugin's contracts.agentToolResultMiddleware declaration. */
   runtimes?: AgentToolResultMiddlewareRuntime[];
+};
+
+export type AgentToolResultMiddlewareScope = {
+  matcher?: PluginToolMatcher;
+  runtimes: AgentToolResultMiddlewareRuntime[];
 };

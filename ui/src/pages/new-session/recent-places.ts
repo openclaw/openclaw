@@ -1,5 +1,4 @@
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { DraftNode } from "./discovery.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 type RecentPlaceSource = {
   execCwd?: unknown;
@@ -9,42 +8,30 @@ type RecentPlaceSource = {
 
 type RecentPlace = {
   folder: string;
-  execNode: string;
 };
 
 export function recentPlaces(
   rows: readonly RecentPlaceSource[],
   opts: {
     workspace: string;
-    execNodes: readonly Pick<DraftNode, "nodeId">[];
+    allowGatewayFolder: (folder: string) => boolean;
   },
 ): RecentPlace[] {
-  const knownNodes = new Set(opts.execNodes.map((node) => node.nodeId));
-  const seen = new Set<string>();
-  const places: RecentPlace[] = [];
+  const folders = new Set<string>();
 
   for (const row of rows) {
     const folder =
       normalizeOptionalString(row.execCwd) ?? normalizeOptionalString(row.worktree?.repoRoot);
-    const execNode = normalizeOptionalString(row.execNode) ?? "";
-    if (
-      !folder ||
-      (folder === opts.workspace && !execNode) ||
-      (execNode && !knownNodes.has(execNode))
-    ) {
+    const execNode = normalizeOptionalString(row.execNode);
+    if (!folder || execNode || folder === opts.workspace || !opts.allowGatewayFolder(folder)) {
       continue;
     }
-    const key = `${execNode}\0${folder}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    places.push({ folder, execNode });
-    if (places.length >= 4) {
+    folders.add(folder);
+    if (folders.size >= 4) {
       break;
     }
   }
-  return places;
+  return Array.from(folders, (folder) => ({ folder }));
 }
 
 export type { RecentPlaceSource };

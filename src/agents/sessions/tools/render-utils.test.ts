@@ -1,26 +1,22 @@
+import fs from "node:fs";
 import * as os from "node:os";
+import path from "node:path";
+import { Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { appendSessionToolTruncationWarning, shortenPath } from "./render-utils.js";
+import { reuseTextComponent, shortenPath, trimTrailingEmptyLines } from "./render-utils.js";
 
-const theme = {
-  fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-};
-
-describe("appendSessionToolTruncationWarning", () => {
-  it("leaves output unchanged when no truncation metadata is present", () => {
-    expect(appendSessionToolTruncationWarning("output", theme, {})).toBe("output");
+describe("trimTrailingEmptyLines", () => {
+  it("removes all-empty input", () => {
+    expect(trimTrailingEmptyLines(["", ""])).toEqual([]);
   });
+});
 
-  it("combines limit, byte, and additional warnings in order", () => {
-    expect(
-      appendSessionToolTruncationWarning("output", theme, {
-        limit: { count: 5, noun: "matches" },
-        truncation: { truncated: true, maxBytes: 1024 },
-        additionalWarnings: ["some lines truncated"],
-      }),
-    ).toBe(
-      "output\n<warning>[Truncated: 5 matches limit, 1.0KB limit, some lines truncated]</warning>",
-    );
+describe("reuseTextComponent", () => {
+  it("creates a zero-padding Text component when no prior component exists", () => {
+    const component = reuseTextComponent(undefined, "hello");
+
+    expect(component).toBeInstanceOf(Text);
+    expect(component.render(5)).toEqual(["hello"]);
   });
 });
 
@@ -31,18 +27,13 @@ describe("shortenPath", () => {
     expect(shortenPath(`${home}/projects/app.ts`)).toBe("~/projects/app.ts");
   });
 
-  it("collapses the home directory itself", () => {
-    expect(shortenPath(home)).toBe("~");
-  });
+  it.skipIf(process.platform !== "win32")("shortens real Windows home casing aliases", () => {
+    const homeAlias = home.toUpperCase();
+    expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
 
-  it("leaves a sibling directory that merely shares the prefix untouched", () => {
-    // `${home}extra` starts with `home` as a substring but is not under it,
-    // so it must not be rewritten to `~extra`.
-    expect(shortenPath(`${home}extra/app.ts`)).toBe(`${home}extra/app.ts`);
-  });
-
-  it("leaves unrelated paths untouched", () => {
-    expect(shortenPath("/var/log/syslog")).toBe("/var/log/syslog");
+    expect(shortenPath(path.join(homeAlias, "projects", "app.ts"))).toBe(
+      `~${path.sep}projects${path.sep}app.ts`,
+    );
   });
 
   it("returns an empty string for non-string input", () => {

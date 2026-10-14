@@ -1,18 +1,26 @@
-/**
- * Built-in OpenClaw harness registration.
- *
- * Harness selection uses this factory to expose the embedded OpenClaw runtime
- * through the same AgentHarness contract as external harness plugins.
- */
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
+import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
-import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
+import { harnessSupportsTurnScopedToolRestrictions } from "./types.js";
+import type {
+  AgentHarness,
+  AgentHarnessAttemptParamsV2,
+  AgentHarnessSettledTurnFinalizationAttemptParams,
+  AgentHarnessV2,
+} from "./types.js";
+
+const builtInOpenClawHarnesses = new WeakSet<object>();
 
 function buildRestrictedFinalizationAttempt(
-  attempt: AgentHarnessAttemptParams,
-): AgentHarnessAttemptParams {
+  attempt: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,
+): EmbeddedRunAttemptParams {
+  const internalAttempt =
+    attempt as AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> &
+      Pick<EmbeddedRunAttemptParams, "admittedRunContext">;
   return {
+    admittedRunContext: internalAttempt.admittedRunContext,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,
@@ -33,11 +41,19 @@ function buildRestrictedFinalizationAttempt(
     onExecutionPhase: attempt.onExecutionPhase,
     onLaneWait: attempt.onLaneWait,
     onRunProgress: attempt.onRunProgress,
+    // The caller owns terminal publication across the failed and finalizing attempts.
+    onAgentEvent: attempt.onAgentEvent,
+    deferTerminalLifecycle: attempt.deferTerminalLifecycle,
     onAttemptTimeoutArmed: attempt.onAttemptTimeoutArmed,
+    onAttemptDeadlineChanged: attempt.onAttemptDeadlineChanged,
     onAttemptTimeout: attempt.onAttemptTimeout,
     onAttemptAbort: attempt.onAttemptAbort,
     preparedModelRuntime: attempt.preparedModelRuntime,
     sessionFile: attempt.sessionFile,
+    // Host-owned transcript custody: detached runs keep the receipt-bearing manager.
+    sessionManager: attempt.sessionManager,
+    sessionPersistence: attempt.sessionPersistence,
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     contextTokenBudget: attempt.contextTokenBudget,
     contextWindowInfo: attempt.contextWindowInfo,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -60,18 +76,21 @@ function buildRestrictedFinalizationAttempt(
     disableTools: true,
     disableTrajectory: true,
     skipPreparedUserTurnMessage: true,
+    suppressNextUserMessagePersistence: true,
     initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
   };
 }
 
-/** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
-export function createOpenClawAgentHarness(): AgentHarness {
-  return {
-    id: "openclaw",
-    label: "OpenClaw embedded agent",
-    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
-    supports: () => ({ supported: true, priority: 0 }),
-    runAttempt: runEmbeddedAttempt,
+export function createOpenClawAgentHarness(): AgentHarnessV2 {
+  const harness: AgentHarnessV2 = {
+    ...BUILTIN_AGENT_HARNESS_METADATA,
+    supportsTurnScopedToolRestrictions: true,
+    runAttempt: (params) =>
+      runEmbeddedAttempt({
+        ...(params as EmbeddedRunAttemptParams),
+        supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
+      }),
+    runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.
@@ -79,4 +98,11 @@ export function createOpenClawAgentHarness(): AgentHarness {
       return projectSettledTurnFinalizationAttemptResult(result);
     },
   };
+  builtInOpenClawHarnesses.add(harness);
+  return harness;
+}
+
+/** Distinguishes the internal runtime from an untrusted harness that copies its public id. */
+export function isBuiltInOpenClawAgentHarness(harness: AgentHarness): boolean {
+  return builtInOpenClawHarnesses.has(harness);
 }

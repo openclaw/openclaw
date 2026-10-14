@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pluginSecretRefSetup } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveTrustedExecutablePath } from "../onepassword-op-path.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
+
+const { resolveTrustedExecutablePath } = pluginSecretRefSetup;
 
 describe("1Password CLI owner trust", () => {
   it("copies the Node fixture without mutating the installed runtime", async () => {
@@ -70,7 +72,9 @@ describe("1Password CLI owner trust", () => {
         const alias = path.join(tempDir, "node-alias");
         await fs.symlink(canonicalInterpreter, alias);
         await fs.writeFile(executable, `#!${alias}\nprocess.exit(0);\n`, { mode: 0o700 });
-        await expect(resolveTrustedExecutablePath(executable)).rejects.toThrow(/must be canonical/);
+        await expect(resolveTrustedExecutablePath(executable)).rejects.toThrow(
+          /must be fully resolved/,
+        );
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }

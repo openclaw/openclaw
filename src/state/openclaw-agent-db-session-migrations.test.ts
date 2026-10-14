@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import {
   backfillSessionConversations,
+  ensureSessionAdditiveColumns,
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 describe("agent DB conversation migration", () => {
   const databases: Array<{ close: () => void }> = [];
@@ -13,6 +17,109 @@ describe("agent DB conversation migration", () => {
     for (const database of databases.splice(0)) {
       database.close();
     }
+  });
+
+  it("covers every installed same-version column in admission facts", () => {
+    const { DatabaseSync } = requireNodeSqlite();
+    using canonical = new DatabaseSync(":memory:");
+    canonical.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    using database = new DatabaseSync(":memory:");
+    // Every canonical table exists but has no projections. This catches a future
+    // ensureColumn call even if it was not added to the admission declarations.
+    for (const { name } of canonical
+      .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+      .all()) {
+      database.exec(`CREATE TABLE "${String(name)}" (probe TEXT)`);
+    }
+    ensureSessionAdditiveColumns(database);
+    const installed = captureSqliteSchemaFacts(database).tableSql;
+    expect(hasPendingAgentStartupColumns(installed)).toBe(false);
+    let additions = 0;
+    for (const [table, sql] of installed) {
+      for (const { name } of database.prepare(`PRAGMA table_info("${table}")`).all()) {
+        if (name === "probe") {
+          continue;
+        }
+        additions += 1;
+        const missing = new Map(installed);
+        // Model an older writer's catalog, without changing unrelated tables.
+        missing.set(
+          table,
+          sql!.replace(new RegExp(`,\\s*${String(name)} (TEXT|INTEGER)`, "u"), ""),
+        );
+        expect(hasPendingAgentStartupColumns(missing), `${table}.${String(name)}`).toBe(true);
+        expect(canonical.prepare(`PRAGMA table_info("${table}")`).all()).toContainEqual(
+          expect.objectContaining({ name }),
+        );
+      }
+    }
+    expect(additions).toBeGreaterThan(0);
+  });
+
+  it("adds nullable route context without advancing the schema version", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    databases.push(database);
+    database.exec(`
+      PRAGMA user_version = 17;
+      CREATE TABLE session_conversations (
+        session_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, conversation_id, role)
+      ) STRICT;
+      INSERT INTO session_conversations (
+        session_id, conversation_id, role, first_seen_at, last_seen_at
+      ) VALUES ('session-a', 'conversation-a', 'primary', 1, 1);
+    `);
+
+    ensureSessionAdditiveColumns(database);
+    ensureSessionAdditiveColumns(database);
+    database
+      .prepare(
+        "UPDATE session_conversations SET route_context_json = ? WHERE session_id = ? AND conversation_id = ?",
+      )
+      .run(
+        '{"version":1,"writeId":"candidate-write","observedAt":1,"context":{"guildId":"guild-a"}}',
+        "session-a",
+        "conversation-a",
+      );
+    database
+      .prepare(
+        "UPDATE session_conversations SET route_context_json = ?, last_seen_at = ? WHERE session_id = ? AND conversation_id = ?",
+      )
+      .run(
+        '{"version":1,"writeId":"current-write","observedAt":1,"context":{"guildId":"guild-a"}}',
+        1,
+        "session-a",
+        "conversation-a",
+      );
+    expect(
+      database
+        .prepare(
+          "SELECT route_context_json FROM session_conversations WHERE session_id = 'session-a'",
+        )
+        .get(),
+    ).toEqual({
+      route_context_json:
+        '{"version":1,"writeId":"current-write","observedAt":1,"context":{"guildId":"guild-a"}}',
+    });
+    database
+      .prepare(
+        "UPDATE session_conversations SET last_seen_at = ? WHERE session_id = ? AND conversation_id = ?",
+      )
+      .run(1, "session-a", "conversation-a");
+
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+    expect(
+      database
+        .prepare(
+          "SELECT route_context_json, last_seen_at FROM session_conversations WHERE session_id = 'session-a'",
+        )
+        .get(),
+    ).toEqual({ route_context_json: null, last_seen_at: 1 });
   });
 
   it("backfills direct addresses and keeps shared-main peers as participants", () => {

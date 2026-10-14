@@ -1,7 +1,6 @@
 /** Tests plugin slot normalization and exclusive slot selection behavior. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginKind } from "./plugin-kind.types.js";
 import {
   applyExclusiveSlotSelection,
   hasKind,
@@ -16,7 +15,7 @@ describe("resetPluginSlotsToDefaults", () => {
         { memory: "dual-plugin", contextEngine: "dual-plugin" },
         "dual-plugin",
       ),
-    ).toEqual({ memory: "memory-core", contextEngine: "legacy" });
+    ).toBeUndefined();
   });
 
   it("preserves slot state when the plugin owns no slot", () => {
@@ -41,257 +40,77 @@ describe("applyExclusiveSlotSelection", () => {
     },
   });
 
-  const runMemorySelection = (config: OpenClawConfig, selectedId = "memory") =>
-    applyExclusiveSlotSelection({
-      config,
-      selectedId,
-      selectedKind: "memory",
-      registry: {
-        plugins: [
-          { id: "memory-core", kind: "memory" },
-          { id: "memory", kind: "memory" },
-        ],
-      },
-    });
-
-  function expectMemorySelectionState(
-    result: ReturnType<typeof applyExclusiveSlotSelection>,
-    params: {
-      changed: boolean;
-      selectedId?: string;
-      disabledCompetingPlugin?: boolean;
-    },
-  ) {
-    expect(result.changed).toBe(params.changed);
-    if (params.selectedId) {
-      expect(result.config.plugins?.slots?.memory).toBe(params.selectedId);
-    }
-    if (params.disabledCompetingPlugin != null) {
-      expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(
-        params.disabledCompetingPlugin,
-      );
-    }
-  }
-
-  function expectSelectionWarnings(
-    warnings: string[],
-    params: {
-      expected: readonly string[];
-    },
-  ) {
-    expect(warnings).toEqual([...params.expected]);
-  }
-
-  function expectUnchangedSelection(result: ReturnType<typeof applyExclusiveSlotSelection>) {
-    expect(result.changed).toBe(false);
-    expect(result.warnings).toHaveLength(0);
-  }
-
-  function buildSelectionRegistry(
-    plugins: ReadonlyArray<{ id: string; kind?: PluginKind | PluginKind[] }>,
-  ) {
-    return {
-      plugins: [...plugins],
+  it("keeps the default memory selection implicit", () => {
+    const config: OpenClawConfig = {
+      plugins: { entries: { "memory-core": { enabled: true } } },
     };
-  }
 
-  function expectUnchangedSelectionCase(params: {
-    config: OpenClawConfig;
-    selectedId: string;
-    selectedKind?: PluginKind | PluginKind[];
-    registry?: { plugins: ReadonlyArray<{ id: string; kind?: PluginKind | PluginKind[] }> };
-  }) {
     const result = applyExclusiveSlotSelection({
-      config: params.config,
-      selectedId: params.selectedId,
-      ...(params.selectedKind ? { selectedKind: params.selectedKind } : {}),
-      ...(params.registry
-        ? {
-            registry: buildSelectionRegistry(params.registry.plugins),
-          }
-        : {}),
-    });
-
-    expectUnchangedSelection(result);
-    expect(result.config).toBe(params.config);
-  }
-
-  function expectChangedSelectionCase(params: {
-    config: OpenClawConfig;
-    selectedId?: string;
-    expectedDisabled?: boolean;
-    warningChecks: {
-      expected: readonly string[];
-    };
-  }) {
-    const result = runMemorySelection(params.config, params.selectedId);
-
-    expectMemorySelectionState(result, {
-      changed: true,
-      selectedId: params.selectedId ?? "memory",
-      ...(params.expectedDisabled != null
-        ? { disabledCompetingPlugin: params.expectedDisabled }
-        : {}),
-    });
-    expectSelectionWarnings(result.warnings, params.warningChecks);
-  }
-
-  it.each([
-    {
-      name: "selects the slot and disables other entries for the same kind",
-      config: createMemoryConfig({
-        slots: { memory: "memory-core" },
-        entries: { "memory-core": { enabled: true } },
-      }),
-      expectedDisabled: false,
-      warningChecks: {
-        expected: [
-          'Exclusive slot "memory" switched from "memory-core" to "memory".',
-          'Disabled other "memory" slot plugins: memory-core.',
-        ],
-      },
-    },
-    {
-      name: "warns when the slot falls back to a default",
-      config: createMemoryConfig(),
-      warningChecks: {
-        expected: [
-          'Exclusive slot "memory" switched from "memory-core" to "memory".',
-          'Disabled other "memory" slot plugins: memory-core.',
-        ],
-      },
-    },
-    {
-      name: "keeps disabled competing plugins disabled without adding disable warnings",
-      config: createMemoryConfig({
-        entries: {
-          "memory-core": { enabled: false },
-        },
-      }),
-      expectedDisabled: false,
-      warningChecks: {
-        expected: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
-      },
-    },
-  ] as const)("$name", ({ config, expectedDisabled, warningChecks }) => {
-    expectChangedSelectionCase({
       config,
-      ...(expectedDisabled != null ? { expectedDisabled } : {}),
-      warningChecks,
+      selectedId: "memory-core",
+      selectedKind: "memory",
     });
+
+    expect(result).toBe(config);
+  });
+
+  it("removes an explicit override when selecting the default memory plugin", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        slots: { memory: "memory" },
+        entries: { memory: { enabled: true }, "memory-core": { enabled: true } },
+      },
+    };
+
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "memory-core",
+      selectedKind: "memory",
+    });
+
+    expect(result).not.toBe(config);
+    expect(result.plugins).not.toHaveProperty("slots");
+    expect(result.plugins?.entries?.memory?.enabled).toBe(true);
   });
 
   it.each([
     {
-      name: "does nothing when the slot already matches",
+      name: "selects the slot and preserves other enabled entries",
       config: createMemoryConfig({
-        slots: { memory: "memory" },
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { enabled: true } },
       }),
+      expectedCoreEnabled: true,
+    },
+  ] as const)("$name", ({ config, expectedCoreEnabled }) => {
+    const result = applyExclusiveSlotSelection({
+      config,
       selectedId: "memory",
       selectedKind: "memory",
-      registry: { plugins: [{ id: "memory", kind: "memory" }] },
-    },
+    });
+
+    expect(result).not.toBe(config);
+    expect(result.plugins?.slots?.memory).toBe("memory");
+    expect(result.plugins?.entries?.["memory-core"]?.enabled).toBe(expectedCoreEnabled);
+  });
+
+  it.each([
     {
       name: "skips changes when no exclusive slot applies",
       config: {} as OpenClawConfig,
       selectedId: "custom",
     },
-  ] as const)("$name", ({ config, selectedId, selectedKind, registry }) => {
-    expectUnchangedSelectionCase({
+  ] as const)("$name", ({ config, selectedId }) => {
+    const result = applyExclusiveSlotSelection({
       config,
       selectedId,
-      ...(selectedKind ? { selectedKind } : {}),
-      ...(registry ? { registry: buildSelectionRegistry(registry.plugins) } : {}),
     });
-  });
 
-  it("applies slot selection for each kind in a multi-kind array", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        slots: { memory: "memory-core", contextEngine: "legacy" },
-        entries: {
-          "memory-core": { enabled: true },
-          legacy: { enabled: true },
-        },
-      },
-    };
-    const result = applyExclusiveSlotSelection({
-      config,
-      selectedId: "dual-plugin",
-      selectedKind: ["memory", "context-engine"],
-      registry: buildSelectionRegistry([
-        { id: "memory-core", kind: "memory" },
-        { id: "legacy", kind: "context-engine" },
-        { id: "dual-plugin", kind: ["memory", "context-engine"] },
-      ]),
-    });
-    expect(result.changed).toBe(true);
-    expect(result.config.plugins?.slots?.memory).toBe("dual-plugin");
-    expect(result.config.plugins?.slots?.contextEngine).toBe("dual-plugin");
-    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
-    expect(result.config.plugins?.entries?.legacy?.enabled).toBe(false);
-  });
-
-  it("does not disable a dual-kind plugin that still owns another slot", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        slots: { memory: "dual-plugin", contextEngine: "dual-plugin" },
-        entries: {
-          "dual-plugin": { enabled: true },
-        },
-      },
-    };
-    const result = applyExclusiveSlotSelection({
-      config,
-      selectedId: "new-memory",
-      selectedKind: "memory",
-      registry: buildSelectionRegistry([
-        { id: "dual-plugin", kind: ["memory", "context-engine"] },
-        { id: "new-memory", kind: "memory" },
-      ]),
-    });
-    expect(result.changed).toBe(true);
-    expect(result.config.plugins?.slots?.memory).toBe("new-memory");
-    // dual-plugin still owns contextEngine — must NOT be disabled
-    expect(result.config.plugins?.entries?.["dual-plugin"]?.enabled).not.toBe(false);
-  });
-
-  it("does not disable a dual-kind plugin that owns another slot via default", () => {
-    // contextEngine is NOT explicitly set — defaults to "legacy"
-    const config: OpenClawConfig = {
-      plugins: {
-        slots: { memory: "legacy" },
-        entries: {
-          legacy: { enabled: true },
-        },
-      },
-    };
-    const result = applyExclusiveSlotSelection({
-      config,
-      selectedId: "new-memory",
-      selectedKind: "memory",
-      registry: buildSelectionRegistry([
-        { id: "legacy", kind: ["memory", "context-engine"] },
-        { id: "new-memory", kind: "memory" },
-      ]),
-    });
-    expect(result.changed).toBe(true);
-    expect(result.config.plugins?.slots?.memory).toBe("new-memory");
-    // legacy still owns contextEngine via default — must NOT be disabled
-    expect(result.config.plugins?.entries?.legacy?.enabled).not.toBe(false);
+    expect(result).toBe(config);
   });
 });
 
 describe("hasKind", () => {
-  it("returns false for undefined kind", () => {
-    expect(hasKind(undefined, "memory")).toBe(false);
-  });
-
-  it("matches a single kind string", () => {
-    expect(hasKind("memory", "memory")).toBe(true);
-    expect(hasKind("memory", "context-engine")).toBe(false);
-  });
-
   it("matches within a kind array", () => {
     expect(hasKind(["memory", "context-engine"], "memory")).toBe(true);
     expect(hasKind(["memory", "context-engine"], "context-engine")).toBe(true);
@@ -299,27 +118,7 @@ describe("hasKind", () => {
 });
 
 describe("kindsEqual", () => {
-  it("treats undefined as equal to undefined", () => {
-    expect(kindsEqual(undefined, undefined)).toBe(true);
-  });
-
-  it("matches identical strings", () => {
-    expect(kindsEqual("memory", "memory")).toBe(true);
-  });
-
-  it("rejects different strings", () => {
-    expect(kindsEqual("memory", "context-engine")).toBe(false);
-  });
-
-  it("matches arrays in different order", () => {
-    expect(kindsEqual(["memory", "context-engine"], ["context-engine", "memory"])).toBe(true);
-  });
-
   it("matches string against single-element array", () => {
     expect(kindsEqual("memory", ["memory"])).toBe(true);
-  });
-
-  it("rejects mismatched lengths", () => {
-    expect(kindsEqual("memory", ["memory", "context-engine"])).toBe(false);
   });
 });

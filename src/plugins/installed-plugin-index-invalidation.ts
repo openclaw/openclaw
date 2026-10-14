@@ -1,6 +1,10 @@
 // Invalidates installed plugin index entries after activation metadata changes.
 import { hasConfigPathActivationMetadataMigration } from "./installed-plugin-index-config-path-scope.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  isInstalledPluginIndexInstallOwnerAmbiguous,
+  resolveInstalledPluginIndexInstallOwner,
+} from "./installed-plugin-index-install-owner.js";
 import type {
   InstalledPluginIndex,
   InstalledPluginIndexRefreshReason,
@@ -41,6 +45,12 @@ export function diffInstalledPluginIndexInvalidationReasons(
     if (
       previousPlugin.rootDir !== currentPlugin.rootDir ||
       previousPlugin.manifestPath !== currentPlugin.manifestPath ||
+      previousPlugin.source !== currentPlugin.source ||
+      previousPlugin.setupSource !== currentPlugin.setupSource ||
+      resolveInstalledPluginIndexInstallOwner(previousPlugin) !==
+        resolveInstalledPluginIndexInstallOwner(currentPlugin) ||
+      isInstalledPluginIndexInstallOwnerAmbiguous(previousPlugin) !==
+        isInstalledPluginIndexInstallOwnerAmbiguous(currentPlugin) ||
       previousPlugin.installRecordHash !== currentPlugin.installRecordHash
     ) {
       reasons.add("source-changed");
@@ -56,7 +66,10 @@ export function diffInstalledPluginIndexInvalidationReasons(
     ) {
       reasons.add("migration");
     }
-    if (previousPlugin.manifestHash !== currentPlugin.manifestHash) {
+    if (
+      previousPlugin.manifestHash !== currentPlugin.manifestHash ||
+      previousPlugin.doctorContractHash !== currentPlugin.doctorContractHash
+    ) {
       reasons.add("stale-manifest");
     }
     if (
@@ -67,12 +80,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
       reasons.add("stale-package");
     }
   }
-  for (const pluginId of currentByPluginId.keys()) {
-    if (!previousByPluginId.has(pluginId)) {
-      const currentPlugin = currentByPluginId.get(pluginId);
-      if (currentPlugin?.enabled === false) {
-        continue;
-      }
+  for (const [pluginId, plugin] of currentByPluginId) {
+    if (!previousByPluginId.has(pluginId) && plugin.enabled) {
       reasons.add("source-changed");
     }
   }

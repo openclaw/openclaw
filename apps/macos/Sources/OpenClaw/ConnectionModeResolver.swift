@@ -15,7 +15,7 @@ struct EffectiveConnectionMode: Equatable {
 enum ConnectionModeResolver {
     static func resolve(
         root: [String: Any],
-        defaults: UserDefaults = .standard) -> EffectiveConnectionMode
+        defaults: UserDefaults = AppDefaults.standard) -> EffectiveConnectionMode
     {
         let gateway = root["gateway"] as? [String: Any]
         let configModeRaw = (gateway?["mode"] as? String) ?? ""
@@ -32,9 +32,7 @@ enum ConnectionModeResolver {
             break
         }
 
-        let remoteURLRaw = ((gateway?["remote"] as? [String: Any])?["url"] as? String) ?? ""
-        let remoteURL = remoteURLRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !remoteURL.isEmpty {
+        if GatewayRemoteConfig.resolveUrlString(root: root) != nil {
             return EffectiveConnectionMode(mode: .remote, source: .configRemoteURL)
         }
 

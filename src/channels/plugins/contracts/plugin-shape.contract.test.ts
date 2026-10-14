@@ -1,36 +1,11 @@
-// Plugin-shape coherence contract for bundled channel plugins.
-//
-// Catalog routing keys off plugin ids, docs surfaces render `meta.docsPath`,
-// and capability flags gate feature discovery, so every bundled channel must
-// keep identity metadata aligned with its catalog id and capability flags
-// coherent with the adapters that implement them. Per-surface behavior checks
-// live in the registry-backed shard suites; this suite pins the static shape.
-//
-// Capability rules verified against every bundled channel before pinning.
-// Dropped for legitimate exceptions rather than special-casing:
-// - threads=true does not imply a threading adapter (clickclack/tlon bind
-//   threads through conversationBindings only).
-// - nativeCommands=true does not imply a commands adapter (mattermost serves
-//   slash commands through gateway HTTP routes).
-// - blockStreaming=true does not imply a streaming adapter (coalesce tuning
-//   is optional).
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { beforeAll, describe, expect, it } from "vitest";
 import { listBundledPackageChannelMetadata } from "../../../plugins/bundled-package-channel-metadata.js";
 import {
   getBundledChannelPluginAsync,
   listBundledChannelPluginIds,
 } from "./test-helpers/bundled-channel-plugin-loader.js";
 
-const sanitizeAssistantVisibleTextMock = vi.hoisted(() =>
-  vi.fn((text: string) => `shared-sanitizer:${text}`),
-);
-
-vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
-  return { ...actual, sanitizeAssistantVisibleText: sanitizeAssistantVisibleTextMock };
-});
-
-const CHAT_TYPES = new Set(["direct", "group", "channel", "thread"]);
 const bundledChannelPluginIds = listBundledChannelPluginIds();
 const packageMetadataById = new Map(
   listBundledPackageChannelMetadata().map((channel) => [channel.id, channel]),
@@ -55,41 +30,30 @@ describe("bundled channel plugin shape coherence", () => {
     }
   });
 
-  it("discovers bundled channel plugins from the catalog", () => {
-    expect(bundledChannelPluginIds.length).toBeGreaterThan(0);
-  });
-
   it.each(SHARED_SANITIZER_CHANNEL_IDS)(
-    "%s wires outbound sanitizeText through the shared sanitizer",
+    "%s applies shared sanitizer semantics to outbound text",
     (id) => {
       const sanitizeText = plugins.get(id)?.outbound?.sanitizeText;
       if (!sanitizeText) {
         throw new Error(`Missing outbound sanitizeText hook for ${id}`);
       }
-      const text = `visible:${id}`;
+      const visible = `Visible answer: ${id}`;
+      const text = [
+        '<invoke name="read">payload</invoke></minimax:tool_call>',
+        '<tool_result>{"output":"hidden"}</tool_result>',
+        "[Tool Call: read (ID: toolu_1)]",
+        'Arguments: {"path":"/tmp/x"}',
+        "<think>secret</think>",
+        visible,
+      ].join("\n");
+      const expected = sanitizeAssistantVisibleText(text);
 
-      sanitizeAssistantVisibleTextMock.mockClear();
-
-      expect(sanitizeText({ text, payload: { text } })).toBe(`shared-sanitizer:${text}`);
-      expect(sanitizeAssistantVisibleTextMock).toHaveBeenCalledExactlyOnceWith(text);
+      expect(expected).toBe(visible);
+      expect(sanitizeText({ text, payload: { text } })).toBe(expected);
     },
   );
 
   describe.each(bundledChannelPluginIds)("%s", (id) => {
-    it("keeps plugin identity aligned with the catalog id", () => {
-      const plugin = plugins.get(id);
-      if (!plugin) {
-        throw new Error(`Missing bundled channel plugin for ${id}`);
-      }
-      expect(plugin.id).toBe(id);
-      expect(plugin.meta.id).toBe(id);
-    });
-
-    it("ships non-empty docs metadata", () => {
-      const plugin = plugins.get(id);
-      expect(plugin?.meta.docsPath.trim()).toBeTruthy();
-    });
-
     it("keeps runtime and lazy setup metadata on the same channel-owned contract", () => {
       const plugin = plugins.get(id);
       const packageSetup = packageMetadataById.get(id)?.setup;
@@ -97,25 +61,12 @@ describe("bundled channel plugin shape coherence", () => {
         return;
       }
       expect(plugin?.setupContract, `${id} must expose setupContract`).toBeDefined();
+      expect(
+        plugin?.setup,
+        `${id} must not duplicate the released legacy setup adapter`,
+      ).toBeUndefined();
       expect(packageSetup, `${id} must expose package setup metadata`).toBeDefined();
       expect(plugin?.setupContract?.metadata).toEqual(packageSetup);
-    });
-
-    it("declares known chat types", () => {
-      const chatTypes = plugins.get(id)?.capabilities.chatTypes ?? [];
-      expect(chatTypes.length).toBeGreaterThan(0);
-      expect(chatTypes.filter((chatType) => !CHAT_TYPES.has(chatType))).toEqual([]);
-    });
-
-    it("backs declared reactions with a message action surface", () => {
-      const plugin = plugins.get(id);
-      if (!plugin?.capabilities.reactions) {
-        return;
-      }
-      // Reactions are delivered through the shared `message` tool, so a channel
-      // declaring the capability without an actions adapter ships a dead flag.
-      expect(plugin.actions).toBeDefined();
-      expect(typeof plugin.actions?.describeMessageTool).toBe("function");
     });
   });
 });

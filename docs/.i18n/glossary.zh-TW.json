@@ -56,10 +56,6 @@
     "target": "Mattermost"
   },
   {
-    "source": "Mintlify",
-    "target": "Mintlify"
-  },
-  {
     "source": "Nextcloud Talk",
     "target": "Nextcloud Talk"
   },
@@ -134,6 +130,10 @@
   {
     "source": "WeChat",
     "target": "微信"
+  },
+  {
+    "source": "WeCom",
+    "target": "企業微信"
   },
   {
     "source": "Weixin",

@@ -1,9 +1,8 @@
 import { Response as UndiciResponse } from "undici";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackNativeDataFallbackText,
   buildSlackNativeDataAccessibilityText,
-  hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
   isSlackInvalidBlocksResponse,
   isSlackNativeResponseUrlRejection,
@@ -38,12 +37,6 @@ const table = {
 };
 
 describe("Slack native data blocks", () => {
-  it("detects charts and current data tables", () => {
-    expect(hasSlackNativeDataBlock([{ type: "section" }])).toBe(false);
-    expect(hasSlackNativeDataBlock([chart])).toBe(true);
-    expect(hasSlackNativeDataBlock([table])).toBe(true);
-  });
-
   it("matches structural invalid_blocks error responses", () => {
     expect(isSlackInvalidBlocksError({ data: { error: "invalid_blocks" } })).toBe(true);
     expect(isSlackInvalidBlocksError({ data: "invalid_blocks" })).toBe(true);
@@ -76,6 +69,54 @@ describe("Slack native data blocks", () => {
         statusCode: 500,
       }),
     ).toBe(false);
+  });
+
+  it("bounds stalled response_url body inspection and cancels its reader", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn(async () => undefined);
+      const releaseLock = vi.fn();
+      const response = {
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: async () => await new Promise<never>(() => {}),
+            cancel,
+            releaseLock,
+          }),
+        },
+      };
+
+      const inspection = isSlackInvalidBlocksResponse(response);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(inspection).resolves.toBe(false);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds oversized response_url bodies and cancels after the prefix", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = {
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => ({
+            done: false,
+            value: new TextEncoder().encode("x".repeat(32 * 1024)),
+          }),
+          cancel,
+          releaseLock,
+        }),
+      },
+    };
+
+    await expect(isSlackInvalidBlocksResponse(response)).resolves.toBe(false);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("appends mixed native data in block order without collapsing repeated blocks", () => {

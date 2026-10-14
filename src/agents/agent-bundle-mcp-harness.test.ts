@@ -1,6 +1,14 @@
 /** Behavior tests for harness-facing requester-scoped MCP materialization. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { getMcpAppViewLease } from "./mcp-ui-resource.js";
+import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const startAuthorization = vi.hoisted(() => vi.fn());
+const readCredentialsStatus = vi.hoisted(() => vi.fn());
 
 const mocks = vi.hoisted(() => {
   type Runtime = SessionMcpRuntime;
@@ -34,17 +42,28 @@ const mocks = vi.hoisted(() => {
     setResolveImpl(impl?: typeof resolveImpl) {
       resolveImpl = impl;
     },
-    getOrCreateRequesterScopedMcpRuntime: vi.fn(
+    acquireRequesterScopedMcpRuntime: vi.fn(
       async (params: { sessionId: string; requesterSenderId?: string | null }) => {
         if (resolveImpl) {
-          return resolveImpl(params);
+          const runtime = await resolveImpl(params);
+          return runtime
+            ? {
+                runtime,
+                releaseLease: runtime.acquireLease?.() ?? (() => {}),
+                advertisedCatalogConfigFingerprint: runtime.configFingerprint,
+              }
+            : undefined;
         }
         return undefined;
       },
     ),
+    acquireSessionMcpRuntime: vi.fn(),
     rememberAdvertisedScopedMcpCatalog: vi.fn(
-      (sessionId: string, catalog: typeof advertised extends Map<string, infer V> ? V : never) => {
-        advertised.set(sessionId, catalog);
+      (
+        handle: { runtime: Runtime },
+        catalog: typeof advertised extends Map<string, infer V> ? V : never,
+      ) => {
+        advertised.set(handle.runtime.sessionId, catalog);
       },
     ),
     getAdvertisedScopedMcpCatalog: vi.fn((sessionId: string) => advertised.get(sessionId) ?? null),
@@ -56,105 +75,471 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./agent-bundle-mcp-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./agent-bundle-mcp-runtime.js")>();
+vi.mock("./agent-bundle-mcp-manager-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agent-bundle-mcp-manager-api.js")>();
   return {
     ...actual,
-    getOrCreateRequesterScopedMcpRuntime: mocks.getOrCreateRequesterScopedMcpRuntime,
+    acquireRequesterScopedMcpRuntime: mocks.acquireRequesterScopedMcpRuntime,
+    acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
     rememberAdvertisedScopedMcpCatalog: mocks.rememberAdvertisedScopedMcpCatalog,
     getAdvertisedScopedMcpCatalog: mocks.getAdvertisedScopedMcpCatalog,
   };
 });
 
-import { materializeRequesterScopedMcpToolsForHarnessRun } from "./agent-bundle-mcp-harness.js";
-
-function makeRuntime(params: { sessionId: string; requesterSenderId: string }): SessionMcpRuntime {
-  const serverName = "user-mail";
-  const catalog = {
-    version: 1,
-    generatedAt: 0,
-    servers: {
-      [serverName]: {
-        serverName,
-        launchSummary: serverName,
-        toolCount: 1,
-      },
-    },
-    tools: [
-      {
-        serverName,
-        safeServerName: serverName,
-        toolName: "inbox",
-        description: "read inbox",
-        inputSchema: { type: "object", properties: {} },
-        fallbackDescription: "read inbox",
-      },
-    ],
-  };
-  let lastUsedAt = Date.now();
-  let activeLeases = 0;
+vi.mock("./mcp-oauth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./mcp-oauth.js")>();
   return {
-    sessionId: params.sessionId,
-    workspaceDir: "/workspace",
-    configFingerprint: "fp",
-    requesterScope: { requesterSenderId: params.requesterSenderId },
-    createdAt: Date.now(),
-    get lastUsedAt() {
-      return lastUsedAt;
-    },
-    get activeLeases() {
-      return activeLeases;
-    },
-    acquireLease: () => {
-      activeLeases += 1;
-      let released = false;
-      return () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        activeLeases -= 1;
-      };
-    },
-    markUsed: () => {
-      lastUsedAt = Date.now();
-    },
-    peekCatalog: () => catalog,
-    getCatalog: async () => catalog,
-    callTool: async (_server, toolName) => ({
-      content: [
-        {
-          type: "text",
-          text: `live:${toolName}:${params.requesterSenderId}`,
-        },
-      ],
-      isError: false,
-    }),
-    dispose: async () => {},
+    ...actual,
+    readMcpOAuthCredentialsStatuses: readCredentialsStatus,
+    startMcpOAuthAuthorization: startAuthorization,
   };
-}
+});
+
+import {
+  materializeRequesterScopedMcpToolsForHarnessRunCore,
+  materializeStaticMcpToolsForHarnessRunCore,
+} from "./agent-bundle-mcp-harness.js";
+import { makeConnectRuntime, makeRuntime } from "./agent-bundle-mcp-harness.test-support.js";
 
 beforeEach(() => {
   mocks.reset();
-  mocks.getOrCreateRequesterScopedMcpRuntime.mockClear();
+  mocks.acquireRequesterScopedMcpRuntime.mockClear();
+  mocks.acquireSessionMcpRuntime.mockReset();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
+  readCredentialsStatus
+    .mockReset()
+    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "unauthenticated" })),
+    );
+  startAuthorization.mockReset();
+});
+
+function makeStaticRuntime(sessionId: string) {
+  const runtime = makeRuntime({ sessionId, requesterSenderId: "unused" });
+  delete runtime.requesterScope;
+  mocks.acquireSessionMcpRuntime.mockResolvedValue({
+    runtime,
+    releaseLease: runtime.acquireLease?.() ?? (() => {}),
+  });
+  return runtime;
+}
+
+describe("materializeStaticMcpToolsForHarnessRunCore", () => {
+  it("never widens a finite scheduled cap", async () => {
+    makeStaticRuntime("scheduled-denied");
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-denied",
+      workspaceDir: "/workspace",
+      toolsAllow: ["read"],
+    });
+
+    expect(result?.tools).toEqual([]);
+    await result?.dispose();
+  });
+
+  it("gates interactive configured MCP before the original executor", async () => {
+    const runtime = makeStaticRuntime("interactive");
+    const callTool = vi.spyOn(runtime, "callTool");
+    let active: (() => boolean) | undefined;
+    const requestInteractiveCodexApproval = vi.fn(async (request) => {
+      active = request.isActive;
+      if (request.toolCallId === "denied") {
+        throw new Error("operator denied");
+      }
+    });
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "interactive",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      requestInteractiveCodexApproval,
+    });
+    const tool = result.tools[0]!;
+
+    await expect(tool.execute("denied", { folder: "private" })).rejects.toThrow("operator denied");
+    expect(callTool).not.toHaveBeenCalled();
+
+    await expect(tool.execute("allowed", { folder: "team" })).resolves.toBeDefined();
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(callTool).toHaveBeenCalledWith("user-mail", "inbox", { folder: "team" });
+    expect(requestInteractiveCodexApproval).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        safeToolName: "user-mail__inbox",
+        toolCallId: "allowed",
+        serverName: "user-mail",
+        toolName: "inbox",
+        mode: "auto",
+      }),
+    );
+    expect(active?.()).toBe(false);
+    await result.dispose();
+  });
+
+  it.each([
+    { name: "explicit prompt", mode: "prompt" as const, grant: false, approvalCalls: 1 },
+    { name: "durable grant", mode: "auto" as const, grant: true, approvalCalls: 0 },
+  ])("preserves $name on the interactive surface", async ({ mode, grant, approvalCalls }) => {
+    const runtime = makeStaticRuntime("interactive-policy");
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = mode;
+    const requestInteractiveCodexApproval = vi.fn(async () => undefined);
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "interactive-policy",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      autoApproveCodexAppServerApprovals: true,
+      projectedMcpServers: grant
+        ? { "user-mail": { tools: { inbox: { approval_mode: "approve" } } } }
+        : undefined,
+      requestInteractiveCodexApproval,
+    });
+    await expect(result.tools[0]!.execute("call", {})).resolves.toBeDefined();
+    expect(requestInteractiveCodexApproval).toHaveBeenCalledTimes(approvalCalls);
+    await result.dispose();
+  });
+
+  it("excludes unsafe auto app tools while allowing read-only app calls", async () => {
+    const runtime = makeStaticRuntime("scheduled-app-approval");
+    runtime.sessionKey = "agent:main:main";
+    const catalog = runtime.peekCatalog()!;
+    catalog.servers["user-mail"]!.toolCount = 3;
+    catalog.servers["user-mail"]!.codexApprovalMode = "auto";
+    catalog.tools = [
+      {
+        serverName: "user-mail",
+        safeServerName: "user-mail",
+        toolName: "show",
+        inputSchema: { type: "object" },
+        fallbackDescription: "show",
+        uiResourceUri: "ui://user-mail/app",
+        codexAnnotations: { readOnlyHint: true },
+      },
+      {
+        serverName: "user-mail",
+        safeServerName: "user-mail",
+        toolName: "safe-app",
+        inputSchema: { type: "object" },
+        fallbackDescription: "safe app",
+        uiVisibility: ["app"],
+        codexAnnotations: { readOnlyHint: true },
+      },
+      {
+        serverName: "user-mail",
+        safeServerName: "user-mail",
+        toolName: "unsafe-app",
+        inputSchema: { type: "object" },
+        fallbackDescription: "unsafe app",
+        uiVisibility: ["app"],
+      },
+    ];
+    runtime.mcpAppsEnabled = true;
+    runtime.readResource = async () => ({
+      contents: [
+        {
+          uri: "ui://user-mail/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>mail</html>",
+        },
+      ],
+    });
+    const callTool = vi.spyOn(runtime, "callTool");
+    const requestInteractiveCodexApproval = vi.fn(async () => undefined);
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-app-approval",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      workspaceDir: "/workspace",
+      toolsAllow: ["*"],
+      requestInteractiveCodexApproval,
+    });
+    const callResult = await result.tools[0]!.execute("call-app", {});
+    const viewId = (callResult.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } })
+      .mcpAppPreview?.mcpApp?.viewId;
+    const view = getMcpAppViewLease(viewId!, runtime)!;
+    expect(view.allowedAppToolNames).toEqual(new Set(["safe-app", "show"]));
+
+    await expect(
+      executeMcpAppOperation(
+        { runtime, view },
+        { method: "tools/call", params: { name: "unsafe-app", arguments: {} } },
+      ),
+    ).rejects.toThrow('MCP tool "unsafe-app" is not app-callable');
+    expect(callTool).toHaveBeenCalledTimes(1);
+    await expect(
+      executeMcpAppOperation(
+        { runtime, view },
+        { method: "tools/call", params: { name: "safe-app", arguments: {} } },
+      ),
+    ).resolves.toBeDefined();
+    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(requestInteractiveCodexApproval).not.toHaveBeenCalled();
+    await result.dispose();
+  });
+
+  it("returns a bounded operator-visible notice for failed configured MCP discovery", async () => {
+    const runtime = makeStaticRuntime("scheduled-diagnostic");
+    const failedCatalog = {
+      version: 1,
+      generatedAt: 0,
+      servers: {},
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "user-mail",
+          safeServerName: "user-mail",
+          launchSummary: "user-mail",
+          message: "authentication required",
+        },
+      ],
+    };
+    runtime.peekCatalog = () => failedCatalog;
+    runtime.getCatalog = async () => failedCatalog;
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-diagnostic",
+      workspaceDir: "/workspace",
+      toolsAllow: ["*"],
+    });
+
+    expect(result.diagnosticNotice).toContain("user-mail: authentication required");
+    expect(result.diagnosticNotice).toContain("Do not claim MCP-backed work succeeded");
+    await result.dispose();
+  });
+
+  it("does not report incomplete MCP for a policy note that removed no tool", async () => {
+    const runtime = makeRuntime({ sessionId: "scheduled-group-note", requesterSenderId: "unused" });
+    delete runtime.requesterScope;
+    mocks.acquireSessionMcpRuntime.mockResolvedValue({
+      runtime,
+      releaseLease: runtime.acquireLease?.() ?? (() => {}),
+    });
+    const warnings: string[] = [];
+
+    // Isolated heartbeat session key with a caller-provided Telegram group id: the final
+    // policy pass drops the group id (and says so) but keeps every configured tool.
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-group-note",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      autoApproveCodexAppServerApprovals: true,
+      policyContext: {
+        config: { agents: { entries: { demo: {} } } },
+        agentId: "demo",
+        sessionKey: "agent:demo:main:heartbeat",
+        groupId: "-1000000000001",
+        messageProvider: "telegram",
+        modelProvider: "openai",
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
+    expect(warnings).toContain(
+      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+    );
+    expect(result.diagnosticNotice).toBeUndefined();
+    await result.dispose();
+  });
+
+  it.each(["-1000000000001"])(
+    "reports heartbeat policy omissions independently of group warnings (groupId: %s)",
+    async (groupId) => {
+      const runtime = makeRuntime({
+        sessionId: "scheduled-group-deny",
+        requesterSenderId: "unused",
+      });
+      delete runtime.requesterScope;
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({
+        runtime,
+        releaseLease: runtime.acquireLease?.() ?? (() => {}),
+      });
+
+      const result = await materializeStaticMcpToolsForHarnessRunCore({
+        sessionId: "scheduled-group-deny",
+        workspaceDir: "/workspace",
+        toolsAllow: ["user-mail__inbox"],
+        autoApproveCodexAppServerApprovals: true,
+        policyContext: {
+          config: {
+            agents: { entries: { demo: {} } },
+            tools: { deny: ["user-mail__inbox"] },
+          },
+          agentId: "demo",
+          sessionKey: "agent:demo:main:heartbeat",
+          groupId,
+          messageProvider: "telegram",
+          modelProvider: "openai",
+        },
+      });
+
+      expect(result.tools).toEqual([]);
+      expect(result.diagnosticNotice).toContain(
+        "Configured MCP is incomplete for this scheduled run",
+      );
+      expect(result.diagnosticNotice).toContain("1 configured MCP tool(s) omitted by policy");
+      expect(result.diagnosticNotice).not.toContain("dropping caller-provided groupId");
+      await result.dispose();
+    },
+  );
+
+  it("honors explicit auto in scheduled full-permission sessions", async () => {
+    const runtime = makeStaticRuntime("scheduled-yolo");
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "auto";
+    const callTool = vi.spyOn(runtime, "callTool");
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-yolo",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      autoApproveCodexAppServerApprovals: true,
+    });
+
+    expect(result.tools).toEqual([]);
+    expect(result.diagnosticNotice).toContain("user-mail/inbox");
+    expect(callTool).not.toHaveBeenCalled();
+    await result.dispose();
+  });
+
+  it("omits MCP tools when scheduled approval metadata is absent", async () => {
+    const runtime = makeStaticRuntime("scheduled-unknown");
+    const callTool = vi.spyOn(runtime, "callTool");
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "scheduled-unknown",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+    });
+
+    expect(result.tools).toEqual([]);
+    expect(result.diagnosticNotice).toContain("user-mail/inbox");
+    expect(result.diagnosticNotice).toContain(
+      "openclaw mcp configure user-mail --approval approve",
+    );
+    expect(callTool).not.toHaveBeenCalled();
+    await result?.dispose();
+  });
 });
 
 afterEach(() => {
   mocks.reset();
+  mcpUiResourceTesting.clearViewStore();
 });
 
-describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
+describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
   it("returns undefined before any requester resolves", async () => {
     mocks.setResolveImpl(async () => undefined);
-    const result = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-empty",
       workspaceDir: "/workspace",
       requesterSenderId: "guest",
     });
     expect(result).toBeUndefined();
     expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps a requester connect tool without starting OAuth during materialization", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeConnectRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "alice",
+        publicOrigin: "https://gateway.example",
+      }),
+    );
+    startAuthorization.mockResolvedValue({
+      status: "redirect",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+      redirectUrl: "https://gateway.example/oauth/mcp/callback",
+      state: "opaque",
+    });
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-connect",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      messageChannel: "telegram",
+      agentAccountId: "bot",
+      cfg: {
+        gateway: { publicOrigin: "https://gateway.example" },
+        mcp: {
+          servers: {
+            calendar: {
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result?.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
+    expect(startAuthorization).not.toHaveBeenCalled();
+    const connect = await result!.tools[0]!.execute("connect", {});
+    expect(connect).toMatchObject({
+      details: {
+        mcpConnect: {
+          serverName: "calendar",
+          authorizationUrl: "https://auth.example/authorize?state=opaque",
+        },
+      },
+    });
+    expect(startAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: "requester", serverName: "calendar" }),
+      expect.objectContaining({ url: "https://mcp.example/rpc" }),
+      { redirectUrl: "https://gateway.example/oauth/mcp/callback" },
+    );
+    expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
+    await result!.dispose();
+  });
+
+  it("returns a bounded operator fix when the public origin is missing", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeConnectRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "alice",
+      }),
+    );
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-no-origin",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      cfg: {
+        mcp: {
+          servers: {
+            calendar: {
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+
+    const connect = await result!.tools[0]!.execute("connect", {});
+    expect(connect.details).toMatchObject({ status: "error" });
+    expect(connect.content[0]).toMatchObject({ text: expect.stringContaining("publicOrigin") });
+    expect(startAuthorization).not.toHaveBeenCalled();
+    await result!.dispose();
+  });
+
+  it("releases the live runtime when pre-return catalog publication fails", async () => {
+    const runtime = makeRuntime({ sessionId: "session-cleanup", requesterSenderId: "authed" });
+    mocks.setResolveImpl(async () => runtime);
+    mocks.rememberAdvertisedScopedMcpCatalog.mockImplementationOnce(() => {
+      throw new Error("catalog publication failed");
+    });
+
+    await expect(
+      materializeRequesterScopedMcpToolsForHarnessRunCore({
+        sessionId: "session-cleanup",
+        workspaceDir: "/workspace",
+        requesterSenderId: "authed",
+      }),
+    ).rejects.toThrow("catalog publication failed");
+    expect(runtime.activeLeases).toBe(0);
   });
 
   it("keeps advertised specs stable and returns not-connected for unauthed senders", async () => {
@@ -169,10 +554,11 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
       });
     });
 
-    const authed = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const authed = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-stable",
       workspaceDir: "/workspace",
       requesterSenderId: "authed",
+      autoApproveCodexAppServerApprovals: true,
     });
     expect(authed).toBeDefined();
     const advertisedNames = authed!.advertisedTools.map((tool) => tool.name);
@@ -185,10 +571,11 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     });
     await authed!.dispose();
 
-    const guest = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const guest = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-stable",
       workspaceDir: "/workspace",
       requesterSenderId: "guest",
+      autoApproveCodexAppServerApprovals: true,
     });
     expect(guest).toBeDefined();
     expect(guest!.advertisedTools.map((tool) => tool.name)).toEqual(advertisedNames);
@@ -204,6 +591,30 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     await guest!.dispose();
   });
 
+  it("removes direct-policy-denied tools from executable and advertised requester catalogs", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "authed",
+      }),
+    );
+
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-policy",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+      autoApproveCodexAppServerApprovals: true,
+      policyContext: {
+        conversationToolPolicy: { deny: ["user-mail__inbox"] },
+      },
+    });
+
+    expect(result).toBeDefined();
+    expect(result!.tools).toEqual([]);
+    expect(result!.advertisedTools).toEqual([]);
+    await result!.dispose();
+  });
+
   it("routes authed calls to that sender's runtime only", async () => {
     mocks.setResolveImpl(async (params) => {
       const senderId =
@@ -217,15 +628,17 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
       });
     });
 
-    const alice = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const alice = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-route",
       workspaceDir: "/workspace",
       requesterSenderId: "alice",
+      autoApproveCodexAppServerApprovals: true,
     });
-    const bob = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const bob = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-route",
       workspaceDir: "/workspace",
       requesterSenderId: "bob",
+      autoApproveCodexAppServerApprovals: true,
     });
     expect(alice).toBeDefined();
     expect(bob).toBeDefined();
@@ -240,5 +653,94 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
 
     await alice!.dispose();
     await bob!.dispose();
+  });
+
+  it("exempts only trusted OAuth bootstrap tools, not real server tools named connect", async () => {
+    const runtime = makeRuntime({
+      sessionId: "session-connect-provenance",
+      requesterSenderId: "authed",
+    });
+    const catalog = runtime.peekCatalog()!;
+    // Real server capability named "connect" — must stay behind the approval gate.
+    catalog.servers["drive"] = {
+      serverName: "drive",
+      launchSummary: "drive",
+      toolCount: 1,
+      codexApprovalMode: "prompt",
+    };
+    catalog.tools.push({
+      serverName: "drive",
+      safeServerName: "drive",
+      toolName: "connect",
+      description: "sync drive",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "sync drive",
+    });
+    // Trusted requester OAuth sign-in bootstrap — exempt by provenance, not by name.
+    catalog.servers["auth-hub"] = {
+      serverName: "auth-hub",
+      launchSummary: "auth-hub",
+      toolCount: 1,
+      codexApprovalMode: "prompt",
+    };
+    catalog.tools.push({
+      serverName: "auth-hub",
+      safeServerName: "auth-hub",
+      toolName: "connect",
+      description: "Connect your auth-hub account.",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "Connect your auth-hub account.",
+      oauthConnectBootstrap: true,
+    });
+    catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
+    const callTool = vi.spyOn(runtime, "callTool");
+    mocks.setResolveImpl(async () => runtime);
+
+    // No callback: fail open by explicit caller-compatibility decision — all
+    // tools stay exposed on both surfaces and dispatch ungated. The trusted
+    // bootstrap exemption still matters when a callback IS provided (gated
+    // below), where only the bootstrap reaches the server without approval.
+    const failClosed = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-connect-provenance",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+    });
+    expect(failClosed!.tools.map((tool) => tool.name)).toEqual([
+      "auth-hub__connect",
+      "drive__connect",
+      "user-mail__inbox",
+    ]);
+    expect(failClosed!.advertisedTools.map((tool) => tool.name)).toEqual([
+      "auth-hub__connect",
+      "drive__connect",
+      "user-mail__inbox",
+    ]);
+    await failClosed!.dispose();
+
+    // With a callback: the real server capability named connect is gated like any
+    // other prompt-required tool and only reaches the server after approval.
+    const requestInteractiveCodexApproval = vi.fn(async (request) => {
+      if (request.toolCallId === "denied-connect") {
+        throw new Error("operator denied");
+      }
+    });
+    const gated = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-connect-provenance",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+      requestInteractiveCodexApproval,
+    });
+    const realConnect = gated!.tools.find((tool) => tool.name === "drive__connect");
+    expect(realConnect).toBeDefined();
+    await expect(realConnect!.execute("denied-connect", {})).rejects.toThrow("operator denied");
+    expect(callTool).not.toHaveBeenCalled();
+    await expect(realConnect!.execute("allowed-connect", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "live:connect:authed" }],
+    });
+    expect(callTool).toHaveBeenCalledWith("drive", "connect", {});
+    expect(requestInteractiveCodexApproval).toHaveBeenLastCalledWith(
+      expect.objectContaining({ serverName: "drive", toolName: "connect", mode: "prompt" }),
+    );
+    await gated!.dispose();
   });
 });

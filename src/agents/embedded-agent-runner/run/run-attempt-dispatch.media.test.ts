@@ -5,36 +5,71 @@ import { describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { detectAndLoadPromptImages } from "./images.js";
-import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
+
+async function preparePluginHarnessPromptImages(params: {
+  runParams: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];
+  runtime: {
+    agentId?: string;
+    workspaceDir: string;
+    model: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"]["model"];
+  };
+}) {
+  const result = await prepareEmbeddedAttemptPromptExecution({
+    attempt: { ...params.runParams, model: params.runtime.model },
+    mediaOwnerAgentId: params.runtime.agentId ?? "main",
+    effectiveWorkspace: params.runtime.workspaceDir,
+    effectiveFsWorkspaceOnly: false,
+    prompt: "",
+    skipPromptSubmission: false,
+    pluginHarness: true,
+  });
+  return { images: result.images, imageOrder: result.imageOrder, media: result.media };
+}
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
-
 describe("plugin harness prompt media", () => {
-  it("does not hydrate marker or bare paths from recalled memory context", async () => {
-    const recalledMemory = [
-      "<relevant-memories>",
-      "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
-      "</relevant-memories>",
-    ].join("\n");
+  it("hydrates an authentic PNG with generic-binary metadata", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-canonical-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const imagePath = path.join(inboundDir, "scan.png");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const media = [{ path: imagePath, contentType: "application/octet-stream" }];
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
-    await expect(
-      preparePluginHarnessPromptImages({
+    try {
+      const result = await preparePluginHarnessPromptImages({
         runParams: {
           agentId: "main",
           config: { agents: { defaults: { sandbox: { mode: "off" } } } },
-          prompt: `${recalledMemory}\n\ncurrent question`,
-          sessionId: "session-recalled-memory",
+          media,
+          sessionId: "session-canonical-media",
+          userTurnTranscriptRecorder: {
+            message: { role: "user", content: "inspect", __openclaw: { media } },
+            async resolveMessage() {
+              return this.message;
+            },
+          },
         },
         runtime: {
           model: { input: ["text", "image"] },
-          sessionId: "session-recalled-memory",
-          workspaceDir: "/tmp",
+          sessionId: "session-canonical-media",
+          workspaceDir,
         },
-        pluginHarnessOwnsTransport: true,
-      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
-    ).resolves.toEqual({ images: undefined, imageOrder: undefined, media: undefined });
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+      expect(result.images ?? []).toHaveLength(1);
+      expect(result.images?.[0]?.mimeType).toBe("image/png");
+      expect(result.media).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("hydrates plugin images and preserves serialized replay order with non-image facts", async () => {
@@ -63,11 +98,18 @@ describe("plugin harness prompt media", () => {
         userTurnTranscriptRecorder: {
           message: {
             role: "user",
-            content: "inspect",
-            __openclaw: {
-              media: [{ path: imagePath, contentType: "image/png" }, documentFact],
-              mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
-            },
+            content: "stale initial facts",
+            __openclaw: { media: [documentFact] },
+          },
+          async resolveMessage() {
+            return {
+              role: "user",
+              content: "inspect",
+              __openclaw: {
+                media: [{ path: imagePath, contentType: "image/png" }, documentFact],
+                mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+              },
+            };
           },
         },
       },
@@ -76,7 +118,6 @@ describe("plugin harness prompt media", () => {
         sessionId: "session-1",
         workspaceDir,
       },
-      pluginHarnessOwnsTransport: true,
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0];
 
     try {
@@ -87,52 +128,68 @@ describe("plugin harness prompt media", () => {
       ]);
       expect(readRuntimePromptImageFactIndexes(result.images ?? [])).toEqual([0]);
       expect(result.imageOrder).toEqual(["inline"]);
-      expect(result.media?.[0]).toMatchObject({ contentType: "image/png", kind: "image" });
-      expect(result.media?.[0]).not.toHaveProperty("path");
-      expect(result.media?.[0]).not.toHaveProperty("url");
-      expect(result.media?.[1]).toMatchObject(documentFact);
-
-      const serialized = JSON.stringify(result);
-      const restored = JSON.parse(serialized) as typeof result;
-      const replay = await detectAndLoadPromptImages({
-        prompt: "",
-        media: restored.media,
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        existingImages: restored.images,
-        imageOrder: restored.imageOrder,
-      });
-      expect(replay.failedMediaCount).toBe(0);
-      expect(replay.images).toEqual(result.images);
-      expect(replay.imageFactIndexes).toEqual([0]);
+      expect(result.media).toMatchObject([documentFact]);
+      expect(JSON.stringify(result)).not.toContain(imagePath);
+      expect(structuredClone(result).images).toEqual(result.images);
     } finally {
       envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("surfaces a failed image hydration before plugin dispatch", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-failed-media-"));
+  it("hydrates named-agent workspace images on the embedded prompt path", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-agent-media-"));
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = Buffer.from(TINY_PNG_BASE64, "base64");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    await fs.writeFile(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
     try {
-      await expect(
-        preparePluginHarnessPromptImages({
-          runParams: {
-            agentId: "main",
-            config: { agents: { defaults: { sandbox: { mode: "off" } } } },
-            imageOrder: ["offloaded"],
-            media: [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }],
-            sessionId: "session-failed",
-          },
-          runtime: {
+      const hydrate = (mediaPath: string, sessionId: string) =>
+        prepareEmbeddedAttemptPromptExecution({
+          attempt: {
+            config: {
+              agents: {
+                entries: {
+                  arthur: { workspace: workspaceDir },
+                  merlin: { workspace: siblingWorkspaceDir },
+                },
+              },
+            },
+            media: [{ path: mediaPath, contentType: "image/png" }],
             model: { input: ["text", "image"] },
-            sessionId: "session-failed",
-            workspaceDir,
+            sessionId,
           },
-          pluginHarnessOwnsTransport: true,
-        } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
-      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+          mediaOwnerAgentId: "arthur",
+          effectiveWorkspace: workspaceDir,
+          effectiveFsWorkspaceOnly: false,
+          prompt: "",
+          skipPromptSubmission: false,
+        } as unknown as Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]);
+
+      const owned = await hydrate(imagePath, "session-embedded-media");
+
+      expect(owned.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(owned.failedMediaCount).toBe(0);
+
+      // The embedded path returns before the plugin-harness throw, so a refused
+      // sibling read shows up as a failure count rather than a rejection.
+      const sibling = await hydrate(siblingImagePath, "session-embedded-sibling-media");
+
+      expect(sibling.images).toEqual([]);
+      expect(sibling.failedMediaCount).toBe(1);
     } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
@@ -151,28 +208,6 @@ describe("plugin harness prompt media", () => {
           sessionId: "session-missing-inline",
           workspaceDir: "/tmp",
         },
-        pluginHarnessOwnsTransport: true,
-      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
-    ).rejects.toThrow("failed to hydrate 1 structured image attachment");
-  });
-
-  it("surfaces a fact-owned image dropped during host sanitization", async () => {
-    await expect(
-      preparePluginHarnessPromptImages({
-        runParams: {
-          agentId: "main",
-          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
-          images: [{ type: "image", data: "%%%", mimeType: "image/png" }],
-          imageOrder: ["inline"],
-          media: [{ kind: "image" }],
-          sessionId: "session-sanitize-failed",
-        },
-        runtime: {
-          model: { input: ["text", "image"] },
-          sessionId: "session-sanitize-failed",
-          workspaceDir: "/tmp",
-        },
-        pluginHarnessOwnsTransport: true,
       } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
     ).rejects.toThrow("failed to hydrate 1 structured image attachment");
   });
@@ -200,7 +235,6 @@ describe("plugin harness prompt media", () => {
           sessionId: "session-suppressed-before-inline",
           workspaceDir: "/tmp",
         },
-        pluginHarnessOwnsTransport: true,
       } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
     ).rejects.toThrow("failed to hydrate 1 structured image attachment");
   });
@@ -229,17 +263,10 @@ describe("plugin harness prompt media", () => {
         sessionId: "session-described",
         workspaceDir: "/tmp",
       },
-      pluginHarnessOwnsTransport: true,
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
     expect(result.images).toEqual([]);
-    expect(result.media?.[0]).toMatchObject({
-      contentType: "image/png",
-      kind: "image",
-      hydrationSuppressed: true,
-    });
-    expect(result.media?.[0]).not.toHaveProperty("path");
-    expect(result.media?.[0]).not.toHaveProperty("url");
+    expect(result.media).toBeUndefined();
   });
 
   it("retains layout-derived suppression after plugin host materialization", async () => {
@@ -256,6 +283,9 @@ describe("plugin harness prompt media", () => {
         ],
         sessionId: "session-layout-suppressed",
         userTurnTranscriptRecorder: {
+          async resolveMessage() {
+            return this.message;
+          },
           message: {
             role: "user",
             content: "compare",
@@ -277,14 +307,11 @@ describe("plugin harness prompt media", () => {
         sessionId: "session-layout-suppressed",
         workspaceDir: "/tmp",
       },
-      pluginHarnessOwnsTransport: true,
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
     expect(result.images).toEqual([inlineImage]);
     expect(result.imageOrder).toEqual(["inline"]);
-    expect(result.media?.[0]).toMatchObject({ kind: "image", hydrationSuppressed: true });
-    expect(result.media?.[1]).toMatchObject({ kind: "image" });
-    expect(result.media?.[1]).not.toHaveProperty("hydrationSuppressed");
+    expect(result.media).toBeUndefined();
   });
 
   it("keeps unsupported native images as aligned type-only facts", async () => {
@@ -304,24 +331,9 @@ describe("plugin harness prompt media", () => {
         sessionId: "session-text-only",
         workspaceDir: "/tmp",
       },
-      pluginHarnessOwnsTransport: true,
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
     expect(result.images).toEqual([]);
-    expect(result.media?.[0]).toMatchObject({ contentType: "image/png" });
-    expect(result.media?.[0]).not.toHaveProperty("path");
-    expect(result.media?.[1]).toMatchObject({ kind: "image" });
-    expect(result.media?.[1]).not.toHaveProperty("path");
-  });
-
-  it("leaves facts untouched when the native harness owns transport", async () => {
-    const media = [{ path: "/tmp/photo.png", contentType: "image/png" }];
-    const result = await preparePluginHarnessPromptImages({
-      runParams: { media },
-      runtime: {},
-      pluginHarnessOwnsTransport: false,
-    } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
-
-    expect(result).toEqual({ images: undefined, imageOrder: undefined, media });
+    expect(result.media).toBeUndefined();
   });
 });

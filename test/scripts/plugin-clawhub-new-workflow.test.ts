@@ -1,4 +1,8 @@
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -22,6 +26,7 @@ type Job = {
 };
 
 type Workflow = {
+  concurrency?: { group: string; "cancel-in-progress": boolean };
   jobs?: Record<string, Job>;
   on?: {
     workflow_dispatch?: {
@@ -37,9 +42,8 @@ const materializerSource = readFileSync("scripts/materialize-clawhub-cli.sh", "u
 const clawhubCliPackage = JSON.parse(
   readFileSync(".github/release/clawhub-cli/package.json", "utf8"),
 ) as { dependencies?: Record<string, string> };
-const clawhubCliLock = JSON.parse(
-  readFileSync(".github/release/clawhub-cli/package-lock.json", "utf8"),
-) as {
+const clawhubCliLockBytes = readFileSync(".github/release/clawhub-cli/package-lock.json");
+const clawhubCliLock = JSON.parse(clawhubCliLockBytes.toString("utf8")) as {
   packages?: Record<string, { integrity?: string; version?: string }>;
 };
 
@@ -56,6 +60,14 @@ function step(jobValue: Job, name: string): Step {
 }
 
 describe("Plugin ClawHub New workflow", () => {
+  it("isolates validation runs while serializing publication of the same target", () => {
+    expect(workflow.concurrency).toEqual({
+      group:
+        "plugin-clawhub-new-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}",
+      "cancel-in-progress": false,
+    });
+  });
+
   it("binds trusted-main workflow code to an exact release target SHA", () => {
     expect(workflow.on?.workflow_dispatch?.inputs?.ref?.required).toBe(true);
     for (const input of [
@@ -73,7 +85,6 @@ describe("Plugin ClawHub New workflow", () => {
     expect(checkout.with?.ref).toBe("${{ github.sha }}");
     const guard = step(resolve, "Require trusted workflow source").run ?? "";
     expect(guard).toContain('WORKFLOW_REF}" == "refs/heads/main"');
-    expect(guard).toContain('GITHUB_ACTOR}" == "github-actions[bot]"');
     expect(guard).toContain("refs/tags/release-publish/");
     expect(guard).toContain(
       "Plugin ClawHub New workflow SHA does not match the parent-approved trusted-main SHA.",
@@ -85,6 +96,58 @@ describe("Plugin ClawHub New workflow", () => {
       "Plugin ClawHub bootstrap target ${TARGET_REF} does not match ${RELEASE_TAG} (${tag_sha}).",
     );
     expect(target).toContain("refs/remotes/origin/release");
+  });
+
+  it("admits direct human recovery from trusted main that contains the approved SHA", () => {
+    const guard = step(job("resolve_bootstrap_plan"), "Require trusted workflow source").run ?? "";
+    const repo = mkdtempSync(path.join(tmpdir(), "plugin-clawhub-new-guard-"));
+    try {
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", repo, ...args], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "t",
+            GIT_AUTHOR_EMAIL: "t@example.com",
+            GIT_COMMITTER_NAME: "t",
+            GIT_COMMITTER_EMAIL: "t@example.com",
+          },
+        }).trim();
+      git("init", "-q");
+      const tree = git("mktree");
+      const approved = git("commit-tree", "--no-gpg-sign", tree, "-m", "approved");
+      const head = git("commit-tree", "--no-gpg-sign", tree, "-p", approved, "-m", "recovery");
+      git("update-ref", "HEAD", head);
+      const run = (actor: string, approvedSha: string, workflowRef = "refs/heads/main") =>
+        spawnSync("bash", ["-c", guard], {
+          cwd: repo,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            APPROVED_WORKFLOW_SHA: approvedSha,
+            GITHUB_ACTOR: actor,
+            PRETAG_VALIDATION: "false",
+            WORKFLOW_REF: workflowRef,
+            WORKFLOW_SHA: head,
+          },
+        });
+
+      const recovery = run("steipete", approved);
+      expect(recovery.status, recovery.stderr).toBe(0);
+      const parentDispatch = run("github-actions[bot]", head);
+      expect(parentDispatch.status, parentDispatch.stderr).toBe(0);
+      expect(run("github-actions[bot]", approved).stderr).toContain(
+        "does not match the parent-approved trusted-main SHA",
+      );
+      expect(run("steipete", "f".repeat(40)).stderr).toContain(
+        "requires trusted main to contain the parent-approved SHA",
+      );
+      expect(run("steipete", approved, "refs/heads/release/2026.9.6").stderr).toContain(
+        "requires trusted main or the protected SHA-pinned release-publish tag",
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("supports a secretless pre-tag validation mode without tag or parent approval", () => {
@@ -135,7 +198,7 @@ describe("Plugin ClawHub New workflow", () => {
     const validation = step(approval, "Validate release publish approval run");
     expect(validation.env).toMatchObject({
       RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-      CHILD_WORKFLOW_SHA: "${{ github.sha }}",
+      CHILD_WORKFLOW_SHA: "${{ inputs.bootstrap_workflow_sha }}",
       RELEASE_PACKAGES: "${{ inputs.plugins }}",
       RELEASE_TAG: "${{ inputs.release_tag }}",
       RELEASE_TARGET_SHA: "${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}",
@@ -144,22 +207,12 @@ describe("Plugin ClawHub New workflow", () => {
     expect(validation.run).toContain(
       "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
     );
+    expect(validation.run).toContain("repository: .repository.full_name");
     expect(validation.run).toContain(
       'EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"',
     );
     expect(validation.run).toContain('--source-ref "${EXPECTED_WORKFLOW_REF}"');
     expect(validation.run).toContain('--source-digest "${EXPECTED_WORKFLOW_SHA}"');
-  });
-
-  it("requires the child workflow SHA to match the separately attested bootstrap tooling SHA", () => {
-    const validation = step(
-      job("validate_release_publish_approval"),
-      "Validate release publish approval run",
-    );
-    expect(validation.env?.CHILD_WORKFLOW_SHA).toBe("${{ github.sha }}");
-    expect(readFileSync("scripts/validate-release-publish-approval.mjs", "utf8")).toContain(
-      "bootstrapWorkflowSha: childWorkflowSha",
-    );
   });
 
   it("packs target code only in the secretless producer", () => {
@@ -187,6 +240,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(packRun).not.toContain('mode}" == "configure-only"');
     expect(packRun).toContain("bash .release-harness/scripts/plugin-clawhub-publish.sh --pack");
     expect(packRun).not.toContain("bash scripts/plugin-clawhub-publish.sh --pack");
+    expect(packRun).not.toContain("check-plugin-npm-runtime-builds.mts");
     expect(packRun).toContain("--validate-packed");
     expect(packRun).toContain("--clawhub-toolchain-integrity");
     expect(packRun).toContain("--clawhub-toolchain-sha256");
@@ -241,8 +295,8 @@ describe("Plugin ClawHub New workflow", () => {
     });
     const uses = (publish.steps ?? []).flatMap((entry) => (entry.uses ? [entry.uses] : []));
     expect(uses).toEqual([
-      "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
-      "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
       "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     ]);
 
@@ -299,68 +353,32 @@ describe("Plugin ClawHub New workflow", () => {
     expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
       "OPENCLAW_CLAWHUB_TARGET_SHA",
     );
-  });
-
-  it("preserves configure-only repair and exact registry byte readback", () => {
-    const publish = job("publish_bootstrap_plugins");
-    const publishRun = step(publish, "Publish exact ClawHub bootstrap artifacts").run ?? "";
-    expect(publishRun).toContain('mode}" == "publish"');
-    expect(publishRun).toContain("GitHub Actions immutable bootstrap retry");
-    expect(publishRun).toContain("GitHub Actions trusted publisher repair before OIDC migration");
-    expect(publishRun).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
-    expect(publishRun).toContain("timeout --signal=TERM --kill-after=10s 300s");
-    expect(publishRun).toContain("--repository openclaw/openclaw");
-    expect(publishRun).toContain("--workflow-filename plugin-clawhub-release.yml");
-    expect(publishRun).not.toContain("--environment");
-    expect(step(publish, "Verify exact ClawHub registry artifact bytes").run).toContain(
-      ".release-harness/scripts/verify-clawhub-published-artifact.mjs",
+    expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
+      "OPENCLAW_CLAWHUB_PACKAGE_FAMILY",
     );
-    expect(step(publish, "Verify exact ClawHub registry artifact bytes").run).toContain(
-      '--terminal-run-attempt "${GITHUB_RUN_ATTEMPT}"',
-    );
-    expect(step(publish, "Upload ClawHub bootstrap readback evidence").with?.name).toBe(
-      "clawhub-bootstrap-readback-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(
-      step(publish, "Reconfirm configure-only registry bytes before credentials").run,
-    ).toContain("--mode configure-only-preflight");
   });
 
   it("uses one lockfile-only ClawHub CLI graph and absolute binary path", () => {
-    expect(clawhubCliPackage.dependencies).toEqual({ clawhub: "0.23.1" });
+    expect(clawhubCliPackage.dependencies).toEqual({ clawhub: "0.23.3" });
     expect(clawhubCliLock.packages?.["node_modules/clawhub"]).toMatchObject({
       integrity:
-        "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==",
-      version: "0.23.1",
+        "sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ==",
+      version: "0.23.3",
     });
     expect(materializerSource).toContain("npm ci");
     expect(materializerSource).toContain('cd "${destination}"');
     expect(materializerSource).not.toContain('--prefix "${destination}"');
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
-    expect(materializerSource).toContain(
-      "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816",
-    );
+    const lockSha256 = createHash("sha256").update(clawhubCliLockBytes).digest("hex");
+    expect(materializerSource).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materializerSource).toContain("lock_sha256=");
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");
     expect(materializerSource).toContain("cli=${clawhub_cli}");
     expect(source).not.toContain("npm exec");
-    expect(source).not.toContain("npm install");
+    expect(source).not.toMatch(/\bnpm\s+install\b/u);
     expect(source).not.toContain("CLAWHUB_CLI_PACKAGE");
     expect(source).toContain("OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}");
     expect(source).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
-  });
-
-  it("bounds every job and keeps secretless validation active in dry-run mode", () => {
-    expect(job("resolve_bootstrap_plan")["timeout-minutes"]).toBe(30);
-    expect(job("validate_release_publish_approval")["timeout-minutes"]).toBe(20);
-    expect(job("validate_bootstrap_trusted_publisher_cli")["timeout-minutes"]).toBe(10);
-    expect(job("validate_bootstrap_trusted_publisher_cli").if).not.toContain(
-      "inputs.dry_run != true",
-    );
-    expect(job("validate_release_publish_approval").if).toContain(
-      "inputs.pretag_validation != true",
-    );
-    expect(job("pack_bootstrap_plugins")["timeout-minutes"]).toBe(60);
   });
 });

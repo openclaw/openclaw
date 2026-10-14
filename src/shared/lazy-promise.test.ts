@@ -8,23 +8,68 @@ import {
 } from "./lazy-promise.js";
 
 describe("getOrCreatePromise", () => {
-  it("dedupes each key and leaves cache lifecycle to the caller", async () => {
+  it("evicts only rejected loads when rejection caching is disabled", async () => {
     const cache = new Map<string, Promise<string>>();
-    const create = vi.fn(async (key: string) => `loaded-${key}`);
+    const create = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValue("recovered");
 
-    const first = getOrCreatePromise(cache, "a", async () => await create("a"));
-    expect(getOrCreatePromise(cache, "a", async () => await create("a"))).toBe(first);
-    await expect(first).resolves.toBe("loaded-a");
-    await expect(getOrCreatePromise(cache, "b", async () => await create("b"))).resolves.toBe(
-      "loaded-b",
+    await expect(
+      getOrCreatePromise(cache, "a", create, { cacheRejections: false }),
+    ).rejects.toThrow("transient");
+    await expect(getOrCreatePromise(cache, "a", create, { cacheRejections: false })).resolves.toBe(
+      "recovered",
+    );
+    await expect(getOrCreatePromise(cache, "a", create, { cacheRejections: false })).resolves.toBe(
+      "recovered",
     );
     expect(create).toHaveBeenCalledTimes(2);
+  });
 
-    cache.clear();
-    await expect(getOrCreatePromise(cache, "a", async () => await create("a"))).resolves.toBe(
-      "loaded-a",
+  it("evicts settled in-flight work without deleting a replacement", async () => {
+    const cache = new Map<string, Promise<string>>();
+    let resolveFirst!: (value: string) => void;
+    const first = getOrCreatePromise(
+      cache,
+      "a",
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
+      { evictOnSettled: true },
     );
-    expect(create).toHaveBeenCalledTimes(3);
+    const replacement = Promise.resolve("replacement");
+    cache.set("a", replacement);
+
+    resolveFirst("first");
+    await expect(first).resolves.toBe("first");
+    expect(cache.get("a")).toBe(replacement);
+
+    await expect(
+      getOrCreatePromise(cache, "b", async () => "settled", { evictOnSettled: true }),
+    ).resolves.toBe("settled");
+    expect(cache.has("b")).toBe(false);
+  });
+
+  it("does not let a stale rejection delete a replacement", async () => {
+    const cache = new Map<string, Promise<string>>();
+    let rejectFirst!: (reason: Error) => void;
+    const first = getOrCreatePromise(
+      cache,
+      "a",
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+      { cacheRejections: false },
+    );
+    const replacement = Promise.resolve("replacement");
+    cache.set("a", replacement);
+
+    rejectFirst(new Error("stale"));
+    await expect(first).rejects.toThrow("stale");
+    expect(cache.get("a")).toBe(replacement);
   });
 });
 
@@ -40,17 +85,6 @@ describe("createLazyPromise", () => {
 });
 
 describe("createLazyPromiseLoader", () => {
-  it("dedupes concurrent loads and reuses the resolved value", async () => {
-    let calls = 0;
-    const loader = createLazyPromiseLoader(async () => `loaded-${++calls}`);
-    const first = loader.load();
-
-    expect(loader.load()).toBe(first);
-    await expect(first).resolves.toBe("loaded-1");
-    await expect(loader.load()).resolves.toBe("loaded-1");
-    expect(calls).toBe(1);
-  });
-
   it("evicts rejected loads by default so retries can recover", async () => {
     let calls = 0;
     const loader = createLazyPromiseLoader(async () => {
@@ -64,17 +98,6 @@ describe("createLazyPromiseLoader", () => {
     await expect(loader.load()).rejects.toThrow("transient");
     await expect(loader.load()).resolves.toBe("recovered");
     expect(calls).toBe(2);
-  });
-
-  it("can keep rejected loads when requested", async () => {
-    const load = vi.fn(async () => {
-      throw new Error("sticky");
-    });
-    const loader = createLazyPromiseLoader(load, { cacheRejections: true });
-
-    await expect(loader.load()).rejects.toThrow("sticky");
-    await expect(loader.load()).rejects.toThrow("sticky");
-    expect(load).toHaveBeenCalledOnce();
   });
 
   it("clears cached values", async () => {

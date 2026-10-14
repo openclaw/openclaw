@@ -1,35 +1,34 @@
 // Sms tests cover inbound plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { unlinkIfExists as unlinkIfExistsType } from "openclaw/plugin-sdk/media-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn<typeof sendSmsViaTwilioType>(async () => ({ sid: "SM-pair", to: "+15551234567" })),
 );
+const unlinkIfExistsMock = vi.hoisted(() =>
+  vi.fn<typeof unlinkIfExistsType>(async () => undefined),
+);
 
-vi.mock("./twilio.js", () => ({
+vi.mock("./twilio.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./twilio.js")>()),
   sendSmsViaTwilio,
 }));
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  unlinkIfExists: unlinkIfExistsMock,
+}));
+
+type SmsTurnAdoptionLifecycle = NonNullable<
+  Parameters<SmsChannelRuntime["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
+>;
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId: "default", ...overrides });
 }
 
 function createRuntime() {
@@ -40,7 +39,7 @@ function createRuntime() {
   const shouldComputeCommandAuthorized = vi.fn((body: string) => body.trim().startsWith("/"));
   const run = vi.fn<
     (params: {
-      turnAdoptionLifecycle?: { onAdopted: () => void | Promise<void> };
+      turnAdoptionLifecycle?: SmsTurnAdoptionLifecycle;
       adapter: {
         ingest: (msg: {
           from: string;
@@ -53,10 +52,16 @@ function createRuntime() {
           ingested: unknown,
         ) => Promise<{ route: { agentId: string; sessionKey: string } }>;
       };
-    }) => void
-  >();
+    }) => Promise<void>
+  >(async () => undefined);
   const buildContext = vi.fn();
   const resolveStorePath = vi.fn();
+  const saveRemoteMedia = vi.fn(async () => ({
+    id: "media-1",
+    path: "/tmp/mms-1.jpg",
+    size: 128,
+    contentType: "image/jpeg",
+  }));
   const runtime = {
     commands: {
       isControlCommandMessage,
@@ -70,8 +75,12 @@ function createRuntime() {
       resolveAgentRoute,
     },
     inbound: {
+      ingress: createPluginRuntimeMock().channel.inbound.ingress,
       run,
       buildContext,
+    },
+    media: {
+      saveRemoteMedia,
     },
     session: {
       resolveStorePath,
@@ -91,12 +100,39 @@ function createRuntime() {
     run,
     buildContext,
     resolveStorePath,
+    saveRemoteMedia,
   };
 }
 
 const SMS_FROM = "+15551234567";
 const SMS_TO = "+15557654321";
 const SMS_SESSION_KEY = `agent:main:sms:direct:${SMS_FROM}`;
+
+function createAuthorizedRuntime() {
+  const mocks = createRuntime();
+  mocks.resolveAgentRoute.mockReturnValue({
+    agentId: "main",
+    accountId: "default",
+    sessionKey: SMS_SESSION_KEY,
+  });
+  return mocks;
+}
+
+function createMmsMessage(messageSid: string) {
+  return {
+    from: SMS_FROM,
+    to: SMS_TO,
+    body: "",
+    messageSid,
+    accountSid: "AC123",
+    media: [
+      {
+        url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/${messageSid}/Media/ME${"1".repeat(32)}`,
+        contentType: "image/jpeg",
+      },
+    ],
+  };
+}
 
 async function resolveAuthorizedSmsTurn(params: {
   body: string;
@@ -126,6 +162,7 @@ async function resolveAuthorizedSmsTurn(params: {
     body: params.body,
     messageSid: params.messageSid,
     accountSid: "AC123",
+    media: [],
   };
   await dispatchSmsInboundEvent({
     cfg: {},
@@ -144,8 +181,13 @@ async function resolveAuthorizedSmsTurn(params: {
 }
 
 describe("dispatchSmsInboundEvent", () => {
+  beforeEach(() => {
+    unlinkIfExistsMock.mockClear();
+  });
+
   it("creates and sends a pairing challenge for first-time SMS senders", async () => {
-    const { runtime, readAllowFromStore, upsertPairingRequest } = createRuntime();
+    const { runtime, readAllowFromStore, run, saveRemoteMedia, upsertPairingRequest } =
+      createRuntime();
 
     await dispatchSmsInboundEvent({
       cfg: {},
@@ -158,6 +200,12 @@ describe("dispatchSmsInboundEvent", () => {
         body: "hello",
         messageSid: "SM-inbound",
         accountSid: "AC123",
+        media: [
+          {
+            url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/SM-inbound/Media/ME${"a".repeat(32)}`,
+            contentType: "image/jpeg",
+          },
+        ],
       },
     });
 
@@ -178,6 +226,8 @@ describe("dispatchSmsInboundEvent", () => {
         text: expect.stringContaining("PAIR123"),
       }),
     );
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("uses the canonical routed session key for authorized SMS turns", async () => {
@@ -209,6 +259,205 @@ describe("dispatchSmsInboundEvent", () => {
       }),
     );
     expect(turn.route.sessionKey).toBe(SMS_SESSION_KEY);
+  });
+
+  it("downloads authorized MMS media with Twilio auth and exposes media facts", async () => {
+    const mocks = createAuthorizedRuntime();
+    mocks.buildContext.mockReturnValue({ SessionKey: SMS_SESSION_KEY });
+    const msg = createMmsMessage("MM-inbound");
+
+    await dispatchSmsInboundEvent({
+      cfg: {},
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
+      channelRuntime: mocks.runtime,
+      receivedAt: 1_700_000_000_123,
+      msg,
+    });
+
+    expect(mocks.saveRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: msg.media[0]?.url,
+        maxBytes: 5 * 1024 * 1024,
+        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+        timeoutMs: 60_000,
+        retry: {
+          attempts: 2,
+          minDelayMs: 500,
+          maxDelayMs: 2_000,
+          jitter: 0.2,
+        },
+        requestInit: {
+          headers: {
+            authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
+          },
+          signal: expect.any(AbortSignal),
+        },
+      }),
+    );
+    expect(unlinkIfExistsMock).toHaveBeenCalledOnce();
+    expect(unlinkIfExistsMock).toHaveBeenCalledWith("/tmp/mms-1.jpg");
+    const runParams = expectDefined(mocks.run.mock.calls[0]?.[0], "SMS inbound run parameters");
+    await runParams.adapter.resolveTurn(runParams.adapter.ingest(msg));
+    expect(mocks.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ bodyForAgent: "" }),
+        media: [
+          expect.objectContaining({
+            path: "/tmp/mms-1.jpg",
+            contentType: "image/jpeg",
+            messageId: "MM-inbound",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("cleans downloaded MMS files when sender access is revoked before dispatch", async () => {
+    const mocks = createRuntime();
+    const account = createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] });
+    mocks.resolveAgentRoute.mockImplementation(() => {
+      account.allowFrom = [];
+      return { agentId: "main", accountId: "default", sessionKey: SMS_SESSION_KEY };
+    });
+
+    await dispatchSmsInboundEvent({
+      cfg: {},
+      account,
+      channelRuntime: mocks.runtime,
+      receivedAt: 1_700_000_000_123,
+      msg: {
+        from: SMS_FROM,
+        to: SMS_TO,
+        body: "photo",
+        messageSid: "MM-revoked",
+        accountSid: "AC123",
+        media: [
+          {
+            url: `https://api.twilio.com/2010-04-01/Accounts/AC123/Messages/MM-revoked/Media/ME${"1".repeat(32)}`,
+            contentType: "image/jpeg",
+          },
+        ],
+      },
+    });
+
+    expect(mocks.saveRemoteMedia).toHaveBeenCalledOnce();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
+  });
+
+  it("cleans materialized MMS files when inbound.run fails before adoption", async () => {
+    const mocks = createAuthorizedRuntime();
+    const runError = new Error("inbound dispatch failed");
+    mocks.run.mockRejectedValueOnce(runError);
+
+    await expect(
+      dispatchSmsInboundEvent({
+        cfg: {},
+        account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
+        channelRuntime: mocks.runtime,
+        receivedAt: 1_700_000_000_123,
+        turnAdoptionLifecycle: {
+          onAdopted: vi.fn(async () => undefined),
+          onDeferred: vi.fn(),
+          onAbandoned: vi.fn(),
+        },
+        msg: createMmsMessage("MM-run-failure"),
+      }),
+    ).rejects.toBe(runError);
+
+    expect(unlinkIfExistsMock).toHaveBeenCalledOnce();
+    expect(unlinkIfExistsMock).toHaveBeenCalledWith("/tmp/mms-1.jpg");
+  });
+
+  it("retains deferred MMS files until the turn is abandoned", async () => {
+    const mocks = createAuthorizedRuntime();
+    const events: string[] = [];
+    unlinkIfExistsMock.mockImplementationOnce(async () => {
+      events.push("cleanup");
+    });
+    const originalLifecycle: SmsTurnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(() => {
+        events.push("abandon");
+      }),
+    };
+    let wrappedLifecycle: SmsTurnAdoptionLifecycle | undefined;
+    mocks.run.mockImplementationOnce(async (runParams) => {
+      wrappedLifecycle = runParams.turnAdoptionLifecycle;
+      wrappedLifecycle?.onDeferred?.();
+    });
+
+    await dispatchSmsInboundEvent({
+      cfg: {},
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
+      channelRuntime: mocks.runtime,
+      receivedAt: 1_700_000_000_123,
+      turnAdoptionLifecycle: originalLifecycle,
+      msg: createMmsMessage("MM-deferred"),
+    });
+
+    expect(originalLifecycle.onDeferred).toHaveBeenCalledOnce();
+    expect(unlinkIfExistsMock).not.toHaveBeenCalled();
+    wrappedLifecycle?.onAbandoned?.();
+    await vi.waitFor(() => expect(originalLifecycle.onAbandoned).toHaveBeenCalledOnce());
+    expect(unlinkIfExistsMock).toHaveBeenCalledOnce();
+    expect(unlinkIfExistsMock).toHaveBeenCalledWith("/tmp/mms-1.jpg");
+    expect(events).toEqual(["cleanup", "abandon"]);
+  });
+
+  it("retains MMS files after successful turn adoption", async () => {
+    const mocks = createAuthorizedRuntime();
+    const originalLifecycle: SmsTurnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+    mocks.run.mockImplementationOnce(async (runParams) => {
+      await runParams.turnAdoptionLifecycle?.onAdopted();
+    });
+
+    await dispatchSmsInboundEvent({
+      cfg: {},
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
+      channelRuntime: mocks.runtime,
+      receivedAt: 1_700_000_000_123,
+      turnAdoptionLifecycle: originalLifecycle,
+      msg: createMmsMessage("MM-adopted"),
+    });
+
+    expect(originalLifecycle.onAdopted).toHaveBeenCalledOnce();
+    expect(unlinkIfExistsMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans deferred MMS files when turn adoption fails", async () => {
+    const mocks = createAuthorizedRuntime();
+    const adoptionError = new Error("durable adoption failed");
+    const originalLifecycle: SmsTurnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => {
+        throw adoptionError;
+      }),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+    mocks.run.mockImplementationOnce(async (runParams) => {
+      runParams.turnAdoptionLifecycle?.onDeferred?.();
+      await runParams.turnAdoptionLifecycle?.onAdopted();
+    });
+
+    await expect(
+      dispatchSmsInboundEvent({
+        cfg: {},
+        account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
+        channelRuntime: mocks.runtime,
+        receivedAt: 1_700_000_000_123,
+        turnAdoptionLifecycle: originalLifecycle,
+        msg: createMmsMessage("MM-adoption-failed"),
+      }),
+    ).rejects.toBe(adoptionError);
+
+    expect(unlinkIfExistsMock).toHaveBeenCalledOnce();
+    expect(unlinkIfExistsMock).toHaveBeenCalledWith("/tmp/mms-1.jpg");
   });
 
   it("marks allowlisted SMS slash commands as text command turns", async () => {

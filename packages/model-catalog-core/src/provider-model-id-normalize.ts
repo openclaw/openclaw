@@ -1,6 +1,16 @@
-// Model Catalog Core helper module supports provider model id normalize behavior.
 const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
 const GOOGLE_PROVIDER_PREFIX = "google/";
+const GOOGLE_MODEL_ALIASES = new Map([
+  ["gemini-3-pro", "gemini-3.1-pro-preview"],
+  ["gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+  ["gemini-3-flash", "gemini-3-flash-preview"],
+  ["gemini-3.1-pro", "gemini-3.1-pro-preview"],
+  // The Flash Lite preview endpoint retired after the model graduated to GA.
+  ["gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"],
+  ["gemini-3.1-flash", "gemini-3-flash-preview"],
+  ["gemini-3.1-flash-preview", "gemini-3-flash-preview"],
+  ["gemma-4-26b", "gemma-4-26b-a4b-it"],
+]);
 
 export function normalizeGooglePreviewModelId(id: string): string {
   if (id.startsWith(GOOGLE_PROVIDER_PREFIX)) {
@@ -8,35 +18,11 @@ export function normalizeGooglePreviewModelId(id: string): string {
     const normalizedModelId = normalizeGooglePreviewModelId(modelId);
     return normalizedModelId === modelId ? id : `${GOOGLE_PROVIDER_PREFIX}${normalizedModelId}`;
   }
-  if (id === "gemini-3-pro" || id === "gemini-3-pro-preview") {
-    return "gemini-3.1-pro-preview";
-  }
-  if (id === "gemini-3-flash") {
-    return "gemini-3-flash-preview";
-  }
-  if (id === "gemini-3.1-pro") {
-    return "gemini-3.1-pro-preview";
-  }
-  // Gemini 3.1 Flash Lite graduated to GA on 2026-05-07; the -preview
-  // endpoint is deprecated (shutdown 2026-05-25). Map old preview name
-  // to the stable GA id.
-  if (id === "gemini-3.1-flash-lite-preview") {
-    return "gemini-3.1-flash-lite";
-  }
-  if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
-    return "gemini-3-flash-preview";
-  }
-  if (id === "gemma-4-26b") {
-    return "gemma-4-26b-a4b-it";
-  }
-  return id;
+  return GOOGLE_MODEL_ALIASES.get(id) ?? id;
 }
 
 export function normalizeTogetherModelId(id: string): string {
-  if (id === "moonshotai/Kimi-K2.5") {
-    return "moonshotai/Kimi-K2.6";
-  }
-  return id;
+  return id === "moonshotai/Kimi-K2.5" ? "moonshotai/Kimi-K2.6" : id;
 }
 
 export function normalizeAntigravityPreviewModelId(id: string): string {

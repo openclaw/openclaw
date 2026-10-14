@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const temps = useAutoCleanupTempDirTracker(afterEach);
 const HELPER = resolve("scripts/docker/shared-image-artifact.sh");
 const TARGET_SHA = "a".repeat(40);
 const WORKFLOW_SHA = "b".repeat(40);
@@ -20,6 +21,11 @@ const IMAGE_REFS = ["openclaw-docker-e2e-bare:pkg-test", "openclaw-docker-e2e-fu
 function imageId(ref: string): string {
   return `sha256:${createHash("sha256").update(ref).digest("hex")}`;
 }
+
+// Docker config IDs are fixture data; the production archive digest stays independently checked.
+const imageIdCases = IMAGE_REFS.flatMap((ref) => [ref, `mismatch:${ref}`])
+  .map((ref) => `    '${ref}') printf '%s' '${imageId(ref)}' ;;`)
+  .join("\n");
 
 function writeExecutable(path: string, contents: string): void {
   writeFileSync(path, contents);
@@ -80,14 +86,18 @@ function verifyUploadedArtifact(
 }
 
 function createFixture() {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-shared-image-artifact-"));
+  const root = temps.make("openclaw-shared-image-artifact-");
   const bin = join(root, "bin");
   const artifactDir = join(root, "artifact");
   const dockerLog = join(root, "docker.log");
   const ghLog = join(root, "gh.log");
+  const ghState = join(root, "gh-state");
+  const sleepLog = join(root, "sleep.log");
   mkdirSync(bin);
+  mkdirSync(ghState);
   writeFileSync(dockerLog, "");
   writeFileSync(ghLog, "");
+  writeFileSync(sleepLog, "");
 
   writeExecutable(
     join(bin, "docker"),
@@ -96,14 +106,17 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 
 image_id() {
-  printf '%s' "$1" | sha256sum | awk '{print "sha256:" $1}'
+  case "$1" in
+${imageIdCases}
+    *) echo "unexpected fixture image ref: $1" >&2; return 2 ;;
+  esac
 }
 
 if [[ "$1" == "image" && "$2" == "inspect" ]]; then
   ref="\${5:?image ref required}"
   id="$(image_id "$ref")"
   if [[ "\${FAKE_DOCKER_FORCE_ID_MISMATCH:-0}" == "1" ]]; then
-    id="sha256:$(printf 'mismatch:%s' "$ref" | sha256sum | awk '{print $1}')"
+    id="$(image_id "mismatch:$ref")"
   fi
   printf '%s\\n' "$id"
   exit 0
@@ -185,14 +198,57 @@ printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
   echo "unexpected gh invocation: $*" >&2
   exit 2
 }
-path="$2"
+shift
+method=""
+path=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --method)
+      method="\${2:?method required}"
+      shift 2
+      ;;
+    *)
+      [[ -z "$path" ]] || {
+        echo "unexpected gh api argument: $1" >&2
+        exit 2
+      }
+      path="$1"
+      shift
+      ;;
+  esac
+done
+[[ "$method" == "GET" ]] || {
+  echo "unexpected gh api method: $method" >&2
+  exit 2
+}
+
 case "$path" in
   "repos/\${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")
+    count_file="$FAKE_GH_STATE/artifact"
+    count="$(( $(cat "$count_file" 2>/dev/null || printf 0) + 1 ))"
+    printf '%s\\n' "$count" > "$count_file"
+    if [[ "$count" -le "\${FAKE_GH_ARTIFACT_FAILURES:-0}" ]]; then
+      printf 'partial artifact response\\n'
+      printf '%s\\n' "\${FAKE_GH_ARTIFACT_ERROR:-gh: request failed}" >&2
+      exit 1
+    fi
+    if [[ -n "\${FAKE_ARTIFACT_JSON:-}" ]]; then
+      printf '%s\\n' "$FAKE_ARTIFACT_JSON"
+      exit 0
+    fi
     printf '{"id":%s,"name":"%s","expired":%s,"digest":"sha256:%s","workflow_run":{"id":%s}}\\n' \
       "$FAKE_ARTIFACT_ID" "$FAKE_ARTIFACT_NAME" "$FAKE_ARTIFACT_EXPIRED" \
       "$FAKE_ARTIFACT_DIGEST" "$FAKE_ARTIFACT_RUN_ID"
     ;;
   "repos/\${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}")
+    count_file="$FAKE_GH_STATE/attempt"
+    count="$(( $(cat "$count_file" 2>/dev/null || printf 0) + 1 ))"
+    printf '%s\\n' "$count" > "$count_file"
+    if [[ "$count" -le "\${FAKE_GH_ATTEMPT_FAILURES:-0}" ]]; then
+      printf 'partial attempt response\\n'
+      printf '%s\\n' "\${FAKE_GH_ATTEMPT_ERROR:-gh: request failed}" >&2
+      exit 1
+    fi
     printf '{"id":%s,"run_attempt":%s}\\n' \
       "$FAKE_ATTEMPT_RUN_ID" "$FAKE_ARTIFACT_RUN_ATTEMPT"
     ;;
@@ -201,6 +257,14 @@ case "$path" in
     exit 2
     ;;
 esac
+`,
+  );
+
+  writeExecutable(
+    join(bin, "sleep"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_SLEEP_LOG"
 `,
   );
 
@@ -215,6 +279,8 @@ esac
     FAKE_ATTEMPT_RUN_ID: ARTIFACT_RUN_ID,
     FAKE_DOCKER_LOG: dockerLog,
     FAKE_GH_LOG: ghLog,
+    FAKE_GH_STATE: ghState,
+    FAKE_SLEEP_LOG: sleepLog,
     GH_TOKEN: "test-token",
     GITHUB_REPOSITORY: "openclaw/openclaw",
     GITHUB_RUN_ATTEMPT: "2",
@@ -223,7 +289,7 @@ esac
     RUNNER_TEMP: root,
     OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256: PACKAGE_SHA256,
   };
-  return { artifactDir, dockerLog, env, ghLog, root };
+  return { artifactDir, dockerLog, env, ghLog, root, sleepLog };
 }
 
 function expectedArchiveEnv(fixture: ReturnType<typeof createFixture>): NodeJS.ProcessEnv {
@@ -241,231 +307,328 @@ function expectedArchiveEnv(fixture: ReturnType<typeof createFixture>): NodeJS.P
 describe("shared Docker image artifacts", () => {
   it("binds uploaded artifacts to the exact service tuple and producer attempt", () => {
     const fixture = createFixture();
-    try {
-      const verified = verifyUploadedArtifact(fixture);
-      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
-      expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-        `api repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
-      );
-      expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-        `api repos/openclaw/openclaw/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}`,
-      );
+    const verified = verifyUploadedArtifact(fixture);
+    expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+    expect(readFileSync(fixture.ghLog, "utf8")).toContain(
+      `api --method GET repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
+    );
+    expect(readFileSync(fixture.ghLog, "utf8")).toContain(
+      `api --method GET repos/openclaw/openclaw/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}`,
+    );
 
-      const digestMismatch = verifyUploadedArtifact(fixture, {
-        artifactDigest: "e".repeat(64),
-      });
-      expect(digestMismatch.status).not.toBe(0);
-      expect(digestMismatch.stderr).toContain(
-        "artifact identity does not match the immutable producer tuple",
-      );
+    writeFileSync(fixture.ghLog, "");
+    const digestMismatch = verifyUploadedArtifact(fixture, {
+      artifactDigest: "e".repeat(64),
+    });
+    expect(digestMismatch.status).not.toBe(0);
+    expect(digestMismatch.stderr).toContain(
+      "artifact identity does not match the immutable producer tuple",
+    );
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(digestMismatch.stderr).not.toContain("retrying");
 
-      const attemptMismatch = verifyUploadedArtifact(fixture, {
-        env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" },
+    writeFileSync(fixture.ghLog, "");
+    const invalidJson = verifyUploadedArtifact(fixture, {
+      env: { FAKE_ARTIFACT_JSON: "not-json" },
+    });
+    expect(invalidJson.status).not.toBe(0);
+    expect(invalidJson.stderr).toContain(
+      "artifact identity does not match the immutable producer tuple",
+    );
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(invalidJson.stderr).not.toContain("retrying");
+
+    writeFileSync(fixture.ghLog, "");
+    const attemptMismatch = verifyUploadedArtifact(fixture, {
+      env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" },
+    });
+    expect(attemptMismatch.status).not.toBe(0);
+    expect(attemptMismatch.stderr).toContain(
+      "producer run attempt does not match the immutable tuple",
+    );
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(2);
+    expect(attemptMismatch.stderr).not.toContain("retrying");
+  });
+
+  it("retries a fresh artifact metadata 404 and then succeeds", () => {
+    const fixture = createFixture();
+    const verified = verifyUploadedArtifact(fixture, {
+      env: {
+        FAKE_GH_ARTIFACT_ERROR: "gh: Not Found (HTTP 404)",
+        FAKE_GH_ARTIFACT_FAILURES: "1",
+      },
+    });
+    expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+    expect(verified.stderr).toContain(
+      "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+    );
+    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
+    const calls = readFileSync(fixture.ghLog, "utf8");
+    expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+    expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+  });
+
+  it("fails immediately when producer run-attempt metadata returns 404", () => {
+    const fixture = createFixture();
+    const failed = verifyUploadedArtifact(fixture, {
+      env: {
+        FAKE_GH_ATTEMPT_ERROR: "gh: Not Found (HTTP 404)",
+        FAKE_GH_ATTEMPT_FAILURES: "3",
+      },
+    });
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain("GitHub API GET failed after 1 attempt(s)");
+    expect(failed.stderr).not.toContain("retrying");
+    expect(readFileSync(fixture.sleepLog, "utf8")).toBe("");
+    const calls = readFileSync(fixture.ghLog, "utf8");
+    expect(calls.match(/actions\/artifacts/g)).toHaveLength(1);
+    expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+  });
+
+  it("recovers on the third attempt and fails cleanly when all attempts are exhausted", () => {
+    const recoveredFixture = createFixture();
+    const recovered = verifyUploadedArtifact(recoveredFixture, {
+      env: {
+        FAKE_GH_ARTIFACT_ERROR: "gh: upstream unavailable (HTTP 503)",
+        FAKE_GH_ARTIFACT_FAILURES: "2",
+      },
+    });
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+    expect(readFileSync(recoveredFixture.sleepLog, "utf8")).toBe("2\n4\n");
+    expect(readFileSync(recoveredFixture.ghLog, "utf8").match(/actions\/artifacts/g)).toHaveLength(
+      3,
+    );
+
+    const exhaustedFixture = createFixture();
+    const exhausted = verifyUploadedArtifact(exhaustedFixture, {
+      env: {
+        FAKE_GH_ARTIFACT_ERROR: "Get https://api.github.com: dial tcp: i/o timeout",
+        FAKE_GH_ARTIFACT_FAILURES: "3",
+      },
+    });
+    expect(exhausted.status).not.toBe(0);
+    expect(exhausted.stdout).not.toContain("partial artifact response");
+    expect(exhausted.stderr).toContain("i/o timeout");
+    expect(exhausted.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
+    expect(readFileSync(exhaustedFixture.sleepLog, "utf8")).toBe("2\n4\n");
+    const calls = readFileSync(exhaustedFixture.ghLog, "utf8");
+    expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
+    expect(calls).not.toContain("actions/runs");
+  });
+
+  it("retries explicit rate limiting but fails fast on permanent HTTP and credential errors", () => {
+    const rateLimitFixture = createFixture();
+    const rateLimited = verifyUploadedArtifact(rateLimitFixture, {
+      env: {
+        FAKE_GH_ARTIFACT_ERROR: "gh: API rate limit exceeded (HTTP 429)",
+        FAKE_GH_ARTIFACT_FAILURES: "1",
+      },
+    });
+    expect(rateLimited.status, `${rateLimited.stdout}\n${rateLimited.stderr}`).toBe(0);
+    expect(readFileSync(rateLimitFixture.sleepLog, "utf8")).toBe("2\n");
+
+    for (const error of [
+      "gh: Unauthorized (HTTP 401)",
+      "gh: Forbidden (HTTP 403)",
+      "gh: Unprocessable Entity (HTTP 422)",
+      "gh: Bad credentials (HTTP 500)",
+      "gh: authentication failed (HTTP 500)",
+    ]) {
+      const fixture = createFixture();
+      const failed = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: error,
+          FAKE_GH_ARTIFACT_FAILURES: "3",
+        },
       });
-      expect(attemptMismatch.status).not.toBe(0);
-      expect(attemptMismatch.stderr).toContain(
-        "producer run attempt does not match the immutable tuple",
-      );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
+      expect(failed.status, error).not.toBe(0);
+      expect(failed.stderr).toContain(error);
+      expect(failed.stderr).toContain("GitHub API GET failed after 1 attempt(s)");
+      expect(failed.stderr).not.toContain("retrying");
+      expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(1);
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("");
     }
   });
 
   it("packs provenance-bound images and verifies them before loading", () => {
     const fixture = createFixture();
-    try {
-      const packed = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "pack",
-        env: fixture.env,
-      });
-      expect(packed.status, `${packed.stdout}\n${packed.stderr}`).toBe(0);
+    const packed = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "pack",
+      env: fixture.env,
+    });
+    expect(packed.status, `${packed.stdout}\n${packed.stderr}`).toBe(0);
 
-      const archive = readFileSync(join(fixture.artifactDir, "shared-images.tar.zst"));
-      const manifest = JSON.parse(
-        readFileSync(join(fixture.artifactDir, "shared-image-artifact.json"), "utf8"),
-      );
-      expect(manifest).toEqual({
-        archive: {
-          filename: "shared-images.tar.zst",
-          format: "docker-tar+zstd",
-          sha256: createHash("sha256").update(archive).digest("hex"),
-          sizeBytes: archive.length,
-        },
-        conclusion: "success",
-        images: IMAGE_REFS.map((ref) => ({ id: imageId(ref), ref })),
-        kind: "docker-e2e",
-        packageSha256: PACKAGE_SHA256,
-        packageSourceSha: TARGET_SHA,
-        runAttempt: 2,
-        runId: 123456,
-        schema: "openclaw.shared-docker-image-artifact/v1",
-        schemaVersion: 1,
-        targetSha: TARGET_SHA,
-        workflowSha: WORKFLOW_SHA,
-      });
+    const archive = readFileSync(join(fixture.artifactDir, "shared-images.tar.zst"));
+    const manifest = JSON.parse(
+      readFileSync(join(fixture.artifactDir, "shared-image-artifact.json"), "utf8"),
+    );
+    expect(manifest).toEqual({
+      archive: {
+        filename: "shared-images.tar.zst",
+        format: "docker-tar+zstd",
+        sha256: createHash("sha256").update(archive).digest("hex"),
+        sizeBytes: archive.length,
+      },
+      conclusion: "success",
+      images: IMAGE_REFS.map((ref) => ({ id: imageId(ref), ref })),
+      kind: "docker-e2e",
+      packageSha256: PACKAGE_SHA256,
+      packageSourceSha: TARGET_SHA,
+      runAttempt: 2,
+      runId: 123456,
+      schema: "openclaw.shared-docker-image-artifact/v1",
+      schemaVersion: 1,
+      targetSha: TARGET_SHA,
+      workflowSha: WORKFLOW_SHA,
+    });
 
-      writeFileSync(fixture.dockerLog, "");
-      const loaded = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "load",
-        env: { ...expectedArchiveEnv(fixture), GITHUB_RUN_ATTEMPT: "3" },
-      });
-      expect(loaded.status, `${loaded.stdout}\n${loaded.stderr}`).toBe(0);
-      const calls = readFileSync(fixture.dockerLog, "utf8");
-      expect(calls).toContain("image load");
-      for (const ref of IMAGE_REFS) {
-        expect(calls).toContain(`image inspect --format {{.Id}} ${ref}`);
-      }
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
+    writeFileSync(fixture.dockerLog, "");
+    const loaded = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "load",
+      env: { ...expectedArchiveEnv(fixture), GITHUB_RUN_ATTEMPT: "3" },
+    });
+    expect(loaded.status, `${loaded.stdout}\n${loaded.stderr}`).toBe(0);
+    const calls = readFileSync(fixture.dockerLog, "utf8");
+    expect(calls).toContain("image load");
+    for (const ref of IMAGE_REFS) {
+      expect(calls).toContain(`image inspect --format {{.Id}} ${ref}`);
     }
   });
 
   it("fails before loading when provenance or archive bytes differ", () => {
     const fixture = createFixture();
-    try {
-      const packed = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "pack",
-        env: fixture.env,
-      });
-      expect(packed.status, packed.stderr).toBe(0);
+    const packed = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "pack",
+      env: fixture.env,
+    });
+    expect(packed.status, packed.stderr).toBe(0);
 
-      for (const variant of [
-        {
-          env: {
-            ...expectedArchiveEnv(fixture),
-            OPENCLAW_SHARED_IMAGE_RUN_ID: "654321",
-          },
-          imageRefs: IMAGE_REFS,
-          expected: "run ID",
+    for (const variant of [
+      {
+        env: {
+          ...expectedArchiveEnv(fixture),
+          OPENCLAW_SHARED_IMAGE_RUN_ID: "654321",
         },
-        {
-          env: expectedArchiveEnv(fixture),
-          imageRefs: [
-            expectDefined(IMAGE_REFS[0], "first shared Docker image reference"),
-            "openclaw-docker-e2e-functional:wrong",
-          ],
-          expected: "image ref 1",
+        imageRefs: IMAGE_REFS,
+        expected: "run ID",
+      },
+      {
+        env: expectedArchiveEnv(fixture),
+        imageRefs: [
+          expectDefined(IMAGE_REFS[0], "first shared Docker image reference"),
+          "openclaw-docker-e2e-functional:wrong",
+        ],
+        expected: "image ref 1",
+      },
+      {
+        env: {
+          ...expectedArchiveEnv(fixture),
+          OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256: "d".repeat(64),
         },
-        {
-          env: {
-            ...expectedArchiveEnv(fixture),
-            OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256: "d".repeat(64),
-          },
-          imageRefs: IMAGE_REFS,
-          expected: "package SHA-256",
-        },
-      ]) {
-        writeFileSync(fixture.dockerLog, "");
-        const result = runHelper({
-          artifactDir: fixture.artifactDir,
-          command: "load",
-          env: variant.env,
-          imageRefs: variant.imageRefs,
-        });
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(variant.expected);
-        expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
-      }
-
-      const archivePath = join(fixture.artifactDir, "shared-images.tar.zst");
-      writeFileSync(archivePath, `${readFileSync(archivePath, "utf8")}tampered`);
+        imageRefs: IMAGE_REFS,
+        expected: "package SHA-256",
+      },
+    ]) {
       writeFileSync(fixture.dockerLog, "");
-      const tampered = runHelper({
+      const result = runHelper({
         artifactDir: fixture.artifactDir,
         command: "load",
-        env: expectedArchiveEnv(fixture),
+        env: variant.env,
+        imageRefs: variant.imageRefs,
       });
-      expect(tampered.status).not.toBe(0);
-      expect(tampered.stderr).toContain("archive SHA-256 mismatch");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(variant.expected);
       expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
+
+    const archivePath = join(fixture.artifactDir, "shared-images.tar.zst");
+    writeFileSync(archivePath, `${readFileSync(archivePath, "utf8")}tampered`);
+    writeFileSync(fixture.dockerLog, "");
+    const tampered = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "load",
+      env: expectedArchiveEnv(fixture),
+    });
+    expect(tampered.status).not.toBe(0);
+    expect(tampered.stderr).toContain("archive SHA-256 mismatch");
+    expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
   });
 
   it("rejects unsafe pack destinations and loaded image ID drift", () => {
     const fixture = createFixture();
-    try {
-      const unsafe = runHelper({
-        artifactDir: fixture.root,
-        command: "pack",
-        env: fixture.env,
-      });
-      expect(unsafe.status).not.toBe(0);
-      expect(unsafe.stderr).toContain("artifact directory must be a child of RUNNER_TEMP");
+    const unsafe = runHelper({
+      artifactDir: fixture.root,
+      command: "pack",
+      env: fixture.env,
+    });
+    expect(unsafe.status).not.toBe(0);
+    expect(unsafe.stderr).toContain("artifact directory must be a child of RUNNER_TEMP");
 
-      const packed = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "pack",
-        env: fixture.env,
-      });
-      expect(packed.status, packed.stderr).toBe(0);
+    const packed = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "pack",
+      env: fixture.env,
+    });
+    expect(packed.status, packed.stderr).toBe(0);
 
-      writeFileSync(fixture.dockerLog, "");
-      const mismatch = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "load",
-        env: { ...expectedArchiveEnv(fixture), FAKE_DOCKER_FORCE_ID_MISMATCH: "1" },
-      });
-      expect(mismatch.status).not.toBe(0);
-      expect(mismatch.stderr).toContain("loaded ID mismatch");
-      expect(readFileSync(fixture.dockerLog, "utf8")).toContain("image load");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
-    }
+    writeFileSync(fixture.dockerLog, "");
+    const mismatch = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "load",
+      env: { ...expectedArchiveEnv(fixture), FAKE_DOCKER_FORCE_ID_MISMATCH: "1" },
+    });
+    expect(mismatch.status).not.toBe(0);
+    expect(mismatch.stderr).toContain("loaded ID mismatch");
+    expect(readFileSync(fixture.dockerLog, "utf8")).toContain("image load");
   });
 
   it("requires an external expected archive digest before loading", () => {
     const fixture = createFixture();
-    try {
-      const packed = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "pack",
-        env: fixture.env,
-      });
-      expect(packed.status, packed.stderr).toBe(0);
+    const packed = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "pack",
+      env: fixture.env,
+    });
+    expect(packed.status, packed.stderr).toBe(0);
 
-      const missingRunEnv = expectedArchiveEnv(fixture);
-      delete missingRunEnv.OPENCLAW_SHARED_IMAGE_RUN_ID;
-      delete missingRunEnv.OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT;
-      const missingRun = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "load",
-        env: missingRunEnv,
-      });
-      expect(missingRun.status).not.toBe(0);
-      expect(missingRun.stderr).toContain("OPENCLAW_SHARED_IMAGE_RUN_ID");
-      expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
+    const missingRunEnv = expectedArchiveEnv(fixture);
+    delete missingRunEnv.OPENCLAW_SHARED_IMAGE_RUN_ID;
+    delete missingRunEnv.OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT;
+    const missingRun = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "load",
+      env: missingRunEnv,
+    });
+    expect(missingRun.status).not.toBe(0);
+    expect(missingRun.stderr).toContain("OPENCLAW_SHARED_IMAGE_RUN_ID");
+    expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
 
-      const missing = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "load",
-        env: {
-          ...fixture.env,
-          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: "2",
-          OPENCLAW_SHARED_IMAGE_RUN_ID: "123456",
-        },
-      });
-      expect(missing.status).not.toBe(0);
-      expect(missing.stderr).toContain("expected shared image archive SHA-256");
-      expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
+    const missing = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "load",
+      env: {
+        ...fixture.env,
+        OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: "2",
+        OPENCLAW_SHARED_IMAGE_RUN_ID: "123456",
+      },
+    });
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr).toContain("expected shared image archive SHA-256");
+    expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
 
-      const mismatched = runHelper({
-        artifactDir: fixture.artifactDir,
-        command: "load",
-        env: {
-          ...expectedArchiveEnv(fixture),
-          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: "d".repeat(64),
-        },
-      });
-      expect(mismatched.status).not.toBe(0);
-      expect(mismatched.stderr).toContain("expected archive sha256");
-      expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
-    }
+    const mismatched = runHelper({
+      artifactDir: fixture.artifactDir,
+      command: "load",
+      env: {
+        ...expectedArchiveEnv(fixture),
+        OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: "d".repeat(64),
+      },
+    });
+    expect(mismatched.status).not.toBe(0);
+    expect(mismatched.stderr).toContain("expected archive sha256");
+    expect(readFileSync(fixture.dockerLog, "utf8")).not.toContain("image load");
   });
 });

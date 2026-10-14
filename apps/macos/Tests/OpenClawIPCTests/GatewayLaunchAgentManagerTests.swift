@@ -2,7 +2,227 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+@Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test(arguments: [
+        "definition",
+        "absent",
+        "legacy",
+        "retained-bun",
+        "restore",
+        "restore-without-runtime",
+        "restore-with-conflicting-cli",
+    ])
+    func `bundled installs carry the CLI observation across the final custody check`(_ mode: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            let runtime = BundledRuntime(root: home.appendingPathComponent("runtime/build"))
+            let definition = mode == "definition" ? #", "definition":"service/\"one\"""# : ""
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads(["""
+            {"service":{"revision":"not-the-pin-revision",
+            "runtimeIntent":{"status":"known","revision":"observed-pin"\(definition)}}}
+            """])
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let retained = ["legacy", "retained-bun"].contains(mode)
+            let restoring = mode.hasPrefix("restore")
+                ? GatewayLaunchAgentManager.InstalledServiceCLI(
+                    prefix: ["/fixture/node", "/fixture/old package/openclaw.mjs"], sqliteLibrary: nil) : nil
+            let legacy: GatewayLaunchAgentManager.InstalledServiceCLI? = retained
+                ? .init(
+                    prefix: [
+                        mode == "legacy" ? "/fixture/node" : "/fixture/runtime/old/bin/bun",
+                        "/fixture/openclaw.mjs",
+                    ],
+                    sqliteLibrary: nil) : nil
+            let arguments = ["install", "--force"] + (restoring == nil ? [] : ["--runtime", "node"])
+            let rejected = ["restore-without-runtime", "restore-with-conflicting-cli"].contains(mode)
+            let error = await GatewayLaunchAgentManager.runDaemonCommand(
+                arguments,
+                runtime: ["retained-bun", "restore-without-runtime"].contains(mode) ? nil : runtime,
+                installedCLI: mode == "restore-with-conflicting-cli" ? restoring : legacy,
+                restoring: restoring,
+                checkCurrent: {
+                    #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().count ==
+                        (retained ? 0 : 1))
+                })
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            if rejected {
+                #expect(error?.contains("Reinstall OpenClaw.app") == true)
+                #expect(calls.isEmpty)
+                return
+            }
+            #expect(error == nil)
+            if retained {
+                #expect(calls == [["install", "--force"]])
+                #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                    .first.map { Array($0.prefix(2)) } == legacy?.prefix)
+            } else {
+                let expected = mode == "definition"
+                    ? #"{"definition":"service/\"one\"","revision":"observed-pin"}"#
+                    : #"{"definition":null,"revision":"observed-pin"}"#
+                let restoration = restoring == nil ? [] : [
+                    "--restore-service-cli",
+                    #"{"entrypoint":"/fixture/old package/openclaw.mjs","executable":"/fixture/node","sqliteLibrary":null}"#,
+                ]
+                #expect(calls == [
+                    ["status", "--deep", "--json", "--no-probe"],
+                    arguments + restoration + ["--expected-runtime-pin", expected],
+                ])
+                let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                #expect(commands.allSatisfy { Array($0.prefix(2)) == runtime.cliCommand })
+            }
+        }
+    }
+
+    @Test(arguments: [
+        #"{"service":{"runtimeIntent":{"status":"unknown"}}}"#,
+        #"{"ok":false,"error":"inspection failed"}"#,
+        #"{"service":{"runtimeIntent":{"status":"known","revision":42}}}"#,
+    ])
+    func `untrusted runtime intent blocks bundled installation`(_ payload: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let error = await GatewayLaunchAgentManager.runDaemonCommand(
+                ["install", "--force"], runtime: BundledRuntime(root: home.appendingPathComponent("runtime/build")))
+            #expect(error == "Gateway service or runtime pin changed before installation. " +
+                "The newer selection was preserved; inspect it before retrying.")
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--deep", "--json", "--no-probe"],
+            ])
+        }
+    }
+
+    @Test func `attach-only marker belongs to the selected state directory`() {
+        let stateDirectory = URL(fileURLWithPath: "/tmp/openclaw-elevation-state", isDirectory: true)
+
+        #expect(GatewayLaunchAgentManager.disableLaunchAgentMarkerURL(in: stateDirectory).path ==
+            "/tmp/openclaw-elevation-state/disable-launchagent")
+    }
+
+    @Test func `gateway launchd artifacts follow default and named profile labels`() {
+        let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
+        let directory = URL(fileURLWithPath: "/state/service-env", isDirectory: true)
+        let base = AppProfile(environment: [:])
+        let work = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+
+        #expect(GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: base).path ==
+            "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist")
+        #expect(GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: work).path ==
+            "/Users/test/Library/LaunchAgents/ai.openclaw.work.plist")
+        let baseArtifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+            directory: directory,
+            profile: base)
+        let workArtifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+            directory: directory,
+            profile: work)
+        #expect(baseArtifacts.environment.path == "/state/service-env/ai.openclaw.gateway.env")
+        #expect(baseArtifacts.wrapper.path == "/state/service-env/ai.openclaw.gateway-env-wrapper.sh")
+        #expect(workArtifacts.environment.path == "/state/service-env/ai.openclaw.work.env")
+        #expect(workArtifacts.wrapper.path == "/state/service-env/ai.openclaw.work-env-wrapper.sh")
+    }
+
+    @Test func `gateway daemon command selects named profile at the root`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
+        try makeExecutableForTests(at: executable)
+        let command = await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway",
+            extraArgs: ["status", "--json"],
+            projectRoot: root,
+            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]))
+
+        #expect(command == [
+            executable.path, "--profile", "work", "gateway", "status", "--json",
+        ])
+    }
+
+    @Test func `daemon commands tolerate first run state migrations`() {
+        #expect(GatewayLaunchAgentManager.startupMigrationTolerance >= 120)
+    }
+
+    @Test func `malformed canonical profile claims fail closed`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["node", "openclaw.mjs", "gateway"],
+                "EnvironmentVariables": [
+                    "OPENCLAW_SERVICE_MARKER": "openclaw",
+                    "OPENCLAW_SERVICE_KIND": "gateway",
+                ],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.p1402.plist"))
+
+        let claim = GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 55636,
+            excludingLabel: "ai.openclaw.p2380",
+            homeDirectory: home)
+
+        #expect(claim?.contains("p1402") == true)
+    }
+
+    @Test func `same prefix ssh tunnel is not a profile Gateway claim`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["/usr/bin/ssh", "-N", "-L", "55636:127.0.0.1:18789"],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.gateway-tunnel.plist"))
+        try Data("not a plist".utf8).write(to: agents.appendingPathComponent("ai.openclaw.unrelated.plist"))
+
+        #expect(GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 55636,
+            excludingLabel: "ai.openclaw.qa",
+            homeDirectory: home) == nil)
+    }
+
+    @Test func `default generated Gateway claim is recognized`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["node", "openclaw.mjs", "gateway", "--port", "18789"],
+                "EnvironmentVariables": [
+                    "OPENCLAW_SERVICE_MARKER": "openclaw",
+                    "OPENCLAW_SERVICE_KIND": "gateway",
+                ],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.gateway.plist"))
+
+        #expect(GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 18789,
+            excludingLabel: "ai.openclaw.qa",
+            homeDirectory: home)?.contains("default") == true)
+    }
+
     @Test func `reads Gateway service ownership command directly from launchd`() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-\(UUID().uuidString).plist")
@@ -51,28 +271,177 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @Test func `attach only runtime override blocks gateway launch agent writes`() async throws {
-        let dir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)
-        let marker = dir.appendingPathComponent("disable-launchagent")
-        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager().removeItem(at: dir) }
-        defer {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+        try await TestIsolation.withIsolatedState {
+            let dir = FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)
+            let marker = dir.appendingPathComponent("disable-launchagent")
+            try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager().removeItem(at: dir) }
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
+            let installError = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                port: 18789)
+            let uninstallError = await GatewayLaunchAgentManager.set(
+                enabled: false,
+                port: 18789)
+            let kickstartError = await GatewayLaunchAgentManager.kickstart()
+
+            #expect(error == nil)
+            #expect(installError == nil)
+            #expect(uninstallError == nil)
+            #expect(kickstartError == nil)
+            #expect(FileManager().fileExists(atPath: marker.path))
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
         }
+    }
 
-        GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-        GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-        GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+    @Test func `unintercepted daemon commands fail closed during tests`() async {
+        await TestIsolation.withIsolatedState {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+            }
 
-        let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
-        let kickstartError = await GatewayLaunchAgentManager.kickstart()
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
 
-        #expect(error == nil)
-        #expect(kickstartError == nil)
-        #expect(FileManager().fileExists(atPath: marker.path))
-        #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            let error = await GatewayLaunchAgentManager.kickstart()
+
+            #expect(error == "Gateway daemon commands require explicit interception during tests")
+        }
+    }
+
+    @Test func `intercepted requests reserve responses before completion hooks`() async {
+        await TestIsolation.withIsolatedState {
+            let firstStarted = AsyncTestGate()
+            let finishFirst = AsyncTestGate()
+            defer {
+                finishFirst.open()
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([
+                #"{"ok":false,"error":"first response"}"#,
+                #"{"ok":false,"error":"second response"}"#,
+            ])
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
+                if arguments.last == "first" {
+                    firstStarted.open()
+                    await finishFirst.wait()
+                }
+            }
+            let first = Task {
+                await GatewayLaunchAgentManager.runDaemonCommand(["status", "first"])
+            }
+            await firstStarted.wait()
+            let admitted = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            let second = await GatewayLaunchAgentManager.runDaemonCommand(["status", "second"])
+            finishFirst.open()
+
+            #expect(await first.value == "first response")
+            #expect(second == "second response")
+            #expect(admitted == [["status", "first"]])
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "first"], ["status", "second"],
+            ])
+        }
+    }
+
+    @Test(arguments: ["failure-with-hints", "failure-hints-only", "failure-without-hints", "success"])
+    func `gateway daemon failures preserve actionable recovery hints`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+
+            let payload = switch scenario {
+            case "failure-with-hints":
+                """
+                {"ok":false,"error":"Gateway service not installed.",
+                "hints":["openclaw gateway install","openclaw gateway start","third hint"]}
+                """
+            case "failure-hints-only":
+                #"{"ok":false,"hints":["openclaw gateway install","openclaw gateway start"]}"#
+            case "failure-without-hints":
+                #"{"ok":false,"error":"Gateway service not installed."}"#
+            default:
+                #"{"ok":true,"message":"Gateway already started."}"#
+            }
+            let expected: String? = switch scenario {
+            case "failure-with-hints":
+                "Gateway service not installed. (openclaw gateway install · openclaw gateway start)"
+            case "failure-hints-only": "openclaw gateway install · openclaw gateway start"
+            case "failure-without-hints": "Gateway service not installed."
+            default: nil
+            }
+
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+
+            #expect(await GatewayLaunchAgentManager.kickstart() == expected)
+        }
+    }
+
+    @Test(arguments: ["load-state", "runtime"])
+    func `unknown service inspection preserves structured diagnostics`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let expected = switch scenario {
+            case "load-state": "launchctl inspection failed; run openclaw gateway status --deep"
+            default: "launchd runtime inspection failed; retry from a GUI login"
+            }
+            let payload = switch scenario {
+            case "load-state":
+                """
+                {"ok":true,"service":{"loaded":null,
+                "loadState":{"status":"unknown","detail":"\(expected)"},
+                "runtime":{"status":"unknown","detail":"Runtime status is unavailable."}}}
+                """
+            default:
+                """
+                {"ok":true,"service":{"loaded":true,
+                "loadState":{"status":"loaded"},
+                "runtime":{"status":"unknown","detail":"\(expected)"}}}
+                """
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            do {
+                _ = try await GatewayLaunchAgentManager.loadedGatewayState(port: 18789)
+                Issue.record("Expected the service inspection diagnostic")
+            } catch {
+                #expect(error.localizedDescription == expected)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
+        }
     }
 
     @Test func `launch agent plist snapshot parses args and env`() throws {
@@ -107,6 +476,8 @@ struct GatewayLaunchAgentManagerTests {
         try """
         # Generated by OpenClaw. Do not edit while the gateway service is installed.
         export CUSTOM_GATEWAY_TOKEN='custom-token'
+        export MULTILINE_FIXTURE='first line
+        second line'\\''s literal $VALUE and `command`'
         export OPENCLAW_GATEWAY_PASSWORD='service'\\''pass'
         export OPENCLAW_GATEWAY_TOKEN=' service-token '
 
@@ -132,6 +503,7 @@ struct GatewayLaunchAgentManagerTests {
             generatedEnvironmentFileURL: environmentFileURL,
             generatedEnvironmentWrapperURL: wrapperURL))
         #expect(snapshot.environment["CUSTOM_GATEWAY_TOKEN"] == "custom-token")
+        #expect(snapshot.environment["MULTILINE_FIXTURE"] == "first line\nsecond line's literal $VALUE and `command`")
         #expect(snapshot.token == "service-token")
         #expect(snapshot.password == "service'pass")
         #expect(snapshot.port == 18789)
@@ -175,5 +547,52 @@ struct GatewayLaunchAgentManagerTests {
         let snapshot = try #require(LaunchAgentPlist.snapshot(url: url))
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
+    }
+
+    @Test(arguments: [
+        ["/fixture/managed/openclaw"],
+        ["/fixture/node", "/fixture/openclaw.mjs"],
+        ["/fixture/app runtime/bun", "/fixture/openclaw.mjs"],
+        ["bun", "/fixture/openclaw.mjs"],
+    ])
+    func `all daemon actions resolve locally before the execution intercept`(
+        cliPrefix: [String]) async
+    {
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": TestIsolation.tempConfigPath()]) {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(
+                true, resolveCLI: { _, _ in .executable(cliPrefix) })
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let actions = [
+                ["install", "--force", "--port", "51845", "--allow-unconfigured"],
+                ["uninstall"],
+                ["restart"],
+                ["status", "--json", "--no-probe"],
+            ]
+            let installError = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                port: 51845,
+                allowUnconfigured: true)
+            #expect(installError == nil)
+            for action in actions.dropFirst() {
+                let error = await GatewayLaunchAgentManager.runDaemonCommand(action)
+                #expect(error == nil)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == actions)
+            let prefix = cliPrefix + AppProfile.current.cliRootArguments + ["gateway"]
+            let expectedCommands = actions.map {
+                prefix + $0 + ($0.contains("--json") ? [] : ["--json"])
+            }
+            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot() == expectedCommands)
+        }
     }
 }

@@ -1,9 +1,11 @@
-// Skill tool dispatch routes runtime skill tool calls through the active session context.
+import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.deferred-followup.js";
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
-import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
+import type { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
+import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -16,6 +18,7 @@ import {
   mergeAlsoAllowPolicy,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
+  type ToolPolicyLike,
 } from "../../agents/tool-policy.js";
 import {
   replaceWithEffectiveCronCreatorToolAllowlist,
@@ -24,7 +27,8 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { getPluginToolMeta } from "../../plugins/tools.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { SkillCommandSpec } from "../types.js";
 
@@ -43,28 +47,37 @@ type SkillDispatchMessageContext = {
   memberRoleIds?: string[];
 };
 
+export type SkillToolDispatchDependencies = {
+  createOpenClawToolsAsync: typeof createOpenClawToolsAsync;
+};
+
 /**
  * Policy-enforcement seam for skill `command-dispatch: tool` invocations.
- * Keep this aligned with the normal tool surfaces so GHSA-mhm4-93fw-4qr2
- * stays closed across allow/deny, group, sandbox, and subagent policy layers.
+ * Keep this aligned with normal tool surfaces across sender, group, sandbox,
+ * and subagent policy layers.
  */
-export function resolveSkillDispatchTools(params: {
-  message: SkillDispatchMessageContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  agentDir?: string;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  workspaceDir: string;
-  provider: string;
-  model: string;
-  senderId?: string;
-  currentChannelId?: string;
-  skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
-    toolName?: string;
-  };
-  groupId?: string;
-}): AnyAgentTool[] {
+export async function resolveSkillDispatchTools(
+  params: {
+    message: SkillDispatchMessageContext;
+    cfg: OpenClawConfig;
+    agentId: string;
+    agentDir?: string;
+    authProfileStoreSource?: boolean;
+    sessionEntry?: SessionEntry;
+    sessionKey: string;
+    workspaceDir: string;
+    provider: string;
+    model: string;
+    senderIsOwner: boolean;
+    senderId?: string;
+    currentChannelId?: string;
+    skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
+      toolName?: string;
+    };
+    groupId?: string;
+  },
+  dependencies: SkillToolDispatchDependencies,
+): Promise<AnyAgentTool[]> {
   const channel =
     resolveGatewayMessageChannel(params.message.surface) ??
     resolveGatewayMessageChannel(params.message.provider) ??
@@ -79,6 +92,7 @@ export function resolveSkillDispatchTools(params: {
     providerProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
+    gatewayConfigReadAllowed,
   } = resolveEffectiveToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -94,29 +108,36 @@ export function resolveSkillDispatchTools(params: {
     providerProfileAlsoAllow,
   );
   const groupId = params.sessionEntry?.groupId ?? params.groupId;
-  const requesterPolicies = resolveRequesterToolPolicies({
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    subagentSessionKey: params.sessionKey,
-    agentId: resolvedAgentId,
-    spawnedBy: params.sessionEntry?.spawnedBy,
-    messageProvider: channel,
-    groupId,
-    groupChannel: params.sessionEntry?.groupChannel,
-    groupSpace: params.sessionEntry?.space,
-    accountId: params.message.accountId,
-    senderId: params.message.senderId ?? params.senderId,
-    senderName: params.message.senderName,
-    senderUsername: params.message.senderUsername,
-    senderE164: params.message.senderE164,
-  });
+  const requesterPolicies = await withPreparedSessionCapabilityRead(() =>
+    resolveRequesterToolPolicies({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      subagentSessionKey: params.sessionKey,
+      agentId: resolvedAgentId,
+      spawnedBy: params.sessionEntry?.spawnedBy,
+      messageProvider: channel,
+      groupId,
+      groupChannel: params.sessionEntry?.groupChannel,
+      groupSpace: params.sessionEntry?.space,
+      accountId: params.message.accountId,
+      senderId: params.message.senderId ?? params.senderId,
+      senderName: params.message.senderName,
+      senderUsername: params.message.senderUsername,
+      senderE164: params.message.senderE164,
+    }),
+  );
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
+    agentId: resolvedAgentId,
     sessionKey: params.sessionKey,
+    preparedSessionEntry: params.sessionEntry ?? null,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
-  const explicitPolicyList = [
+  const ownerOnlyCoreToolPolicy = !params.senderIsOwner
+    ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] }
+    : undefined;
+  const explicitPolicyList: Array<ToolPolicyLike | undefined> = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -128,6 +149,7 @@ export function resolveSkillDispatchTools(params: {
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+    ownerOnlyCoreToolPolicy,
   ];
   const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
@@ -148,7 +170,8 @@ export function resolveSkillDispatchTools(params: {
         },
       }
     : undefined;
-  const tools = createOpenClawTools({
+  const tools = await dependencies.createOpenClawToolsAsync({
+    gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
     agentAccountId: params.message.accountId,
@@ -160,12 +183,15 @@ export function resolveSkillDispatchTools(params: {
     agentGroupSpace: params.sessionEntry?.space,
     agentMemberRoleIds: params.message.memberRoleIds,
     agentDir: params.agentDir,
+    authProfileStoreSource: params.authProfileStoreSource,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    sessionConfigSource: "runtime",
     allowGatewaySubagentBinding: true,
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
     requesterSenderId: params.senderId,
+    senderIsOwner: params.senderIsOwner,
     sessionId: params.sessionEntry?.sessionId,
     currentChannelId: params.currentChannelId,
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
@@ -176,10 +202,11 @@ export function resolveSkillDispatchTools(params: {
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,
     inheritedToolDenylist: explicitDenylist,
+    inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
   });
   const policyFiltered = applyToolPolicyPipeline({
     tools,
-    toolMeta: (tool) => getPluginToolMeta(tool),
+    toolMeta: getPluginToolMeta,
     warn: logVerbose,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
@@ -200,6 +227,7 @@ export function resolveSkillDispatchTools(params: {
       { policy: sandboxPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
+      { policy: ownerOnlyCoreToolPolicy, label: "gateway sender owner-only tools" },
     ],
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.cfg,
@@ -210,8 +238,12 @@ export function resolveSkillDispatchTools(params: {
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
   }
-  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
-    getPluginToolMeta(tool),
+  replaceWithEffectiveCronCreatorToolAllowlist(
+    cronCreatorToolAllowlist,
+    policyFiltered,
+    getPluginToolMeta,
   );
-  return policyFiltered;
+  return applyToolAvailabilityDescriptions(
+    filterRequesterYieldTools(policyFiltered, params.sessionKey),
+  );
 }

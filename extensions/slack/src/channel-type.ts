@@ -1,14 +1,15 @@
-// Slack plugin module implements channel type behavior.
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
-import { createSlackWebClient } from "./client.js";
-import { normalizeAllowListLower } from "./monitor/allow-list.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import { createSlackReadClient, createSlackWebClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { readLruMapEntry } from "./monitor/lru-map-cache.js";
 
 export type SlackConversationInfo = {
   type: "channel" | "group" | "dm" | "unknown";
@@ -18,15 +19,6 @@ export type SlackConversationInfo = {
 
 const SLACK_CONVERSATION_INFO_CACHE_MAX_ENTRIES = 1024;
 const SLACK_CONVERSATION_INFO_CACHE = new Map<string, SlackConversationInfo>();
-
-function getCachedSlackConversationInfo(cacheKey: string): SlackConversationInfo | undefined {
-  const cached = SLACK_CONVERSATION_INFO_CACHE.get(cacheKey);
-  if (cached) {
-    SLACK_CONVERSATION_INFO_CACHE.delete(cacheKey);
-    SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, cached);
-  }
-  return cached;
-}
 
 function setCachedSlackConversationInfo(
   cacheKey: string,
@@ -49,7 +41,7 @@ function resolveConfiguredSlackConversationInfo(params: {
     return { type: "dm" };
   }
   const channelIdLower = normalizeLowercaseStringOrEmpty(params.channelId);
-  const groupChannels = normalizeAllowListLower(params.account.dm?.groupChannels);
+  const groupChannels = normalizeStringEntriesLower(params.account.dm?.groupChannels);
   if (
     groupChannels.includes(channelIdLower) ||
     groupChannels.includes(`slack:${channelIdLower}`) ||
@@ -74,22 +66,26 @@ export async function resolveSlackConversationInfo(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   channelId: string;
+  teamId?: string;
   operation?: "read" | "write";
   requireFreshName?: boolean;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<SlackConversationInfo> {
   const channelId = params.channelId.trim();
   if (!channelId) {
     return { type: "unknown" };
   }
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
   const operation = params.operation ?? "read";
   const token = resolveSlackOperationToken(account, operation);
   const userToken = normalizeOptionalString(account.userToken);
   const credentialRole = token ? (token === userToken ? "user" : "bot") : "none";
   const credentialFingerprint = token ? fingerprintSlackCredential(token) : "none";
-  const cacheKey = `${account.accountId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
+  const teamId = normalizeLowercaseStringOrEmpty(params.teamId) || "no-team-id";
+  const cacheKey = `${account.accountId}:${teamId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
   if (!params.requireFreshName) {
-    const cached = getCachedSlackConversationInfo(cacheKey);
+    const cached = readLruMapEntry(SLACK_CONVERSATION_INFO_CACHE, cacheKey);
     if (cached) {
       return cached;
     }
@@ -98,25 +94,32 @@ export async function resolveSlackConversationInfo(params: {
   const configuredInfo = resolveConfiguredSlackConversationInfo({ account, channelId });
   if (token) {
     try {
-      const client = createSlackWebClient(token);
       // Read-only classification stays on conversations.info. conversations.open is
       // write-scoped and must only run when the caller explicitly requests a write.
       if (isNativeImChannel && operation === "write") {
+        const client = createSlackWebClient(
+          token,
+          { teamId: params.teamId },
+          params.assertDirectAdapterHandoff,
+        );
         const opened = await client.conversations.open({
           channel: channelId,
           prevent_creation: true,
           return_im: true,
         });
-        const user =
-          typeof opened.channel?.user === "string" && opened.channel.user.trim()
-            ? opened.channel.user.trim()
-            : undefined;
+        const user = normalizeOptionalString(opened.channel?.user);
         const result: SlackConversationInfo = user ? { type: "dm", user } : { type: "dm" };
         if (user) {
           setCachedSlackConversationInfo(cacheKey, result);
         }
         return result;
       }
+      const client = createSlackReadClient(
+        token,
+        { teamId: params.teamId },
+        undefined,
+        params.assertDirectAdapterHandoff,
+      );
       const info = await client.conversations.info({ channel: channelId });
       const channel = info.channel as
         | { is_im?: boolean; is_mpim?: boolean; name?: string; user?: string }
@@ -135,28 +138,23 @@ export async function resolveSlackConversationInfo(params: {
       });
       return result;
     } catch {
+      // Keep metadata fallback only while the action that requested it remains current.
+      params.assertDirectAdapterHandoff?.();
       return { type: isNativeImChannel ? "dm" : "unknown" };
     }
   }
 
-  const result = configuredInfo;
   if (!isNativeImChannel) {
-    setCachedSlackConversationInfo(cacheKey, result);
+    setCachedSlackConversationInfo(cacheKey, configuredInfo);
   }
-  return result;
+  return configuredInfo;
 }
 
 export async function resolveSlackChannelType(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   channelId: string;
+  teamId?: string;
 }): Promise<"channel" | "group" | "dm" | "unknown"> {
   return (await resolveSlackConversationInfo(params)).type;
 }
-
-export function resetSlackChannelTypeCacheForTest(): void {
-  SLACK_CONVERSATION_INFO_CACHE.clear();
-}
-
-/** @deprecated Use `resetSlackChannelTypeCacheForTest`. */
-export { resetSlackChannelTypeCacheForTest as __resetSlackChannelTypeCacheForTest };

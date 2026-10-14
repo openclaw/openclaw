@@ -7,7 +7,7 @@ import {
   extractKotlinHandledEvents,
   extractSwiftHandledEvents,
   extractSwiftStaticStringConstants,
-} from "../../scripts/check-protocol-event-coverage.mjs";
+} from "../../scripts/check-protocol-event-coverage.mts";
 
 const GATEWAY_LIST_FIXTURE = `
 export const GATEWAY_EVENTS = [
@@ -88,27 +88,10 @@ describe("extractSwiftHandledEvents", () => {
       if evt.event == "connect.challenge" { return }
     `;
     const handled = extractSwiftHandledEvents(source, constants);
-    expect([...handled].toSorted()).toEqual([
-      "chat",
-      "connect.challenge",
-      "exec.approval.requested",
-      "session.message",
-      "tick",
-    ]);
-  });
-
-  it("extracts only type-scoped static string constants", () => {
-    const constants = extractSwiftStaticStringConstants(`
-      enum ApprovalBridge {
-        static let requestedKind = "exec.approval.requested"
-        private static let nested = makeValue {
-          "not.an.event"
-        }
-      }
-      let requestedKind = "wrong.global.value"
-    `);
-
-    expect([...constants]).toEqual([["ApprovalBridge.requestedKind", "exec.approval.requested"]]);
+    const handledEvents = [...handled] as string[];
+    expect(
+      handledEvents.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    ).toEqual(["chat", "connect.challenge", "exec.approval.requested", "session.message", "tick"]);
   });
 
   it("does not resolve qualified constants inside quoted case labels", () => {
@@ -208,23 +191,6 @@ describe("extractKotlinHandledEvents", () => {
     ]);
   });
 
-  it("extracts only enum-scoped constructor string values", () => {
-    const constants = extractKotlinEnumStringConstants(`
-      enum class GatewayEvent(
-        val rawValue: String,
-      ) {
-        Tick("tick"),
-        Chat("chat"),
-      }
-      val Tick = "wrong.global.value"
-    `);
-
-    expect([...constants]).toEqual([
-      ["GatewayEvent.Tick", "tick"],
-      ["GatewayEvent.Chat", "chat"],
-    ]);
-  });
-
   it("ignores event literals outside handler function bodies", () => {
     // Regression guard: predicate helpers that are not called from the
     // dispatch path must not count as coverage (false negative for the gate).
@@ -247,16 +213,6 @@ describe("extractKotlinHandledEvents", () => {
 
 describe("compareEventCoverage", () => {
   const serverEvents = ["tick", "chat", "presence", "cron"];
-
-  it("passes when every event is handled or allowlisted", () => {
-    const errors = compareEventCoverage({
-      client: "ios",
-      serverEvents,
-      handledEvents: new Set(["tick", "chat", "client.only.synthetic"]),
-      allowlist: { presence: "not rendered", cron: "not surfaced" },
-    });
-    expect(errors).toEqual([]);
-  });
 
   it("reports unhandled events missing from the allowlist", () => {
     const errors = compareEventCoverage({

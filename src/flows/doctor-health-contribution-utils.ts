@@ -1,3 +1,4 @@
+import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -12,6 +13,10 @@ export function isUpdateDoctorRun(
 export function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
+export function resolveDoctorWorkspaceDir(cfg: OpenClawConfig, env = process.env) {
+  const agentId = tryResolveSoleAgentId(cfg);
+  return agentId ? resolveAgentWorkspaceDir(cfg, agentId, env) : undefined;
+}
 
 export function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext): {
   lastTouchedVersionOverride?: string;
@@ -21,4 +26,15 @@ export function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext)
   }
   const version = ctx.configResult.sourceLastTouchedVersion?.trim();
   return version ? { lastTouchedVersionOverride: version } : {};
+}
+
+export function noteDoctorRepairResult(
+  result: { changes: readonly string[]; warnings: readonly string[] },
+  note: typeof import("../../packages/terminal-core/src/note.js").note,
+): void {
+  for (const kind of ["changes", "warnings"] as const) {
+    if (result[kind].length > 0) {
+      note(result[kind].join("\n"), `Doctor ${kind}`);
+    }
+  }
 }

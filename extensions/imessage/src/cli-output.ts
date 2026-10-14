@@ -1,5 +1,7 @@
 // Bounded one-shot iMessage CLI execution shared by action and send surfaces.
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { expandIMessageUserPath } from "./cli-path.js";
 
 const IMESSAGE_CLI_STDOUT_MAX_BYTES = 8 * 1024 * 1024;
 const IMESSAGE_CLI_STDERR_TAIL_BYTES = 64 * 1024;
@@ -13,10 +15,7 @@ function parseLastJsonObject(stdout: string): Record<string, unknown> | null {
     return null;
   }
   try {
-    const value = JSON.parse(last) as unknown;
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
+    return asNullableRecord(JSON.parse(last));
   } catch {
     return null;
   }
@@ -29,7 +28,12 @@ export async function runIMessageCliJsonCommand(params: {
   timeoutMs?: number;
 }): Promise<Record<string, unknown>> {
   const dbPath = params.dbPath?.trim();
-  const argv = [params.cliPath, ...params.args, ...(dbPath ? ["--db", dbPath] : []), "--json"];
+  const argv = [
+    expandIMessageUserPath(params.cliPath),
+    ...params.args,
+    ...(dbPath ? ["--db", dbPath] : []),
+    "--json",
+  ];
   const result = await runCommandWithTimeout(argv, {
     killProcessTree: true,
     maxOutputBytes: {

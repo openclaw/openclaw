@@ -1,33 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackMessage } from "../types.js";
 import {
   recordPendingDiscussionOpen,
   reserveDiscussionBindingGeneration,
 } from "./binding-generation.js";
-import type { ClickClackDiscussionBinding } from "./binding-store.js";
+import {
+  getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
+} from "./binding-store.js";
 import { discussionCredentialFingerprint } from "./naming.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
-import { assertManagedChannelListContract } from "./service-open.js";
+import { assertChannelPatch } from "./service-open.js";
 import {
+  discussionChannel,
   TEST_DESTINATION_IDENTITY,
   createHarness,
   discussionConfig,
   testExternalRef,
 } from "./service-test-support.js";
 
+function occupiedBinding(index: number): ClickClackDiscussionBinding {
+  return {
+    accountId: "default",
+    agentId: "main",
+    sessionId: `occupied-${index}`,
+    serverBaseUrl: "https://clickclack.example",
+    externalRef: testExternalRef(`agent:main:occupied-${index}`),
+    externalUrl: "",
+    workspaceRef: "team",
+    workspaceId: "wsp_team",
+    channelId: `chn_occupied_${index}`,
+    channelRouteId: `occupied-${index}`,
+    workspaceRouteId: "team-route",
+    section: "Sessions",
+    archived: false,
+    label: "Occupied",
+  };
+}
+
 describe("ClickClack discussion service contracts", () => {
   it("preflights the managed-channel list contract before creating", async () => {
     const harness = createHarness({ label: "Unsupported server" });
     vi.mocked(harness.channels).mockResolvedValue([
-      {
+      discussionChannel({
         id: "chn_general",
         route_id: "general-route",
-        workspace_id: "wsp_team",
         name: "general",
-        kind: "public",
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
+      }),
     ]);
 
     await expect(harness.service.open("agent:main:unsupported")).rejects.toThrow(
@@ -40,15 +59,12 @@ describe("ClickClack discussion service contracts", () => {
   it("accepts ordinary channels whose nullable managed fields are omitted", async () => {
     const harness = createHarness({ label: "Supported server" });
     vi.mocked(harness.channels).mockResolvedValue([
-      {
+      discussionChannel({
         id: "chn_general",
         route_id: "general-route",
-        workspace_id: "wsp_team",
         name: "general",
-        kind: "public",
         external_managed: false,
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
+      }),
     ]);
 
     await expect(harness.service.open("agent:main:supported")).resolves.toMatchObject({
@@ -59,15 +75,12 @@ describe("ClickClack discussion service contracts", () => {
   it("rejects a non-boolean managed-contract capability signal", async () => {
     const harness = createHarness({ label: "Unsupported server" });
     vi.mocked(harness.channels).mockResolvedValue([
-      {
+      discussionChannel({
         id: "chn_general",
         route_id: "general-route",
-        workspace_id: "wsp_team",
         name: "general",
-        kind: "public",
         external_managed: "false" as unknown as boolean,
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
+      }),
     ]);
 
     await expect(harness.service.open("agent:main:unsupported-type")).rejects.toThrow(
@@ -75,22 +88,24 @@ describe("ClickClack discussion service contracts", () => {
     );
   });
 
-  it("accepts a managed list entry whose external URL is omitted", () => {
-    expect(() =>
-      assertManagedChannelListContract([
-        {
-          id: "chn_managed",
-          route_id: "managed-route",
-          workspace_id: "wsp_team",
-          name: "managed",
-          kind: "public",
-          external_managed: true,
-          external_ref: "openclaw:discussion:example",
-          sidebar_section: "Sessions",
-          created_at: "2026-07-19T00:00:00.000Z",
-        },
-      ]),
-    ).not.toThrow();
+  it("accepts a managed list entry whose external URL is omitted", async () => {
+    const harness = createHarness({ label: "Managed channel without URL" });
+    vi.mocked(harness.channels).mockResolvedValue([
+      {
+        id: "chn_managed",
+        route_id: "managed-route",
+        workspace_id: "wsp_team",
+        name: "managed",
+        kind: "public",
+        external_managed: true,
+        external_ref: "openclaw:discussion:example",
+        sidebar_section: "Sessions",
+        created_at: "2026-07-19T00:00:00.000Z",
+      },
+    ]);
+    await expect(harness.service.open("agent:main:managed-without-url")).resolves.toMatchObject({
+      state: "open",
+    });
   });
 
   it("does not retain a generation when channel preflight cannot run", async () => {
@@ -104,29 +119,52 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
   });
 
-  it("creates the first managed channel in an empty workspace", async () => {
-    const harness = createHarness({ label: "First discussion" });
-    vi.mocked(harness.channels).mockResolvedValue([]);
+  it("rejects a create response with the wrong display_title", async () => {
+    const harness = createHarness({ label: "Expected title" });
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      discussionChannel({
+        id: "chn_wrong_title",
+        route_id: "wrong-title-route",
+        ...input,
+        display_title: "Wrong title",
+        kind: "public",
+      }),
+    );
 
-    expect(await harness.service.open("agent:main:first-discussion")).toMatchObject({
-      state: "open",
+    await expect(harness.service.open("agent:main:wrong-title")).rejects.toThrow(
+      "managed discussion channel contract",
+    );
+  });
+
+  it("checks display_title patches only when the response advertises the field", () => {
+    const channel = discussionChannel({
+      id: "chn_patch_title",
+      route_id: "patch-title-route",
+      name: "expected-title",
     });
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
+
+    expect(() => assertChannelPatch(channel, { display_title: "Expected title" })).not.toThrow();
+    expect(() =>
+      assertChannelPatch(
+        { ...channel, display_title: "Wrong title" },
+        { display_title: "Expected title" },
+      ),
+    ).toThrow("did not apply display_title");
   });
 
   it("accepts a managed channel whose absent external URL is omitted", async () => {
     const harness = createHarness({ label: "Missing URL field" });
     harness.config.channels!.clickclack!.discussions!.controlUrlBase = undefined;
     vi.mocked(harness.channels).mockResolvedValue([]);
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
-      id: "chn_incompatible",
-      route_id: "incompatible-route",
-      workspace_id: "wsp_team",
-      ...input,
-      external_url: undefined,
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      discussionChannel({
+        id: "chn_incompatible",
+        route_id: "incompatible-route",
+        ...input,
+        external_url: undefined,
+        kind: "public",
+      }),
+    );
 
     await expect(harness.service.open("agent:main:missing-url-field")).resolves.toMatchObject({
       state: "open",
@@ -135,96 +173,51 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.generationStore.lookup("agent:main:missing-url-field")).toBeUndefined();
   });
 
-  it("retains incompatible channel recovery state when archival fails", async () => {
-    const harness = createHarness({ label: "Incompatible archival failure" });
-    const sessionKey = "agent:main:incompatible-archive-failure";
+  it("retains incompatible channel recovery state without mutating the room", async () => {
+    const harness = createHarness({ label: "Incompatible recovery" });
+    const sessionKey = "agent:main:incompatible-recovery";
     vi.mocked(harness.channels).mockResolvedValue([]);
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
-      id: "chn_incompatible_archive_failure",
-      route_id: "incompatible-archive-failure-route",
-      workspace_id: "wsp_team",
-      ...input,
-      external_url: undefined,
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(new Error("archive unavailable"));
-
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      discussionChannel({
+        id: "chn_incompatible_recovery",
+        route_id: "incompatible-recovery-route",
+        ...input,
+        external_url: undefined,
+        kind: "public",
+      }),
+    );
     await expect(harness.service.open(sessionKey)).rejects.toThrow(
       "managed discussion channel contract",
     );
 
     expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+      generation: expect.any(String),
     });
+    expect(harness.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
   });
 
-  it("archives a newly created channel whose route id is missing", async () => {
+  it("quarantines a newly created channel whose route id is missing", async () => {
     const harness = createHarness({ label: "Missing route" });
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
-      id: "chn_route_less",
-      route_id: "",
-      workspace_id: "wsp_team",
-      ...input,
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      discussionChannel({
+        id: "chn_route_less",
+        route_id: "",
+        ...input,
+        kind: "public",
+      }),
+    );
 
     await expect(harness.service.open("agent:main:missing-route")).rejects.toThrow(
       "ClickClack discussion channel is missing its route id",
     );
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_route_less", { archived: true });
+    expect(harness.updateChannel).not.toHaveBeenCalled();
     expect(harness.revokedStore.entries()).toHaveLength(1);
-    expect(harness.generationStore.lookup("agent:main:missing-route")).toBeUndefined();
-  });
-
-  it("retains route-less channel recovery state when archival fails", async () => {
-    const harness = createHarness({ label: "Route-less archival failure" });
-    const sessionKey = "agent:main:route-less-archive-failure";
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) => ({
-      id: "chn_route_less_archive_failure",
-      route_id: "",
-      workspace_id: "wsp_team",
-      ...input,
-      kind: "public",
-      created_at: "2026-07-19T00:00:00.000Z",
-    }));
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(new Error("archive unavailable"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow(
-      "ClickClack discussion channel is missing its route id",
-    );
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
+    expect(harness.generationStore.lookup("agent:main:missing-route")).toMatchObject({
+      generation: expect.any(String),
     });
-  });
-
-  it("rejects ambiguous multi-account discussion configuration", async () => {
-    const harness = createHarness({ label: "Ambiguous" });
-    harness.config.channels!.clickclack = {
-      accounts: {
-        first: {
-          enabled: true,
-          baseUrl: "https://clickclack-one.example",
-          token: "test-token-placeholder",
-          workspace: "team",
-          discussions: { enabled: true },
-        },
-        second: {
-          enabled: true,
-          baseUrl: "https://clickclack-two.example",
-          token: "test-token-placeholder",
-          workspace: "team",
-          discussions: { enabled: true },
-        },
-      },
-    };
-
-    await expect(harness.service.open("agent:main:ambiguous")).rejects.toThrow(
-      "ClickClack discussions require exactly one enabled discussion account",
+    expect(harness.generationStore.lookup("agent:main:missing-route")).not.toHaveProperty(
+      "pending",
     );
-    expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
   it("stops honoring an existing binding when a second discussion account is enabled", async () => {
@@ -412,7 +405,7 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.updateChannel).not.toHaveBeenCalled();
   });
 
-  it("archives and releases a binding when its configured workspace changes", async () => {
+  it("releases a binding without archiving when its configured workspace changes", async () => {
     const harness = createHarness({ label: "Workspace retarget" });
     const sessionKey = "agent:main:workspace-retarget";
     await harness.service.open(sessionKey);
@@ -423,61 +416,41 @@ describe("ClickClack discussion service contracts", () => {
     );
     expect(harness.updateChannel).not.toHaveBeenCalled();
     await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", { archived: true });
+    expect(harness.updateChannel).not.toHaveBeenCalled();
     harness.config.channels!.clickclack!.discussions!.workspace = "team";
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
   });
 
-  it("retains a stale binding for retry when archival fails", async () => {
+  it("releases a stale binding locally without mutating the room", async () => {
     const harness = createHarness({ label: "Retry cleanup" });
     const sessionKey = "agent:main:cleanup-retry";
     await harness.service.open(sessionKey);
     harness.config.channels!.clickclack!.discussions!.workspace = "other-team";
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(new Error("temporary outage"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("temporary outage");
+    await expect(harness.service.open(sessionKey)).rejects.toThrow(
+      "ClickClack discussions workspace not found: other-team",
+    );
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
+    expect(harness.updateChannel).not.toHaveBeenCalled();
     harness.config.channels!.clickclack!.discussions!.workspace = "team";
-    expect(await harness.service.info(sessionKey)).toMatchObject({ state: "open" });
+    expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
   });
 
-  it("serializes stale info cleanup before a replacement open", async () => {
+  it("serializes local stale cleanup before a replacement open", async () => {
     const harness = createHarness({ label: "Concurrent cleanup" });
     const sessionKey = "agent:main:concurrent-cleanup";
     await harness.service.open(sessionKey);
     harness.config.channels!.clickclack!.discussions!.workspace = "wsp_team";
-    let releaseArchive: (() => void) | undefined;
-    const archiveGate = new Promise<void>((resolve) => {
-      releaseArchive = resolve;
-    });
-    const defaultUpdate = vi.mocked(harness.updateChannel).getMockImplementation() as
-      | ((
-          ...args: Parameters<ClickClackClient["updateChannel"]>
-        ) => ReturnType<ClickClackClient["updateChannel"]>)
-      | undefined;
-    if (!defaultUpdate) {
-      throw new Error("expected update implementation");
-    }
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (...args) => {
-      await archiveGate;
-      return await defaultUpdate(...args);
-    });
-
-    const info = harness.service.info(sessionKey);
-    await vi.waitFor(() => expect(harness.updateChannel).toHaveBeenCalledTimes(1));
-    const open = harness.service.open(sessionKey);
-    releaseArchive?.();
-
-    expect(await info).toEqual({ state: "available" });
-    expect(await open).toMatchObject({ state: "open" });
+    expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
+    expect(await harness.service.open(sessionKey)).toMatchObject({ state: "open" });
     expect(harness.createChannel).toHaveBeenCalledTimes(2);
+    expect(harness.updateChannel).not.toHaveBeenCalled();
     expect(harness.store.lookup(sessionKey)).toMatchObject({ workspaceRef: "wsp_team" });
   });
 
   it("rejects binding capacity before creating a remote channel", async () => {
     const harness = createHarness({ label: "At capacity" });
     for (let index = 0; index < 10_000; index += 1) {
-      harness.store.register(`occupied-${index}`, {});
+      harness.store.register(`agent:main:occupied-${index}`, occupiedBinding(index));
     }
 
     await expect(harness.service.open("agent:main:capacity")).rejects.toThrow(
@@ -487,7 +460,54 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
-  it("archives the remote channel when binding persistence fails", async () => {
+  it("reclaims a deleted-session binding before rejecting a new active session", async () => {
+    const harness = createHarness(undefined);
+    const deletedKey = "agent:main:capacity-deleted";
+    const activeKey = "agent:main:capacity-active";
+    const entries = new Map<string, { sessionId: string; label: string; updatedAt: number }>();
+    vi.mocked(harness.runtime.agent.session.getSessionEntry).mockImplementation(({ sessionKey }) =>
+      entries.get(sessionKey),
+    );
+    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync).mockImplementation(
+      async ({ sessionKey }) => entries.get(sessionKey),
+    );
+
+    entries.set(deletedKey, {
+      sessionId: "session-deleted",
+      label: "Capacity deleted",
+      updatedAt: 1,
+    });
+    await harness.service.open(deletedKey);
+    entries.delete(deletedKey);
+    await harness.service.reconcile(deletedKey);
+    for (let index = 0; index < 9_999; index += 1) {
+      harness.store.register(`agent:main:occupied-${index}`, occupiedBinding(index));
+    }
+
+    harness.createChannel.mockImplementationOnce(async (_workspaceId, input) =>
+      discussionChannel({
+        id: "chn_capacity_active",
+        route_id: "capacity-active-route",
+        ...input,
+        kind: "public",
+      }),
+    );
+    entries.set(activeKey, {
+      sessionId: "session-active",
+      label: "Capacity active",
+      updatedAt: 2,
+    });
+
+    await expect(harness.service.open(activeKey)).resolves.toMatchObject({ state: "open" });
+    expect(harness.store.lookup(deletedKey)).toBeUndefined();
+    expect(harness.store.lookup(activeKey)).toMatchObject({
+      channelId: "chn_capacity_active",
+    });
+    expect(harness.revokedStore.entries()).toHaveLength(1);
+    expect(harness.store.entries()).toHaveLength(10_000);
+  });
+
+  it("keeps the remote channel quarantined when binding persistence fails", async () => {
     const harness = createHarness({ label: "Persistence failure" });
     harness.store.register = vi.fn(() => {
       throw new Error("SQLITE_FULL: database is full");
@@ -497,25 +517,14 @@ describe("ClickClack discussion service contracts", () => {
       "SQLITE_FULL",
     );
     expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", { archived: true });
+    expect(harness.updateChannel).not.toHaveBeenCalled();
     expect(harness.revokedStore.entries()).toHaveLength(1);
-    expect(harness.generationStore.lookup("agent:main:persistence-failure")).toBeUndefined();
-  });
-
-  it("retains the reservation when binding persistence and archival both fail", async () => {
-    const harness = createHarness({ label: "Persistence and archive failure" });
-    const sessionKey = "agent:main:persistence-archive-failure";
-    harness.store.register = vi.fn(() => {
-      throw new Error("SQLITE_FULL: database is full");
+    expect(harness.generationStore.lookup("agent:main:persistence-failure")).toMatchObject({
+      generation: expect.any(String),
     });
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(new Error("archive unavailable"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("SQLITE_FULL");
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
-    });
-    expect(harness.revokedStore.entries()).toHaveLength(1);
+    expect(harness.generationStore.lookup("agent:main:persistence-failure")).not.toHaveProperty(
+      "pending",
+    );
   });
 
   it("finalizes a persisted binding left with its pending commit markers", async () => {
@@ -526,13 +535,15 @@ describe("ClickClack discussion service contracts", () => {
     if (!binding?.credentialFingerprint) {
       throw new Error("expected persisted binding");
     }
-    const generation = reserveDiscussionBindingGeneration({
+    const generation = await reserveDiscussionBindingGeneration({
       runtime: harness.runtime,
       sessionKey,
+      accountId: binding.accountId,
+      credentialFingerprint: binding.credentialFingerprint,
       destinationIdentity: TEST_DESTINATION_IDENTITY,
       createGeneration: () => "interrupted-commit-generation",
     });
-    recordPendingDiscussionOpen({
+    await recordPendingDiscussionOpen({
       runtime: harness.runtime,
       sessionKey,
       generation,
@@ -545,7 +556,7 @@ describe("ClickClack discussion service contracts", () => {
         credentialFingerprint: discussionCredentialFingerprint("test-token"),
       },
     });
-    markClickClackDiscussionChannelRevoked(harness.runtime, binding);
+    await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, binding);
 
     await harness.service.reconcile(sessionKey);
 
@@ -554,14 +565,51 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.revokedStore.entries()).toHaveLength(0);
   });
 
+  it("rejects a pending open when ownership changes after reservation", async () => {
+    const harness = createHarness({ label: "Ownership changed" });
+    const sessionKey = "agent:main:ownership-changed";
+    const credentialFingerprint = discussionCredentialFingerprint("original-token");
+    const generation = await reserveDiscussionBindingGeneration({
+      runtime: harness.runtime,
+      sessionKey,
+      accountId: "account-original",
+      credentialFingerprint,
+      destinationIdentity: TEST_DESTINATION_IDENTITY,
+      createGeneration: () => "ownership-generation",
+    });
+
+    await expect(
+      recordPendingDiscussionOpen({
+        runtime: harness.runtime,
+        sessionKey,
+        generation,
+        pending: {
+          accountId: "account-replacement",
+          serverBaseUrl: "https://clickclack.example",
+          workspaceId: "wsp_team",
+          sessionId: "session-replacement",
+          externalRef: "openclaw:discussion:ownership-generation",
+          credentialFingerprint: discussionCredentialFingerprint("replacement-token"),
+        },
+      }),
+    ).rejects.toThrow("ClickClack discussion ownership changed before channel creation");
+    expect(harness.generationStore.lookup(sessionKey)).toEqual({
+      accountId: "account-original",
+      credentialFingerprint,
+      destinationIdentity: TEST_DESTINATION_IDENTITY,
+      generation,
+    });
+  });
+
   it("lets a durable revocation marker override a surviving binding", async () => {
     const harness = createHarness({ label: "Revoked binding" });
     const sessionKey = "agent:main:revoked-binding";
     await harness.service.open(sessionKey);
-    const binding = harness.store.lookup(sessionKey) as Parameters<
-      typeof markClickClackDiscussionChannelRevoked
-    >[1];
-    markClickClackDiscussionChannelRevoked(harness.runtime, binding);
+    const binding = getClickClackDiscussionBindingStore(harness.runtime).get(sessionKey);
+    if (!binding) {
+      throw new Error("Expected the original discussion binding");
+    }
+    await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, binding);
 
     expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
     expect(harness.store.lookup(sessionKey)).toBeUndefined();
@@ -604,19 +652,16 @@ describe("ClickClack discussion service contracts", () => {
     const sessionKey = "agent:main:patch-validation";
     await harness.service.open(sessionKey);
     harness.setSessionEntry({ label: "Support", category: "Incidents" });
-    vi.mocked(harness.updateChannel).mockResolvedValueOnce({
-      id: "chn_discussion",
-      route_id: "discussion-route",
-      workspace_id: "wsp_team",
-      name: "support",
-      kind: "public",
-      external_managed: true,
-      external_ref: testExternalRef(sessionKey),
-      external_url: "https://control.example/control/chat/main/support-12345678",
-      sidebar_section: "Projects",
-      archived: false,
-      created_at: "2026-07-19T00:00:00.000Z",
-    });
+    vi.mocked(harness.updateChannel).mockResolvedValueOnce(
+      discussionChannel({
+        name: "support",
+        external_managed: true,
+        external_ref: testExternalRef(sessionKey),
+        external_url: "https://control.example/control/chat/main/support-12345678",
+        sidebar_section: "Projects",
+        archived: false,
+      }),
+    );
 
     await expect(harness.service.reconcile(sessionKey)).rejects.toThrow(
       "ClickClack channel update did not apply sidebar_section",
@@ -661,6 +706,61 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.latestChannelMessages).toHaveBeenCalledWith("chn_discussion", 12);
     expect(result.text).toBe(
       'timestamp="2026-07-19T12:30:00.000Z" [Author "Alice" id="usr_alice"] text="Please relay the rollout concern."',
+    );
+  });
+
+  it("records attachment persistence failures while reading discussion history", async () => {
+    const harness = createHarness({ sessionId: "session-old", label: "History reset" });
+    const sessionKey = "agent:main:history-reset";
+    await harness.service.open(sessionKey);
+    harness.setSessionEntry({ sessionId: "session-new", label: "History reset" });
+    harness.store.register = vi.fn(() => {
+      throw new Error("SQLITE_FULL");
+    });
+
+    expect(await harness.service.readLatestMessages(sessionKey, 30)).toEqual({
+      text: "No discussion is bound to this session.",
+    });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-old" });
+    const loggerCall = vi
+      .mocked(harness.runtime.logging.getChildLogger)
+      .mock.calls.findIndex(
+        ([context]) => context?.plugin === "clickclack" && context.feature === "discussions",
+      );
+    const logger = vi.mocked(harness.runtime.logging.getChildLogger).mock.results[loggerCall]
+      ?.value;
+    expect(logger?.warn).toHaveBeenCalledWith(
+      `discussion attachment refresh failed for ${sessionKey}: Error: SQLITE_FULL`,
+    );
+  });
+
+  it("keeps the previous attachment when reconciliation cannot persist a reset", async () => {
+    const harness = createHarness({ sessionId: "session-old", label: "Reconcile reset" });
+    const sessionKey = "agent:main:reconcile-reset";
+    await harness.service.open(sessionKey);
+    harness.updateChannel.mockClear();
+    harness.setSessionEntry({ sessionId: "session-new", label: "Reconcile reset" });
+    const register = vi.fn(() => {
+      throw new Error("SQLITE_FULL");
+    });
+    harness.store.register = register;
+
+    await expect(harness.service.info(sessionKey)).resolves.toMatchObject({ state: "open" });
+    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+    await expect(harness.service.reconcile(sessionKey)).resolves.toBeUndefined();
+
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ sessionId: "session-old" });
+    expect(register).toHaveBeenCalledTimes(3);
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    const loggerCall = vi
+      .mocked(harness.runtime.logging.getChildLogger)
+      .mock.calls.findIndex(
+        ([context]) => context?.plugin === "clickclack" && context.feature === "discussions",
+      );
+    const logger = vi.mocked(harness.runtime.logging.getChildLogger).mock.results[loggerCall]
+      ?.value;
+    expect(logger?.warn).toHaveBeenCalledWith(
+      `discussion attachment refresh failed for ${sessionKey}: Error: SQLITE_FULL`,
     );
   });
 

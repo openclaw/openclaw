@@ -1,19 +1,7 @@
-// Telegram plugin module implements lane delivery state behavior.
-type LaneDeliverySnapshot = {
-  delivered: boolean;
-  skippedNonSilent: number;
-  failedNonSilent: number;
-};
+export type LaneDeliveryStateTracker = ReturnType<typeof createLaneDeliveryStateTracker>;
 
-type LaneDeliveryStateTracker = {
-  markDelivered: () => void;
-  markNonSilentSkip: () => void;
-  markNonSilentFailure: () => void;
-  snapshot: () => LaneDeliverySnapshot;
-};
-
-export function createLaneDeliveryStateTracker(): LaneDeliveryStateTracker {
-  const state: LaneDeliverySnapshot = {
+export function createLaneDeliveryStateTracker() {
+  const state = {
     delivered: false,
     skippedNonSilent: 0,
     failedNonSilent: 0,

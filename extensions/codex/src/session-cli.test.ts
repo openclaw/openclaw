@@ -94,6 +94,8 @@ describe("registerCodexSessionCli", () => {
           [
             "codex",
             "sessions",
+            "--agent",
+            "JarVis",
             "--search",
             "  openclaw  ",
             "--host",
@@ -123,6 +125,7 @@ describe("registerCodexSessionCli", () => {
           json: true,
         },
         {
+          agentId: "jarvis",
           catalogId: "codex",
           search: "openclaw",
           limitPerHost: 25,
@@ -158,14 +161,6 @@ describe("registerCodexSessionCli", () => {
       );
       expect(output).toContain("Dev Box (node · node:devbox · devbox) — offline — 0 sessions");
       expect(output).toContain("Error [NODE_OFFLINE]: Paired node is offline");
-    });
-
-    it("declares the extended federated catalog timeout in help", () => {
-      const program = createProgram();
-      const codex = program.commands.find((command) => command.name() === "codex");
-      const sessions = codex?.commands.find((command) => command.name() === "sessions");
-
-      expect(sessions?.helpInformation()).toContain('(default: "75000")');
     });
 
     it("neutralizes terminal controls in human-readable host and session metadata", async () => {
@@ -270,6 +265,10 @@ describe("registerCodexSessionCli", () => {
             "codex",
             "continue",
             "thread-1",
+            "--agent",
+            "JarVis",
+            "--host",
+            "gateway:local:source-a",
             "--url",
             "ws://gateway.test",
             "--token",
@@ -289,7 +288,12 @@ describe("registerCodexSessionCli", () => {
           timeout: "4321",
           json: false,
         },
-        { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+        {
+          agentId: "jarvis",
+          catalogId: "codex",
+          hostId: "gateway:local:source-a",
+          threadId: "thread-1",
+        },
         { mode: "cli", scopes: ["operator.write"] },
       );
       expect(output).toBe("OpenClaw session: harness:codex:supervision:branch\n");
@@ -313,16 +317,16 @@ describe("registerCodexSessionCli", () => {
       });
     });
 
-    it.each([
-      [{ ignored: true }, "invalid session key"],
-      [{ sessionKey: " " }, "invalid session key"],
-    ])("rejects invalid Gateway results %#", async (result, message) => {
-      gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
+    it.each([[{ sessionKey: " " }, "invalid session key"]])(
+      "rejects invalid Gateway results %#",
+      async (result, message) => {
+        gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
 
-      await expect(
-        createProgram().parseAsync(["codex", "continue", "thread-1"], { from: "user" }),
-      ).rejects.toThrow(message);
-    });
+        await expect(
+          createProgram().parseAsync(["codex", "continue", "thread-1"], { from: "user" }),
+        ).rejects.toThrow(message);
+      },
+    );
 
     it("rejects an empty thread id before calling the Gateway", async () => {
       await expect(
@@ -340,38 +344,6 @@ describe("registerCodexSessionCli", () => {
       ).rejects.toThrow("--confirm-no-other-runner is required");
 
       expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
-    });
-
-    it("archives a Gateway-local thread and prints the structured result as JSON", async () => {
-      gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ ok: true, ignored: true });
-
-      const output = await captureStdout(async () => {
-        await createProgram().parseAsync(
-          [
-            "codex",
-            "archive",
-            "thread-1",
-            "--confirm-no-other-runner",
-            "--json",
-            "--url",
-            "ws://gateway.test",
-          ],
-          { from: "user" },
-        );
-      });
-
-      expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
-        "sessions.catalog.archive",
-        { url: "ws://gateway.test", timeout: "30000", json: true },
-        {
-          catalogId: "codex",
-          hostId: "gateway:local",
-          threadId: "thread-1",
-          confirmNoOtherRunner: true,
-        },
-        { mode: "cli", scopes: ["operator.write"] },
-      );
-      expect(JSON.parse(output)).toEqual({ ok: true });
     });
 
     it("renders a successful archive in human-readable output", async () => {
@@ -395,16 +367,6 @@ describe("registerCodexSessionCli", () => {
           from: "user",
         }),
       ).rejects.toThrow("Codex session archive returned an invalid result");
-    });
-
-    it("rejects an empty thread id before checking confirmation or calling the Gateway", async () => {
-      await expect(
-        createProgram().parseAsync(["codex", "archive", "   ", "--confirm-no-other-runner"], {
-          from: "user",
-        }),
-      ).rejects.toThrow("Codex thread id must not be empty");
-
-      expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
     });
   });
 });

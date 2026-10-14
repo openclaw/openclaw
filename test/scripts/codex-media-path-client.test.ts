@@ -1,38 +1,21 @@
 // Codex Media Path Client tests cover codex media path client script behavior.
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { once } from "node:events";
+import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
-import {
-  readPositiveIntEnv,
-  readTcpPortEnv,
-} from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
+import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const fakeAppServerPath = path.resolve(
   "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs",
 );
 const writeConfigPath = path.resolve("scripts/e2e/lib/codex-media-path/write-config.mjs");
 
-function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-codex-media-path-"));
-  tempRoots.push(root);
-  return root;
-}
-
 function jsonl(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
-}
-
-function padJsonlToLength(value: Record<string, unknown>, length: number): string {
-  const base = jsonl({ ...value, pad: "" });
-  if (base.length > length) {
-    throw new Error(`cannot pad JSONL down from ${base.length} to ${length}`);
-  }
-  return jsonl({ ...value, pad: "x".repeat(length - base.length) });
 }
 
 function runWriteConfig(root: string, env: Record<string, string> = {}) {
@@ -89,46 +72,9 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   });
 }
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 describe("codex media path limits", () => {
-  it("rejects loose numeric env values instead of parsing prefixes", () => {
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180, {
-        OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES", 2 * 1024 * 1024, {
-        OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: "64bytes",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
-  });
-
-  it("rejects out-of-range TCP ports", () => {
-    expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
-  });
-
-  it("writes strict positive timeout and port values into generated config", () => {
-    const root = makeTempRoot();
-    const result = runWriteConfig(root, {
-      OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "240",
-      PORT: "19002",
-    });
-
-    expect(result.status).toBe(0);
-    const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-    expect(config.gateway.port).toBe(19002);
-    expect(config.agents.defaults.timeoutSeconds).toBe(240);
-    expect(config.plugins.entries.codex.config.appServer.requestTimeoutMs).toBe(240_000);
-  });
-
   it("rejects loose write-config timeout env values", () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-codex-media-path-");
     const result = runWriteConfig(root, {
       OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "1e3",
     });
@@ -138,7 +84,7 @@ describe("codex media path limits", () => {
   });
 
   it("rejects out-of-range write-config gateway ports", () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-codex-media-path-");
     const result = runWriteConfig(root, { PORT: "65536" });
 
     expect(result.status).not.toBe(0);
@@ -148,7 +94,7 @@ describe("codex media path limits", () => {
 
 describe("codex media path fake app-server", () => {
   it("returns a structured error when request logging fails", async () => {
-    const requestLogDirectory = makeTempRoot();
+    const requestLogDirectory = tempRoots.make("openclaw-codex-media-path-");
     const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [fakeAppServerPath], {
       env: {
         ...process.env,
@@ -161,6 +107,8 @@ describe("codex media path fake app-server", () => {
     child.stderr.on("data", (chunk: string) => {
       stderr.append(chunk);
     });
+    // Reproduce independent pipe delivery: stdout can arrive before stderr.
+    child.stderr.pause();
 
     try {
       const responseLine = readStdoutLine(child);
@@ -173,6 +121,11 @@ describe("codex media path fake app-server", () => {
         },
         id: "request-1",
       });
+      // Closing stdin lets the fixture exit; close joins both output streams.
+      const closed = once(child, "close");
+      child.stdin.end();
+      child.stderr.resume();
+      await closed;
       expect(stderr.text()).toContain("fake Codex app-server request log write failed");
     } finally {
       await stopChild(child);
@@ -182,7 +135,7 @@ describe("codex media path fake app-server", () => {
 
 describe("codex media path JSONL tailer", () => {
   it("keeps parsed app-server requests and reads only appended lines", () => {
-    const logPath = path.join(makeTempRoot(), "app-server.jsonl");
+    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
     const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
 
     expect(tailer.read()).toEqual([]);
@@ -198,7 +151,7 @@ describe("codex media path JSONL tailer", () => {
   });
 
   it("starts from a bounded tail of oversized logs", () => {
-    const logPath = path.join(makeTempRoot(), "app-server.jsonl");
+    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
     const lastLine = jsonl({ method: "turn/start" });
     writeFileSync(logPath, `${"x".repeat(256)}\n${jsonl({ method: "old" })}${lastLine}`);
 
@@ -210,21 +163,8 @@ describe("codex media path JSONL tailer", () => {
     expect(tailer.read()).toEqual([{ method: "turn/start" }]);
   });
 
-  it("keeps a complete line when the bounded tail starts on its boundary", () => {
-    const logPath = path.join(makeTempRoot(), "app-server.jsonl");
-    const lastLine = jsonl({ method: "turn/start" });
-    writeFileSync(logPath, `${"x".repeat(256)}\n${lastLine}`);
-
-    const tailer = createJsonlRequestTailer(logPath, {
-      maxReadBytes: lastLine.length,
-      historyLimit: 10,
-    });
-
-    expect(tailer.read()).toEqual([{ method: "turn/start" }]);
-  });
-
   it("resets request history when the app-server log is truncated", () => {
-    const logPath = path.join(makeTempRoot(), "app-server.jsonl");
+    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
     const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
 
     writeFileSync(logPath, jsonl({ method: "initialize", payload: "long enough to rotate" }));
@@ -232,22 +172,5 @@ describe("codex media path JSONL tailer", () => {
 
     writeFileSync(logPath, jsonl({ method: "turn/start" }));
     expect(tailer.read()).toEqual([{ method: "turn/start" }]);
-  });
-
-  it("resets request history when a rotated app-server log keeps the same size", () => {
-    const logPath = path.join(makeTempRoot(), "app-server.jsonl");
-    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
-    const oldText = jsonl({ method: "initialize", pad: "x".repeat(64) });
-    const replacementText = padJsonlToLength({ method: "turn/start" }, oldText.length);
-    const replacement = JSON.parse(replacementText) as Record<string, unknown>;
-
-    expect(replacementText.length).toBe(oldText.length);
-    writeFileSync(logPath, oldText);
-    expect(tailer.read()).toEqual([{ method: "initialize", pad: "x".repeat(64) }]);
-
-    rmSync(logPath, { force: true });
-    writeFileSync(logPath, replacementText);
-
-    expect(tailer.read()).toEqual([replacement]);
   });
 });

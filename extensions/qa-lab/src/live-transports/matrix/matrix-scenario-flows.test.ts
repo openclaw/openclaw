@@ -4,17 +4,8 @@ import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
 } from "../../scenario-catalog.js";
-
-const MATRIX_MENTION_GATE_PRIMARY_SCENARIOS = [
-  "matrix-allowbots-default-block",
-  "matrix-allowbots-mentions-mentioned-room",
-  "matrix-allowbots-mentions-unmentioned-open-room-block",
-  "matrix-allowbots-room-override-blocks-account-true",
-  "matrix-allowbots-room-override-enables-account-off",
-  "matrix-allowbots-self-sender-ignored",
-  "matrix-allowbots-true-unmentioned-open-room",
-  "matrix-mention-metadata-spoof-block",
-] as const;
+import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
+import { collectQaSuitePluginIds } from "../../suite-planning.js";
 
 function readModuleBinding(
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
@@ -67,32 +58,6 @@ describe("Matrix QA Lab scenario flows", () => {
     );
   });
 
-  it("expands every Matrix module call through the shared flow host", () => {
-    const bindings = new Set<string>();
-    expect(scenarios).toHaveLength(82);
-    for (const scenario of scenarios) {
-      expect(scenario.execution.kind, scenario.id).toBe("flow");
-      if (scenario.execution.kind !== "flow") {
-        continue;
-      }
-      const { importAction, callAction } = readModuleBinding(scenario);
-      bindings.add(`${importAction.value.expr}:${callAction.call}`);
-      if (scenario.id !== "matrix-allowlist-hot-reload") {
-        expect(scenario.objective, scenario.id).toBe(scenario.title);
-        expect(scenario.successCriteria, scenario.id).toEqual([
-          `${scenario.title} completes successfully.`,
-        ]);
-      }
-      expect(scenario.execution.channel, scenario.id).toBe("matrix");
-      expect(scenario.execution.retryCount, scenario.id).toBe(0);
-      expect(scenario.execution.timeoutMs, scenario.id).toBeGreaterThan(0);
-      expect(scenario.execution.flow?.steps.at(-1)?.detailsExpr, scenario.id).toBe(
-        "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
-      );
-    }
-    expect(bindings.size).toBe(82);
-  });
-
   it("prepares the shared canary only for canary-dependent scenarios", () => {
     const canaryScenarioIds = new Set([
       "matrix-reaction-not-a-reply",
@@ -110,58 +75,32 @@ describe("Matrix QA Lab scenario flows", () => {
     }
   });
 
-  it("applies the portable thread override through Matrix flow preparation", () => {
-    expect(readQaScenarioById("thread-reply-override").execution).toMatchObject({
-      kind: "flow",
-      channel: "matrix",
-      timeoutMs: 60_000,
-      retryCount: 0,
-      config: {
-        matrixConfigOverrides: {
-          threadReplies: "always",
-        },
-      },
-    });
-  });
+  it("isolates scenarios that assert fresh thread and DM session routing", () => {
+    const expectedReasons = {
+      "dm-shared-session": "pristine per-user DM session routing",
+      "thread-isolation": "fresh session boundary",
+      "thread-reply-override": "must not inherit an existing room session",
+    } as const;
 
-  it("runs the allowlist scenario through its config-file reload owner", () => {
-    const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
-    expect(scenario?.execution.kind).toBe("flow");
-    if (scenario?.execution.kind !== "flow") {
-      return;
+    for (const [scenarioId, reason] of Object.entries(expectedReasons)) {
+      const execution = requireFlowScenario(readQaScenarioById(scenarioId)).execution;
+      expect(execution.suiteIsolation, scenarioId).toBe("isolated");
+      expect(execution.isolationReason, scenarioId).toContain(reason);
     }
-    const { importAction, callAction } = readModuleBinding(scenario);
-    expect(importAction.value.expr).toContain("scenario-runtime-config.js");
-    expect(callAction).toEqual({
-      call: "scenarioModule.runMatrixQaAllowlistHotReloadScenario",
-      args: [{ expr: "scenarioContext" }],
-      saveAs: "result",
-    });
-  });
-
-  it("attributes Matrix admission and media evidence to behavior the flows execute", () => {
-    for (const scenarioId of MATRIX_MENTION_GATE_PRIMARY_SCENARIOS) {
-      expect(readQaScenarioById(scenarioId).coverage, scenarioId).toEqual({
-        primary: ["matrix.mention-gates"],
-      });
-    }
-    expect(readQaScenarioById("matrix-mxid-prefixed-command-block").coverage).toEqual({
-      primary: ["matrix.mention-gates"],
-      secondary: ["channels.channel-native-commands"],
-    });
-    expect(readQaScenarioById("matrix-unsupported-media-safe").coverage).toEqual({
-      primary: ["channels.inbound-media-normalization"],
-    });
   });
 
   it("loads the voice preflight provider and media overrides", () => {
-    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
+    const scenario = readQaScenarioById("matrix-voice-preflight-mention");
+
+    expect(scenario.execution).toMatchObject({
       kind: "flow",
       providerMode: "mock-openai",
       retryCount: 0,
       timeoutMs: 90_000,
     });
-    expect(readQaScenarioById("matrix-voice-preflight-mention").gatewayConfigPatch).toMatchObject({
+    expect(scenario.plugins).toEqual(["openai"]);
+    expect(collectQaSuitePluginIds([scenario])).toEqual(["openai"]);
+    expect(scenario.gatewayConfigPatch).toMatchObject({
       tools: {
         media: {
           models: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],

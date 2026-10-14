@@ -1,5 +1,4 @@
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
-// Agent skill filter helpers select skills that apply to a configured agent.
 import type { OpenClawConfig } from "../../config/types.js";
 import { normalizeSkillFilter } from "./filter.js";
 
@@ -38,4 +37,17 @@ export function resolveEffectiveAgentSkillsLimits(
   }
   const { maxSkillsPromptChars } = agentEntry.skillsLimits ?? {};
   return typeof maxSkillsPromptChars === "number" ? { maxSkillsPromptChars } : undefined;
+}
+
+/** Applies a session's sparse skill overlay after agent/default allowlist resolution. */
+export function isSessionSkillEnabled(
+  skillName: string,
+  baseFilter: readonly string[] | undefined,
+  overrides: Readonly<Record<string, boolean>> | undefined,
+  skillKey = skillName,
+): boolean {
+  const override =
+    overrides && Object.hasOwn(overrides, skillKey) ? overrides[skillKey] : undefined;
+  const baseAllows = baseFilter === undefined || baseFilter.includes(skillName);
+  return override === true || (baseAllows && override !== false);
 }

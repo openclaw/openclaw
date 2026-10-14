@@ -1,11 +1,11 @@
 // Assistant transcript annotations are produced after Markdown inline parsing and text joining.
-import type MarkdownIt from "markdown-it";
-import type Token from "markdown-it/lib/token.mjs";
+import type { MarkdownIt, StateCore, Token } from "markdown-it";
 import {
   findAssistantTranscriptRoleHeaderSpans,
   type AssistantTranscriptRoleHeaderSpan,
 } from "./assistant-transcript-headers.js";
 import { tokenizeHtmlTags } from "./html-tags.js";
+import { appendHtmlTags, copyHtmlTags, RAW_HTML_TOKEN_TYPE } from "./ir-metadata.js";
 
 export const ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE = "assistant_transcript_role_text";
 
@@ -78,7 +78,8 @@ function visibleTokenProjection(
   if (token.type === "text" || token.type === "html_inline") {
     return { text: token.content, excludedRanges: [] };
   }
-  if (token.type === "code_inline") {
+  // Raw lexemes own their contents but still contribute length to later text offsets.
+  if (token.type === "code_inline" || token.type === RAW_HTML_TOKEN_TYPE) {
     return { text: token.content, excludedRanges: [{ start: 0, end: token.content.length }] };
   }
   if (token.type === "image") {
@@ -111,9 +112,10 @@ function visibleTokensProjection(
 }
 
 function cloneToken(
-  TokenType: typeof Token,
+  TokenType: StateCore["Token"],
   source: Token,
-  content: string,
+  start: number,
+  end: number,
   type: string = source.type,
 ): Token {
   const token = new TokenType(
@@ -123,18 +125,19 @@ function cloneToken(
   );
   Object.assign(token, source);
   token.type = type;
-  token.content = content;
+  token.content = source.content.slice(start, end);
   token.children = null;
-  return token;
+  return copyHtmlTags(source, token, start, end);
 }
 
 function annotatedToken(
-  TokenType: typeof Token,
+  TokenType: StateCore["Token"],
   source: Token,
-  content: string,
+  start: number,
+  end: number,
   span: AssistantTranscriptRoleHeaderSpan,
 ): Token {
-  const token = cloneToken(TokenType, source, content, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
+  const token = cloneToken(TokenType, source, start, end, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
   token.meta = {
     ...(source.meta && typeof source.meta === "object" ? source.meta : {}),
     assistantTranscriptRoleHeader: {
@@ -145,57 +148,56 @@ function annotatedToken(
   return token;
 }
 
-function splitVisibleToken(params: {
-  TokenType: typeof Token;
-  token: Token;
-  visibleStart: number;
-  spanStartIndex: number;
-  spans: readonly AssistantTranscriptRoleHeaderSpan[];
-}): Token[] {
-  const { token, visibleStart } = params;
-  const visibleEnd = visibleStart + token.content.length;
-  const firstSpan = params.spans[params.spanStartIndex];
-  if (!firstSpan || firstSpan.start >= visibleEnd) {
-    return [token];
-  }
-
-  const result: Token[] = [];
-  let localCursor = 0;
-  for (let spanIndex = params.spanStartIndex; spanIndex < params.spans.length; spanIndex += 1) {
-    const span = params.spans[spanIndex];
-    if (!span || span.start >= visibleEnd) {
+function sliceRoleHeaderSpans(
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
+  spanStartIndex: number,
+  start: number,
+  end: number,
+): AssistantTranscriptRoleHeaderSpan[] {
+  const sliced: AssistantTranscriptRoleHeaderSpan[] = [];
+  for (let index = spanStartIndex; index < spans.length; index += 1) {
+    const span = spans[index];
+    if (!span || span.start >= end) {
       break;
     }
-    if (span.end <= visibleStart) {
-      continue;
+    if (span.end > start) {
+      sliced.push({
+        ...span,
+        start: Math.max(span.start, start) - start,
+        end: Math.min(span.end, end) - start,
+      });
     }
-    const overlapStart = Math.max(span.start, visibleStart) - visibleStart;
-    const overlapEnd = Math.min(span.end, visibleEnd) - visibleStart;
-    if (overlapStart > localCursor) {
-      result.push(
-        cloneToken(params.TokenType, token, token.content.slice(localCursor, overlapStart)),
-      );
+  }
+  return sliced;
+}
+
+function splitVisibleToken(
+  TokenType: StateCore["Token"],
+  token: Token,
+  spans: readonly AssistantTranscriptRoleHeaderSpan[],
+): Token[] {
+  if (spans.length === 0) {
+    return [token];
+  }
+  const result: Token[] = [];
+  let localCursor = 0;
+  for (const span of spans) {
+    if (span.start > localCursor) {
+      result.push(cloneToken(TokenType, token, localCursor, span.start));
     }
-    if (overlapEnd > overlapStart) {
-      result.push(
-        annotatedToken(
-          params.TokenType,
-          token,
-          token.content.slice(overlapStart, overlapEnd),
-          span,
-        ),
-      );
+    if (span.end > span.start) {
+      result.push(annotatedToken(TokenType, token, span.start, span.end, span));
     }
-    localCursor = overlapEnd;
+    localCursor = span.end;
   }
   if (localCursor < token.content.length) {
-    result.push(cloneToken(params.TokenType, token, token.content.slice(localCursor)));
+    result.push(cloneToken(TokenType, token, localCursor, token.content.length));
   }
   return result;
 }
 
 function annotateInlineChildren(
-  TokenType: typeof Token,
+  TokenType: StateCore["Token"],
   children: Token[],
   preserveLinks: boolean,
   options: AssistantTranscriptRoleMarkdownOptions,
@@ -225,31 +227,19 @@ function annotateInlineChildren(
     }
     if (token.type === "text" || token.type === "html_inline") {
       result.push(
-        ...splitVisibleToken({
+        ...splitVisibleToken(
           TokenType,
           token,
-          visibleStart: visibleCursor,
-          spanStartIndex: spanCursor,
-          spans,
-        }),
+          sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, visibleCursor + content.length),
+        ),
       );
     } else if (token.type === "image") {
-      const visibleEnd = visibleCursor + content.length;
-      const imageSpans: AssistantTranscriptRoleHeaderSpan[] = [];
-      for (let spanIndex = spanCursor; spanIndex < spans.length; spanIndex += 1) {
-        const span = spans[spanIndex];
-        if (!span || span.start >= visibleEnd) {
-          break;
-        }
-        if (span.end <= visibleCursor) {
-          continue;
-        }
-        imageSpans.push({
-          ...span,
-          start: Math.max(span.start, visibleCursor) - visibleCursor,
-          end: Math.min(span.end, visibleEnd) - visibleCursor,
-        });
-      }
+      const imageSpans = sliceRoleHeaderSpans(
+        spans,
+        spanCursor,
+        visibleCursor,
+        visibleCursor + content.length,
+      );
       if (imageSpans.length > 0) {
         token.meta = {
           ...(token.meta && typeof token.meta === "object" ? token.meta : {}),
@@ -302,6 +292,7 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
       previous?.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE &&
       token.type === ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE
     ) {
+      appendHtmlTags(previous, token, previous.content.length);
       previous.content += token.content;
       continue;
     }
@@ -310,15 +301,12 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
   return result;
 }
 
-function annotateHtmlBlock(TokenType: typeof Token, token: Token): Token[] {
+function annotateHtmlBlock(TokenType: StateCore["Token"], token: Token): Token[] {
   const spans = findAssistantTranscriptRoleHeaderSpans(
     token.content,
     findRawCodeContainerRanges(token.content),
   );
-  if (spans.length === 0) {
-    return [token];
-  }
-  return splitVisibleToken({ TokenType, token, visibleStart: 0, spanStartIndex: 0, spans });
+  return splitVisibleToken(TokenType, token, spans);
 }
 
 /** Adds semantic transcript-role tokens to assistant-authored Markdown only. */

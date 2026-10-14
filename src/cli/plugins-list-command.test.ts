@@ -1,5 +1,6 @@
 // Plugins list command tests cover plugin list command execution and output.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 
 function createJsonRuntime(writes: unknown[]): OutputRuntimeEnv {
@@ -14,14 +15,87 @@ function createJsonRuntime(writes: unknown[]): OutputRuntimeEnv {
   };
 }
 
+type SnapshotPlugin = {
+  id: string;
+  enabled: boolean;
+  commands?: string[];
+  agentHarnessIds?: string[];
+};
+
+function mockPluginListSnapshot(
+  plugins: SnapshotPlugin[],
+  config: OpenClawConfig = {},
+  scope?: {
+    workspaceDir?: string;
+    workspaceScope: "selected" | "omitted";
+    diagnostics?: Array<{ level: "warn"; code: "workspace-scope-omitted"; message: string }>;
+  },
+): void {
+  // mock-isolation: Each plugin-list fixture supplies its config without loading operator state.
+  vi.doMock("../config/config.js", () => ({
+    getRuntimeConfig: () => config,
+    loadConfig: () => config,
+    captureRuntimeConfigAsyncReader: () => async () => config,
+  }));
+  vi.doMock("../plugins/status-snapshot.js", () => ({
+    buildPluginRegistrySnapshotReport: () => ({
+      workspaceDir: scope?.workspaceDir ?? "/workspace",
+      workspaceScope: scope?.workspaceScope ?? "selected",
+      registrySource: "config",
+      registryDiagnostics: [],
+      plugins,
+      diagnostics: scope?.diagnostics ?? [],
+    }),
+  }));
+}
+
+function mockHumanListModules(importedModules: string[] = []): void {
+  vi.doMock("../plugins/source-display.js", () => {
+    importedModules.push("source-display");
+    return {
+      formatPluginSourceForTable: vi.fn(),
+      resolvePluginSourceRoots: vi.fn(),
+    };
+  });
+  vi.doMock("../../packages/terminal-core/src/table.js", () => {
+    importedModules.push("table");
+    return {
+      getTerminalTableWidth: vi.fn(),
+      renderTable: vi.fn(),
+    };
+  });
+  vi.doMock("../../packages/terminal-core/src/theme.js", () => {
+    importedModules.push("theme");
+    return {
+      theme: {
+        muted: (value: string) => value,
+        warn: (value: string) => value,
+      },
+    };
+  });
+  vi.doMock("./command-format.js", () => {
+    importedModules.push("command-format");
+    return {
+      formatCliCommand: (value: string) => `formatted(${value})`,
+    };
+  });
+  vi.doMock("./plugins-list-format.js", () => {
+    importedModules.push("plugins-list-format");
+    return {
+      formatPluginLine: vi.fn(),
+      formatPluginStatus: vi.fn(),
+    };
+  });
+}
+
 describe("runPluginsListCommand", () => {
   afterEach(() => {
     vi.doUnmock("../config/config.js");
     vi.doUnmock("../plugins/status.js");
     vi.doUnmock("../plugins/status-snapshot.js");
     vi.doUnmock("../plugins/source-display.js");
-    vi.doUnmock("../terminal/table.js");
-    vi.doUnmock("../terminal/theme.js");
+    vi.doUnmock("../../packages/terminal-core/src/table.js");
+    vi.doUnmock("../../packages/terminal-core/src/theme.js");
     vi.doUnmock("./command-format.js");
     vi.doUnmock("./plugins-list-format.js");
     vi.resetModules();
@@ -31,70 +105,16 @@ describe("runPluginsListCommand", () => {
     vi.resetModules();
     const importedHumanModules: string[] = [];
 
-    vi.doMock("../config/config.js", () => ({
-      getRuntimeConfig: () => ({}),
-    }));
     vi.doMock("../plugins/status.js", () => {
       throw new Error("plugins list JSON must use the snapshot status module");
     });
     vi.doMock("./plugins-command-helpers.js", () => {
       throw new Error("plugins list JSON must not import plugin command helpers");
     });
-    vi.doMock("../plugins/status-snapshot.js", () => ({
-      buildPluginRegistrySnapshotReport: () => ({
-        workspaceDir: "/workspace",
-        registrySource: "config",
-        registryDiagnostics: [],
-        plugins: [
-          {
-            id: "demo",
-            enabled: true,
-            commands: ["demo"],
-            agentHarnessIds: ["runtime-only"],
-          },
-        ],
-        diagnostics: [],
-      }),
-    }));
-    vi.doMock("../plugins/source-display.js", () => {
-      importedHumanModules.push("source-display");
-      return {
-        formatPluginSourceForTable: vi.fn(),
-        resolvePluginSourceRoots: vi.fn(),
-      };
-    });
-    vi.doMock("../terminal/table.js", () => {
-      importedHumanModules.push("table");
-      return {
-        getTerminalTableWidth: vi.fn(),
-        renderTable: vi.fn(),
-      };
-    });
-    vi.doMock("../terminal/theme.js", () => {
-      importedHumanModules.push("theme");
-      return {
-        theme: {
-          muted: (value: string) => value,
-          heading: (value: string) => value,
-          command: (value: string) => value,
-          error: (value: string) => value,
-          success: (value: string) => value,
-          warn: (value: string) => value,
-        },
-      };
-    });
-    vi.doMock("./command-format.js", () => {
-      importedHumanModules.push("command-format");
-      return {
-        formatCliCommand: (value: string) => value,
-      };
-    });
-    vi.doMock("./plugins-list-format.js", () => {
-      importedHumanModules.push("plugins-list-format");
-      return {
-        formatPluginLine: vi.fn(),
-      };
-    });
+    mockPluginListSnapshot([
+      { id: "demo", enabled: true, commands: ["demo"], agentHarnessIds: ["runtime-only"] },
+    ]);
+    mockHumanListModules(importedHumanModules);
 
     const { runPluginsListCommand } = await import("./plugins-list-command.js");
     const writes: unknown[] = [];
@@ -105,6 +125,7 @@ describe("runPluginsListCommand", () => {
     expect(writes).toEqual([
       {
         workspaceDir: "/workspace",
+        workspaceScope: "selected",
         registry: {
           source: "config",
           diagnostics: [],
@@ -112,6 +133,58 @@ describe("runPluginsListCommand", () => {
         plugins: [{ id: "demo", enabled: true, commands: ["demo"] }],
         diagnostics: [],
       },
+    ]);
+  });
+
+  it("explains an empty enabled-only list when plugins are installed", async () => {
+    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }]);
+    mockHumanListModules();
+    const { runPluginsListCommand } = await import("./plugins-list-command.js");
+    const writes: unknown[] = [];
+
+    await runPluginsListCommand({ enabled: true }, createJsonRuntime(writes));
+
+    expect(writes).toEqual([
+      "No enabled plugins found. Run formatted(openclaw plugins list) to inspect installed plugins.",
+    ]);
+  });
+
+  it("explains a globally disabled plugin inventory", async () => {
+    mockPluginListSnapshot([{ id: "disabled-plugin", enabled: false }], {
+      plugins: { enabled: false },
+    });
+    mockHumanListModules();
+    const { runPluginsListCommand } = await import("./plugins-list-command.js");
+    const writes: unknown[] = [];
+
+    await runPluginsListCommand({ enabled: true, verbose: true }, createJsonRuntime(writes));
+
+    expect(writes).toEqual([
+      "No enabled plugins found. Plugins are globally disabled. Run formatted(openclaw plugins list) to inspect installed plugins.",
+    ]);
+  });
+
+  it("makes omitted workspace plugin scope visible in human output", async () => {
+    const message =
+      "Workspace plugin discovery was skipped; set agents.defaults.systemAgent.agentId.";
+    mockPluginListSnapshot(
+      [],
+      {},
+      {
+        workspaceScope: "omitted",
+        diagnostics: [{ level: "warn", code: "workspace-scope-omitted", message }],
+      },
+    );
+    mockHumanListModules();
+    const { runPluginsListCommand } = await import("./plugins-list-command.js");
+    const writes: unknown[] = [];
+
+    await runPluginsListCommand({}, createJsonRuntime(writes));
+
+    expect(writes).toEqual([
+      `Warning: ${message}`,
+      "",
+      "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
     ]);
   });
 });

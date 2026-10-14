@@ -12,8 +12,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import type { FileTransferNodeInvokeCommand } from "./node-invoke-policy-commands.js";
 
-export type FileTransferAuditOp = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
+export type FileTransferAuditOp = FileTransferNodeInvokeCommand;
 
 type FileTransferAuditDecision =
   | "allowed"
@@ -74,7 +75,7 @@ function auditFilePath(dir: string): string {
 }
 
 /**
- * Append an audit record. Best-effort — failures are logged to stderr and
+ * Append an audit record. Best-effort — failures are logged through console capture and
  * never propagated to the caller (the caller's operation is the source of
  * truth, not the audit write).
  */
@@ -93,6 +94,6 @@ export async function appendFileTransferAudit(
       rejectSymlinkParents: true,
     });
   } catch (e) {
-    process.stderr.write(`[file-transfer:audit] append failed: ${String(e)}\n`);
+    console.warn(`[file-transfer:audit] append failed: ${String(e)}`);
   }
 }

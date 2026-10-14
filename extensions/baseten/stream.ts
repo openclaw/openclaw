@@ -1,68 +1,76 @@
-/** Baseten request payload policy for models with opt-in chat-template reasoning. */
+/** Baseten session affinity and model-specific thinking policy. */
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { usesBasetenChatTemplateThinking } from "./models.js";
+import {
+  normalizeOpenAICompatibleReasoningReplay,
+  streamWithPayloadPatch,
+} from "openclaw/plugin-sdk/provider-stream-shared";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BASETEN_BASE_URL, usesBasetenChatTemplateThinking } from "./models.js";
 
-const BASETEN_DEEPSEEK_V4_MODEL_ID = "deepseek-ai/deepseek-v4-pro";
-
-function isThinkingEnabled(level: ProviderWrapStreamFnContext["thinkingLevel"]): boolean {
-  return level !== undefined && level !== "off";
-}
-
-function isBasetenDeepSeekV4ModelId(modelId: string): boolean {
-  return modelId.trim().toLowerCase() === BASETEN_DEEPSEEK_V4_MODEL_ID;
-}
-
-function patchBasetenDeepSeekV4Replay(
-  payload: Record<string, unknown>,
-  thinkingEnabled: boolean,
-): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const record = message as Record<string, unknown>;
-    if (record.role !== "assistant") {
-      continue;
-    }
-    // DeepSeek V4 requires reasoning_content on replayed assistant turns.
-    // Cross-provider turns lack it, so backfill while thinking is enabled.
-    if (thinkingEnabled) {
-      record.reasoning_content ??= "";
-    } else {
-      delete record.reasoning_content;
-    }
-  }
-}
-
-/** Adds Baseten's `chat_template_args.enable_thinking` without dropping caller args. */
 export function createBasetenThinkingWrapper(
   ctx: ProviderWrapStreamFnContext,
 ): ProviderWrapStreamFnContext["streamFn"] {
-  return createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model }) => {
-    if (model.provider !== "baseten" || model.api !== "openai-completions") {
-      return;
+  const underlying = ctx.streamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Standalone completions use dispatch aliases; the source API owns wire policy.
+    if (model.provider !== "baseten" || (ctx.sourceApi ?? model.api) !== "openai-completions") {
+      return underlying(model, context, options);
     }
-    if (isBasetenDeepSeekV4ModelId(model.id)) {
-      // DeepSeek reasoning defaults on when no level is supplied. Only an
-      // explicit `off` may remove its required replay metadata.
-      patchBasetenDeepSeekV4Replay(payload, ctx.thinkingLevel !== "off");
+    const affinity = options?.promptCacheKey ?? options?.sessionId;
+    const cacheRetention = options?.cacheRetention ?? ctx.extraParams?.cacheRetention;
+    let streamOptions = options;
+    if (
+      affinity &&
+      cacheRetention !== "none" &&
+      model.baseUrl?.trim().replace(/\/+$/u, "") === BASETEN_BASE_URL &&
+      !Object.keys({ ...model.headers, ...options?.headers }).some(
+        (name) => name.toLowerCase() === "x-session-affinity",
+      )
+    ) {
+      streamOptions = {
+        ...options,
+        headers: { ...options?.headers, "x-session-affinity": affinity },
+      };
     }
-    if (!usesBasetenChatTemplateThinking(model.id)) {
-      return;
-    }
-    const existing =
-      payload.chat_template_args &&
-      typeof payload.chat_template_args === "object" &&
-      !Array.isArray(payload.chat_template_args)
-        ? (payload.chat_template_args as Record<string, unknown>)
-        : {};
-    payload.chat_template_args = {
-      ...existing,
-      enable_thinking: isThinkingEnabled(ctx.thinkingLevel),
-    };
-  });
+    const optIn = usesBasetenChatTemplateThinking(model.id);
+    const thinkingLevel =
+      options?.reasoning ??
+      (ctx.thinkingLevel === "adaptive" ? "max" : ctx.thinkingLevel) ??
+      (optIn ? "off" : undefined);
+    // Resolve before serialization so scalar effort agrees with the opt-in toggle.
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      thinkingLevel === undefined ? streamOptions : { ...streamOptions, reasoning: thinkingLevel },
+      (payload) => {
+        const normalizedModelId = model.id.trim().toLowerCase();
+        if (
+          normalizedModelId === "deepseek-ai/deepseek-v4-pro" ||
+          normalizedModelId === "deepseek-ai/deepseek-v4-pro-0813"
+        ) {
+          // DeepSeek defaults on; only explicit off may remove required replay metadata.
+          normalizeOpenAICompatibleReasoningReplay(payload, {
+            thinkingEnabled: thinkingLevel !== "off",
+            stripAssistantMessagesOnly: true,
+            replaceNullReasoningContent: true,
+          });
+          // The current Pro endpoint requires this envelope whenever scalar effort is present.
+          if (
+            normalizedModelId === "deepseek-ai/deepseek-v4-pro-0813" &&
+            payload.reasoning_effort !== undefined
+          ) {
+            payload.thinking = { type: "enabled" };
+          }
+        }
+        if (optIn) {
+          payload.chat_template_args = {
+            ...asNonArrayRecord(payload.chat_template_args),
+            enable_thinking: thinkingLevel !== "off",
+          };
+        }
+      },
+    );
+  };
 }

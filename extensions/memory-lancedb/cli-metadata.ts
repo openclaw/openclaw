@@ -1,5 +1,5 @@
-// Memory Lancedb plugin module implements cli metadata behavior.
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { isMemoryMachineOutput } from "./cli-output-mode.js";
 
 export default definePluginEntry({
   id: "memory-lancedb",
@@ -12,6 +12,7 @@ export default definePluginEntry({
           name: "ltm",
           description: "Inspect and query LanceDB-backed memory",
           hasSubcommands: true,
+          machineOutput: isMemoryMachineOutput,
         },
       ],
     });

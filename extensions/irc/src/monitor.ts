@@ -1,5 +1,7 @@
-// Irc plugin module implements monitor behavior.
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
@@ -10,7 +12,7 @@ import {
   type IrcIngressLifecycle,
   type IrcIngressMonitor,
 } from "./irc-ingress.js";
-import type { RuntimeEnv } from "./runtime-api.js";
+import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
@@ -19,12 +21,10 @@ type IrcMonitorOptions = {
   config?: CoreConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
   ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
-
-const IRC_MONITOR_RECONNECT_DELAY_MS = 1000;
 
 export async function monitorIrcProvider(
   opts: IrcMonitorOptions,
@@ -56,18 +56,12 @@ export async function monitorIrcProvider(
   let activeConnectionEpoch: string | null = null;
   let ingressPause: Promise<void> = Promise.resolve();
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const reconnectBackoff = createIrcReconnectBackoff();
   let stopped = false;
   const monitorAbort = new AbortController();
-  let removeAbortListener: (() => void) | null = null;
-  if (opts.abortSignal) {
-    const forwardAbort = () => monitorAbort.abort();
-    if (opts.abortSignal.aborted) {
-      forwardAbort();
-    } else {
-      opts.abortSignal.addEventListener("abort", forwardAbort, { once: true });
-      removeAbortListener = () => opts.abortSignal?.removeEventListener("abort", forwardAbort);
-    }
-  }
+  const abortSignal = opts.abortSignal
+    ? AbortSignal.any([opts.abortSignal, monitorAbort.signal])
+    : monitorAbort.signal;
 
   const ingress: IrcIngressMonitor = createIrcIngressMonitor({
     accountId: account.accountId,
@@ -79,7 +73,7 @@ export async function monitorIrcProvider(
       context: { connectedNick: string; connectionEpoch: string },
     ) => {
       const activeClient = client;
-      if (!activeClient || stopped || monitorAbort.signal.aborted) {
+      if (!activeClient || stopped || abortSignal.aborted) {
         return {
           kind: "failed-retryable",
           error: new Error("IRC transport disconnected before ingress dispatch."),
@@ -112,13 +106,13 @@ export async function monitorIrcProvider(
         turnAdoptionLifecycle,
         sendReply: async (target, text) => {
           const replyClient = client;
-          if (!replyClient || !replyClient.isReady() || stopped || monitorAbort.signal.aborted) {
+          if (!replyClient || !replyClient.isReady() || stopped || abortSignal.aborted) {
             throw new Error("IRC transport disconnected before reply send.");
           }
           if (!message.isGroup && context.connectionEpoch !== activeConnectionEpoch) {
             throw new Error("IRC connection changed before private reply send.");
           }
-          replyClient.sendPrivmsg(target, text);
+          await replyClient.sendPrivmsg(target, text);
           opts.statusSink?.({ lastOutboundAt: Date.now() });
           core.channel.activity.record({
             channel: "irc",
@@ -131,47 +125,46 @@ export async function monitorIrcProvider(
     },
   });
 
-  function scheduleReconnect() {
-    if (stopped || monitorAbort.signal.aborted || reconnectTimer) {
-      return;
+  function scheduleReconnect(): number | undefined {
+    if (stopped || abortSignal.aborted || reconnectTimer) {
+      return undefined;
     }
+    opts.statusSink?.({ connected: false, lifecycle: "recovering" });
+    const delayMs = reconnectBackoff.nextDelayMs();
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       void connect().catch((error: unknown) => {
-        if (stopped || monitorAbort.signal.aborted) {
+        if (stopped || abortSignal.aborted) {
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
         logger.error(`[${account.accountId}] IRC reconnect failed: ${message}`);
+        opts.statusSink?.({ lastError: message });
         scheduleReconnect();
       });
-    }, IRC_MONITOR_RECONNECT_DELAY_MS);
+    }, delayMs);
+    return delayMs;
   }
 
   async function connect() {
-    if (stopped || monitorAbort.signal.aborted) {
+    if (stopped || abortSignal.aborted) {
       return;
     }
     const ingressConnection = ingress.openConnection();
     const nextClient = await connectIrcClient(
       buildIrcConnectOptions(account, {
         channels: account.config.channels,
-        abortSignal: monitorAbort.signal,
-        onLine: (line) => {
-          if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] << ${line}`);
-          }
-        },
+        abortSignal,
         onNotice: (text, target) => {
           if (core.logging.shouldLogVerbose()) {
-            logger.debug?.(`[${account.accountId}] notice ${target ?? ""}: ${text}`);
+            logger.debug?.(`[${account.accountId}] notice ${target ?? ""} len=${text.length}`);
           }
         },
         onError: (error) => {
           logger.error(`[${account.accountId}] IRC error: ${error.message}`);
         },
         onDisconnect: () => {
-          if (stopped || monitorAbort.signal.aborted) {
+          if (stopped || abortSignal.aborted) {
             return;
           }
           ingressPause = ingress.pause();
@@ -179,10 +172,13 @@ export async function monitorIrcProvider(
             activeConnectionEpoch = null;
           }
           client = null;
-          logger.warn?.(
-            `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
-          );
-          scheduleReconnect();
+          opts.statusSink?.({ lastDisconnect: { at: Date.now() } });
+          const delayMs = scheduleReconnect();
+          if (delayMs !== undefined) {
+            logger.warn?.(
+              `[${account.accountId}] IRC connection closed; reconnecting in ${delayMs}ms`,
+            );
+          }
         },
         onPrivmsg: async (event) => {
           await ingressConnection.accept(event.rawLine, event.connectedNick);
@@ -201,7 +197,7 @@ export async function monitorIrcProvider(
         },
       }),
     );
-    if (stopped || monitorAbort.signal.aborted) {
+    if (stopped || abortSignal.aborted) {
       nextClient.quit("shutdown");
       return;
     }
@@ -215,6 +211,8 @@ export async function monitorIrcProvider(
       return;
     }
     ingress.start();
+    reconnectBackoff.markConnected();
+    opts.statusSink?.(channelReadyPatch());
 
     logger.info(
       `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${nextClient.nick}`,
@@ -224,8 +222,6 @@ export async function monitorIrcProvider(
   try {
     await connect();
   } catch (error) {
-    removeAbortListener?.();
-    removeAbortListener = null;
     await ingress.stop();
     throw error;
   }
@@ -235,9 +231,7 @@ export async function monitorIrcProvider(
     stop: () => {
       stopTask ??= (async () => {
         stopped = true;
-        removeAbortListener?.();
-        removeAbortListener = null;
-        if (!monitorAbort.signal.aborted) {
+        if (!abortSignal.aborted) {
           monitorAbort.abort();
         }
         if (reconnectTimer) {

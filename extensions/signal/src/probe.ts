@@ -1,6 +1,9 @@
-// Signal plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type SignalTransportKind, signalCheck, signalRpcRequest } from "./client-adapter.js";
 import { detectSignalTransport } from "./transport-detection.js";
@@ -12,26 +15,32 @@ export type SignalProbe = BaseProbeResult & {
 };
 
 function parseSignalVersion(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
+  const directVersion = normalizeOptionalString(value);
+  if (directVersion) {
+    return directVersion;
   }
   if (typeof value === "object" && value !== null) {
-    const version = (value as { version?: unknown }).version;
-    if (typeof version === "string" && version.trim()) {
-      return version.trim();
+    const { version, versions } = value as { version?: unknown; versions?: unknown };
+    const normalizedVersion = normalizeOptionalString(version);
+    if (normalizedVersion) {
+      return normalizedVersion;
     }
+    return normalizeTrimmedStringList(versions).join(", ") || null;
   }
   return null;
 }
 
-export async function probeSignal(
+type SignalProbeOptions = {
+  transportKind?: SignalTransportKind;
+  /** @deprecated Pass transportKind after resolving the account transport. */
+  apiMode?: "auto" | "native" | "container";
+};
+
+async function probeSignalTransport(
   baseUrl: string,
   timeoutMs: number,
-  options: {
-    transportKind?: SignalTransportKind;
-    /** @deprecated Pass transportKind after resolving the account transport. */
-    apiMode?: "auto" | "native" | "container";
-  } = {},
+  options: SignalProbeOptions,
+  account?: string,
 ): Promise<SignalProbe> {
   return await runChannelProbe(undefined, async () => {
     const result: Omit<SignalProbe, "elapsedMs"> = {
@@ -46,7 +55,10 @@ export async function probeSignal(
     } catch (error) {
       return { ...result, error: formatErrorMessage(error) };
     }
-    const check = await signalCheck(baseUrl, timeoutMs, { transportKind });
+    const check = await signalCheck(baseUrl, timeoutMs, {
+      transportKind,
+      ...(account && transportKind === "container" ? { account } : {}),
+    });
     if (!check.ok) {
       return {
         ...result,
@@ -64,17 +76,37 @@ export async function probeSignal(
     } catch (error) {
       result.error = formatErrorMessage(error);
     }
-    return { ...result, ok: true, status: check.status ?? null };
+    return { ...result, ok: result.error === null, status: check.status ?? null };
   });
+}
+
+export async function probeSignal(
+  baseUrl: string,
+  timeoutMs: number,
+  options: SignalProbeOptions = {},
+): Promise<SignalProbe> {
+  return await probeSignalTransport(baseUrl, timeoutMs, options);
+}
+
+export async function probeSignalAccount(params: {
+  baseUrl: string;
+  timeoutMs: number;
+  transportKind: SignalTransportKind;
+  account?: string;
+}): Promise<SignalProbe> {
+  // Container /about can succeed while this account's receive WebSocket cannot upgrade.
+  return await probeSignalTransport(
+    params.baseUrl,
+    params.timeoutMs,
+    { transportKind: params.transportKind },
+    params.account,
+  );
 }
 
 async function resolveProbeTransportKind(
   baseUrl: string,
   timeoutMs: number,
-  options: {
-    transportKind?: SignalTransportKind;
-    apiMode?: "auto" | "native" | "container";
-  },
+  options: SignalProbeOptions,
 ): Promise<SignalTransportKind> {
   if (options.transportKind) {
     return options.transportKind;

@@ -1,144 +1,380 @@
-import type { GatewayHelloOk } from "../api/gateway.ts";
-import type { UpdateAvailable } from "../api/types.ts";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
+import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
+import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { t } from "../i18n/index.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
+import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
 
 export type ApplicationStatusBanner = {
+  source?: "read";
   tone: "danger" | "warn" | "info";
   text: string;
 };
 
-export const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
-const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
-export const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
-export const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
-export const UPDATE_HANDOFF_POLL_MS = 1_000;
-export const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
-const PENDING_UPDATE_HANDOFF_REASONS = new Set([
-  UPDATE_HANDOFF_STARTED_REASON,
-  UPDATE_RESTART_HEALTH_PENDING_REASON,
-]);
+export type RecordedUpdateAttempt = {
+  timestampMs: number;
+  status: string;
+  reason: string;
+  installKind: string | null;
+  beforeVersion: string | null;
+  beforeSha: string | null;
+  afterVersion: string | null;
+  afterSha: string | null;
+  failure: UpdateFailureCause | null;
+};
 
-export type UpdateRestartStatusResponse = {
-  sentinel?: {
-    kind?: string;
-    status?: string;
-    stats?: {
-      reason?: string | null;
-      after?: { version?: string | null } | null;
-    } | null;
+export type UpdateFailureTriage = {
+  id: string;
+  outcome: "failed" | "unknown";
+  attempt: RecordedUpdateAttempt | null;
+  banner: ApplicationStatusBanner;
+  reconciledRecord?: UpdateOutcomeRecord;
+};
+
+type UpdateOutcomeRecord = { id: string | null; timestampMs: number | null };
+
+export type UpdateTriageAdmission = {
+  isCurrent: () => boolean;
+  admit: () => boolean;
+};
+
+const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
+  dirty: "updates.failureReasons.dirty",
+  "no-upstream": "updates.failureReasons.noUpstream",
+  "not-git-install": "updates.failureReasons.notGitInstall",
+  "not-openclaw-root": "updates.failureReasons.notOpenclawRoot",
+  "deps-install-failed": "updates.failureReasons.depsInstallFailed",
+  "build-failed": "updates.failureReasons.buildFailed",
+  "build-dirty": "updates.failureReasons.buildDirty",
+  "ui-build-failed": "updates.failureReasons.uiBuildFailed",
+  "global-install-failed": "updates.failureReasons.globalInstallFailed",
+  "restart-disabled": "updates.failureReasons.restartDisabled",
+  "restart-unavailable": "updates.failureReasons.restartUnavailable",
+  "external-supervisor-update-required": "updates.failureReasons.externalSupervisorUpdateRequired",
+  "restart-unhealthy": "updates.failureReasons.restartUnhealthy",
+  "restart-revision-mismatch": "updates.failureReasons.restartRevisionMismatch",
+  "restart-revision-unavailable": "updates.failureReasons.restartRevisionUnavailable",
+  "already-current": "updates.failureReasons.alreadyCurrent",
+  "managed-service-handoff-already-running":
+    "updates.failureReasons.managedServiceHandoffAlreadyRunning",
+  "managed-service-handoff-unavailable": "updates.failureReasons.managedServiceHandoffUnavailable",
+  "doctor-failed": "updates.failureReasons.doctorFailed",
+  // The detached helper owns these; its output never reaches the gateway log,
+  // so the default "see the gateway logs" guidance would send operators nowhere.
+  "managed-service-handoff-failed": "updates.failureReasons.managedServiceHandoffFailed",
+  "managed-service-handoff-spawn-failed": "updates.failureReasons.managedServiceHandoffSpawnFailed",
+  "managed-service-handoff-helper-failed": "updates.failureReasons.managedServiceHandoffFailed",
+  "managed-service-handoff-parent-timeout":
+    "updates.failureReasons.managedServiceHandoffParentTimeout",
+};
+// One line is enough to name the cause; the full tail belongs in the CLI.
+const MAX_UPDATE_FAILURE_CAUSE_CHARS = 180;
+
+type UpdateSentinelStep = {
+  name?: string | null;
+  log?: {
+    stdoutTail?: string | null;
+    stderrTail?: string | null;
+    exitCode?: number | null;
   } | null;
 };
 
+export type UpdateRestartStatusResponse = {
+  activeRun?: UpdateRunRecord;
+  lastRun?: UpdateRunRecord;
+  sentinel?: {
+    kind?: string;
+    status?: string;
+    ts?: number;
+    stats?: {
+      mode?: string | null;
+      reason?: string | null;
+      runId?: string | null;
+      handoffId?: string | null;
+      before?: { sha?: string | null; version?: string | null } | null;
+      after?: { sha?: string | null; version?: string | null } | null;
+      steps?: UpdateSentinelStep[] | null;
+    } | null;
+  } | null;
+  updateAvailable?: UpdateAvailable | null;
+  schedule?: UpdateScheduleState;
+};
+
+type UpdateFailureCause = { step: string; detail: string };
+
+function readUpdateAttemptId(sentinel: UpdateRestartStatusResponse["sentinel"]): string | null {
+  const id = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
+  return id && id.length <= 256 ? id : null;
+}
+
+export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sentinel"]): {
+  attempt: RecordedUpdateAttempt | null;
+  banner: ApplicationStatusBanner | null;
+  failure: UpdateFailureTriage | null;
+} | null {
+  if (sentinel?.kind !== "update" || !sentinel.status) {
+    return null;
+  }
+  const stats = sentinel.stats;
+  const outcome = classifyUpdateOutcome({
+    status: sentinel.status,
+    reason: stats?.reason ?? undefined,
+  });
+  const showResult = outcome !== "succeeded" && outcome !== "pending";
+  const cause = showResult ? readUpdateFailureCause(sentinel) : null;
+  const attempt =
+    showResult && typeof sentinel.ts === "number"
+      ? {
+          timestampMs: sentinel.ts,
+          status: sentinel.status,
+          reason: stats?.reason?.trim() || "unexpected-error",
+          installKind: stats?.mode?.trim() || null,
+          beforeVersion: stats?.before?.version?.trim() || null,
+          beforeSha: stats?.before?.sha?.trim() || null,
+          afterVersion: stats?.after?.version?.trim() || null,
+          afterSha: stats?.after?.sha?.trim() || null,
+          failure: cause,
+        }
+      : null;
+  const banner = showResult
+    ? resolveUpdateStatusBanner({
+        status: sentinel.status,
+        reason: stats?.reason ?? undefined,
+        cause,
+      })
+    : null;
+  if (banner && outcome === "failed") {
+    banner.text += ` ${t("updates.triage.hostHint")}`;
+  }
+  const record = {
+    id:
+      readUpdateAttemptId(sentinel) ??
+      (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}` : null),
+    timestampMs: sentinel.ts ?? null,
+  };
+  const failure: UpdateFailureTriage | null =
+    outcome === "failed" && record.id && banner
+      ? { id: record.id, outcome, attempt, banner, reconciledRecord: record }
+      : null;
+  return { attempt, banner, failure };
+}
+
+function lastLogLine(tail: string | null | undefined): string | null {
+  // Redact before clipping: a truncated URL can lose its credential delimiter.
+  const lines = formatUiExternalText(tail)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const last = lines.at(-1);
+  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+}
+
+function readUpdateFailureCause(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): UpdateFailureCause | null {
+  const steps = sentinel?.stats?.steps;
+  // The run stops at its first failure, so the last non-zero exit is the cause.
+  const failed = Array.isArray(steps)
+    ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
+    : undefined;
+  const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
+  const step = failed?.name?.trim();
+  return step && detail ? { step, detail } : null;
+}
+
 export type UpdateRunResponse = {
+  runId?: string;
   ok?: boolean;
   result?: {
     status?: string;
     reason?: string;
-    after?: { version?: string | null } | null;
+    before?: { sha?: string | null; version?: string | null } | null;
+    after?: { sha?: string | null; version?: string | null } | null;
   };
   handoff?: { status?: string };
   restart?: { coalesced?: boolean } | null;
+  sentinel?: { payload?: UpdateRestartStatusResponse["sentinel"] } | null;
 };
 
-export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
-  const snapshot = hello?.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
-    return null;
-  }
-  const update = (snapshot as { updateAvailable?: unknown }).updateAvailable;
-  if (!update || typeof update !== "object" || Array.isArray(update)) {
-    return null;
-  }
-  const value = update as Partial<UpdateAvailable>;
-  return typeof value.currentVersion === "string" &&
-    typeof value.latestVersion === "string" &&
-    typeof value.channel === "string"
-    ? {
-        currentVersion: value.currentVersion,
-        latestVersion: value.latestVersion,
-        channel: value.channel,
+export function createUpdateStatusRefresher(params: {
+  getClient: () => GatewayBrowserClient | null;
+  getEpoch: () => number;
+  getAuthorization: () => GatewayHelloOk["auth"] | undefined;
+  canRefresh: () => boolean;
+  isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onRefreshing: (refreshing: boolean) => void;
+  onStatus: (response: UpdateRestartStatusResponse) => void;
+  onError: (error: unknown, mode: "manual" | "completion") => void;
+}) {
+  const refresh = async (
+    mode: "manual" | "background" | "completion" = "manual",
+  ): Promise<boolean> => {
+    const client = params.getClient();
+    const epoch = params.getEpoch();
+    // A later admin grant cannot authorize a response issued under a revoked grant.
+    const authorization = params.getAuthorization();
+    if (!client || !params.canRefresh() || !params.isCurrent(client, epoch)) {
+      return false;
+    }
+    const refreshCheckout = mode === "manual";
+    const isCurrent = () =>
+      params.isCurrent(client, epoch) &&
+      params.getAuthorization() === authorization &&
+      params.canRefresh();
+    if (refreshCheckout) {
+      params.onRefreshing(true);
+    }
+    try {
+      const pending = client
+        .request<UpdateRestartStatusResponse>(
+          "update.status",
+          refreshCheckout ? { refreshCheckout: true } : {},
+          // Checkout discovery uses the Gateway's Git command budgets.
+          { timeoutMs: refreshCheckout ? null : 5_000 },
+        )
+        .catch((error: unknown) => {
+          if (mode !== "background" && isCurrent()) {
+            params.onError(error, mode);
+          }
+          return null;
+        });
+      // Start discovery first, but do not make progress wait for network Git.
+      const progress = refreshCheckout ? refresh("background") : null;
+      const response = await pending;
+      if (response && isCurrent()) {
+        if (refreshCheckout) {
+          params.onError(null, "manual");
+          params.onStatus(response);
+          // The fast read may predate the fetch. Reconcile the target before
+          // the caller opens confirmation.
+          await progress;
+          return isCurrent() && (await refresh("completion"));
+        }
+        params.onError(null, "completion");
+        params.onStatus(response);
+        return true;
       }
-    : null;
+      return false;
+    } finally {
+      if (refreshCheckout && params.isCurrent(client, epoch)) {
+        params.onRefreshing(false);
+      }
+    }
+  };
+  return refresh;
+}
+
+/** Retained pre-ledger sentinels remain readable across a stable upgrade. */
+export function projectUpdateStatusResponse(
+  response: UpdateRestartStatusResponse,
+  current: {
+    updateStatusBanner: ApplicationStatusBanner | null;
+    recordedUpdateAttempt: RecordedUpdateAttempt | null;
+    heldUpdateCampaignId: string | null;
+    updateSchedule?: UpdateScheduleState | null;
+  },
+) {
+  const result = projectUpdateSentinel(response.sentinel);
+  return {
+    failure: result?.failure ?? null,
+    updateStatusBanner: result ? result.banner : current.updateStatusBanner,
+    recordedUpdateAttempt: result ? result.attempt : current.recordedUpdateAttempt,
+    ...projectUpdateCheckoutResponse(response, current),
+  };
+}
+
+function projectUpdateCheckoutResponse(
+  response: UpdateRestartStatusResponse,
+  current: { heldUpdateCampaignId: string | null; updateSchedule?: UpdateScheduleState | null },
+) {
+  const updateSchedule = Object.hasOwn(response, "schedule")
+    ? readUpdateScheduleValue(response.schedule)
+    : undefined;
+  return {
+    ...(Object.hasOwn(response, "updateAvailable")
+      ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
+      : {}),
+    ...(updateSchedule !== undefined
+      ? {
+          updateSchedule,
+          heldUpdateCampaignId: resolveHeldUpdateCampaignId(
+            updateSchedule,
+            current.heldUpdateCampaignId,
+          ),
+        }
+      : {}),
+  };
+}
+
+export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTriage | null {
+  if (
+    isAcknowledgedAbandonedUpdateRun(run) ||
+    (run.status !== "failed" && run.status !== "rolled-back")
+  ) {
+    return null;
+  }
+  const step = run.steps.findLast((entry) => entry.status === "failed");
+  return {
+    id: run.runId,
+    reconciledRecord: { id: run.runId, timestampMs: run.finishedAtMs ?? run.updatedAtMs },
+    outcome: "failed",
+    banner: {
+      tone: run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON ? "warn" : "danger",
+      text: renderUpdateRunReport(run).markdown,
+    },
+    attempt: {
+      timestampMs: run.finishedAtMs ?? run.updatedAtMs,
+      status: run.status,
+      reason: run.reason ?? "unexpected-error",
+      installKind: run.target.kind ?? null,
+      beforeVersion: run.before.version ?? null,
+      beforeSha: run.before.sha ?? null,
+      afterVersion: run.after.version ?? null,
+      afterSha: run.after.sha ?? null,
+      failure: step ? { step: step.step, detail: step.detail ?? "" } : null,
+    },
+  };
+}
+
+export function resolveUpdateStatusCheckBanner(error: unknown): ApplicationStatusBanner {
+  return {
+    tone: "warn",
+    text: t("updates.checkError", { error: formatUiError(error) }),
+  };
 }
 
 export function resolveUpdateStatusBanner(params: {
   status?: string;
   reason?: string;
+  cause?: UpdateFailureCause | null;
 }): ApplicationStatusBanner {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const guidance =
-    {
-      dirty: "Commit or stash changes, then retry.",
-      "no-upstream": "Set an upstream branch, then retry.",
-      "not-git-install":
-        "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
-      "not-openclaw-root":
-        "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
-      "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
-      "build-failed": "Build failed. Fix the build error and retry.",
-      "build-dirty":
-        "The selected revision's build changed checkout files. Retry with a revision that includes its generated artifacts.",
-      "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
-      "global-install-failed":
-        "The global package install did not verify on disk. Retry or reinstall from the CLI.",
-      "restart-disabled":
-        "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry.",
-      "restart-unavailable":
-        "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
-      "restart-unhealthy":
-        "The replacement process never became healthy. The previous process stayed up so you can recover.",
-      "managed-service-handoff-already-running":
-        "Another managed update is already running. Wait for it to complete, then refresh update status.",
-      "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
-    }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
+  const guidanceKey = Object.hasOwn(UPDATE_FAILURE_REASON_KEYS, reason)
+    ? UPDATE_FAILURE_REASON_KEYS[reason]
+    : undefined;
+  const guidance = t(guidanceKey ?? "updates.failureReasons.default");
+  const cause = params.cause;
   return {
     tone: status === "skipped" ? "warn" : "danger",
-    text: `Update ${status}: ${reason}. ${guidance}`,
+    // A recorded cause names what actually broke; the reason slug only names
+    // which step owned it.
+    text: cause
+      ? `${t("updates.failedAtStep", { step: cause.step, cause: cause.detail })} ${guidance}`
+      : t("updates.status", { status, reason, guidance }),
   };
 }
 
-export function resolveUpdateVerificationBanner(params: {
-  expectedVersion: string;
-  actualVersion: string | null;
-}): ApplicationStatusBanner {
-  const actualSuffix = params.actualVersion
-    ? ` Expected v${params.expectedVersion}, running v${params.actualVersion}.`
-    : "";
+export function resolveUnknownUpdateOutcomeBanner(): ApplicationStatusBanner {
   return {
     tone: "danger",
-    text: `Update installed but running version did not change — restart may have been blocked.${actualSuffix}`,
+    text: t("updates.outcomeUnknown"),
   };
-}
-
-export function resolvePostRestartUpdateBanner(
-  reason: string | null | undefined,
-): ApplicationStatusBanner {
-  const normalizedReason = reason?.trim() || "restart-unhealthy";
-  const guidance =
-    normalizedReason === "restart-unhealthy"
-      ? "The replacement process never became healthy and the previous process stayed up."
-      : "Check the gateway logs for the replacement failure.";
-  return {
-    tone: "danger",
-    text: `Update error: ${normalizedReason}. ${guidance}`,
-  };
-}
-
-export function resolvePendingUpdateHandoffTimeoutBanner(): ApplicationStatusBanner {
-  return {
-    tone: "danger",
-    text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
-  };
-}
-
-export function isPendingUpdateHandoffSentinel(
-  sentinel: UpdateRestartStatusResponse["sentinel"],
-): boolean {
-  const reason = sentinel?.stats?.reason;
-  return (
-    sentinel?.kind === "update" &&
-    sentinel.status === "skipped" &&
-    typeof reason === "string" &&
-    PENDING_UPDATE_HANDOFF_REASONS.has(reason)
-  );
 }

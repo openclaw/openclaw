@@ -1,0 +1,601 @@
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { getCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  patchSessionEntryCore,
+  resolveSessionTranscriptDatabasePath,
+} from "../../config/sessions/session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import type {
+  SessionTranscriptReadScope,
+  SessionTranscriptRuntimeTarget,
+} from "../../config/sessions/session-accessor.types.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  SessionTranscriptWriterClaimReboundError,
+  getOwnedSessionTranscriptWriterFence,
+  withSessionTranscriptWriteAssertion,
+} from "../../config/sessions/transcript-write-context.js";
+import { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { resolveStateDir } from "../../config/state-dir.js";
+import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type { StopReason } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
+import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
+import {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
+} from "../harness/agent-end-side-effects.js";
+import { buildAgentRunBlockedUserMessage } from "../harness/before-agent-run.js";
+import {
+  finalizeHarnessContextEngineTurn,
+  runHarnessContextEngineMaintenance,
+} from "../harness/context-engine-lifecycle.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
+import type { AgentMessage } from "../runtime/index.js";
+import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+
+const log = createSubsystemLogger("agents/cli-runner");
+
+export function buildCliHookUserMessage(prompt: string): Extract<AgentMessage, { role: "user" }> {
+  return {
+    role: "user",
+    content: prompt,
+    timestamp: Date.now(),
+  };
+}
+
+/** Interrupted turns persist as aborted so replayed history never treats partial text as complete. */
+export function resolveCliAssistantStopReason(output: CliOutput): StopReason {
+  return output.terminalInterruption ? "aborted" : "stop";
+}
+
+export function buildCliHookAssistantMessage(params: {
+  text: string;
+  provider: string;
+  model: string;
+  usage?: CliUsage;
+  stopReason: StopReason;
+}): unknown {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: params.text }],
+    api: "responses",
+    provider: params.provider,
+    model: params.model,
+    ...(params.usage ? { usage: params.usage } : {}),
+    stopReason: params.stopReason,
+    timestamp: Date.now(),
+  };
+}
+
+function isAgentMessage(value: unknown): value is AgentMessage {
+  return Boolean(value && typeof value === "object" && "role" in value);
+}
+
+type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
+
+export async function runCliAgentEndHook(
+  params: RunCliAgentParams,
+  hookParams: CliAgentEndHookParams,
+): Promise<void> {
+  if (!params.messageChannel && !params.messageProvider) {
+    await awaitAgentEndSideEffects(hookParams);
+    return;
+  }
+  await runAgentEndSideEffectsAsync(hookParams);
+}
+
+export async function persistApprovedCliUserTurnTranscript(
+  params: RunCliAgentParams,
+): Promise<boolean> {
+  const recorder = params.userTurnTranscriptRecorder;
+  const reusingPersistedTurn = params.suppressNextUserMessagePersistence === true;
+  if (!recorder || (reusingPersistedTurn && !recorder.hasPersisted())) {
+    return recorder?.isBlocked() === true;
+  }
+
+  const persisted = await recorder.persistApproved({
+    cwd: params.cwd ?? params.workspaceDir,
+  });
+  if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
+    // A prepared user row can be rejected by before_message_write. Preserve
+    // that terminal decision so outer transcript mirrors do not retry it.
+    recorder.markBlocked();
+  }
+  if (persisted && !reusingPersistedTurn) {
+    try {
+      const notification = params.onUserMessagePersisted?.(persisted.message);
+      if (notification) {
+        void Promise.resolve(notification).catch((error: unknown) => {
+          log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+        });
+      }
+    } catch (error) {
+      log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+    }
+  }
+  return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
+}
+
+export async function persistCliAssistantTranscript(params: {
+  runParams: RunCliAgentParams;
+  text: string;
+  modelId: string;
+  usage?: CliUsage;
+  stopReason: StopReason;
+  yielded?: true;
+}): Promise<{
+  owned: boolean;
+  idempotencyKey?: string;
+  terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
+}> {
+  const { runParams } = params;
+  if (runParams.currentInboundEventKind === "room_event" || !params.text) {
+    const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+    return {
+      owned: runParams.currentInboundEventKind === "room_event",
+      ...(admission ? { terminalAnchor: admission } : {}),
+    };
+  }
+  if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
+    return { owned: false };
+  }
+  const idempotencyKey = cliAssistantItemId(runParams.runId);
+  let committed = false;
+  try {
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey: runParams.sessionKey,
+      agentId: runParams.agentId,
+      expectedSessionId: runParams.sessionId,
+      ...(runParams.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: runParams.expectedLifecycleRevision }
+        : {}),
+      ...(runParams.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: runParams.expectedWriterRunId }
+        : {}),
+      storePath: runParams.storePath,
+      idempotencyKey,
+      runId: runParams.runId,
+      config: runParams.config,
+      onMessageCommitted: () => {
+        committed = true;
+      },
+      beforeMessageWrite: (write) => {
+        const message = runAgentHarnessBeforeMessageWriteHook({
+          ...write,
+          message: projectAgentHarnessTranscriptMessageForDisplay({
+            hidden: false,
+            inputProvenance: runParams.inputProvenance,
+            message: write.message,
+          }),
+          prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
+        });
+        return message
+          ? projectAgentHarnessTranscriptMessageForDisplay({
+              hidden: false,
+              inputProvenance: runParams.inputProvenance,
+              message,
+            })
+          : null;
+      },
+      message: {
+        ...buildAssistantMessage({
+          model: {
+            api: "cli",
+            provider: runParams.provider,
+            id: params.modelId,
+          },
+          content: [{ type: "text", text: params.text }],
+          stopReason: params.stopReason,
+          usage: buildUsageWithNoCost({
+            input: params.usage?.input,
+            output: params.usage?.output,
+            cacheRead: params.usage?.cacheRead,
+            cacheWrite: params.usage?.cacheWrite,
+            totalTokens: params.usage?.total,
+          }),
+        }),
+        // A paused turn owns visible progress, not a final answer. Keep the
+        // existing keyed-segment contract without hiding narration or media.
+        ...(params.yielded && params.stopReason === "stop"
+          ? {
+              openclawStreamFallback: {
+                replacementText: params.text,
+                source: "segment",
+                itemId: runParams.runId,
+              },
+            }
+          : {}),
+      },
+    });
+    if (!result.ok) {
+      log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
+      return { owned: result.code === "blocked" || result.code === "session-rebound" };
+    }
+    return {
+      owned: true,
+      idempotencyKey,
+      ...(result.anchor ? { terminalAnchor: result.anchor } : {}),
+    };
+  } catch (error) {
+    log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
+    return committed ? { owned: true, idempotencyKey } : { owned: false };
+  }
+}
+
+async function notifyCliUserMessagePersisted(
+  params: RunCliAgentParams,
+  message: Extract<AgentMessage, { role: "user" }>,
+  context: string,
+): Promise<void> {
+  try {
+    await Promise.resolve(params.onUserMessagePersisted?.(message));
+  } catch (err) {
+    log.warn(`${context} notification failed: ${formatErrorMessage(err)}`);
+  }
+}
+
+async function prepareCliBlockFallbackWrite(
+  target: SessionTranscriptRuntimeTarget,
+  expectedEntry: InternalSessionEntry,
+  committedSource: CapturedSessionEntryReadSource | undefined,
+) {
+  const identity = { ...target };
+  const memory = getSessionActorStorageBinding(identity);
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const readScope = { ...identity, env } satisfies SessionTranscriptReadScope;
+  const assertOwnedWrite = captureOwnedTranscriptWriteAssertion(identity);
+  const fence = getOwnedSessionTranscriptWriterFence({
+    sessionKey: identity.sessionKey,
+    sessionTarget: identity,
+  });
+  if (memory) {
+    const cliWriter = getCliHistoryWriter({ ...identity, storePath: memory.path });
+    const assertCurrent = () => {
+      assertOwnedWrite();
+      cliWriter?.assertCurrent();
+      const current = memory.actor.snapshot(memory.authority)?.entry;
+      if (
+        !current ||
+        current.sessionId !== identity.sessionId ||
+        current.lifecycleRevision !== expectedEntry.lifecycleRevision ||
+        current.activeWriterRunId !== expectedEntry.activeWriterRunId ||
+        (fence?.expectedLifecycleRevision !== undefined &&
+          current.lifecycleRevision !== fence.expectedLifecycleRevision) ||
+        (fence?.expectedWriterRunId !== undefined &&
+          current.activeWriterRunId !== fence.expectedWriterRunId)
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+    };
+    return { readScope: { ...identity, storePath: memory.path }, assertCurrent, release() {} };
+  }
+  const retainWrite = (source: CapturedSessionEntryReadSource, captured: InternalSessionEntry) => {
+    const { databaseIdentity } = source;
+    if (typeof databaseIdentity !== "string") {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+    const { lifecycleRevision, activeWriterRunId } = expectedEntry;
+    const matches = (current: InternalSessionEntry | undefined) =>
+      current?.sessionId === identity.sessionId &&
+      current.lifecycleRevision === lifecycleRevision &&
+      current.activeWriterRunId === activeWriterRunId &&
+      (fence?.expectedLifecycleRevision === undefined ||
+        current.lifecycleRevision === fence.expectedLifecycleRevision) &&
+      (fence?.expectedWriterRunId === undefined ||
+        current.activeWriterRunId === fence.expectedWriterRunId);
+    if (!matches(captured)) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+    const retained = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${databaseIdentity}`,
+      sessionKey: resolveSqliteSessionKey(identity.sessionKey, identity.agentId),
+      entry: captured,
+      matches: (_before, current) => matches(current),
+    });
+    const cliWriter = getCliHistoryWriter({ ...identity, storePath: source.path });
+    return {
+      readScope,
+      assertCurrent() {
+        assertOwnedWrite();
+        cliWriter?.assertCurrent();
+        if (!retained.isCurrent()) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+      },
+      release: retained.release,
+    };
+  };
+  if (committedSource) {
+    return retainWrite(committedSource, expectedEntry);
+  }
+  let write: ReturnType<typeof retainWrite> | undefined;
+  try {
+    return await withSessionEntryReadOnlyInWorker(
+      readScope,
+      assertOwnedWrite,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        if (!read.value || !owner.source) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+        write = retainWrite(owner.source, read.value);
+        return write;
+      },
+    );
+  } catch (error) {
+    // The read owner can reject after the callback has retained the write predicate.
+    write?.release();
+    throw error;
+  }
+}
+
+export async function persistCliRunBlock(
+  params: RunCliAgentParams,
+  block: { message: string; pluginId: string },
+): Promise<void> {
+  const redactedUserMessage = buildAgentRunBlockedUserMessage(params.runId, {
+    message: block.message,
+    blockedBy: block.pluginId,
+  });
+  try {
+    const persisted = await params.userTurnTranscriptRecorder?.persistBlocked(redactedUserMessage);
+    if (persisted) {
+      await notifyCliUserMessagePersisted(
+        params,
+        persisted.message,
+        "before_agent_run block user-turn persistence",
+      );
+      return;
+    }
+  } catch (err) {
+    log.warn(
+      `before_agent_run block: failed to persist canonical CLI user message: ${formatErrorMessage(
+        err,
+      )}`,
+    );
+  }
+
+  try {
+    const sessionManager = params.sessionManager;
+    if (!sessionManager) {
+      const sessionKey = params.sessionKey?.trim() || params.sessionId;
+      const targetAgentId = params.sessionTarget?.agentId;
+      const targetStorePath = params.sessionTarget?.storePath;
+      const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+        config: params.config ?? {},
+        sessionKey,
+        storePath: targetStorePath,
+      });
+      const explicitAlternateStoreAgentId =
+        targetAgentId &&
+        targetStorePath &&
+        !parseAgentSessionKey(sessionKey)?.agentId &&
+        targetStoreOwner.kind === "none"
+          ? targetAgentId
+          : undefined;
+      const agentId =
+        explicitAlternateStoreAgentId ??
+        resolveSessionAgentId({
+          agentId: targetAgentId ?? params.agentId,
+          config: params.config,
+          sessionKey,
+        });
+      const assertCallerCurrent = () => {
+        params.abortSignal?.throwIfAborted();
+        params.assertCurrent?.();
+      };
+      const memorySource = captureSessionActorStorageOwner(
+        { sessionKey, agentId, storePath: targetStorePath ?? params.storePath },
+        { assertCurrent: assertCallerCurrent, authorize() {} },
+      );
+      const sessionTarget = {
+        ...(params.sessionTarget ?? {
+          agentId,
+          sessionId: params.sessionId,
+          sessionKey,
+          storePath:
+            params.storePath ??
+            memorySource?.path ??
+            resolveSessionStorePathCore(params.config?.session?.store, {
+              agentId,
+            }),
+        }),
+      };
+      const memory = memorySource
+        ? await acquireSessionActorStorage(sessionTarget, {
+            create: !params.sessionEntry,
+            lifetime: { assertCurrent: assertCallerCurrent, assertReadable: assertCallerCurrent },
+            authority: { assertCurrent: assertCallerCurrent, authorize() {} },
+          })
+        : undefined;
+      if (memorySource && !memory) {
+        return;
+      }
+      const persist = async () => {
+        let committedSource: CapturedSessionEntryReadSource | undefined;
+        const persistedEntry = await patchSessionEntryCore(
+          sessionTarget,
+          (entry, patchContext) => {
+            if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
+              return null;
+            }
+            return {
+              sessionId: sessionTarget.sessionId,
+              updatedAt: Date.now(),
+            };
+          },
+          {
+            fallbackEntry: params.sessionEntry
+              ? undefined
+              : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
+            skipMaintenance: true,
+            onCommittedSource: (source) => {
+              committedSource = source;
+            },
+          },
+        );
+        if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
+          // Skip only this stale blocked-message write; the outer runner still returns blocked.
+          return;
+        }
+        const write = await prepareCliBlockFallbackWrite(
+          sessionTarget,
+          persistedEntry,
+          committedSource,
+        );
+        using _ = { [Symbol.dispose]: write.release };
+        if (!memory) {
+          const { restoreSessionColdTranscript } =
+            await import("../../config/sessions/session-cold-storage.js");
+          await restoreSessionColdTranscript(write.readScope, write.assertCurrent);
+        }
+        await withSessionTranscriptWriteAssertion(
+          write.readScope,
+          write.assertCurrent,
+          async () => {
+            const manager = await SessionManager.openAsync(write.readScope);
+            write.assertCurrent();
+            await manager.appendMessageAsync(redactedUserMessage);
+          },
+        );
+      };
+      try {
+        await (memory ? runWithSessionActorStorage(memory, persist) : persist());
+      } finally {
+        await memory?.actor.release();
+      }
+      return;
+    }
+    const target = sessionManager.getSessionTarget();
+    const assertOwnedWrite = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
+    const cliWriter = target
+      ? getCliHistoryWriter({ ...target, storePath: resolveSessionTranscriptDatabasePath(target) })
+      : undefined;
+    const assertCurrent = () => {
+      assertOwnedWrite?.();
+      cliWriter?.assertCurrent();
+    };
+    const append = () =>
+      withSessionManagerWrite(sessionManager, async () => {
+        assertCurrent();
+        await sessionManager.appendMessageAsync(redactedUserMessage);
+      });
+    await (target ? withSessionTranscriptWriteAssertion(target, assertCurrent, append) : append());
+  } catch (err) {
+    log.warn(
+      `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
+        err,
+      )}`,
+    );
+  }
+}
+
+export async function finalizeCliContextEngineTurn(params: {
+  context: PreparedCliRunContext;
+  historyMessages: unknown[];
+  assistantText: string;
+  terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
+  output: CliOutput;
+}): Promise<void> {
+  const { context } = params;
+  if (!context.contextEngine) {
+    return;
+  }
+
+  const { params: runParams } = context;
+  const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  if (runParams.onContextEngineTurnCandidate) {
+    if (admission && params.terminalAnchor) {
+      runParams.onContextEngineTurnCandidate({
+        boundary: { admission, terminal: params.terminalAnchor },
+        sessionIdUsed: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+        sessionTarget: runParams.sessionTarget,
+        promptError: false,
+        aborted:
+          params.output.terminalInterruption !== undefined ||
+          runParams.abortSignal?.aborted === true,
+        yieldAborted: false,
+        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+        runtimeContext: {
+          provider: runParams.modelProvider ?? runParams.provider,
+          modelId: context.modelId,
+          modelContextWindow: runParams.modelContextWindow,
+          tokenBudget: context.contextWindowInfo?.tokens,
+        },
+      });
+    }
+  } else {
+    const prePromptMessages = params.historyMessages.filter(isAgentMessage);
+    const turnMessages: AgentMessage[] = [];
+    if (context.contextEngineTurnPrompt) {
+      turnMessages.push(buildCliHookUserMessage(context.contextEngineTurnPrompt));
+    }
+    if (params.assistantText) {
+      turnMessages.push(
+        buildCliHookAssistantMessage({
+          text: params.assistantText,
+          provider: runParams.provider,
+          model: context.modelId,
+          usage: params.output.usage,
+          stopReason: resolveCliAssistantStopReason(params.output),
+        }) as AgentMessage,
+      );
+    }
+
+    const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+      backendId: context.backendResolved.id,
+    });
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: context.contextEngine,
+      promptError: false,
+      aborted:
+        params.output.terminalInterruption !== undefined || runParams.abortSignal?.aborted === true,
+      yieldAborted: false,
+      sessionIdUsed: runParams.sessionId,
+      sessionKey: runParams.sessionKey,
+      sessionTarget: runParams.sessionTarget,
+      sessionFile: runParams.sessionFile,
+      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+      messagesSnapshot: [...prePromptMessages, ...turnMessages],
+      prePromptMessageCount: prePromptMessages.length,
+      sessionManager: runParams.sessionManager,
+      config: context.contextEngineConfig,
+      contextEngineHostSupport,
+      providerId: runParams.provider,
+      modelId: context.modelId,
+      runMaintenance: async (maintenanceParams) =>
+        await runHarnessContextEngineMaintenance({
+          ...maintenanceParams,
+          onDeferredMaintenance: context.deferContextEngineDisposalUntil,
+          withSessionManagerRewriteLock: async (operation) => await operation(),
+        }),
+      warn: (message) => log.warn(message),
+    });
+  }
+}

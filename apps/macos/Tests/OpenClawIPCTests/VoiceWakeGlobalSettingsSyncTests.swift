@@ -3,7 +3,82 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized) struct VoiceWakeGlobalSettingsSyncTests {
+private actor VoiceWakeSyncDelaySequence {
+    private var calls = 0
+    private var firstStartedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstReleaseWaiter: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        self.calls += 1
+        guard self.calls == 1 else { return }
+        for waiter in self.firstStartedWaiters {
+            waiter.resume()
+        }
+        self.firstStartedWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            self.firstReleaseWaiter = continuation
+        }
+    }
+
+    func waitUntilFirstStarted() async {
+        guard self.calls == 0 else { return }
+        await withCheckedContinuation { continuation in
+            self.firstStartedWaiters.append(continuation)
+        }
+    }
+
+    func releaseFirst() {
+        self.firstReleaseWaiter?.resume()
+        self.firstReleaseWaiter = nil
+    }
+}
+
+private actor VoiceWakeSyncRecorder {
+    private let blockFirst: Bool
+    private let recorded = AsyncTestSignal()
+    private(set) var payloads: [[String]] = []
+    private var firstStartedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstReleaseWaiter: CheckedContinuation<Void, Never>?
+
+    init(blockFirst: Bool = false) {
+        self.blockFirst = blockFirst
+    }
+
+    func record(_ triggers: [String]) async {
+        self.payloads.append(triggers)
+        self.recorded.notify()
+        guard self.blockFirst, self.payloads.count == 1 else { return }
+        for waiter in self.firstStartedWaiters {
+            waiter.resume()
+        }
+        self.firstStartedWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            self.firstReleaseWaiter = continuation
+        }
+    }
+
+    func waitUntilFirstStarted() async {
+        guard self.payloads.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            self.firstStartedWaiters.append(continuation)
+        }
+    }
+
+    func releaseFirst() {
+        self.firstReleaseWaiter?.resume()
+        self.firstReleaseWaiter = nil
+    }
+
+    func waitForPayloadCount(_ expected: Int) async throws {
+        try await self.recorded.wait("\(expected) voice wake payloads") {
+            self.payloads.count >= expected
+        }
+    }
+}
+
+@Suite(.serialized, .testWaitLimit)
+@MainActor
+struct VoiceWakeGlobalSettingsSyncTests {
     private func voiceWakeChangedEvent(payload: OpenClawProtocol.AnyCodable) -> EventFrame {
         EventFrame(
             type: "event",
@@ -28,7 +103,7 @@ import Testing
             "computer",
         ]]))
 
-        await VoiceWakeGlobalSettingsSync.shared.handle(push: .event(evt))
+        VoiceWakeGlobalSettingsSync.shared.handle(push: .event(evt))
 
         let updated = await MainActor.run { AppStateStore.shared.swabbleTriggerWords }
         #expect(updated == ["openclaw", "computer"])
@@ -42,7 +117,7 @@ import Testing
         let previous = await applyTriggersAndCapturePrevious(["before"])
         let evt = self.voiceWakeChangedEvent(payload: OpenClawProtocol.AnyCodable(["unexpected": 123]))
 
-        await VoiceWakeGlobalSettingsSync.shared.handle(push: .event(evt))
+        VoiceWakeGlobalSettingsSync.shared.handle(push: .event(evt))
 
         let updated = await MainActor.run { AppStateStore.shared.swabbleTriggerWords }
         #expect(updated == ["before"])
@@ -50,5 +125,41 @@ import Testing
         await MainActor.run {
             AppStateStore.shared.applyGlobalVoiceWakeTriggers(previous)
         }
+    }
+
+    @Test func `cancelled trigger sync does not send stale payload`() async throws {
+        let delay = VoiceWakeSyncDelaySequence()
+        let recorder = VoiceWakeSyncRecorder()
+        let scheduler = VoiceWakeGlobalSyncScheduler(
+            delay: { await delay.wait() },
+            deliver: { await recorder.record($0) })
+
+        let stale = scheduler.schedule(["stale"])
+        await delay.waitUntilFirstStarted()
+        let current = scheduler.schedule(["current"])
+        await current.value
+        try await recorder.waitForPayloadCount(1)
+        await delay.releaseFirst()
+        await stale.value
+
+        #expect(await recorder.payloads == [["current"]])
+    }
+
+    @Test func `newest trigger sync is delivered after an in flight stale write`() async throws {
+        let recorder = VoiceWakeSyncRecorder(blockFirst: true)
+        let scheduler = VoiceWakeGlobalSyncScheduler(
+            delay: {},
+            deliver: { await recorder.record($0) })
+
+        scheduler.schedule(["stale"])
+        await recorder.waitUntilFirstStarted()
+        let current = scheduler.schedule(["current"])
+        await current.value
+
+        #expect(await recorder.payloads == [["stale"]])
+
+        await recorder.releaseFirst()
+        try await recorder.waitForPayloadCount(2)
+        #expect(await recorder.payloads == [["stale"], ["current"]])
     }
 }

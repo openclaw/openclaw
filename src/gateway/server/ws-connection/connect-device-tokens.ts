@@ -1,5 +1,4 @@
-// Gateway WebSocket device authorization issues the session and bootstrap handoff tokens.
-import { ensureDeviceToken } from "../../../infra/device-pairing.js";
+import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type {
   AuthenticatedGatewayConnect,
@@ -10,6 +9,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
   state: AuthenticatedGatewayConnect;
   scopes: string[];
   hasApprovedDeviceBaseline: boolean;
+  isIssuanceCurrent: () => boolean;
 }): Promise<Pick<DeviceAuthorizedGatewayConnect, "deviceToken" | "bootstrapDeviceTokens">> {
   const { state, scopes, hasApprovedDeviceBaseline } = params;
   const {
@@ -18,7 +18,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
     isBrowserOperatorUi,
     isWebchat,
     trustedProxyAuthOk,
-    usesSharedGatewayAuth,
+    sessionUsesSharedGatewayAuth,
     sessionSharedGatewaySessionGeneration,
     deviceTokenSharedGatewaySessionGeneration,
     handoffBootstrapProfile,
@@ -26,7 +26,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
   const sharedGatewayAuthIssuer =
     sessionSharedGatewaySessionGeneration &&
     (deviceTokenSharedGatewaySessionGeneration !== undefined ||
-      (usesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
+      (sessionUsesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
       ? {
           kind: "shared-gateway-auth" as const,
           generation: sessionSharedGatewaySessionGeneration,
@@ -39,6 +39,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
           role,
           scopes,
           issuer: sharedGatewayAuthIssuer,
+          isIssuanceCurrent: params.isIssuanceCurrent,
         })
       : null;
   const bootstrapDeviceTokens: DeviceAuthorizedGatewayConnect["bootstrapDeviceTokens"] = [];
@@ -70,6 +71,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
         deviceId: device.id,
         role: bootstrapRole,
         scopes: bootstrapRoleScopes,
+        isIssuanceCurrent: params.isIssuanceCurrent,
       });
       if (!extraToken) {
         continue;

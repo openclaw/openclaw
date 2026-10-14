@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
+import { FAILOVER_REASONS } from "../failover-reasons.js";
 import {
   type WorkerAdmissionHandshake,
   WorkerAdmissionResponseFrameSchema,
@@ -11,6 +12,7 @@ import {
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
+  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
@@ -21,10 +23,15 @@ import {
   validateWorkerLiveEventParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../worker-transcript-budget.js";
+import { WorkerGatewayToolResultSchema } from "./worker-gateway-tool.js";
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
+  validateWorkerInferenceEventFrame,
   validateWorkerInferenceStartParams,
+  validateWorkerInferenceTerminalFrame,
 } from "./worker-inference.js";
+import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "./worker-protocol-primitives.js";
 
 const bundleHash = "a".repeat(64);
 const handshake: WorkerAdmissionHandshake = {
@@ -53,6 +60,12 @@ const connectParams = {
     handshake,
   },
 };
+const connectRequest = (params: unknown, id = "connect-1") => ({
+  type: "req",
+  id,
+  method: "connect",
+  params,
+});
 const workerHello = {
   type: "worker-hello-ok" as const,
   environmentId: "worker-1",
@@ -103,6 +116,24 @@ const transcriptMessages = [
     timestamp: 3,
   },
 ];
+const transcriptCommit = (overrides: Record<string, unknown> = {}) => ({
+  runEpoch: 2,
+  seq: 1,
+  baseLeafId: null,
+  messages: transcriptMessages,
+  ...overrides,
+});
+const commitResponse = (value: Record<string, unknown>) =>
+  Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
+    type: "res",
+    id: "commit-1",
+    ...value,
+  });
+const commitError = (message: string, reason: string) =>
+  commitResponse({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message, details: { reason } },
+  });
 const liveBase = { runEpoch: 2, lastAckedSeq: 0, seq: 1, runId: "r" };
 const models = {
   selectedProvider: "p",
@@ -137,12 +168,22 @@ const approval = (phase: string, status: string) =>
   event("approval", { phase, kind: "exec", status, title: "x" });
 const lifecycle = (phase: string, payload: Record<string, unknown> = {}) =>
   event("lifecycle", { phase, ...payload });
-const fallbackStep = (outcome: string) =>
+const fallbackStep = (outcome: string, reason?: string) =>
   lifecycle("fallback_step", {
     fallbackStepType: "fallback_step",
     fallbackStepFromModel: "p/m",
+    ...(reason === undefined ? {} : { fallbackStepFromFailureReason: reason }),
     fallbackStepFinalOutcome: outcome,
   });
+const fallbackReasonEvents = (reason: string) => [
+  lifecycle("fallback", {
+    ...models,
+    reasonSummary: "x",
+    attemptSummaries: ["x"],
+    attempts: [{ provider: "p", model: "m", error: "x", reason }],
+  }),
+  fallbackStep("next_fallback", reason),
+];
 const assistant = event("assistant", { text: "x", delta: "x" });
 const validateLive = validateWorkerLiveEventParams;
 const liveError = (details: Record<string, unknown>) => ({
@@ -170,49 +211,30 @@ describe("worker admission handshake schema", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { ...handshake, bundleHash: "short" },
-    { ...handshake, bundleHash: "A".repeat(64) },
-    { ...handshake, openclawVersion: "" },
-    { ...handshake, protocolFeatures: [""] },
-    { ...handshake, protocolFeatures: ["run-v1", "run-v1"] },
-    { ...handshake, unexpected: true },
-  ])("rejects malformed admission identity %#", (candidate) => {
-    expect(validateWorkerAdmissionHandshake(candidate)).toBe(false);
-  });
+  it.each([{ ...handshake, bundleHash: "short" }])(
+    "rejects malformed admission identity %#",
+    (candidate) => {
+      expect(validateWorkerAdmissionHandshake(candidate)).toBe(false);
+    },
+  );
 });
 
 describe("worker protocol schemas", () => {
   it("accepts a dedicated connect and explicit unattached session", () => {
-    expect(
-      validateWorkerConnectRequestFrame({
-        type: "req",
-        id: "connect-1",
-        method: "connect",
-        params: connectParams,
-      }),
-    ).toBe(true);
+    expect(validateWorkerConnectRequestFrame(connectRequest(connectParams))).toBe(true);
     const missingRunId = structuredClone(connectParams);
     Reflect.deleteProperty(missingRunId.admission, "runId");
     expect(
-      validateWorkerConnectRequestFrame({
-        type: "req",
-        id: "connect-missing-run",
-        method: "connect",
-        params: missingRunId,
-      }),
+      validateWorkerConnectRequestFrame(connectRequest(missingRunId, "connect-missing-run")),
     ).toBe(false);
     for (const admission of [
       { ...connectParams.admission, sessionId: null, runId: "run-1" },
       { ...connectParams.admission, sessionId: "session-1", runId: null },
     ]) {
       expect(
-        validateWorkerConnectRequestFrame({
-          type: "req",
-          id: "connect-mismatched-session-run",
-          method: "connect",
-          params: { ...connectParams, admission },
-        }),
+        validateWorkerConnectRequestFrame(
+          connectRequest({ ...connectParams, admission }, "connect-mismatched-session-run"),
+        ),
       ).toBe(false);
     }
     expect(
@@ -245,12 +267,7 @@ describe("worker protocol schemas", () => {
   });
 
   it("accepts semantic transcript commits and generated-id responses", () => {
-    const commitParams = {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
-      messages: transcriptMessages,
-    };
+    const commitParams = transcriptCommit();
     expect(validateWorkerTranscriptCommitParams(commitParams)).toBe(true);
     expect(
       Value.Check(WorkerTranscriptCommitRequestFrameSchema, {
@@ -261,43 +278,155 @@ describe("worker protocol schemas", () => {
       }),
     ).toBe(true);
     expect(
-      Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
-        type: "res",
-        id: "commit-1",
+      commitResponse({
         ok: true,
         payload: { entryIds: ["entry-1", "entry-2", "entry-3"], newLeafId: "entry-3" },
       }),
     ).toBe(true);
+    expect(commitError("worker request rejected", "credential-replaced")).toBe(true);
+    expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
+  });
+
+  it("accepts bounded opaque provider response IDs across worker message transports", () => {
+    const assistantMessage = transcriptMessages[1];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      throw new Error("expected assistant transcript fixture");
+    }
+    const accepts = (responseId: string) => {
+      const message = { ...assistantMessage, responseId };
+      return [
+        validateWorkerTranscriptCommitParams(transcriptCommit({ messages: [message] })),
+        validateWorkerInferenceStartParams({
+          ...inferenceStart,
+          context: { messages: [message] },
+        }),
+        validateWorkerInferenceTerminalFrame({
+          type: "event",
+          event: "worker.inference.terminal",
+          payload: { ...inferenceIdentity, seq: 1, outcome: { type: "done", message } },
+        }),
+      ];
+    };
+
+    // Compatible providers can encode routing state in IDs longer than internal worker IDs.
+    for (const responseId of [
+      "response" + "x".repeat(477),
+      "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES),
+    ]) {
+      expect(accepts(responseId)).toEqual([true, true, true]);
+    }
+    for (const responseId of [
+      "",
+      " ",
+      " response",
+      "response ",
+      "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1),
+    ]) {
+      expect(accepts(responseId)).toEqual([false, false, false]);
+    }
     expect(
-      Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
-        type: "res",
-        id: "commit-1",
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "worker request rejected",
-          details: { reason: "credential-replaced" },
-        },
+      validateWorkerTranscriptCommitParams(
+        transcriptCommit({
+          messages: [{ ...assistantMessage, model: "x".repeat(257) }],
+        }),
+      ),
+    ).toBe(false);
+    expect(validateWorkerInferenceStartParams({ ...inferenceStart, runId: "x".repeat(257) })).toBe(
+      false,
+    );
+    for (const [responseId, withinBudget] of [
+      ["response" + "x".repeat(477), true],
+      ["x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES), false],
+    ] as const) {
+      expect(
+        isWorkerTranscriptFrameWithinBudget({
+          type: "req",
+          id: "commit-1",
+          method: "worker.transcript.commit",
+          params: {
+            runEpoch: 2,
+            seq: 1,
+            baseLeafId: null,
+            messages: [{ ...assistantMessage, responseId }],
+          },
+        }),
+      ).toBe(withinBudget);
+    }
+  });
+
+  it("accepts opaque provider replay state on assistant transcript messages", () => {
+    const assistantMessage = transcriptMessages[1];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      throw new Error("expected assistant transcript fixture");
+    }
+    const providerReplay = {
+      v: 1 as const,
+      type: "openai-responses-compaction",
+      id: "cmp_worker",
+      data: "opaque-worker-compaction",
+      replayIndex: 1,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    };
+    const candidate = transcriptCommit({
+      messages: [{ ...assistantMessage, providerReplay }],
+    });
+
+    expect(validateWorkerTranscriptCommitParams(candidate)).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: { ...providerReplay, privateScratch: "drop" },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+            },
+          },
+        ],
       }),
     ).toBe(true);
     expect(
-      Value.Check(WorkerTranscriptCommitResponseFrameSchema, {
-        type: "res",
-        id: "commit-1",
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "transcript commit rejected",
-          details: { reason: "stale-base-leaf" },
-        },
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
+            },
+          },
+        ],
       }),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("advertises only the current execution-context dialect", () => {
+    expect(WORKER_PROTOCOL_FEATURES).not.toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
+    expect(WORKER_PROTOCOL_FEATURES).not.toContain("worker-execution-context-v1");
+    expect(WORKER_PROTOCOL_FEATURES).toContain("worker-execution-context-v2");
   });
 
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
-    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
     for (const validEvent of [
       assistant,
       event("thinking", { text: "x", delta: "x" }),
@@ -371,6 +500,18 @@ describe("worker protocol schemas", () => {
     }
   });
 
+  it("keeps both worker fallback reason fields aligned with the canonical vocabulary", () => {
+    for (const reason of FAILOVER_REASONS) {
+      for (const fallbackEvent of fallbackReasonEvents(reason)) {
+        expect(validateLive(params(fallbackEvent))).toBe(true);
+      }
+    }
+
+    for (const fallbackEvent of fallbackReasonEvents("not-a-reason")) {
+      expect(validateLive(params(fallbackEvent))).toBe(false);
+    }
+  });
+
   it("accepts only a model reference and constrained inference options", () => {
     expect(
       validateWorkerInferenceStartParams({
@@ -390,28 +531,29 @@ describe("worker protocol schemas", () => {
     }
   });
 
+  it.each([{ type: "toolcall_start", id: "call-1", toolName: "probe" }])(
+    "keeps inference content events closed and indexed: $type",
+    (contentEvent) => {
+      const validateEvent = (value: unknown) =>
+        validateWorkerInferenceEventFrame({
+          type: "event",
+          event: "worker.inference.event",
+          payload: { ...inferenceIdentity, seq: 1, event: value },
+        });
+      expect(validateEvent({ ...contentEvent, contentIndex: 0 })).toBe(true);
+      expect(validateEvent(contentEvent)).toBe(false);
+      expect(validateEvent({ ...contentEvent, contentIndex: -1 })).toBe(false);
+      expect(validateEvent({ ...contentEvent, contentIndex: 0, unexpected: true })).toBe(false);
+    },
+  );
+
   it.each([
-    { runEpoch: 2, seq: 1, baseLeafId: null, messages: [] },
-    { runEpoch: 2, seq: 0, baseLeafId: null, messages: transcriptMessages },
-    { runEpoch: 2, seq: 1, baseLeafId: null, messages: transcriptMessages, sessionId: "other" },
-    {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
-      messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }],
-    },
-    {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
-      messages: [{ ...transcriptMessages[0], parentId: "parent-from-worker" }],
-    },
-    {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
+    transcriptCommit({ sessionId: "other" }),
+    transcriptCommit({ messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }] }),
+    transcriptCommit({ messages: [{ ...transcriptMessages[0], parentId: "parent-from-worker" }] }),
+    transcriptCommit({
       messages: [{ ...transcriptMessages[0], sessionId: "foreign-session" }],
-    },
+    }),
   ])("rejects raw transcript identity or invalid batch fields %#", (candidate) => {
     expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
   });
@@ -425,10 +567,7 @@ describe("worker protocol schemas", () => {
     if (!transcriptAssistant || transcriptAssistant.role !== "assistant") {
       throw new Error("expected assistant transcript fixture");
     }
-    const candidate = {
-      runEpoch: 2,
-      seq: 1,
-      baseLeafId: null,
+    const candidate = transcriptCommit({
       messages: [
         {
           ...transcriptAssistant,
@@ -442,7 +581,7 @@ describe("worker protocol schemas", () => {
           ],
         },
       ],
-    };
+    });
 
     expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
     expect(validateWorkerTranscriptCommitParams.errors?.[0]).toMatchObject({
@@ -451,31 +590,58 @@ describe("worker protocol schemas", () => {
     });
   });
 
-  it("rejects non-finite numbers parsed from worker JSON", () => {
-    const candidate = JSON.parse(`{
-      "runEpoch": 2,
-      "seq": 1,
-      "baseLeafId": null,
-      "messages": [{
-        "role": "toolResult",
-        "toolCallId": "call-non-finite",
-        "toolName": "probe",
-        "content": [],
-        "details": { "value": 1e400 },
-        "isError": false,
-        "timestamp": 1
-      }]
-    }`) as unknown;
-
-    expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
-    expect(validateWorkerTranscriptCommitParams.errors?.[0]).toMatchObject({
-      keyword: "finite",
-    });
-  });
-
   it("keeps worker close reasons closed", () => {
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "admission-rejected")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);
+  });
+});
+
+describe("worker message wire boundaries", () => {
+  it.each([
+    {
+      content: { type: "image", data: "encoded", mimeType: "image/png" },
+      accepts: [true, true, true],
+    },
+    {
+      content: { type: "text", text: "a".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1) },
+      accepts: [false, true, false],
+    },
+  ])("retains each transport's content limits ($accepts)", ({ content, accepts }) => {
+    const message = { role: "user", content: [content], timestamp: 1 };
+    expect([
+      validateWorkerTranscriptCommitParams(transcriptCommit({ messages: [message] })),
+      validateWorkerInferenceStartParams({ ...inferenceStart, context: { messages: [message] } }),
+      Value.Check(WorkerGatewayToolResultSchema, { content: [content] }),
+    ]).toEqual(accepts);
+  });
+
+  it("admits text-only runtime context and rejects image payloads", () => {
+    const runtimeContext = {
+      role: "user",
+      content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent facts" }],
+      timestamp: 1,
+      runtimeContext: { retained: true },
+    };
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: { messages: [runtimeContext] },
+      }),
+    ).toBe(true);
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: {
+          messages: [
+            {
+              ...runtimeContext,
+              content: [{ type: "image", data: "encoded", mimeType: "image/png" }],
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 });

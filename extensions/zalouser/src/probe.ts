@@ -1,4 +1,3 @@
-// Zalouser plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -18,13 +17,9 @@ export async function probeZalouser(
   return await runChannelProbe(
     timeoutMs ? resolveTimerTimeoutMs(timeoutMs, 1000, 1000) : undefined,
     async () => {
-      try {
-        const user = await getZaloUserInfo(profile);
-        return user ? { ok: true, user } : { ok: false, error: "Not authenticated" };
-      } catch (error) {
-        return { ok: false, error: formatErrorMessage(error) };
-      }
+      const user = await getZaloUserInfo(profile);
+      return user ? { ok: true, user } : { ok: false, error: "Not authenticated" };
     },
-    () => ({ ok: false, error: "Not authenticated" }),
+    (error) => ({ ok: false, error: formatErrorMessage(error) }),
   );
 }

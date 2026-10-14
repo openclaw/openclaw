@@ -1,9 +1,4 @@
-/**
- * HTTP session dispatcher config helpers.
- *
- * Parses idle-timeout values shared by server and config surfaces.
- */
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 
 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
 

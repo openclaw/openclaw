@@ -1,7 +1,3 @@
-/**
- * Help examples shown by the Browser CLI root command.
- */
-/** Core Browser CLI examples for lifecycle and inspection commands. */
 export const browserCoreExamples = [
   "openclaw browser status",
   "openclaw browser start",
@@ -18,10 +14,8 @@ export const browserCoreExamples = [
   "openclaw browser snapshot --format aria --limit 200",
   "openclaw browser snapshot --efficient",
   "openclaw browser snapshot --labels",
-  'openclaw browser extract "What is the main conclusion?"',
 ];
 
-/** Browser CLI examples for interaction/action commands. */
 export const browserActionExamples = [
   "openclaw browser navigate https://example.com",
   "openclaw browser resize 1280 720",

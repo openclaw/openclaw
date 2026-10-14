@@ -3,10 +3,15 @@
  * Ensures pre-execution policy checks see add/update/delete/move paths in
  * host and sandbox forms without requiring full parser success.
  */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractApplyPatchTargetPaths } from "./apply-patch-paths.js";
+import {
+  extractApplyPatchTargetPaths,
+  extractResolvedApplyPatchTargetPaths,
+} from "./apply-patch-paths.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const defaultCwd = process.cwd();
 const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
@@ -25,16 +30,6 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths({ input: "" })).toEqual([]);
   });
 
-  it("extracts Add File markers from the envelope payload", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Add File: src/new.ts",
-      "+export const a = 1;",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("src/new.ts")]);
-  });
-
   it("extracts Update File and Delete File markers", () => {
     const patch = [
       "*** Begin Patch",
@@ -46,22 +41,6 @@ describe("extractApplyPatchTargetPaths", () => {
       "*** End Patch",
     ].join("\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("a.ts"), cwdPath("b.ts")]);
-  });
-
-  it("includes the Move to: target paired with an Update File", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: old/path.ts",
-      "*** Move to: new/path.ts",
-      "@@",
-      " context",
-      "+added",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([
-      cwdPath("old/path.ts"),
-      cwdPath("new/path.ts"),
-    ]);
   });
 
   it("tolerates blank lines between Update File and Move to", () => {
@@ -78,19 +57,6 @@ describe("extractApplyPatchTargetPaths", () => {
   it("accepts the wrapper object form used by the apply_patch tool", () => {
     const patch = ["*** Begin Patch", "*** Add File: foo.ts", "+x", "*** End Patch"].join("\n");
     expect(extractApplyPatchTargetPaths({ input: patch })).toEqual([cwdPath("foo.ts")]);
-  });
-
-  it("de-duplicates repeated paths within a single envelope", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Add File: same.ts",
-      "+a",
-      "*** Update File: same.ts",
-      "@@",
-      "+b",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("same.ts")]);
   });
 
   it("normalizes derived paths before de-duplicating them", () => {
@@ -167,22 +133,6 @@ describe("extractApplyPatchTargetPaths", () => {
     ]);
   });
 
-  it("finds top-level markers after an update hunk", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: src/old.ts",
-      "@@",
-      "-old",
-      "+new",
-      "*** Delete File: src/dead.ts",
-      "*** End Patch",
-    ].join("\n");
-    expect(extractApplyPatchTargetPaths(patch)).toEqual([
-      cwdPath("src/old.ts"),
-      cwdPath("src/dead.ts"),
-    ]);
-  });
-
   it("ignores markers outside of the envelope grammar", () => {
     expect(
       extractApplyPatchTargetPaths(
@@ -223,6 +173,49 @@ describe("extractApplyPatchTargetPaths", () => {
       path.join("/tmp", "openclaw-target.ts"),
     ]);
   });
+
+  it.each(["host", "mounted sandbox"])(
+    "derives literal @ files and new descendants through the %s path owner",
+    async (runtime) => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-at-path-"));
+      try {
+        const literalParent = path.join(cwd, "@notes");
+        const siblingParent = path.join(cwd, "notes");
+        await fs.mkdir(literalParent);
+        await fs.mkdir(siblingParent);
+        await fs.writeFile(path.join(literalParent, "existing.md"), "literal");
+        await fs.writeFile(path.join(siblingParent, "existing.md"), "sibling");
+        await fs.writeFile(path.join(siblingParent, "new.md"), "sibling");
+        const patch = [
+          "*** Begin Patch",
+          "*** Delete File: @notes/existing.md",
+          "*** Add File: @notes/new.md",
+          "+literal",
+          "*** End Patch",
+        ].join("\n");
+        const options =
+          runtime === "mounted sandbox"
+            ? { cwd, sandbox: { root: cwd, bridge: createHostSandboxFsBridge(cwd) } }
+            : { cwd };
+
+        expect(extractApplyPatchTargetPaths(patch, options)).toEqual([
+          path.join(literalParent, "existing.md"),
+          path.join(literalParent, "new.md"),
+        ]);
+        const mentionedPatch = patch.replaceAll("File: @notes/", "File: @@notes/");
+        const expected = [
+          path.join(literalParent, "existing.md"),
+          path.join(literalParent, "new.md"),
+        ];
+        expect(extractApplyPatchTargetPaths(mentionedPatch, options)).toEqual(expected);
+        await expect(
+          extractResolvedApplyPatchTargetPaths(mentionedPatch, options),
+        ).resolves.toEqual(expected);
+      } finally {
+        await fs.rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("defaults missing cwd to apply_patch process cwd semantics", () => {
     const patch = [

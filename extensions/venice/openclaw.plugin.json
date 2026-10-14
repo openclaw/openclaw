@@ -1,5 +1,6 @@
 {
   "id": "venice",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -7,6 +8,11 @@
   "providers": ["venice"],
   "contracts": {
     "usageProviders": ["venice"]
+  },
+  "modelPricing": {
+    "providers": {
+      "venice": { "venice": { "provider": "venice" } }
+    }
   },
   "providerAuthChoices": [
     {
@@ -39,6 +45,9 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "venice": "venice"
+    },
     "providers": {
       "venice": {
         "baseUrl": "https://api.venice.ai/api/v1",
@@ -160,7 +169,28 @@
             "input": ["text", "image"],
             "contextWindow": 500000,
             "maxTokens": 32000,
-            "cost": { "input": 2.27, "output": 6.8, "cacheRead": 0.34, "cacheWrite": 0 },
+            "cost": {
+              "input": 2.27,
+              "output": 6.8,
+              "cacheRead": 0.34,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 2.27,
+                  "output": 6.8,
+                  "cacheRead": 0.34,
+                  "cacheWrite": 0,
+                  "range": [0, 200001]
+                },
+                {
+                  "input": 4.53,
+                  "output": 13.6,
+                  "cacheRead": 0.68,
+                  "cacheWrite": 0,
+                  "range": [200001]
+                }
+              ]
+            },
             "compat": {
               "supportsUsageInStreaming": false
             }
@@ -184,7 +214,28 @@
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 65536,
-            "cost": { "input": 0.5, "output": 2, "cacheRead": 0.05, "cacheWrite": 0.625 },
+            "cost": {
+              "input": 0.5,
+              "output": 2,
+              "cacheRead": 0.05,
+              "cacheWrite": 0.625,
+              "tieredPricing": [
+                {
+                  "input": 0.5,
+                  "output": 2,
+                  "cacheRead": 0.05,
+                  "cacheWrite": 0.625,
+                  "range": [0, 256001]
+                },
+                {
+                  "input": 1.5,
+                  "output": 6,
+                  "cacheRead": 0.15,
+                  "cacheWrite": 1.875,
+                  "range": [256001]
+                }
+              ]
+            },
             "compat": {
               "supportsUsageInStreaming": false
             }
@@ -198,7 +249,8 @@
             "maxTokens": 128000,
             "cost": { "input": 12, "output": 60, "cacheRead": 1.2, "cacheWrite": 15 },
             "compat": {
-              "supportsUsageInStreaming": false
+              "supportsUsageInStreaming": false,
+              "codeMode": "capable"
             }
           },
           {
@@ -210,7 +262,8 @@
             "maxTokens": 128000,
             "cost": { "input": 6, "output": 30, "cacheRead": 0.6, "cacheWrite": 7.5 },
             "compat": {
-              "supportsUsageInStreaming": false
+              "supportsUsageInStreaming": false,
+              "codeMode": "capable"
             }
           },
           {

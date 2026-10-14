@@ -1,12 +1,12 @@
 // Metadata registry loader tests cover metadata-only plugin registry assembly.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import type { PluginLoadOptions } from "../loader.js";
+import { loadPluginMetadataRegistrySnapshot } from "./metadata-registry-loader.js";
 
 const loadConfigMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
-
-let loadPluginMetadataRegistrySnapshot: typeof import("./metadata-registry-loader.js").loadPluginMetadataRegistrySnapshot;
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
@@ -19,11 +19,24 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    loadOpenClawPluginsMock({ ...options, activate: false }),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: () => "/resolved-workspace",
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
   resolveDefaultAgentId: () => "default",
+}));
+
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (params: { workspaceDir?: string }) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  }),
 }));
 
 function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
@@ -36,10 +49,6 @@ function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
 }
 
 describe("loadPluginMetadataRegistrySnapshot", () => {
-  beforeAll(async () => {
-    ({ loadPluginMetadataRegistrySnapshot } = await import("./metadata-registry-loader.js"));
-  });
-
   beforeEach(() => {
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -97,16 +106,12 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: false,
     });
-    expect(loadOptions.env).toBe(process.env);
+    expect(loadOptions.env === process.env).toBe(true);
     expect(loadOptions.logger).toBeDefined();
   });
 
   it("forwards an explicit logger through metadata snapshots", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
 
     loadPluginMetadataRegistrySnapshot({
       config: { plugins: {} },
@@ -114,12 +119,12 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       workspaceDir: "/workspace",
     });
 
-    expect(getOnlyLoadOpenClawPluginsOptions()).toMatchObject({
+    const { env, ...loadOptions } = getOnlyLoadOpenClawPluginsOptions();
+    expect(loadOptions).toMatchObject({
       config: { plugins: {} },
       activationSourceConfig: { plugins: {} },
       autoEnabledReasons: {},
       workspaceDir: "/workspace",
-      env: process.env,
       logger,
       throwOnLoadError: true,
       cache: false,
@@ -127,14 +132,14 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: undefined,
     });
+    // Preserve the env subset check without handing its values to the matcher.
+    expect(
+      env !== undefined && Object.entries(process.env).every(([key, value]) => env[key] === value),
+    ).toBe(true);
   });
 
   it("honors explicit load options when reusing a resolved runtime context", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
     const env = { HOME: "/tmp/context-home" } as NodeJS.ProcessEnv;
     const manifestRegistry = { plugins: [], diagnostics: [] };
 
@@ -170,6 +175,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: undefined,
       manifestRegistry,
+      installRecords: undefined,
     });
   });
 
@@ -192,7 +198,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       loadModules: undefined,
       onlyPluginIds: [],
     });
-    expect(loadOptions.env).toBe(process.env);
+    expect(loadOptions.env === process.env).toBe(true);
     expect(loadOptions.logger).toBeDefined();
   });
 });

@@ -2,13 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   formatToolAggregate,
   inferToolMetaFromArgs,
   resetAgentEventsForTest,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -20,8 +21,13 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
 
 export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -90,7 +96,9 @@ export async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile).appendMessage(assistantMessage("history", Date.now()));
+  await openFileBackedSessionManagerForTest(sessionFile, {
+    sessionId: "session-1",
+  }).appendMessageAsync(assistantMessage("history", Date.now()));
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -102,6 +110,7 @@ export async function createParams(): Promise<EmbeddedRunAttemptParams> {
     model: createCodexTestModel(),
     thinkLevel: "medium",
     observeToolTerminal: createCodexTestToolTerminalObserver(),
+    hostCapabilities: createCodexTestHostCapabilities(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -138,13 +147,15 @@ export function registerCodexEventProjectorTestLifecycle(): void {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const tempDir of tempDirs) {
+      await closeOpenClawAgentDatabasesAsync(tempDir);
+      closeOpenClawAgentDatabasesForTest(tempDir);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
     tempDirs.clear();
   });
 }
 
-export async function createProjectorWithHooks() {
+export async function createProjectorWithHooks(options?: CodexAppServerEventProjectorOptions) {
   const beforeCompaction = vi.fn();
   const afterCompaction = vi.fn();
   initializeGlobalHookRunner(
@@ -153,7 +164,7 @@ export async function createProjectorWithHooks() {
       { hookName: "after_compaction", handler: afterCompaction },
     ]),
   );
-  const projector = await createProjector();
+  const projector = await createProjector(undefined, options);
   return { projector, beforeCompaction, afterCompaction };
 }
 
@@ -280,11 +291,12 @@ export function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNot
 export function appServerError(params: {
   message: string;
   willRetry: boolean;
+  codexErrorInfo?: string;
 }): ProjectorNotification {
   return forCurrentTurn("error", {
     error: {
       message: params.message,
-      codexErrorInfo: null,
+      codexErrorInfo: params.codexErrorInfo ?? null,
       additionalDetails: null,
     },
     willRetry: params.willRetry,

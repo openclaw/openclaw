@@ -1,4 +1,5 @@
-import { setTimeout as sleep } from "node:timers/promises";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 /** Internal pull-wait ownership used by the node-host long poll. */
 export class MeetingNodeAudioPullWaiters {
@@ -9,13 +10,10 @@ export class MeetingNodeAudioPullWaiters {
   }
 
   async wait(timeoutMs: number): Promise<void> {
-    let wake!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      wake = resolve;
-      this.#waiters.add(wake);
-    });
+    const { promise: ready, resolve: wake } = createDeferredCore();
+    this.#waiters.add(wake);
     try {
-      await Promise.race([sleep(timeoutMs), ready]);
+      await raceWithTimeout(ready, timeoutMs, () => {});
     } finally {
       // A stalled bridge can be polled indefinitely. Timeout must release its
       // resolver instead of retaining one waiter per empty pull.

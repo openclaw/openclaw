@@ -19,6 +19,7 @@ describe("normalizeMediaAttachments", () => {
         path: "/tmp/replied-audio.ogg",
         url: undefined,
         mime: "audio/ogg",
+        kind: "audio",
         index: 1,
         alreadyTranscribed: false,
       },

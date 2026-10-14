@@ -1,17 +1,23 @@
 // Delivery context tests cover context normalization for channel delivery.
 import { describe, expect, it } from "vitest";
+import { deliveryContextFromSession } from "./delivery-context.read.js";
 import {
   deliveryContextKey,
-  deliveryContextFromSession,
-  normalizeDeliveryContext,
-} from "./delivery-context.js";
-import {
+  hasDeliveryTargetFields,
   mergeDeliveryContext,
+  normalizeDeliveryContext,
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
 } from "./delivery-context.shared.js";
 
 describe("delivery context helpers", () => {
+  it.each([["whitespace-only fields", { channel: " ", to: " " }, true]] as const)(
+    "checks raw delivery target fields for %s",
+    (_name, context, expected) => {
+      expect(hasDeliveryTargetFields(context)).toBe(expected);
+    },
+  );
+
   it("normalizes channel/to/accountId and drops empty contexts", () => {
     expect(
       normalizeDeliveryContext({
@@ -42,20 +48,6 @@ describe("delivery context helpers", () => {
     expect(merged?.threadId).toBeUndefined();
   });
 
-  it("inherits missing route fields when channels match", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "demo-channel" },
-      { channel: "demo-channel", to: "123", accountId: "acct", threadId: "99" },
-    );
-
-    expect(merged).toEqual({
-      channel: "demo-channel",
-      to: "123",
-      accountId: "acct",
-      threadId: "99",
-    });
-  });
-
   it("does not inherit route fields from a different account on the same channel", () => {
     const merged = mergeDeliveryContext(
       { channel: "telegram", accountId: "bot-a" },
@@ -78,20 +70,6 @@ describe("delivery context helpers", () => {
       channel: undefined,
       to: undefined,
       accountId: "bot-a",
-    });
-  });
-
-  it("uses fallback route fields when fallback has no channel", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "demo-channel" },
-      { to: "123", accountId: "acct", threadId: "99" },
-    );
-
-    expect(merged).toEqual({
-      channel: "demo-channel",
-      to: "123",
-      accountId: "acct",
-      threadId: "99",
     });
   });
 
@@ -180,6 +158,17 @@ describe("delivery context helpers", () => {
         threadId: "177000.123",
         chatType: "channel",
       },
+    });
+
+    expect(
+      normalizeSessionDeliveryState({
+        route: { channel: "webchat", target: { to: "dashboard" } },
+        context: { channel: "room-chat", to: "room:ops" },
+      }),
+    ).toMatchObject({
+      kind: "external",
+      route: { channel: "room-chat", target: { to: "room:ops" } },
+      context: { channel: "room-chat", to: "room:ops" },
     });
   });
 

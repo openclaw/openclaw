@@ -12,8 +12,6 @@ export {
   expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
-  loadBundledPluginPublicSurface,
-  loadBundledPluginPublicSurfaceSync,
   type ProviderPlugin,
 } from "./test-helpers/provider-catalog.js";
 export { describeProviderContracts } from "./test-helpers/provider-contract.js";
@@ -71,7 +69,6 @@ export {
 export {
   describeProviderWizardChoiceResolutionContract,
   describeProviderWizardModelPickerContract,
-  describeProviderWizardSetupOptionsContract,
 } from "./test-helpers/provider-wizard-contract-suites.js";
 export { expectPassthroughReplayPolicy } from "./test-helpers/provider-replay-policy.js";
 export { createCapturedThinkingConfigStream } from "./test-helpers/stream-hooks.js";

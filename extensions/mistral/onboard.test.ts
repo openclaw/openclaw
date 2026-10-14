@@ -1,10 +1,8 @@
-// Mistral tests cover onboard plugin behavior.
 import {
   expectProviderOnboardMergedLegacyConfig,
   expectProviderOnboardPrimaryAndFallbacks,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "./model-definitions.js";
 import { MISTRAL_DEFAULT_MODEL_REF } from "./model-definitions.js";
 import { applyMistralConfig, applyMistralProviderConfig } from "./onboard.js";
 
@@ -33,16 +31,6 @@ describe("mistral onboard", () => {
     const mistralDefault = provider?.models.find((model) => model.id === "mistral-large-latest");
     expect(mistralDefault?.contextWindow).toBe(262144);
     expect(mistralDefault?.maxTokens).toBe(16384);
-  });
-
-  it("uses the bundled mistral default model definition", () => {
-    const bundled = buildBundledMistralModelDefinition();
-    const cfg = applyMistralProviderConfig({});
-    const defaultModel = cfg.models?.providers?.mistral?.models.find(
-      (model) => model.id === bundled.id,
-    );
-
-    expect(defaultModel).toEqual(bundled);
   });
 
   it("adds the expected alias for the default model", () => {

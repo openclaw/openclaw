@@ -1,5 +1,6 @@
 // Approval request/reply helpers for exec and plugin approval flows.
 
+export type { ApprovalScope } from "../infra/approval-scope.js";
 export {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -22,18 +23,22 @@ export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-comman
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export {
   createChannelApproverDmTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
   createChannelNativeOriginTargetResolver,
+  createChannelNativeOriginTargetResolverAsync,
 } from "./approval-native-helpers.js";
 export {
   resolveApprovalRequestOriginTarget,
+  resolveApprovalRequestOriginTargetAsync,
   resolveApprovalRequestSessionTarget,
+  resolveApprovalRequestSessionTargetAsync,
   resolveExecApprovalSessionTarget,
+  resolveExecApprovalSessionTargetAsync,
   type ExecApprovalSessionTarget,
 } from "../infra/exec-approval-session-target.js";
 export {
   doesApprovalRequestMatchChannelAccount,
-  resolveApprovalRequestAccountId,
-  resolveApprovalRequestChannelAccountId,
+  doesApprovalRequestMatchChannelAccountAsync,
 } from "../infra/approval-request-account-binding.js";
 export {
   buildPluginApprovalExpiredMessage,
@@ -45,9 +50,15 @@ export {
   type PluginApprovalRequestPayload,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+export type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../infra/system-agent-approvals.js";
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
 export {
   createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
 } from "./approval-client-helpers.js";
@@ -61,7 +72,6 @@ export {
 export { resolveApprovalApprovers } from "./approval-approvers.js";
 export {
   matchesApprovalRequestFilters,
-  matchesApprovalRequestSessionFilter,
   type ApprovalRequestFilterInput,
 } from "../infra/approval-request-filters.js";
 export {
@@ -70,3 +80,14 @@ export {
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "./approval-renderers.js";
+export {
+  buildSystemAgentApprovalResolvedText,
+  formatApprovalDecisionLabel,
+  formatChannelApprovalResolvedLabel,
+} from "./approval-terminal.js";
+export { createNativeApprovalControlRegistry } from "./approval-native-controls.js";
+
+export {
+  resolveApprovalRequestSessionDeliveryAsync,
+  type ApprovalRequestSessionDelivery,
+} from "../infra/approval-request-account-binding.js";

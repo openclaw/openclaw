@@ -7,55 +7,137 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import {
-  buildSandboxHostContentSecurityPolicy,
-  buildSandboxHostProxyHtml,
+  buildSandboxHostDocument,
   decodeSandboxHostCsp,
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
+import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
-const MCP_APP_PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), clipboard-write=()";
+type PublicResourceReader = NonNullable<
+  PluginBoardWidgetContentKind["resources"]["readPublicResource"]
+>;
 
-function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): void {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
-    res.statusCode = 400;
-    res.end("Bad Request");
-    return;
+function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  const url = URL.parse(req.url ?? "/", "http://localhost");
+  if (!url) {
+    respondPlainText(res, 400, "Bad Request");
+    return true;
   }
   if (url.pathname !== SANDBOX_HOST_PATH || (req.method !== "GET" && req.method !== "HEAD")) {
-    res.statusCode = 404;
-    res.end("Not Found");
-    return;
+    return false;
   }
 
   let csp;
   try {
     csp = decodeSandboxHostCsp(url.searchParams.get("csp"));
   } catch {
-    res.statusCode = 400;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("invalid MCP App sandbox policy");
-    return;
+    respondPlainText(res, 400, "invalid MCP App sandbox policy");
+    return true;
   }
 
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
+  const { html, headers, version } = buildSandboxHostDocument(
+    csp,
+    ingress ? [ingress.publicOrigin, ...ingress.frameAncestors] : undefined,
+  );
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Security-Policy", buildSandboxHostContentSecurityPolicy(csp));
-  res.setHeader("Permissions-Policy", MCP_APP_PERMISSIONS_POLICY);
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  res.setHeader("Origin-Agent-Cluster", "?1");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.end(req.method === "HEAD" ? undefined : buildSandboxHostProxyHtml(csp));
+  for (const [name, value] of Object.entries(headers)) {
+    res.setHeader(name, value);
+  }
+  // A mismatched URL can come from another Gateway version sharing this host.
+  // Serve the current shell, but never retain it under a different content hash.
+  res.setHeader(
+    "Cache-Control",
+    url.searchParams.get("v") === version ? "public, max-age=31536000, immutable" : "no-store",
+  );
+  // Keep GET and HEAD representation metadata aligned while suppressing the HEAD body.
+  res.setHeader("Content-Length", String(Buffer.byteLength(html)));
+  res.end(req.method === "HEAD" ? undefined : html);
+  return true;
 }
 
-/** Dedicated listener: this origin must never serve Control UI or authenticated Gateway data. */
-export function createSandboxHostHttpServer(tlsOptions?: TlsOptions): HttpServer {
-  const handler = (req: IncomingMessage, res: ServerResponse) => {
-    handleMcpAppSandboxHttpRequest(req, res);
+/** Dedicated listener: only the proxy and explicitly public renderer assets, never Gateway data. */
+export function createSandboxHostHttpServer(
+  tlsOptions?: TlsOptions,
+  resolvePluginRegistry?: () => PluginRegistry,
+): HttpServer {
+  const handler = createSandboxHostHttpRequestHandler(resolvePluginRegistry);
+  const listener = (req: IncomingMessage, res: ServerResponse) => {
+    void handler(req, res);
   };
-  return tlsOptions ? createHttpsServer(tlsOptions, handler) : createHttpServer(handler);
+  return tlsOptions ? createHttpsServer(tlsOptions, listener) : createHttpServer(listener);
+}
+
+/** Shared dedicated-surface owner for listener and virtual ingress transports. */
+export function createSandboxHostHttpRequestHandler(
+  resolvePluginRegistry?: () => PluginRegistry,
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  // Public static assets may finish an in-flight read across plugin reloads.
+  const readersByRegistry = new WeakMap<PluginRegistry, Map<string, PublicResourceReader>>();
+  const serveResource = async (req: IncomingMessage, res: ServerResponse) => {
+    const registry = resolvePluginRegistry?.();
+    if (!registry || (req.method !== "GET" && req.method !== "HEAD")) {
+      respondPlainText(res, 404, "Not Found");
+      return;
+    }
+    let readers = readersByRegistry.get(registry);
+    if (!readers) {
+      readers = new Map();
+      for (const { definition } of registry.boardWidgetContentKinds.values()) {
+        const read = definition.resources.readPublicResource;
+        if (read) {
+          for (const resourcePath of definition.resources.paths) {
+            readers.set(resourcePath, read);
+          }
+        }
+      }
+      readersByRegistry.set(registry, readers);
+    }
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    const reader = readers.get(pathname);
+    const resource = reader ? await reader(pathname) : undefined;
+    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
+    if (!resource) {
+      respondPlainText(res, 404, "Not Found");
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader("Content-Type", resource.contentType);
+    res.setHeader("Content-Length", String(resource.body.byteLength));
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.end(req.method === "HEAD" ? undefined : resource.body);
+  };
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
+    if (handleMcpAppSandboxHttpRequest(req, res)) {
+      return;
+    }
+    if (!resolvePluginRegistry) {
+      respondPlainText(res, 404, "Not Found");
+      return;
+    }
+    try {
+      await serveResource(req, res);
+    } catch {
+      if (ingress) {
+        try {
+          assertRemoteControlUiIngressCurrent(ingress);
+        } catch {
+          res.destroy();
+          return;
+        }
+      }
+      respondPlainText(res, 503, "Renderer resource unavailable");
+    }
+  };
 }

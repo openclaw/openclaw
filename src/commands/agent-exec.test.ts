@@ -1,38 +1,31 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
+import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
+import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
+import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
 import {
-  ensureAuthProfileStore,
-  findPersistedAuthProfileCredential,
-  loadAuthProfileStoreForRuntime,
-  resolvePersistedAuthProfileOwnerAgentDir,
-} from "../agents/auth-profiles.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { agentExecCommand, classifyAgentExecResult, resolveAgentExecPrompt } from "./agent-exec.js";
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/io.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { resolveExecBaseConfig } from "./agent-exec-input.js";
+import { classifyAgentExecResult } from "./agent-exec-result.js";
+import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const externalTempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
-
-async function makeTempRoot(prefix: string): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempRoots.push(root);
-  return root;
-}
-
-function createRuntime() {
-  const log = vi.fn();
-  const error = vi.fn();
-  const runtime: RuntimeEnv = {
-    log,
-    error,
-    exit: vi.fn(),
-  };
-  return { runtime, log, error };
-}
 
 function successResult(text = "done") {
   return {
@@ -50,86 +43,53 @@ function successResult(text = "done") {
   };
 }
 
-afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
+afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe("agent exec prompt sources", () => {
-  it("accepts a positional prompt", async () => {
-    await expect(resolveAgentExecPrompt("fix it", undefined)).resolves.toBe("fix it");
-  });
-
-  it("reads a UTF-8 prompt file", async () => {
-    const root = await makeTempRoot("openclaw-agent-exec-prompt-");
-    const promptPath = path.join(root, "prompt.md");
-    await fs.writeFile(promptPath, "\uFEFFline one\nline two", "utf8");
-
-    await expect(resolveAgentExecPrompt(undefined, promptPath)).resolves.toBe("line one\nline two");
-  });
-
-  it("reads --message-file - from stdin", async () => {
-    const stdin = Readable.from([Buffer.from("from stdin", "utf8")]);
-    await expect(resolveAgentExecPrompt(undefined, "-", stdin)).resolves.toBe("from stdin");
-  });
+  clearRuntimeConfigSnapshot();
+  cleanupTempDirs(externalTempDirs);
 });
 
 describe("agent exec strict result classification", () => {
-  it("classifies a successful embedded result", () => {
-    expect(classifyAgentExecResult(successResult())).toMatchObject({
-      ok: true,
-      status: "ok",
-      final: "done",
-    });
-  });
-
-  it("classifies model error payloads as failure", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [{ text: "provider rejected request", isError: true }],
+  it.each([
+    {
+      payload: { isError: true },
       meta: { durationMs: 10 },
-    });
-    expect(envelope).toMatchObject({
-      ok: false,
       status: "error",
-      error: { kind: "error_payload", message: "provider rejected request" },
-    });
-  });
-
-  it("classifies textless error payloads as failure", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [{ isError: true }],
-      meta: { durationMs: 10 },
-    });
-    expect(envelope).toMatchObject({
-      ok: false,
-      status: "error",
-      error: { kind: "error_payload", message: "Agent run failed" },
-    });
-  });
-
-  it("classifies terminal timeouts separately", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [{ text: "timed out", isError: true }],
+      kind: "error_payload",
+      message: "Agent run failed",
+    },
+    {
+      payload: { text: "timed out", isError: true },
       meta: { durationMs: 600_000, aborted: true, stopReason: "timeout" },
-    });
-    expect(envelope).toMatchObject({
-      ok: false,
       status: "timeout",
-      error: { kind: "timeout" },
-    });
-  });
-
-  it("classifies exhausted explicit fallbacks as failure", () => {
-    const envelope = classifyAgentExecResult(successResult("last candidate output"), true);
-    expect(envelope).toMatchObject({
+      kind: "timeout",
+      message: "timed out",
+    },
+  ])("classifies $message", ({ payload, meta, status, kind, message }) => {
+    expect(classifyAgentExecResult({ payloads: [payload], meta })).toMatchObject({
       ok: false,
-      status: "error",
-      error: { kind: "fallback_exhausted" },
+      status,
+      error: { kind, message },
     });
   });
 
+  it("projects only documented payload fields and the outer tool summary", () => {
+    const toolSummary = { calls: 2, tools: ["read", "write"], failures: 1, totalToolTimeMs: 25 };
+    const envelope = classifyAgentExecResult({
+      payloads: [
+        {
+          text: "done",
+          mediaUrl: null,
+          audioAsVoice: true,
+          presentation: { blocks: [] },
+          channelData: { private: true },
+        },
+      ],
+      meta: { durationMs: 10, toolSummary },
+    });
+    expect(envelope.payloads).toEqual([{ text: "done", mediaUrl: null }]);
+    expect(envelope.toolSummary).toEqual(toolSummary);
+  });
   it("classifies projected production error payloads as failure", () => {
     const envelope = classifyAgentExecResult(
       successResult("projected error text"),
@@ -144,53 +104,97 @@ describe("agent exec strict result classification", () => {
       error: { kind: "error_payload", message: "projected error text" },
     });
   });
-
-  it("does not restore metadata text for a projected textless error", () => {
-    const result = successResult("metadata error text");
-    result.payloads = [];
-    const envelope = classifyAgentExecResult(result, false, true);
-    expect(envelope).toMatchObject({ ok: false, status: "error", final: "", payloads: [] });
-  });
-
-  it("projects payloads onto the stable documented fields", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [
-        {
-          text: "done",
-          mediaUrl: null,
-          audioAsVoice: true,
-          presentation: { blocks: [] },
-          channelData: { private: true },
-        },
-      ],
-      meta: { durationMs: 10 },
-    });
-    expect(envelope.payloads).toEqual([{ text: "done", mediaUrl: null }]);
-  });
 });
 
 describe("agent exec command composition", () => {
+  it("treats invalid timeout syntax as an ordinary usage error", async () => {
+    const runtime = createTestRuntime();
+
+    const result = await runAgentExecWithMock(
+      "inspect",
+      { timeout: "nope", json: true },
+      runtime,
+      vi.fn(async () => successResult()),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      envelope: { status: "error", error: { kind: "exception" } },
+    });
+  });
+
+  it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
+    const runtime = createTestRuntime();
+    const timeout = new AgentRunTerminalOutcomeError(
+      new Error("attempt aborted before prompt submission"),
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    );
+
+    const result = await runAgentExecWithMock(
+      "inspect",
+      { json: true },
+      runtime,
+      vi.fn(async () => {
+        throw timeout;
+      }),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 2,
+      envelope: {
+        status: "timeout",
+        error: {
+          kind: "timeout",
+          message: "attempt aborted before prompt submission",
+        },
+      },
+    });
+  });
+
+  it("rejects invalid programmatic Code Mode values", async () => {
+    const runtime = createTestRuntime();
+
+    const result = await runAgentExecWithMock(
+      "inspect",
+      { codeMode: "invalid" as never },
+      runtime,
+      vi.fn(async () => successResult()),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      envelope: {
+        status: "error",
+        error: { kind: "exception", message: "--code-mode must be one of direct, auto, code." },
+      },
+    });
+  });
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
+      import { registerHooks } from "node:module";
       import { agentExecCommand } from "./src/commands/agent-exec.ts";
-      import { enableConsoleCapture, routeLogsToStderr } from "./src/logging.ts";
+      import { enableConsoleCapture, routeLogsToStderr } from "./src/logging/console.ts";
       import { defaultRuntime } from "./src/runtime.ts";
 
       routeLogsToStderr();
       enableConsoleCapture();
-      const result = await agentExecCommand("inspect", {}, defaultRuntime, {
-        runAgent: async () => ({
-          payloads: [{ text: "india" }],
-          meta: {
-            durationMs: 1,
-            agentMeta: {
-              sessionId: "session-result",
-              provider: "openai",
-              model: "gpt-5.6-sol",
-            },
-          },
-        }),
+      registerHooks({
+        resolve(specifier, context, nextResolve) {
+          if (specifier === "./agent.js" && context.parentURL?.endsWith("/commands/agent-exec.ts")) {
+            return {
+              url: "data:text/javascript," + encodeURIComponent(${JSON.stringify(`export const agentCommand = async () => (${JSON.stringify(successResult("india"))});`)}),
+              shortCircuit: true,
+            };
+          }
+          return nextResolve(specifier, context);
+        },
       });
+      const result = await agentExecCommand("inspect", {}, defaultRuntime);
       process.exitCode = result.exitCode;
     `;
 
@@ -208,137 +212,182 @@ describe("agent exec command composition", () => {
     expect(stderr).not.toContain("india");
   });
 
-  it("treats invalid timeout syntax as an ordinary usage error", async () => {
-    const { runtime } = createRuntime();
-
-    const result = await agentExecCommand("inspect", { timeout: "nope", json: true }, runtime, {
-      runAgent: vi.fn(async () => successResult()),
-    });
-
-    expect(result).toMatchObject({
-      exitCode: 1,
-      envelope: { status: "error", error: { kind: "exception" } },
-    });
-  });
-
-  it("maps structured thrown timeouts to exit code 2", async () => {
-    const { runtime } = createRuntime();
-    const timeout = Object.assign(new Error("deadline elapsed"), { name: "TimeoutError" });
-
-    const result = await agentExecCommand("inspect", { json: true }, runtime, {
-      runAgent: vi.fn(async () => {
-        throw timeout;
-      }),
-    });
-
-    expect(result).toMatchObject({
-      exitCode: 2,
-      envelope: { status: "timeout", error: { kind: "timeout" } },
-    });
-  });
-
-  it("creates and removes ephemeral state around the embedded run", async () => {
-    const { runtime } = createRuntime();
-    let observedStateDir = "";
-    let observedConfig: unknown;
-    const result = await agentExecCommand("inspect", {}, runtime, {
-      runAgent: vi.fn(async () => {
-        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-        observedConfig = JSON.parse(
-          await fs.readFile(process.env.OPENCLAW_CONFIG_PATH ?? "", "utf8"),
-        );
-        await expect(fs.stat(observedStateDir)).resolves.toBeDefined();
+  it("flushes opted-in identity evidence through its owned direct-local writer", async () => {
+    const root = tempDirs.make("openclaw-agent-exec-audit-");
+    setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
+    const result = await runAgentExecWithMock(
+      "inspect",
+      { stateDir: root },
+      createTestRuntime(),
+      async () => {
+        expect(
+          enqueueExecutionIdentityContextAtAdmission(
+            {
+              runId: "run",
+              agentId: "main",
+              ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+              runtime: { kind: "embedded" },
+            },
+            {
+              enabled: true,
+              contextId: "context",
+              executionId: "execution",
+              now: Date.now(),
+              runtimeInstanceId: "runtime",
+            },
+          ),
+        ).toMatchObject({ accepted: true });
         return successResult();
-      }),
-    });
-
-    expect(result.exitCode).toBe(0);
-    expect(observedConfig).toMatchObject({
-      agents: { defaults: { skipBootstrap: true, sandbox: { mode: "off" } } },
-      tools: {
-        profile: "coding",
-        fs: { workspaceOnly: true },
-        exec: { host: "gateway", mode: "full" },
       },
+    );
+    expect(result.exitCode).toBe(0);
+    const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
+      readOnly: true,
     });
-    await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    try {
+      const row = database
+        .prepare("SELECT context_json FROM execution_identity_contexts WHERE execution_id = ?")
+        .get("execution") as { context_json: string };
+      expect(JSON.parse(row.context_json)).toMatchObject({
+        contextId: "context",
+        executionId: "execution",
+        runId: "run",
+        ingress: { kind: "local-cli", state: "present" },
+      });
+    } finally {
+      database.close();
+    }
   });
 
-  it("classifies cleanup failures before emitting the JSON envelope", async () => {
-    const { runtime, log } = createRuntime();
+  it("keeps operator-installed plugins hidden under --isolated", async () => {
+    const operatorStateDir = tempDirs.make("openclaw-agent-exec-plugin-isolated-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: operatorStateDir }, async () => {
+      const result = await runAgentExecWithMock(
+        "inspect",
+        { isolated: true },
+        createTestRuntime(),
+        async () => {
+          const { resolveDefaultPluginExtensionsDir } = await import("../plugins/install-paths.js");
+          const extensionsDir = resolveDefaultPluginExtensionsDir();
+          expect(extensionsDir).not.toBe(path.join(operatorStateDir, "extensions"));
+          expect(path.basename(path.dirname(extensionsDir))).toMatch(/^openclaw-agent-exec-/u);
+          return successResult();
+        },
+      );
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  it.each([
+    { mode: "direct", configured: true, capability: "preferred", enabled: false },
+    { mode: "code", configured: false, capability: "capable", enabled: true },
+    { mode: "auto", configured: false, capability: "preferred", enabled: true },
+  ] as const)(
+    "honors --code-mode $mode over model settings ($capability)",
+    async ({ mode, configured, capability, enabled }) => {
+      const runtime = createTestRuntime();
+      const codeMode = { enabled: configured, maxOutputBytes: 4096 };
+      setRuntimeConfigSnapshot({
+        agents: {
+          defaults: {
+            systemAgent: { agentId: "main" },
+            models: { "test/model-a": { codeMode: configured } },
+          },
+          entries: {
+            main: { models: { "test/model-a": { codeMode: configured } } },
+          },
+        },
+        tools: { codeMode, toolSearch: false },
+      });
+      let visibleTools: string[] | undefined;
+      try {
+        const result = await runAgentExecWithMock(
+          "inspect",
+          { codeMode: mode, model: "test/model-a", localModelLean: true },
+          runtime,
+          vi.fn(async (invocation) => {
+            const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
+            expect(config.tools?.codeMode).toEqual(codeMode);
+            expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
+            const surface = createAgentHarnessToolSurfaceRuntimeCore({
+              config,
+              agentId: "main",
+              modelProvider: "test",
+              modelId: "model-a",
+              model: { compat: { codeMode: capability } },
+              codeModeOverride: invocation.codeModeOverride as boolean | "auto" | undefined,
+              modelToolsEnabled: true,
+              executeTool: async () => ({ content: [], details: {} }),
+            });
+            try {
+              visibleTools = surface
+                .compactTools([createStubTool("read")])
+                .tools.map((tool) => tool.name);
+            } finally {
+              surface.cleanup();
+            }
+            return successResult();
+          }),
+        );
+        expect(result.exitCode).toBe(0);
+        expect(visibleTools).toEqual(enabled ? ["exec", "wait"] : ["read"]);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it("preserves context overflow when temporary-state cleanup also fails", async () => {
+    const runtime = createTestRuntime();
+    const { log, error } = runtime;
     let observedStateDir = "";
     vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
 
-    const result = await agentExecCommand("inspect", { json: true }, runtime, {
-      runAgent: vi.fn(async () => {
-        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
-        return successResult();
-      }),
+    const result = await runAgentExecWithMock("inspect", { json: true }, runtime, async () => {
+      observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+      return {
+        ...successResult("partial answer"),
+        meta: {
+          durationMs: 25,
+          error: { kind: "context_overflow", message: "original run failure" },
+        },
+      };
     });
-    tempRoots.push(observedStateDir);
+    externalTempDirs.push(observedStateDir);
 
     expect(result).toMatchObject({
       exitCode: 1,
       envelope: {
-        ok: false,
         status: "error",
-        error: { kind: "exception", message: "Agent exec cleanup failed: cleanup denied" },
+        final: "partial answer",
+        payloads: [{ text: "partial answer" }],
+        error: { kind: "context_overflow", message: "original run failure" },
       },
     });
     expect(log).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      ok: false,
-      status: "error",
-      error: { message: "Agent exec cleanup failed: cleanup denied" },
-    });
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual(result.envelope);
+    expect(error).toHaveBeenCalledWith("original run failure");
+    expect(error).toHaveBeenCalledWith("Agent exec cleanup failed: cleanup denied");
   });
 
-  it("threads --cwd to both workspace and tool cwd", async () => {
-    const root = await makeTempRoot("openclaw-agent-exec-cwd-");
-    const { runtime } = createRuntime();
-    const runAgent = vi.fn(async () => successResult());
-
-    await agentExecCommand("inspect", { cwd: root }, runtime, { runAgent });
-
-    expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: root, cwd: root }),
-      expect.any(Object),
-    );
-  });
-
-  it("emits the small stable JSON envelope", async () => {
-    const { runtime, log } = createRuntime();
-
-    const result = await agentExecCommand("inspect", { json: true }, runtime, {
-      runAgent: vi.fn(async () => successResult("final answer")),
+  it("reports exhaustion of the ordered explicit fallback chain", async () => {
+    const runtime = createTestRuntime();
+    const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
+      if (typeof opts.onModelFallbackExhausted !== "function") {
+        throw new Error("Missing fallback outcome callback");
+      }
+      opts.onModelFallbackExhausted();
+      return successResult();
     });
 
-    expect(result.exitCode).toBe(0);
-    expect(log).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
-      ok: true,
-      status: "ok",
-      final: "final answer",
-      payloads: [{ text: "final answer" }],
-      usage: { input: 10, output: 2, total: 12 },
-      model: "gpt-5.6-sol",
-      provider: "openai",
-      sessionId: "session-result",
-    });
-  });
-
-  it("honors ordered fallbacks with an explicit primary model", async () => {
-    const { runtime } = createRuntime();
-    const runAgent = vi.fn(async () => successResult());
-
-    await agentExecCommand(
+    const result = await runAgentExecWithMock(
       "inspect",
       {
         model: "openai/gpt-5.6-sol",
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
       },
       runtime,
-      { runAgent },
+      runAgent,
     );
 
     expect(runAgent).toHaveBeenCalledWith(
@@ -348,179 +397,101 @@ describe("agent exec command composition", () => {
       }),
       expect.any(Object),
     );
-  });
-
-  it("keeps an explicit state directory and deletes only its temporary config", async () => {
-    const stateDir = await makeTempRoot("openclaw-agent-exec-state-");
-    const marker = path.join(stateDir, "keep.txt");
-    await fs.writeFile(marker, "keep", "utf8");
-    const { runtime } = createRuntime();
-    let configPath = "";
-
-    await agentExecCommand("inspect", { stateDir }, runtime, {
-      runAgent: vi.fn(async () => {
-        configPath = process.env.OPENCLAW_CONFIG_PATH ?? "";
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-        return successResult();
-      }),
+    expect(result).toMatchObject({
+      exitCode: 1,
+      envelope: { ok: false, status: "error", error: { kind: "fallback_exhausted" } },
     });
-
-    await expect(fs.readFile(marker, "utf8")).resolves.toBe("keep");
-    await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("skips external Codex CLI credentials in default auth-env-only mode", async () => {
-    const codexHome = await makeTempRoot("openclaw-agent-exec-codex-home-");
+  it("undoes environment mutations made by loading the config", async () => {
+    const seedDir = tempDirs.make("openclaw-agent-exec-envseed-");
+    const seedPath = path.join(seedDir, "openclaw.json");
     await fs.writeFile(
-      path.join(codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: { access_token: "test-access", refresh_token: "test-refresh" },
-      }),
+      seedPath,
+      JSON.stringify({ env: { vars: { OPENCLAW_EXEC_ENV_PROBE: "from-config" } } }),
       "utf8",
     );
-    const previousCodexHome = process.env.CODEX_HOME;
-    const previousOpenAiApiKey = process.env.OPENAI_API_KEY;
-    const previousDatabaseUrl = process.env.DATABASE_URL;
-    process.env.CODEX_HOME = codexHome;
-    process.env.OPENAI_API_KEY = "test-openai-key";
-    process.env.DATABASE_URL = "postgres://test.invalid/database";
-    const { runtime } = createRuntime();
-    let profileIds: string[] = [];
-    let runtimeProfileIds: string[] = [];
-    let hostExecApiKey: string | undefined;
-    let hostExecDatabaseUrl: string | undefined;
-    try {
-      const { withHostExecInheritedEnvOmitted } = await import("../infra/host-env-security.js");
-      await withHostExecInheritedEnvOmitted(["DATABASE_URL"], () =>
-        agentExecCommand("inspect", {}, runtime, {
-          runAgent: vi.fn(async () => {
-            profileIds = Object.keys(
-              ensureAuthProfileStore(undefined, {
-                allowKeychainPrompt: false,
-                externalCliProviderIds: ["openai"],
-              }).profiles,
-            );
-            runtimeProfileIds = Object.keys(
-              loadAuthProfileStoreForRuntime(undefined, {
-                allowKeychainPrompt: false,
-                externalCliProviderIds: ["openai"],
-              }).profiles,
-            );
-            const { sanitizeHostExecEnv } = await import("../infra/host-env-security.js");
-            const hostExecEnv = sanitizeHostExecEnv({ baseEnv: process.env });
-            hostExecApiKey = hostExecEnv.OPENAI_API_KEY;
-            hostExecDatabaseUrl = hostExecEnv.DATABASE_URL;
-            return successResult();
-          }),
-        }),
-      );
-    } finally {
-      if (previousCodexHome === undefined) {
-        delete process.env.CODEX_HOME;
-      } else {
-        process.env.CODEX_HOME = previousCodexHome;
-      }
-      if (previousOpenAiApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previousOpenAiApiKey;
-      }
-      if (previousDatabaseUrl === undefined) {
-        delete process.env.DATABASE_URL;
-      } else {
-        process.env.DATABASE_URL = previousDatabaseUrl;
-      }
-    }
+    const runtime = createTestRuntime();
+    let observedDuringRun: string | undefined;
 
-    expect(profileIds).toEqual([]);
-    expect(runtimeProfileIds).toEqual([]);
-    expect(hostExecApiKey).toBeUndefined();
-    expect(hostExecDatabaseUrl).toBeUndefined();
+    await runAgentExecWithMock(
+      "inspect",
+      { config: seedPath },
+      runtime,
+      vi.fn(async () => {
+        observedDuringRun = process.env.OPENCLAW_EXEC_ENV_PROBE;
+        return successResult();
+      }),
+    );
+
+    expect(observedDuringRun).toBe("from-config");
+    // Config-applied values must not outlive the command, or a later isolated
+    // run in the same process would inherit them.
+    expect(process.env.OPENCLAW_EXEC_ENV_PROBE).toBeUndefined();
+  });
+});
+
+describe("agent exec base config resolution", () => {
+  it("rejects a missing or invalid pinned config instead of falling back", async () => {
+    const missing = path.join(tempDirs.make("openclaw-agent-exec-seed-"), "absent.json");
+    await expect(resolveExecBaseConfig({ config: missing })).rejects.toThrow(
+      "--config file not found",
+    );
+
+    const broken = await writeSeed("{ this is not a config");
+    await expect(resolveExecBaseConfig({ config: broken })).rejects.toThrow();
   });
 
-  it("blocks direct persisted credential reads in default auth-env-only mode", async () => {
-    const normalStateDir = await makeTempRoot("openclaw-agent-exec-hidden-auth-");
-    const normalAgentDir = path.join(normalStateDir, "agents", "main", "agent");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = normalStateDir;
-    const { saveAuthProfileStore } = await import("../agents/auth-profiles.js");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:stored": { type: "api_key", provider: "openai", key: "test-key" },
-        },
-      },
-      normalAgentDir,
-    );
-    const { runtime } = createRuntime();
-    let persistedCredential: unknown;
-    let ownerAgentDir: string | undefined;
-    try {
-      await agentExecCommand("inspect", {}, runtime, {
-        runAgent: vi.fn(async () => {
-          persistedCredential = findPersistedAuthProfileCredential({
-            agentDir: normalAgentDir,
-            profileId: "openai:stored",
-          });
-          ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
-            agentDir: normalAgentDir,
-            profileId: "openai:stored",
-          });
-          return successResult();
-        }),
-      });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+  async function writeSeed(body: string): Promise<string> {
+    const dir = tempDirs.make("openclaw-agent-exec-seed-");
+    const seedPath = path.join(dir, "openclaw.json");
+    await fs.writeFile(seedPath, body, "utf8");
+    return seedPath;
+  }
 
-    expect(persistedCredential).toBeUndefined();
-    expect(ownerAgentDir).toBeUndefined();
+  it("rejects --config paired with a mode that reads no config", async () => {
+    const seedPath = await writeSeed("{}");
+
+    await expect(resolveExecBaseConfig({ config: seedPath, isolated: true })).rejects.toThrow(
+      "--config cannot be combined with --isolated",
+    );
+    await expect(resolveExecBaseConfig({ config: seedPath, authEnvOnly: true })).rejects.toThrow(
+      "--config cannot be combined with --auth-env-only",
+    );
+  });
+});
+
+describe("agent exec tool lifetime", () => {
+  const runtime = createTestRuntime();
+
+  it("closes retained tool closures when the invocation ends", async () => {
+    const source = vi.fn(async () => ({ content: [], details: {} }));
+    let retained: ReturnType<typeof wrapToolWithBeforeToolCallHook> | undefined;
+    const result = await runAgentExecWithMock("inspect", {}, runtime, async () => {
+      retained = wrapToolWithBeforeToolCallHook({ ...createStubTool("read"), execute: source });
+      return successResult();
+    });
+
+    expect(result.exitCode).toBe(0);
+    await expect(retained?.execute("late", {})).rejects.toThrow();
+    expect(source).not.toHaveBeenCalled();
   });
 
-  it("uses the normal stored auth profile when auth-env-only is disabled", async () => {
-    const normalStateDir = await makeTempRoot("openclaw-agent-exec-normal-state-");
-    const normalAgentDir = path.join(normalStateDir, "agents", "main", "agent");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = normalStateDir;
-    const { saveAuthProfileStore } = await import("../agents/auth-profiles.js");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:stored": { type: "api_key", provider: "openai", key: "test-key" },
-        },
-      },
-      normalAgentDir,
-    );
-    const { runtime } = createRuntime();
-    let profileIds: string[] = [];
-    try {
-      await agentExecCommand("inspect", { authEnvOnly: false }, runtime, {
-        runAgent: vi.fn(async () => {
-          expect(process.env.OPENCLAW_STATE_DIR).not.toBe(normalStateDir);
-          profileIds = Object.keys(
-            ensureAuthProfileStore(undefined, {
-              allowKeychainPrompt: false,
-              syncExternalCli: false,
-            }).profiles,
-          );
-          return successResult();
-        }),
-      });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
-
-    expect(profileIds).toContain("openai:stored");
+  it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
+    let retainedGuard: (() => void) | undefined;
+    const effect = vi.fn();
+    await runAgentExecWithMock("inspect", {}, runtime, async () => {
+      retainedGuard = captureAgentToolSourceExecutionGuard();
+      return successResult();
+    });
+    const replacement = await runAgentExecWithMock("inspect", {}, runtime, async () => {
+      expect(() => {
+        retainedGuard?.();
+        effect();
+      }).toThrow("execution scope is no longer active");
+      return successResult();
+    });
+    expect(replacement.exitCode).toBe(0);
+    expect(effect).not.toHaveBeenCalled();
   });
 });

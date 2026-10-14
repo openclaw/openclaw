@@ -1,0 +1,77 @@
+import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
+import type { DevicePairingBinding } from "./device-pairing-read.types.js";
+import {
+  getPairedDevice,
+  hasEffectivePairedDeviceRole,
+  resolveNodePairingState,
+  type NodePairingGeneration,
+  type NodePairingState,
+} from "./device-pairing.js";
+import type { NodeApprovalSurface } from "./node-pairing-surface.js";
+
+export type { NodePairingGeneration } from "./device-pairing.js";
+
+/** Registry projection of a paired device's authenticated node-role state. */
+export type PairedDeviceNodeBinding = DevicePairingBinding;
+
+export async function resolveCurrentPairedDeviceNodeBinding(
+  nodeId: string,
+): Promise<PairedDeviceNodeBinding | undefined> {
+  await getPairedDevice(nodeId);
+  return getPublishedPairedDeviceBinding(nodeId.trim()) ?? undefined;
+}
+
+export function isPairedDeviceNodeBindingCurrent(
+  nodeId: string,
+  expected: PairedDeviceNodeBinding,
+): boolean {
+  const current = getPublishedPairedDeviceBinding(nodeId.trim());
+  return Boolean(
+    current &&
+    current.identity === expected.identity &&
+    (!expected.generation || current.generation === expected.generation),
+  );
+}
+
+export async function captureNodePairingGeneration(
+  nodeId: string,
+): Promise<NodePairingGeneration | null> {
+  return resolveNodePairingState(await getPairedDevice(nodeId))?.generation ?? null;
+}
+
+/** Binds a connected session to the exact device key and node token used for authentication. */
+export async function captureAuthenticatedNodePairingState(params: {
+  nodeId: string;
+  publicKey: string;
+  token: string;
+  baseDir?: string;
+}): Promise<(NodePairingState & { approvedSurface: NodeApprovalSurface }) | null> {
+  const device = await getPairedDevice(params.nodeId, params.baseDir);
+  if (
+    !device ||
+    device.publicKey !== params.publicKey ||
+    device.tokens?.node?.token !== params.token ||
+    !hasEffectivePairedDeviceRole(device, "node")
+  ) {
+    return null;
+  }
+  const state = resolveNodePairingState(device);
+  return state
+    ? {
+        ...state,
+        approvedSurface: {
+          caps: device.nodeSurface?.caps ?? [],
+          commands: device.nodeSurface?.commands ?? [],
+          permissions: device.nodeSurface?.permissions,
+        },
+      }
+    : null;
+}
+
+export async function isNodePairingGenerationCurrent(
+  generation: NodePairingGeneration,
+): Promise<boolean> {
+  await getPairedDevice(generation.nodeId);
+  const current = getPublishedPairedDeviceBinding(generation.nodeId);
+  return current?.generation === generation.key;
+}

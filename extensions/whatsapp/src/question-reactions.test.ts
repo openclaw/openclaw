@@ -16,7 +16,6 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
 
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
-  clearWhatsAppQuestionReactionTargetsForTest,
   maybeResolveWhatsAppQuestionReaction,
   registerWhatsAppQuestionReactionTargetForDeliveredPayload,
 } from "./question-reactions.js";
@@ -44,7 +43,6 @@ function buildPayload() {
 
 describe("WhatsApp question reactions", () => {
   beforeEach(() => {
-    clearWhatsAppQuestionReactionTargetsForTest();
     hoisted.resolve.mockReset().mockResolvedValue({
       status: "answered",
       questionId: "choice",
@@ -52,68 +50,62 @@ describe("WhatsApp question reactions", () => {
     });
   });
 
-  it("round-trips a delivered message and silently consumes a stale second tap", async () => {
-    const payload = buildPayload();
-    expect(payload).not.toBeNull();
-    expect(
-      registerWhatsAppQuestionReactionTargetForDeliveredPayload({
-        cfg: {},
-        target: { channel: "whatsapp", accountId: "default" },
-        payload: payload!,
-        results: [{ channel: "whatsapp", messageId: "wa-1", toJid: "1555@s.whatsapp.net" }],
-      }),
-    ).toBe(true);
-    const msg = {
-      key: { remoteJid: "1555@s.whatsapp.net", participant: "1555@s.whatsapp.net" },
-      message: {
-        reactionMessage: {
-          text: "2️⃣",
-          key: { id: "wa-1", remoteJid: "1555@s.whatsapp.net" },
-        },
-      },
-    };
-    const debug = vi.fn();
-
-    await expect(
-      maybeResolveWhatsAppQuestionReaction({
-        cfg: {},
-        accountId: "default",
-        msg: {
-          ...msg,
-          message: {
-            reactionMessage: {
-              ...msg.message.reactionMessage,
-              text: "4️⃣",
+  it.each([undefined, "whatsapp", "other-channel"])(
+    "matches receipt identities through JID aliases with raw channel %s",
+    async (channel) => {
+      const payload = buildPayload();
+      expect(payload).not.toBeNull();
+      expect(
+        registerWhatsAppQuestionReactionTargetForDeliveredPayload({
+          cfg: {},
+          target: { channel: "whatsapp", accountId: "default" },
+          payload: payload!,
+          results: [
+            {
+              channel: "whatsapp",
+              messageId: "summary",
+              toJid: "group@g.us",
+              receipt: {
+                platformMessageIds: ["wa-1"],
+                sentAt: 1,
+                parts: [
+                  {
+                    platformMessageId: "wa-1",
+                    kind: "text",
+                    index: 0,
+                    raw: { channel, messageId: "wa-1", toJid: "1555@s.whatsapp.net" },
+                  },
+                ],
+              },
             },
+          ],
+        }),
+      ).toBe(true);
+      const msg = {
+        key: { remoteJid: "group@g.us", participant: "1555@s.whatsapp.net" },
+        message: {
+          reactionMessage: {
+            text: "2️⃣",
+            key: { id: "wa-1", remoteJid: "group@g.us" },
           },
         },
-        senderId: "+1555",
-        logDebug: debug,
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      maybeResolveWhatsAppQuestionReaction({
-        cfg: {},
-        accountId: "default",
-        msg,
-        senderId: "+1555",
-        logDebug: debug,
-      }),
-    ).resolves.toBe(true);
-    expect(hoisted.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId, optionValue: "Two", senderId: "+1555" }),
-    );
+      };
+      const debug = vi.fn();
 
-    await expect(
-      maybeResolveWhatsAppQuestionReaction({
-        cfg: {},
-        accountId: "default",
-        msg,
-        senderId: "+1555",
-        logDebug: debug,
-      }),
-    ).resolves.toBe(true);
-    expect(hoisted.resolve).toHaveBeenCalledOnce();
-    expect(debug).toHaveBeenCalledWith(expect.stringContaining("stale question reaction ignored"));
-  });
+      await expect(
+        maybeResolveWhatsAppQuestionReaction({
+          cfg: {},
+          accountId: "default",
+          msg,
+          senderId: "+1555",
+          resolveReactionTargetJids: async () => ["1555@s.whatsapp.net"],
+          logDebug: debug,
+        }),
+      ).resolves.toBe(true);
+      expect(hoisted.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ questionId, optionValue: "Two", senderId: "+1555" }),
+      );
+      expect(hoisted.resolve).toHaveBeenCalledOnce();
+    },
+  );
 });

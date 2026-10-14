@@ -1,4 +1,3 @@
-// Defines plugin hook registry entry and dispatch types.
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginHookRegistration as TypedPluginHookRegistration } from "./hook-types.js";
 
@@ -21,6 +20,7 @@ export type HookRunnerRegistry = {
 export type GlobalHookRunnerRegistry = HookRunnerRegistry & {
   plugins: Array<{
     id: string;
+    packageVersion?: string;
     status: "loaded" | "disabled" | "error";
   }>;
 };

@@ -1,4 +1,3 @@
-// Volcengine API module exposes the plugin public contract.
 import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,7 +32,6 @@ export function applyVolcengineToolSchemaCompat<T extends { compat?: ModelCompat
   });
 }
 
-export { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 export {
   DOUBAO_BASE_URL,
   DOUBAO_CODING_BASE_URL,

@@ -1,40 +1,13 @@
 // Discord tests cover receive recovery plugin behavior.
+import { DAVESession, NetworkingStatusCode, VoiceConnectionStatus } from "@discordjs/voice";
+import { VoiceOpcodes } from "discord-api-types/voice/v8";
 import { OpusError } from "libopus-wasm";
 import { describe, expect, it, vi } from "vitest";
-import {
-  analyzeVoiceReceiveError,
-  createVoiceReceiveRecoveryState,
-  enableDaveReceivePassthrough,
-  noteVoiceDecryptFailure,
-} from "./receive-recovery.js";
+import { analyzeVoiceReceiveError, recoverDaveZeroTransition } from "./receive-recovery.js";
 
 const OPUS_INVALID_PACKET_CODE = -4;
 
 describe("voice receive recovery", () => {
-  it("treats passthrough-disabled decrypt errors as decrypt failures", () => {
-    expect(
-      analyzeVoiceReceiveError(
-        new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-      ),
-    ).toEqual({
-      message: "Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)",
-      isAbortLike: false,
-      isDecodeCorruption: false,
-      shouldAttemptPassthrough: true,
-      countsAsDecryptFailure: true,
-    });
-  });
-
-  it("treats WASM bounds traps as recoverable receive failures", () => {
-    expect(analyzeVoiceReceiveError(new Error("memory access out of bounds"))).toEqual({
-      message: "memory access out of bounds",
-      isAbortLike: false,
-      isDecodeCorruption: false,
-      shouldAttemptPassthrough: false,
-      countsAsDecryptFailure: true,
-    });
-  });
-
   it("treats corrupt Opus packets as non-recoverable decode noise", () => {
     expect(
       analyzeVoiceReceiveError(new OpusError(OPUS_INVALID_PACKET_CODE, "not inspected", "decode")),
@@ -86,62 +59,140 @@ describe("voice receive recovery", () => {
     });
   });
 
-  it("gates recovery after repeated decrypt failures in the same window", () => {
-    const state = createVoiceReceiveRecoveryState();
-
-    expect(noteVoiceDecryptFailure(state, 1_000)).toEqual({
-      firstFailure: true,
-      shouldRecover: false,
+  it("recovers transition zero through the real DAVE invalidation and key-package events", () => {
+    const dave = new DAVESession(1, "bot", "c1", { decryptionFailureTolerance: 0 });
+    const keyPackage = Buffer.from("new-key-package");
+    const nativeSession = {
+      decrypt: vi.fn(() => {
+        throw new Error("UnencryptedWhenPassthroughDisabled");
+      }),
+      getSerializedKeyPackage: vi.fn(() => keyPackage),
+      ready: true,
+      reinit: vi.fn(),
+      setPassthroughMode: vi.fn(),
+    };
+    dave.session = nativeSession as unknown as NonNullable<typeof dave.session>;
+    dave.lastTransitionId = 0;
+    const gateway = {
+      sendBinaryMessage: vi.fn(),
+      sendPacket: vi.fn(),
+    };
+    dave.on("invalidateTransition", (transitionId) => {
+      gateway.sendPacket({
+        op: VoiceOpcodes.DaveMlsInvalidCommitWelcome,
+        d: { transition_id: transitionId },
+      });
     });
-    expect(noteVoiceDecryptFailure(state, 2_000)).toEqual({
-      firstFailure: false,
-      shouldRecover: false,
+    dave.on("keyPackage", (nextKeyPackage) => {
+      gateway.sendBinaryMessage(VoiceOpcodes.DaveMlsKeyPackage, nextKeyPackage);
     });
-    expect(noteVoiceDecryptFailure(state, 3_000)).toEqual({
-      firstFailure: false,
-      shouldRecover: true,
-    });
-  });
-
-  it("enables passthrough only for ready DAVE sessions", () => {
-    const setPassthroughMode = vi.fn();
-    const onVerbose = vi.fn();
     const onWarn = vi.fn();
 
+    expect(() => dave.decrypt(Buffer.from("encrypted-audio"), "speaker")).toThrow(
+      "UnencryptedWhenPassthroughDisabled",
+    );
+
     expect(
-      enableDaveReceivePassthrough({
+      recoverDaveZeroTransition({
         target: {
           guildId: "g1",
           channelId: "c1",
           connection: {
             state: {
-              status: "ready",
+              status: VoiceConnectionStatus.Ready,
               networking: {
                 state: {
-                  code: "networking-ready",
+                  code: NetworkingStatusCode.Ready,
+                  dave,
+                },
+              },
+            },
+          },
+        },
+        sdk: { VoiceConnectionStatus, NetworkingStatusCode },
+        onWarn,
+      }),
+    ).toBe("recovered");
+
+    expect(nativeSession.reinit).toHaveBeenCalledWith(1, "bot", "c1");
+    expect(gateway.sendPacket).toHaveBeenCalledWith({
+      op: VoiceOpcodes.DaveMlsInvalidCommitWelcome,
+      d: { transition_id: 0 },
+    });
+    expect(gateway.sendBinaryMessage).toHaveBeenCalledWith(
+      VoiceOpcodes.DaveMlsKeyPackage,
+      keyPackage,
+    );
+    expect(gateway.sendPacket.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.sendBinaryMessage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(dave.reinitializing).toBe(true);
+    expect(dave.decrypt(Buffer.from("encrypted-audio"), "speaker")).toBeNull();
+    expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it("keeps bounded recovery when a real DAVE debug listener fails before invalidation", () => {
+    const dave = new DAVESession(1, "bot", "c1", { decryptionFailureTolerance: 0 });
+    dave.lastTransitionId = 0;
+    dave.on("debug", () => {
+      throw new Error("debug subscriber unavailable");
+    });
+    const onWarn = vi.fn();
+
+    expect(
+      recoverDaveZeroTransition({
+        target: {
+          guildId: "g1",
+          channelId: "c1",
+          connection: {
+            state: {
+              status: VoiceConnectionStatus.Ready,
+              networking: {
+                state: { code: NetworkingStatusCode.Ready, dave },
+              },
+            },
+          },
+        },
+        sdk: { VoiceConnectionStatus, NetworkingStatusCode },
+        onWarn,
+      }),
+    ).toBe("not-attempted");
+
+    expect(dave.reinitializing).toBe(false);
+    expect(onWarn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to recover DAVE transition 0"),
+    );
+  });
+
+  it("does not invalidate disconnected voice connections", () => {
+    const recoverFromInvalidTransition = vi.fn();
+
+    expect(
+      recoverDaveZeroTransition({
+        target: {
+          guildId: "g1",
+          channelId: "c1",
+          connection: {
+            state: {
+              status: VoiceConnectionStatus.Disconnected,
+              networking: {
+                state: {
+                  code: NetworkingStatusCode.Ready,
                   dave: {
-                    session: {
-                      setPassthroughMode,
-                    },
+                    lastTransitionId: 0,
+                    reinitializing: false,
+                    recoverFromInvalidTransition,
                   },
                 },
               },
             },
           },
         },
-        sdk: {
-          VoiceConnectionStatus: { Ready: "ready" },
-          NetworkingStatusCode: { Ready: "networking-ready", Resuming: "networking-resuming" },
-        },
-        reason: "test",
-        expirySeconds: 15,
-        onVerbose,
-        onWarn,
+        sdk: { VoiceConnectionStatus, NetworkingStatusCode },
+        onWarn: vi.fn(),
       }),
-    ).toBe(true);
+    ).toBe("not-attempted");
 
-    expect(setPassthroughMode).toHaveBeenCalledWith(true, 15);
-    expect(onVerbose).toHaveBeenCalled();
-    expect(onWarn).not.toHaveBeenCalled();
+    expect(recoverFromInvalidTransition).not.toHaveBeenCalled();
   });
 });

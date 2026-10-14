@@ -1,4 +1,3 @@
-// Imessage API module exposes the plugin public contract.
 export { imessagePlugin } from "./src/channel.js";
 export { imessageSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -9,9 +8,8 @@ export {
   resolveIMessageAccount,
 } from "./src/accounts.js";
 export {
-  testing,
-  testing as __testing,
   createIMessageConversationBindingManager,
+  createIMessageConversationBindingManagerV2,
 } from "./src/conversation-bindings.js";
 export {
   matchIMessageAcpConversation,
@@ -44,7 +42,7 @@ export {
   resolveServicePrefixedOrChatAllowTarget,
   resolveServicePrefixedTarget,
   type ServicePrefix,
-} from "./src/target-parsing-helpers.js";
+} from "openclaw/plugin-sdk/channel-targets";
 export {
   formatIMessageChatTarget,
   type IMessageAllowTarget,

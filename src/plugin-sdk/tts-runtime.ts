@@ -1,4 +1,8 @@
-// TTS runtime exports expose text-to-speech runtime helpers through the plugin SDK.
+// TTS runtime exports expose host-owned text-to-speech helpers through the plugin SDK.
+export { maybeApplyTtsToPayload, textToSpeech } from "../tts/tts.js";
+export type { TtsResult } from "../tts/tts-runtime-types.js";
+export { prepareTtsPreferences, type PreparedTtsPreferences } from "../tts/tts-preferences.js";
+
 export {
   TtsAutoSchema,
   TtsConfigSchema,
@@ -9,25 +13,27 @@ export {
 /** Compatibility no-op retained for callers that prewarm facade runtimes generically. */
 export function prewarmTtsRuntimeFacade(): void {}
 
-// TTS runtime helpers are owned by speech-core; this SDK facade stays as a thin
-// export barrel so public imports do not depend on bundled plugin internals.
 export {
   buildTtsSystemPromptHint,
+  buildTtsSystemPromptHintAsync,
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,
   getTtsMaxLength,
   getTtsPersona,
   getTtsProvider,
+  getTtsProviderAsync,
   isSummarizationEnabled,
   isTtsEnabled,
   isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
   listSpeechVoices,
   listTtsPersonas,
-  maybeApplyTtsToPayload,
   resolveExplicitTtsOverrides,
+  resolveExplicitTtsOverridesAsync,
   resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   resolveTtsProviderOrder,
   setLastTtsAttempt,
   setSummarizationEnabled,
@@ -38,7 +44,6 @@ export {
   setTtsProvider,
   synthesizeSpeech,
   streamSpeech,
-  textToSpeech,
   textToSpeechStream,
   textToSpeechTelephony,
   testApi,
@@ -47,9 +52,8 @@ export {
   type ResolvedTtsModelOverrides,
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
-  type TtsResult,
   type TtsSynthesisResult,
   type TtsSynthesisStreamResult,
   type TtsStreamResult,
   type TtsTelephonyResult,
-} from "../../packages/speech-core/runtime-api.js";
+} from "../tts/runtime-api.js";

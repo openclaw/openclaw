@@ -1,44 +1,44 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
+import {
+  releaseChatAttachmentPayloads,
+  releaseDisplacedChatAttachmentPayloads,
+} from "../chat/attachment-payload-store.ts";
+import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachment-reads.ts";
 
 export class NewSessionAttachmentDraft {
   attachments: ChatAttachment[] = [];
-  pendingReads = 0;
-  private readController = new AbortController();
+  readonly reads: ChatAttachmentReadLifecycle;
 
-  constructor(private readonly notify: () => void) {}
-
-  get readSignal() {
-    return this.readController.signal;
+  constructor(
+    private readonly notify: () => void,
+    private readonly onUserChange: () => void,
+  ) {
+    this.reads = new ChatAttachmentReadLifecycle(notify);
   }
 
   replace(attachments: ChatAttachment[]) {
     this.attachments = attachments;
+    this.onUserChange();
     this.notify();
   }
 
-  updatePending(readSignal: AbortSignal, delta: 1 | -1) {
-    if (this.readController.signal !== readSignal) {
-      return;
-    }
-    this.pendingReads = Math.max(0, this.pendingReads + delta);
+  restore(attachments: ChatAttachment[]) {
+    releaseDisplacedChatAttachmentPayloads(this.attachments, [attachments]);
+    this.attachments = attachments;
     this.notify();
   }
 
-  abortReads() {
-    this.readController.abort();
-    this.readController = new AbortController();
-    this.pendingReads = 0;
-    this.notify();
-  }
-
-  reset(options: { release: boolean }) {
-    this.abortReads();
-    if (options.release) {
-      releaseChatAttachmentPayloads(this.attachments);
-    }
+  take(): ChatAttachment[] {
+    this.reads.abortReads();
+    const attachments = this.attachments;
     this.attachments = [];
     this.notify();
+    return attachments;
+  }
+
+  reset() {
+    this.reads.abortReads();
+    this.clearAfterSubmit(true);
   }
 
   clearAfterSubmit(release: boolean) {

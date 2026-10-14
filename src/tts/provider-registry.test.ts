@@ -1,11 +1,31 @@
 // TTS provider registry tests cover registration and provider resolution.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import {
-  createSpeechProviderRegistry,
-  normalizeSpeechProviderId,
-} from "./provider-registry-core.js";
+  isTtsProviderConfiguredAsync,
+  resolveTtsProviderAsync,
+  resolvePreparedTtsProvider,
+  resolveTtsProviderOrder,
+} from "./tts-provider-resolution.js";
+import { resolveTtsConfig } from "./tts-settings.js";
+
+const mocks = vi.hoisted(() => ({
+  canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => {
+    const normalized = providerId?.trim().toLowerCase();
+    return normalized === "edge" ? "microsoft" : normalized || undefined;
+  }),
+  getSpeechProvider: vi.fn(),
+  listSpeechProviders: vi.fn(),
+}));
+
+vi.mock("./provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./provider-registry.js")>()),
+  canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
+  getSpeechProvider: mocks.getSpeechProvider,
+  listSpeechProviders: mocks.listSpeechProviders,
+}));
 
 function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlugin {
   return {
@@ -23,57 +43,128 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 }
 
 describe("speech provider registry", () => {
-  const getProviderCalls: Array<{ providerId: string; cfg?: OpenClawConfig }> = [];
-  const listProvidersCalls: Array<{ cfg?: OpenClawConfig }> = [];
-  let providers: SpeechProviderPlugin[] = [];
-  let directProvider: SpeechProviderPlugin | undefined;
-  let registry: ReturnType<typeof createSpeechProviderRegistry>;
-
   beforeEach(() => {
-    providers = [];
-    directProvider = undefined;
-    getProviderCalls.length = 0;
-    listProvidersCalls.length = 0;
-    registry = createSpeechProviderRegistry({
-      getProvider: (providerId, cfg) => {
-        getProviderCalls.push({ providerId, cfg });
-        return directProvider;
-      },
-      listProviders: (cfg) => {
-        listProvidersCalls.push({ cfg });
-        return providers;
-      },
+    mocks.canonicalizeSpeechProviderId.mockClear();
+    mocks.getSpeechProvider.mockReset();
+    mocks.listSpeechProviders.mockReset();
+  });
+
+  it("resolves deterministic fallback order and aliases from a supplied provider inventory", () => {
+    const inventory = [
+      { ...createSpeechProvider("openai", ["oai"]), autoSelectOrder: 5 },
+      { ...createSpeechProvider("google"), autoSelectOrder: 1 },
+      { ...createSpeechProvider("azure"), autoSelectOrder: 1 },
+      { ...createSpeechProvider("elevenlabs"), autoSelectOrder: 3 },
+    ];
+
+    expect(
+      resolveTtsProviderOrder(
+        " OAI " as Parameters<typeof resolveTtsProviderOrder>[0],
+        undefined,
+        inventory,
+      ),
+    ).toEqual(["openai", "azure", "google", "elevenlabs"]);
+  });
+
+  it.each([
+    {
+      name: "persisted aliases",
+      preference: { provider: "oai", source: "prefs" } as const,
+      inventory: [createSpeechProvider("openai", ["oai"])],
+      expected: "openai",
+    },
+    {
+      name: "configured providers",
+      preference: { provider: "custom", source: "config" } as const,
+      inventory: [],
+      expected: "custom",
+    },
+  ])("preserves $name in prepared selection", ({ preference, inventory, expected }) => {
+    expect(
+      resolvePreparedTtsProvider({
+        config: resolveTtsConfig({}),
+        preference,
+        providers: inventory,
+        configuredByProvider: new Map(),
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps persona selection conditional on provider availability", () => {
+    const availablePersonaProvider = createSpeechProvider("persona-provider");
+    mocks.getSpeechProvider.mockReturnValueOnce(availablePersonaProvider);
+    const config = resolveTtsConfig({});
+    const preference = { provider: "persona-provider", source: "persona" } as const;
+
+    expect(
+      resolvePreparedTtsProvider({
+        config,
+        preference,
+        providers: [],
+        configuredByProvider: new Map(),
+      }),
+    ).toBe("persona-provider");
+    expect(
+      resolvePreparedTtsProvider({
+        config,
+        preference,
+        providers: [createSpeechProvider("fallback")],
+        configuredByProvider: new Map([["fallback", true]]),
+      }),
+    ).toBe("fallback");
+  });
+
+  it("uses prepared provider objects for configuration without registry rediscovery", async () => {
+    const resolveConfig = vi.fn(() => ({}));
+    const isConfigured = vi.fn(() => true);
+    const provider = {
+      ...createSpeechProvider("openai"),
+      resolveConfig,
+      isConfigured,
+    };
+    const cfg = {} as OpenClawConfig;
+
+    expect(await isTtsProviderConfiguredAsync(resolveTtsConfig(cfg), provider, cfg)).toBe(true);
+    expect(resolveConfig).toHaveBeenCalledOnce();
+    expect(isConfigured).toHaveBeenCalledOnce();
+    expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
+    expect(mocks.getSpeechProvider).not.toHaveBeenCalled();
+  });
+
+  it("selects providers through async availability and observes subsequent changes", async () => {
+    let configured = true;
+    const isConfigured = vi.fn(() => {
+      throw new Error("sync availability must not run");
     });
+    const first = {
+      ...createSpeechProvider("first"),
+      autoSelectOrder: 1,
+      isConfigured,
+      isConfiguredAsync: async () => configured,
+    };
+    const fallback = { ...createSpeechProvider("fallback"), autoSelectOrder: 2 };
+    const availableProviders = [first, fallback];
+    const config = resolveTtsConfig({});
+    const selectionRegistry = createSpeechProviderRegistry({
+      getProvider: (id) => availableProviders.find((provider) => provider.id === id),
+      listProviders: () => availableProviders,
+    });
+
+    expect(await resolveTtsProviderAsync(config, "/unused", selectionRegistry, {})).toBe("first");
+    configured = false;
+    expect(await resolveTtsProviderAsync(config, "/unused", selectionRegistry, {})).toBe(
+      "fallback",
+    );
+    expect(isConfigured).not.toHaveBeenCalled();
   });
 
-  it("lists providers from the speech capability runtime", () => {
-    const cfg = {} as OpenClawConfig;
-    providers = [createSpeechProvider("demo-speech")];
+  it("canonicalizes a voice-model alias omitted from the supplied inventory", () => {
+    const inventory = [createSpeechProvider("openai")];
+    const cfg = {
+      agents: { defaults: { voiceModel: { primary: "edge/edge-tts" } } },
+    } as OpenClawConfig;
 
-    expect(registry.listSpeechProviders(cfg).map((provider) => provider.id)).toEqual([
-      "demo-speech",
-    ]);
-    expect(listProvidersCalls).toEqual([{ cfg }]);
-  });
-
-  it("gets providers by normalized id through the capability runtime", () => {
-    const cfg = {} as OpenClawConfig;
-    directProvider = createSpeechProvider("microsoft", ["edge"]);
-
-    expect(registry.getSpeechProvider(" MICROSOFT ", cfg)).toBe(directProvider);
-    expect(getProviderCalls).toEqual([{ providerId: "microsoft", cfg }]);
-  });
-
-  it("canonicalizes aliases from listed providers when direct lookup misses", () => {
-    providers = [createSpeechProvider("microsoft", ["edge"])];
-
-    expect(normalizeSpeechProviderId("edge")).toBe("edge");
-    expect(registry.canonicalizeSpeechProviderId("edge")).toBe("microsoft");
-  });
-
-  it("returns empty results when the capability runtime has no speech providers", () => {
-    expect(registry.listSpeechProviders()).toStrictEqual([]);
-    expect(registry.getSpeechProvider("demo-speech")).toBeUndefined();
-    expect(registry.canonicalizeSpeechProviderId("demo-speech")).toBe("demo-speech");
+    expect(resolveTtsProviderOrder("openai", cfg, inventory)).toEqual(["openai", "microsoft"]);
+    expect(mocks.canonicalizeSpeechProviderId).toHaveBeenCalledWith("edge", expect.any(Object));
   });
 });

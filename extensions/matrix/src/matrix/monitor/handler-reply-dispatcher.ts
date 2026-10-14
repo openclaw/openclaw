@@ -1,31 +1,33 @@
 import {
   createPreviewMessageReceipt,
-  defineFinalizableLivePreviewAdapter,
-  deliverWithFinalizableLivePreviewAdapter,
+  createReplyPrefixOptions,
+  createTypingCallbacks,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMatrixExtraContent } from "../../outbound.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import type { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
-  buildMatrixFinalizedPreviewContent,
   loadMatrixSendModule,
   matrixTextWouldActivateMentions,
-  redactMatrixDraftEvent,
   type MatrixDraftStreamHandle,
 } from "./handler-runtime.js";
-import { deliverMatrixReplies } from "./replies.js";
 import {
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "./runtime-api.js";
+  deliverMatrixReplies,
+  mergeMatrixReplyDeliveryResults,
+  toMatrixPartialDeliveryError,
+  type MatrixReplyDeliveryResult,
+} from "./replies.js";
 
 type MatrixDraftController = Awaited<ReturnType<typeof createMatrixDraftController>>;
 
@@ -42,13 +44,11 @@ export function createMatrixReplyDispatcher(config: {
   client: MatrixClient;
   roomId: string;
   runtime: RuntimeEnv;
-  textLimit: number;
   replyToMode: ReplyToMode;
   threadTarget?: string;
   replyToEventId?: string;
   accountId: string;
   mediaLocalRoots: readonly string[];
-  tableMode: Parameters<typeof deliverMatrixReplies>[0]["tableMode"];
   logVerboseMessage: (message: string) => void;
 }) {
   const {
@@ -62,310 +62,224 @@ export function createMatrixReplyDispatcher(config: {
     client,
     roomId,
     runtime,
-    textLimit,
     replyToMode,
     threadTarget,
     replyToEventId,
     accountId,
     mediaLocalRoots,
-    tableMode,
     logVerboseMessage,
   } = config;
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
-  let finalReplyDeliveryFailed = false;
+  // Tool, block, and final payloads are delivered separately but share one first-reply slot.
+  const hasRepliedRef = { value: false };
+  const deliverPayload = (reply: ReplyPayload) =>
+    deliverMatrixReplies({
+      cfg,
+      replies: [reply],
+      roomId,
+      client,
+      runtime,
+      replyToMode,
+      hasRepliedRef,
+      threadId: threadTarget,
+      replyToId: threadTarget ?? replyToEventId ?? undefined,
+      accountId,
+      mediaLocalRoots,
+    });
+  const { previewLifecycle } = draftController;
   let nonFinalReplyDeliveryFailed = false;
+  const beginNextBlockDraft = () => {
+    // Each block owns a new draft generation; prior retained/consumed state must not
+    // suppress settlement or cleanup for the next provider-visible event.
+    draftController.beginDraftGeneration();
+    draftController.advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
+    draftStream?.reset();
+    draftController.resetReplyToIdForNextBlock();
+    draftController.updateDraftFromLatestFullText();
+  };
 
-  const dispatcherOptions = {
-    ...prefixOptions,
-    humanDelay,
-    deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-      if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-        const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-        const fallbackPayload =
-          ttsSupplement &&
-          ttsSupplement.visibleTextAlreadyDelivered !== true &&
-          !payload.text?.trim()
-            ? { ...payload, text: ttsSupplement.spokenText }
-            : payload;
-
-        if (draftController.isDraftConsumed()) {
-          await draftStream.discardPending();
-          await deliverMatrixReplies({
-            cfg,
-            replies: [fallbackPayload],
-            roomId,
-            client,
-            runtime,
-            textLimit,
-            replyToMode,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-            tableMode,
-          });
-          return;
-        }
-
-        const payloadReplyToId = normalizeOptionalString(payload.replyToId);
-        const payloadReplyMismatch =
-          replyToMode !== "off" &&
-          !threadTarget &&
-          payloadReplyToId !== draftController.currentReplyToId();
-        let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
-        const canPotentiallyFinalizeDraft =
-          Boolean(payload.text?.trim()) &&
-          !payload.isError &&
-          !payloadReplyMismatch &&
-          !mustDeliverFinalNormally;
-
-        if (canPotentiallyFinalizeDraft) {
-          await draftStream.stop();
-          mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
-        } else {
-          await draftStream.discardPending();
-        }
-        const draftEventId = draftStream.eventId();
-        const draftFinalTextNeedsNormalMentionDelivery =
-          Boolean(draftEventId) &&
-          typeof payload.text === "string" &&
-          Boolean(payload.text.trim()) &&
-          !payload.isError &&
-          !payloadReplyMismatch &&
-          !mustDeliverFinalNormally &&
-          (await matrixTextWouldActivateMentions(client, payload.text));
-
-        if (
-          draftEventId &&
-          payload.text &&
-          !payload.isError &&
-          !hasMedia &&
-          !payloadReplyMismatch &&
-          !mustDeliverFinalNormally &&
-          !draftFinalTextNeedsNormalMentionDelivery
-        ) {
-          const finalPreviewText = payload.text;
-          await deliverWithFinalizableLivePreviewAdapter<
-            ReplyPayload,
-            string,
-            {
-              text: string;
-              finalizeLive: boolean;
-              extraContent?: Record<string, unknown>;
-            }
-          >({
-            kind: "final",
-            payload,
-            adapter: defineFinalizableLivePreviewAdapter({
-              draft: {
-                flush: async () => {},
-                clear: async () => {},
-                discardPending: async () => {},
-                id: () => draftEventId,
-              },
-              buildFinalEdit: () => ({
-                text: finalPreviewText,
-                finalizeLive: !(
-                  quietDraftStreaming || !draftStream.matchesPreparedText(finalPreviewText)
-                ),
-                ...(quietDraftStreaming
-                  ? { extraContent: buildMatrixFinalizedPreviewContent() }
-                  : {}),
-              }),
-              editFinal: async (_draftEventId, edit) => {
-                if (edit.finalizeLive) {
-                  if (!(await draftStream.finalizeLive())) {
-                    throw new Error("Matrix draft live finalize failed");
-                  }
-                  return;
-                }
-                const { editMessageMatrix } = await loadMatrixSendModule();
-                await editMessageMatrix(roomId, _draftEventId, edit.text, {
-                  client,
-                  cfg,
-                  threadId: threadTarget,
-                  accountId,
-                  extraContent: edit.extraContent,
-                });
-              },
-              createPreviewReceipt: (id): MessageReceipt =>
-                createPreviewMessageReceipt({
-                  id,
-                  ...(threadTarget ? { threadId: threadTarget } : {}),
-                  ...(draftController.currentReplyToId()
-                    ? { replyToId: draftController.currentReplyToId() }
-                    : {}),
-                }),
-              logPreviewEditFailure: (err) => {
-                logVerboseMessage(`matrix: preview final edit failed: ${String(err)}`);
-              },
-            }),
-            deliverNormally: async () => {
-              await redactMatrixDraftEvent(client, roomId, draftEventId);
-              await deliverMatrixReplies({
-                cfg,
-                replies: [fallbackPayload],
-                roomId,
-                client,
-                runtime,
-                textLimit,
-                replyToMode,
-                threadId: threadTarget,
-                replyToId: threadTarget ?? replyToEventId ?? undefined,
-                accountId,
-                mediaLocalRoots,
-                tableMode,
-              });
-            },
-          });
-          draftController.markDraftConsumed();
-        } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
-          let textEditOk = !mustDeliverFinalNormally;
-          const payloadText = payload.text ?? ttsSupplement?.spokenText;
-          const payloadTextMatchesDraft =
-            typeof payloadText === "string" && draftStream.matchesPreparedText(payloadText);
-          const reusesDraftTextUnchanged =
-            typeof payloadText === "string" &&
-            Boolean(payloadText.trim()) &&
-            payloadTextMatchesDraft;
-          const mediaTextNeedsNormalMentionDelivery =
-            typeof payloadText === "string" &&
-            Boolean(payloadText.trim()) &&
-            (await matrixTextWouldActivateMentions(client, payloadText));
-          const requiresFinalTextEdit =
-            quietDraftStreaming || (typeof payloadText === "string" && !payloadTextMatchesDraft);
-          if (textEditOk && mediaTextNeedsNormalMentionDelivery) {
-            textEditOk = false;
-          } else if (textEditOk && payloadText && requiresFinalTextEdit) {
-            const { editMessageMatrix } = await loadMatrixSendModule();
-            textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
-              client,
-              cfg,
-              threadId: threadTarget,
-              accountId,
-              extraContent: quietDraftStreaming ? buildMatrixFinalizedPreviewContent() : undefined,
-            }).then(
-              () => true,
-              () => false,
-            );
-          } else if (textEditOk && reusesDraftTextUnchanged) {
-            textEditOk = await draftStream.finalizeLive();
-          }
-          const reusesDraftAsFinalText = Boolean(payloadText?.trim()) && textEditOk;
-          if (!reusesDraftAsFinalText) {
-            await redactMatrixDraftEvent(client, roomId, draftEventId);
-          }
-          const mediaPayload =
-            ttsSupplement && reusesDraftAsFinalText
-              ? buildTtsSupplementMediaPayload(payload)
-              : {
-                  ...payload,
-                  text: reusesDraftAsFinalText
-                    ? undefined
-                    : (payload.text ??
-                      (ttsSupplement?.visibleTextAlreadyDelivered === true
-                        ? undefined
-                        : ttsSupplement?.spokenText)),
-                };
-          await deliverMatrixReplies({
-            cfg,
-            replies: [mediaPayload],
-            roomId,
-            client,
-            runtime,
-            textLimit,
-            replyToMode,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-            tableMode,
-          });
-          draftController.markDraftConsumed();
-        } else {
-          const draftRedacted =
-            Boolean(draftEventId) &&
-            (payload.isError ||
-              payloadReplyMismatch ||
-              mustDeliverFinalNormally ||
-              draftFinalTextNeedsNormalMentionDelivery);
-          if (draftRedacted && draftEventId) {
-            await redactMatrixDraftEvent(client, roomId, draftEventId);
-          }
-          const deliveredFallback = await deliverMatrixReplies({
-            cfg,
-            replies: [fallbackPayload],
-            roomId,
-            client,
-            runtime,
-            textLimit,
-            replyToMode,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-            tableMode,
-          });
-          if (draftRedacted || deliveredFallback) {
-            draftController.markDraftConsumed();
-          }
-        }
-
-        if (info.kind === "block") {
-          draftController.clearDraftConsumed();
-          draftController.advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
-          draftStream.reset();
-          draftController.resetReplyToIdForNextBlock();
-          draftController.updateDraftFromLatestFullText();
-
-          // Re-assert typing so the user still sees the indicator while
-          // the next block generates.
-          const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, true, undefined, client).catch(() => {});
-        }
-      } else {
-        await deliverMatrixReplies({
-          cfg,
-          replies: [payload],
-          roomId,
-          client,
-          runtime,
-          textLimit,
-          replyToMode,
-          threadId: threadTarget,
-          replyToId: threadTarget ?? replyToEventId ?? undefined,
-          accountId,
-          mediaLocalRoots,
-          tableMode,
-        });
-      }
+  return {
+    turnDispatcherOptions: {
+      ...prefixOptions,
+      humanDelay,
+      onReplyStart: typingCallbacks.onReplyStart,
+      onIdle: typingCallbacks.onIdle,
     },
-    onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
+    deliverReply: async (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => {
+      const createDraftReceipt = (id: string): MessageReceipt =>
+        createPreviewMessageReceipt({
+          id,
+          ...(threadTarget ? { threadId: threadTarget } : {}),
+          ...(draftController.currentReplyToId()
+            ? { replyToId: draftController.currentReplyToId() }
+            : {}),
+        });
+      const createDraftDeliveryResult = (
+        id: string,
+        content: string,
+      ): MatrixReplyDeliveryResult => {
+        const receipt = createDraftReceipt(id);
+        return {
+          messageIds: receipt.platformMessageIds,
+          receipt,
+          visibleReplySent: true,
+          content,
+        };
+      };
+      const settlesPreview =
+        Boolean(draftStream) && info.kind !== "tool" && !payload.isCompactionNotice;
+      const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+      const fallbackPayload =
+        settlesPreview &&
+        ttsSupplement &&
+        ttsSupplement.visibleTextAlreadyDelivered !== true &&
+        !payload.text?.trim()
+          ? { ...payload, text: ttsSupplement.spokenText }
+          : payload;
+      const { hasMedia } = resolveSendableOutboundReplyParts(payload);
+      const payloadText = payload.text ?? ttsSupplement?.spokenText;
+      const payloadReplyMismatch =
+        ((!threadTarget && replyToMode !== "off") ||
+          payload.replyToTag ||
+          payload.replyToCurrent) &&
+        normalizeOptionalString(payload.replyToId) !== draftController.currentReplyToId();
+      let retainedDraftDelivery: MatrixReplyDeliveryResult | undefined;
+      let deliveryResult: MatrixReplyDeliveryResult | undefined;
+      try {
+        const result = await previewLifecycle.deliver<{ text: string }>({
+          // Matrix block events are durable finals of their own draft generation.
+          kind: payload.isCompactionNotice ? "tool" : info.kind === "block" ? "final" : info.kind,
+          payload,
+          isError: payload.isError,
+          adapter: draftStream
+            ? {
+                buildFinalEdit: () =>
+                  payloadText?.trim() &&
+                  !payload.isError &&
+                  !payloadReplyMismatch &&
+                  !draftStream.mustDeliverFinalNormally()
+                    ? { text: payloadText }
+                    : undefined,
+                editFinal: async (draftEventId, edit) => {
+                  // A flush can discover a single-event limit, and mentions require a
+                  // fresh event because draft mentions are deliberately inert.
+                  if (
+                    draftStream.mustDeliverFinalNormally() ||
+                    (await matrixTextWouldActivateMentions(client, edit.text))
+                  ) {
+                    return { visibleReplySent: false };
+                  }
+                  const { editMessageMatrix, prepareMatrixSingleText } =
+                    await loadMatrixSendModule();
+                  const presentationContent = hasMedia
+                    ? undefined
+                    : resolveMatrixExtraContent(payload);
+                  const extraContent = {
+                    ...(quietDraftStreaming
+                      ? { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true }
+                      : {}),
+                    ...presentationContent,
+                  };
+                  if (
+                    !quietDraftStreaming &&
+                    !presentationContent &&
+                    draftStream.matchesPreparedText(edit.text)
+                  ) {
+                    if (!(await draftStream.finalizeLive())) {
+                      return { visibleReplySent: false };
+                    }
+                  } else {
+                    await editMessageMatrix(roomId, draftEventId, edit.text, {
+                      client,
+                      cfg,
+                      threadId: threadTarget,
+                      accountId,
+                      ...(Object.keys(extraContent).length > 0 ? { extraContent } : {}),
+                    });
+                  }
+                  return createDraftDeliveryResult(
+                    draftEventId,
+                    prepareMatrixSingleText(edit.text, {
+                      cfg,
+                      accountId,
+                      preserveWhitespace: true,
+                    }).convertedText,
+                  );
+                },
+                createPreviewReceipt: createDraftReceipt,
+                buildSupplementalPayload: () =>
+                  hasMedia
+                    ? ttsSupplement
+                      ? buildTtsSupplementMediaPayload(payload)
+                      : { ...payload, text: undefined }
+                    : undefined,
+                deliverSupplemental: deliverPayload,
+                logPreviewEditFailure: (err) => {
+                  logVerboseMessage(`matrix: preview final edit failed: ${String(err)}`);
+                },
+              }
+            : undefined,
+          deliverNormally: async (normalPayload) => {
+            if (
+              settlesPreview &&
+              !previewLifecycle.previewFinalized &&
+              (hasMedia ||
+                payloadText?.trim() ||
+                payload.isError ||
+                payloadReplyMismatch ||
+                draftStream?.mustDeliverFinalNormally())
+            ) {
+              const id = draftStream?.eventId();
+              const content = draftStream?.content();
+              if (id && content) {
+                retainedDraftDelivery = createDraftDeliveryResult(id, content);
+              }
+            }
+            return await deliverPayload(
+              normalPayload === payload ? fallbackPayload : normalPayload,
+            );
+          },
+        });
+        deliveryResult = result.deliveryResult;
+      } catch (error: unknown) {
+        if (retainedDraftDelivery) {
+          previewLifecycle.retainPreview();
+        }
+        throw toMatrixPartialDeliveryError(
+          error,
+          retainedDraftDelivery ? [retainedDraftDelivery] : [],
+        );
+      }
+      if (retainedDraftDelivery && !deliveryResult?.visibleReplySent) {
+        previewLifecycle.retainPreview();
+      }
+      const retainedDraft = retainedDraftDelivery?.messageIds?.includes(
+        draftStream?.eventId() ?? "",
+      )
+        ? retainedDraftDelivery
+        : undefined;
+      const mergedDelivery = mergeMatrixReplyDeliveryResults(
+        [retainedDraft, deliveryResult].filter(
+          (result): result is MatrixReplyDeliveryResult => result !== undefined,
+        ),
+      );
+      if (info.kind === "block") {
+        beginNextBlockDraft();
+        await typingCallbacks.onReplyStart();
+      }
+      return mergedDelivery;
+    },
+    onReplyError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {
-        finalReplyDeliveryFailed = true;
+        previewLifecycle.observeFailure();
       } else {
         nonFinalReplyDeliveryFailed = true;
       }
       if (info.kind === "block") {
-        draftController.advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
+        beginNextBlockDraft();
       }
       runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
     },
-    onReplyStart: typingCallbacks.onReplyStart,
-    onIdle: typingCallbacks.onIdle,
-  };
-  const {
-    deliver: deliverReply,
-    onError: onReplyError,
-    ...turnDispatcherOptions
-  } = dispatcherOptions;
-
-  return {
-    deliverReply,
-    onReplyError,
-    turnDispatcherOptions,
-    finalReplyDeliveryFailed: () => finalReplyDeliveryFailed,
     nonFinalReplyDeliveryFailed: () => nonFinalReplyDeliveryFailed,
   };
 }

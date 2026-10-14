@@ -68,6 +68,7 @@ export class GatewayBrowserDeviceAuthLifecycle {
     trustedDeviceTokenRetry?: boolean;
     preferBootstrapToken?: boolean;
     nonce: string | null;
+    challengeTs?: number | null;
   }): Promise<GatewayBrowserDeviceAuthPlan> {
     const identity = await this.deps.loadIdentity();
     const stored = identity
@@ -77,47 +78,44 @@ export class GatewayBrowserDeviceAuthLifecycle {
           role: params.role,
         })
       : null;
-    const storedValue = stored?.token;
     const selectedAuth = selectGatewayConnectAuth({
       token: params.token,
       bootstrapToken: params.bootstrapToken,
       password: params.password,
-      storedToken: storedValue,
+      storedToken: stored?.token,
       storedScopes: stored?.scopes,
       pendingDeviceTokenRetry: params.pendingDeviceTokenRetry,
       trustedDeviceTokenRetry: params.trustedDeviceTokenRetry,
       preferBootstrapToken: params.preferBootstrapToken,
     });
-    const { usingStoredDeviceToken } = selectedAuth;
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
         ? params.bootstrapScopes
           ? [...params.bootstrapScopes]
           : undefined
         : undefined,
-      usingStoredDeviceToken,
+      usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: params.defaultScopes,
     });
+    const plan: GatewayBrowserDeviceAuthPlan = {
+      clientId: params.client.id,
+      role: params.role,
+      identity,
+      selectedAuth,
+      scopes,
+      auth: buildGatewayConnectAuth(selectedAuth),
+    };
     if (!identity) {
-      return {
-        clientId: params.client.id,
-        role: params.role,
-        identity,
-        selectedAuth,
-        scopes,
-        auth: buildGatewayConnectAuth(selectedAuth),
-      };
+      return plan;
     }
-    const signedAtMs = this.deps.nowMs?.() ?? Date.now();
+    // Undefined is reserved for an explicit no-challenge fallback; a received invalid challenge is null.
+    const signedAtMs =
+      params.challengeTs === undefined ? (this.deps.nowMs?.() ?? Date.now()) : params.challengeTs;
+    if (typeof signedAtMs !== "number" || !Number.isSafeInteger(signedAtMs) || signedAtMs < 0) {
+      throw new Error("gateway connect challenge timestamp invalid");
+    }
     const nonce = params.nonce ?? "";
-    const { authBootstrapToken: primary, signatureToken: signed } = selectedAuth;
-    let token: string | null = null;
-    if (primary) {
-      token = primary;
-    } else if (signed) {
-      token = signed;
-    }
     const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
       clientId: params.client.id,
@@ -125,26 +123,19 @@ export class GatewayBrowserDeviceAuthLifecycle {
       role: params.role,
       scopes,
       signedAtMs,
-      token,
+      token: selectedAuth.authBootstrapToken || selectedAuth.signatureToken || null,
       nonce,
       platform: params.client.platform,
       deviceFamily: params.client.deviceFamily,
     });
-    return {
-      clientId: params.client.id,
-      role: params.role,
-      identity,
-      selectedAuth,
-      scopes,
-      auth: buildGatewayConnectAuth(selectedAuth),
-      device: {
-        id: identity.deviceId,
-        publicKey: identity.publicKey,
-        signature: await identity.sign(payload),
-        signedAt: signedAtMs,
-        nonce,
-      },
+    plan.device = {
+      id: identity.deviceId,
+      publicKey: identity.publicKey,
+      signature: await identity.sign(payload),
+      signedAt: signedAtMs,
+      nonce,
     };
+    return plan;
   }
 
   async acceptHello(
@@ -155,12 +146,18 @@ export class GatewayBrowserDeviceAuthLifecycle {
     if (!token || !plan.identity) {
       return;
     }
+    const role = hello.auth?.role ?? plan.role;
+    const stored = await this.deps.tokenStore.load({
+      clientId: plan.clientId,
+      deviceId: plan.identity.deviceId,
+      role,
+    });
     await this.deps.tokenStore.store({
       clientId: plan.clientId,
       deviceId: plan.identity.deviceId,
-      role: hello.auth?.role ?? plan.role,
+      role,
       token,
-      scopes: hello.auth?.scopes ?? [],
+      scopes: stored?.token === token ? stored.scopes : (hello.auth?.scopes ?? []),
     });
   }
 

@@ -6,17 +6,26 @@ import {
   readSessionTranscriptVisibleMessageDelta,
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
-  replaceTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  cleanupSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../test-utils/session-state-cleanup.js";
 import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
 } from "./context-engine-lifecycle.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-terminal-");
 
 function requireTranscriptTarget(params: {
   sessionId: string;
@@ -44,6 +53,71 @@ function readMessageContent(message: AgentMessage): unknown {
 }
 
 describe("context engine transcript cursor contract", () => {
+  it("records a reconstructed terminal anchor despite an intervening transcript append", async () => {
+    const target = {
+      agentId: "main",
+      sessionId: "terminal-append",
+      sessionKey: "agent:main:terminal-append",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const user = await appendTranscriptMessage(target, {
+      message: { role: "user", content: "request" },
+      now: 1_000,
+    });
+    const terminal = await appendTranscriptMessage(target, {
+      message: { role: "assistant", content: "reply" },
+      parentId: user!.messageId,
+      now: 2_000,
+    });
+    const readAnchor = transcriptAnchors.readActiveTranscriptEntryAnchorAsync;
+    const read = vi
+      .spyOn(transcriptAnchors, "readActiveTranscriptEntryAnchorAsync")
+      .mockImplementation(async (...args) => {
+        const anchor = await readAnchor(...args);
+        // Append after the snapshot is read, before finalization consumes its terminal anchor.
+        await appendTranscriptMessage(target, {
+          message: { role: "assistant", content: "later reply" },
+          now: 3_000,
+        });
+        return anchor;
+      });
+    const record = vi.fn();
+    const engine: ContextEngine = {
+      info: { id: "terminal-proof", name: "Terminal proof" },
+      ingest: async () => ({ ingested: true }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+    };
+    try {
+      await finalizeHarnessContextEngineTurn({
+        contextEngine: engine,
+        sessionIdUsed: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionFile: target.storePath,
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        promptError: false,
+        aborted: false,
+        yieldAborted: false,
+        turnCandidate: {
+          admission: { ...user!.anchor!, logicalTurnId: "turn", role: "user" },
+          terminalEntryId: terminal!.messageId,
+          record,
+        },
+        warn: vi.fn(),
+      });
+      expect(read).toHaveBeenCalledOnce();
+      expect(record).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          boundary: expect.objectContaining({ terminal: terminal!.anchor }),
+        }),
+      );
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("bootstraps, resumes appends, and rebuilds after replacement through the public SDK", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-engine-cursor-"));
     const storePath = path.join(tempDir, "sessions.json");
@@ -51,6 +125,7 @@ describe("context engine transcript cursor contract", () => {
       agentId: "main",
       sessionId: "context-engine-cursor",
       sessionKey: "agent:main:context-engine-cursor",
+      sessionEntry: { sessionId: "context-engine-cursor", updatedAt: 10 },
       storePath,
     };
     const projectedMessages: AgentMessage[] = [];
@@ -87,7 +162,11 @@ describe("context engine transcript cursor contract", () => {
       }
     };
     const engine: ContextEngine = {
-      info: { id: "cursor-proof", name: "Cursor proof" },
+      info: {
+        id: "cursor-proof",
+        name: "Cursor proof",
+        transcriptSemantics: { currentTurnFence: "before-current-turn-entry-v1" },
+      },
       bootstrap: async (params) => {
         await consumeVisibleTranscript(params);
         return { bootstrapped: true, importedMessages: projectedMessages.length };
@@ -102,7 +181,8 @@ describe("context engine transcript cursor contract", () => {
     > = async () => undefined;
 
     try {
-      await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 10 });
+      setRuntimeConfigSnapshot({ session: { store: storePath } });
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 10 });
       const first = await appendTranscriptMessage(target, {
         message: { role: "user", content: "first" },
         now: 1_000,
@@ -112,6 +192,15 @@ describe("context engine transcript cursor contract", () => {
         parentId: first?.messageId,
         now: 2_000,
       });
+      const admitted = await createUserTurnTranscriptRecorder({
+        message: { role: "user", content: "third", timestamp: 3_000 },
+        target,
+        updateMode: "none",
+      }).persistApproved();
+      if (!admitted) {
+        throw new Error("expected admitted user message with transcript admission");
+      }
+      const admission = admitted.admission;
 
       await bootstrapHarnessContextEngine({
         hadSessionFile: true,
@@ -120,14 +209,16 @@ describe("context engine transcript cursor contract", () => {
         sessionKey: target.sessionKey,
         sessionTarget: target,
         sessionFile: "sqlite://context-engine-cursor",
+        transcriptReadFence: admission,
         runMaintenance: skipMaintenance,
         warn: () => {},
       });
       expect(projectedMessages.map(readMessageContent)).toEqual(["first", "second"]);
 
       await appendTranscriptMessage(target, {
-        message: { role: "user", content: "third" },
-        now: 3_000,
+        message: { role: "assistant", content: "fourth" },
+        parentId: admitted.messageId,
+        now: 4_000,
       });
       await finalizeHarnessContextEngineTurn({
         contextEngine: engine,
@@ -143,14 +234,44 @@ describe("context engine transcript cursor contract", () => {
         runMaintenance: skipMaintenance,
         warn: () => {},
       });
-      expect(projectedMessages.map(readMessageContent)).toEqual(["first", "second", "third"]);
+      expect(projectedMessages.map(readMessageContent)).toEqual([
+        "first",
+        "second",
+        "third",
+        "fourth",
+      ]);
+
+      await appendTranscriptMessage(target, {
+        message: { role: "user", content: "failed turn" },
+        now: 5_000,
+      });
+      await finalizeHarnessContextEngineTurn({
+        contextEngine: engine,
+        promptError: true,
+        aborted: false,
+        yieldAborted: false,
+        sessionIdUsed: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+        sessionFile: "sqlite://context-engine-cursor",
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        runMaintenance: skipMaintenance,
+        warn: () => {},
+      });
+      expect(projectedMessages.map(readMessageContent)).toEqual([
+        "first",
+        "second",
+        "third",
+        "fourth",
+      ]);
 
       await replaceTranscriptEvents(target, [
         {
           type: "message",
           id: "replacement",
           parentId: null,
-          timestamp: "1970-01-01T00:00:04.000Z",
+          timestamp: "1970-01-01T00:00:06.000Z",
           message: { role: "user", content: "replacement" },
         },
       ]);
@@ -171,6 +292,8 @@ describe("context engine transcript cursor contract", () => {
       expect(resetCount).toBe(1);
       expect(projectedMessages.map(readMessageContent)).toEqual(["replacement"]);
     } finally {
+      clearRuntimeConfigSnapshot();
+      await cleanupSessionStateForTest({ stateDir: tempDir });
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });

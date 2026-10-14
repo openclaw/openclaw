@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
   SessionsCatalogHostEvent,
@@ -5,7 +6,14 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  isAwaitingGatewayFailure,
+  resolveGatewayReadRetryDelayMs,
+} from "../lib/gateway-availability.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import {
@@ -14,12 +22,9 @@ import {
 } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
-export const SESSION_CATALOG_CHANGED_REFRESH_MS = 5_000;
+const SESSION_CATALOG_SAFETY_REFRESH_MS = 10 * 60_000;
 const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
-
-function sessionCatalogSnapshot(catalogs: readonly SessionCatalog[]): string {
-  return JSON.stringify(catalogs);
-}
+const SESSION_CATALOG_MAX_RETRIES = 3;
 
 export function sessionCatalogListClient(
   snapshot: ApplicationGatewaySnapshot | undefined,
@@ -27,310 +32,202 @@ export function sessionCatalogListClient(
 ): GatewayBrowserClient | null {
   if (
     !connected ||
-    snapshot?.phase !== "connected" ||
-    !snapshot.client ||
-    isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
+    !snapshot?.client ||
+    !canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }
   return snapshot.client;
 }
 
-async function requestSessionCatalogList(params: {
-  client: GatewayBrowserClient;
-  agentId: string;
-  progressId: string;
-  progressive: boolean;
-}): Promise<{ result: SessionsCatalogListResult; progressive: boolean }> {
-  const baseParams = { agentId: params.agentId, limitPerHost: 40 };
-  if (!params.progressive) {
-    return {
-      result: await params.client.request("sessions.catalog.list", baseParams),
-      progressive: false,
-    };
-  }
-  try {
-    return {
-      result: await params.client.request("sessions.catalog.list", {
-        ...baseParams,
-        progressId: params.progressId,
-      }),
-      progressive: true,
-    };
-  } catch (error) {
-    if (!isLegacyProgressIdRejection(error)) {
-      throw error;
-    }
-    // Older Gateways advertise the list method but reject the additive field.
-    // Retry once without streaming, then keep that connection on final pages.
-    return {
-      result: await params.client.request("sessions.catalog.list", baseParams),
-      progressive: false,
-    };
-  }
-}
-
-function isLegacyProgressIdRejection(error: unknown): boolean {
-  if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
-    return false;
-  }
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("progressid") &&
-    (message.includes("unexpected property") ||
-      message.includes("additional property") ||
-      message.includes("additional properties") ||
-      message.includes("unknown property") ||
-      message.includes("unrecognized property"))
-  );
-}
-
 function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHostEvent {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const event = value as Record<string, unknown>;
-  const catalog = event.catalog;
-  if (!catalog || typeof catalog !== "object") {
-    return false;
-  }
-  const catalogRecord = catalog as Record<string, unknown>;
-  const hosts = Array.isArray(catalogRecord.hosts) ? catalogRecord.hosts : [];
-  const host = hosts[0];
-  return (
+  const event = asNullableRecord(value);
+  const catalog = asNullableRecord(event?.catalog);
+  const hosts = Array.isArray(catalog?.hosts) ? catalog.hosts : [];
+  const host = asNullableRecord(hosts[0]);
+  return Boolean(
+    event &&
+    catalog &&
+    host &&
     typeof event.progressId === "string" &&
     event.progressId.length > 0 &&
     typeof event.agentId === "string" &&
     event.agentId.length > 0 &&
-    typeof catalogRecord.id === "string" &&
-    typeof catalogRecord.label === "string" &&
-    catalogRecord.capabilities !== null &&
-    typeof catalogRecord.capabilities === "object" &&
+    typeof catalog.id === "string" &&
+    typeof catalog.label === "string" &&
+    catalog.capabilities !== null &&
+    typeof catalog.capabilities === "object" &&
     hosts.length === 1 &&
-    host !== null &&
-    typeof host === "object" &&
-    typeof (host as Record<string, unknown>).hostId === "string" &&
-    Array.isArray((host as Record<string, unknown>).sessions)
+    typeof host.hostId === "string" &&
+    Array.isArray(host.sessions),
   );
 }
 
-/** Tracks one sidebar's progressive list streams and adaptive refresh lifecycle. */
+/** Tracks one sidebar's progressive list streams and event refresh lifecycle. */
 export class SessionCatalogLiveState {
+  refreshScope = {};
   timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   requestGeneration: number | null = null;
-  sawChange = false;
   refreshPending = false;
-  progressive = true;
+  readonly discoveryPages = new Map<
+    string,
+    { headCursor: string; nextCursor: string; depth: number; cursors: Set<string> }
+  >();
 
-  private activationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private connectionEpoch = 0;
-  private refetchOwner: symbol | null = null;
-  private presenceSignature: string | null = null;
-  private progressSequence = 0;
-  private readonly progressSequences = new Map<string, number>();
-  private readonly hostProgressSequences = new Map<string, number>();
-  private readonly hostIdsByCatalog = new Map<string, ReadonlySet<string>>();
+  private activationRefresh: (() => Promise<void> | void) | null = null;
+  private readonly eventRefresh = createSessionEventRefreshCoordinator({
+    active: true,
+    refresh: async () => {
+      const refresh = this.activationRefresh;
+      this.activationRefresh = null;
+      await refresh?.();
+    },
+  });
+  private readonly progressIds = new Set<string>();
   private readonly requestChangedHostKeys = new Set<string>();
   private readonly warnedRequestErrors = new Set<string>();
-  private requestOwner: symbol | null = null;
+  private retryAttempts = 0;
+  private retryAt = 0;
+  startupPending = false;
+
+  get retryDelayMs() {
+    return Math.max(0, this.retryAt - Date.now());
+  }
+
+  resetRetry() {
+    this.retryAttempts = 0;
+    this.retryAt = 0;
+    this.startupPending = false;
+  }
+
+  retryRequest(error: unknown): number | null {
+    this.startupPending = isAgentDatabaseInspectionPendingError(error);
+    if (this.startupPending) {
+      const delay = resolveGatewayReadRetryDelayMs(error, this.retryAttempts++);
+      this.retryAt = Date.now() + delay;
+      return delay;
+    }
+    if (
+      !(error instanceof GatewayRequestError) ||
+      !error.retryable ||
+      isAwaitingGatewayFailure(error, null) ||
+      this.retryAttempts >= SESSION_CATALOG_MAX_RETRIES
+    ) {
+      this.resetRetry();
+      return null;
+    }
+    const serverDelay =
+      typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+        ? error.retryAfterMs
+        : 0;
+    const delay = Math.max(serverDelay, 1_000 * 2 ** this.retryAttempts++);
+    this.retryAt = Date.now() + delay;
+    return delay;
+  }
 
   cancelTimer() {
-    if (this.timer !== null) {
-      globalThis.clearTimeout(this.timer);
+    const handle = this.timer;
+    if (handle !== null) {
+      globalThis.clearTimeout(handle);
       this.timer = null;
     }
   }
 
   clear() {
+    this.refreshScope = {};
     this.cancelScheduledRefreshes();
+    this.resetRetry();
     this.requestGeneration = null;
-    this.requestOwner = null;
-    this.progressSequences.clear();
-    this.hostProgressSequences.clear();
-    this.hostIdsByCatalog.clear();
+    this.progressIds.clear();
     this.requestChangedHostKeys.clear();
-    this.presenceSignature = null;
-    this.sawChange = false;
     this.refreshPending = false;
-    this.refetchOwner = null;
+    this.discoveryPages.clear();
   }
 
-  resetConnection() {
-    this.clear();
-    this.connectionEpoch += 1;
-    this.progressive = true;
-  }
-
-  async requestList(
-    client: GatewayBrowserClient,
-    agentId: string,
-    progressId: string,
-  ): Promise<SessionsCatalogListResult> {
-    const connectionEpoch = this.connectionEpoch;
-    const response = await requestSessionCatalogList({
-      client,
-      agentId,
-      progressId,
-      progressive: this.progressive,
-    });
-    if (connectionEpoch === this.connectionEpoch) {
-      this.progressive = response.progressive;
+  resumeDiscovery(catalogs: SessionCatalog[]): SessionCatalog[] {
+    const currentKeys = new Set<string>();
+    const result = catalogs.map((catalog) => ({
+      ...catalog,
+      hosts: catalog.hosts.map((host) => {
+        const key = sessionCatalogHostKey(catalog.id, host.hostId);
+        currentKeys.add(key);
+        const discovery = this.discoveryPages.get(key);
+        if (!discovery || host.pending || host.error || catalog.error) {
+          return host;
+        }
+        // Recheck the head on each refresh. A changed anchor or newly visible row
+        // starts fresh; empty prefixes only belong to the current finite sweep.
+        if (host.sessions.length > 0 || host.nextCursor !== discovery.headCursor) {
+          this.discoveryPages.delete(key);
+          return host;
+        }
+        return { ...host, nextCursor: discovery.nextCursor };
+      }),
+    }));
+    for (const key of this.discoveryPages.keys()) {
+      if (!currentKeys.has(key)) {
+        this.discoveryPages.delete(key);
+      }
     }
-    return response.result;
+    return result;
   }
 
   mergeFinal(catalogs: SessionCatalog[], currentCatalogs: readonly SessionCatalog[]) {
-    const current = new Map(currentCatalogs.map((catalog) => [catalog.id, catalog]));
-    return catalogs.map((catalog) => {
-      const currentHosts = new Map(
-        current.get(catalog.id)?.hosts.map((host) => [host.hostId, host]) ?? [],
-      );
-      return {
-        ...catalog,
-        hosts: catalog.hosts.map((host) => {
-          const progressiveHost = currentHosts.get(host.hostId);
-          const changed = this.requestChangedHostKeys.has(
-            sessionCatalogHostKey(catalog.id, host.hostId),
-          );
-          return host.error && changed && progressiveHost && !progressiveHost.error
+    const currentHosts = new Map(
+      currentCatalogs.flatMap((catalog) =>
+        catalog.hosts.map(
+          (host) => [sessionCatalogHostKey(catalog.id, host.hostId), host] as const,
+        ),
+      ),
+    );
+    return catalogs.map((catalog) => ({
+      ...catalog,
+      hosts: catalog.hosts.map((host) => {
+        const hostKey = sessionCatalogHostKey(catalog.id, host.hostId);
+        const progressiveHost = currentHosts.get(hostKey);
+        if (host.pending) {
+          return this.requestChangedHostKeys.has(hostKey) &&
+            progressiveHost &&
+            !progressiveHost.pending
             ? progressiveHost
-            : host;
-        }),
-      };
-    });
+            : preserveExpandedCatalogHost(host, progressiveHost);
+        }
+        return host.error &&
+          this.requestChangedHostKeys.has(hostKey) &&
+          progressiveHost &&
+          !progressiveHost.error
+          ? progressiveHost
+          : host;
+      }),
+    }));
   }
 
-  get refetching() {
-    return this.refetchOwner !== null;
+  get hasRequested() {
+    return this.progressIds.size > 0;
   }
 
-  beginRefetch(active: boolean): symbol | null {
-    if (!active) {
-      return null;
-    }
-    const owner = Symbol("session-catalog-refetch");
-    this.refetchOwner = owner;
-    return owner;
-  }
-
-  endRefetch(owner: symbol | null) {
-    if (owner !== null && this.refetchOwner === owner) {
-      this.refetchOwner = null;
-    }
-  }
-
-  beginRequest(generation: number): {
-    progressId: string;
-    progressSequence: number;
-    requestOwner: symbol;
-  } {
+  beginRequest(generation: number): { progressId: string } {
+    this.eventRefresh.absorb();
+    this.activationRefresh = null;
     this.requestGeneration = generation;
-    const requestOwner = Symbol("session-catalog-request");
-    this.requestOwner = requestOwner;
-    this.sawChange = false;
     this.requestChangedHostKeys.clear();
     const progressId = generateUUID();
-    const progressSequence = ++this.progressSequence;
-    this.progressSequences.set(progressId, progressSequence);
-    if (this.progressSequences.size > 8) {
-      const oldest = this.progressSequences.keys().next().value;
-      if (oldest) {
-        this.progressSequences.delete(oldest);
-      }
+    this.progressIds.add(progressId);
+    if (this.progressIds.size > 8) {
+      this.progressIds.delete(this.progressIds.values().next().value!);
     }
-    return { progressId, progressSequence, requestOwner };
-  }
-
-  ownsRequest(owner: symbol) {
-    return this.requestOwner === owner;
+    return { progressId };
   }
 
   warnRequestError(error: unknown) {
     const code = error instanceof GatewayRequestError ? error.gatewayCode : "UNAVAILABLE";
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     const signature = `${code}\u0000${message}`;
     if (this.warnedRequestErrors.has(signature)) {
       return;
     }
     this.warnedRequestErrors.add(signature);
     console.warn("Session catalog refresh failed", error);
-  }
-
-  markFinal(params: {
-    catalogs: readonly SessionCatalog[];
-    hadCatalogs: boolean;
-    previousSnapshot: string;
-    progressSequence: number;
-  }) {
-    this.sawChange =
-      params.hadCatalogs && params.previousSnapshot !== sessionCatalogSnapshot(params.catalogs);
-    const finalCatalogIds = new Set(params.catalogs.map((catalog) => catalog.id));
-    for (const [catalogId, previousHostIds] of this.hostIdsByCatalog) {
-      if (finalCatalogIds.has(catalogId)) {
-        continue;
-      }
-      for (const hostId of previousHostIds) {
-        this.hostProgressSequences.set(
-          sessionCatalogHostKey(catalogId, hostId),
-          params.progressSequence,
-        );
-      }
-      this.hostIdsByCatalog.delete(catalogId);
-    }
-    for (const catalog of params.catalogs) {
-      const previousHostIds = this.hostIdsByCatalog.get(catalog.id) ?? new Set<string>();
-      const finalHostIds = new Set(catalog.hosts.map((host) => host.hostId));
-      for (const hostId of previousHostIds) {
-        if (!finalHostIds.has(hostId)) {
-          this.hostProgressSequences.set(
-            sessionCatalogHostKey(catalog.id, hostId),
-            params.progressSequence,
-          );
-        }
-      }
-      for (const host of catalog.hosts) {
-        if (host.error) {
-          continue;
-        }
-        const key = sessionCatalogHostKey(catalog.id, host.hostId);
-        this.hostProgressSequences.set(
-          key,
-          Math.max(this.hostProgressSequences.get(key) ?? -1, params.progressSequence),
-        );
-      }
-      this.hostIdsByCatalog.set(catalog.id, finalHostIds);
-    }
-  }
-
-  observePresence(payload: unknown): boolean {
-    const presence =
-      payload && typeof payload === "object"
-        ? (payload as { presence?: unknown }).presence
-        : undefined;
-    if (!Array.isArray(presence)) {
-      return false;
-    }
-    const states = new Map<string, "connected" | "offline">();
-    for (const entry of presence) {
-      if (!entry || typeof entry !== "object") {
-        continue;
-      }
-      const record = entry as Record<string, unknown>;
-      const rawId = typeof record.deviceId === "string" ? record.deviceId : record.instanceId;
-      const id = typeof rawId === "string" ? rawId.trim().toLowerCase() : "";
-      const mode = typeof record.mode === "string" ? record.mode.trim().toLowerCase() : "";
-      if (!id || mode === "gateway") {
-        continue;
-      }
-      const reason = typeof record.reason === "string" ? record.reason.trim().toLowerCase() : "";
-      states.set(id, reason === "disconnect" ? "offline" : "connected");
-    }
-    const signature = JSON.stringify(
-      [...states].toSorted(([left], [right]) => left.localeCompare(right)),
-    );
-    const previous = this.presenceSignature;
-    this.presenceSignature = signature;
-    return previous === null ? states.size > 0 : previous !== signature;
   }
 
   applyHost(params: {
@@ -346,47 +243,60 @@ export class SessionCatalogLiveState {
     if (normalizeAgentId(event.agentId) !== normalizeAgentId(params.agentId)) {
       return null;
     }
-    const sequence = this.progressSequences.get(event.progressId);
     const freshHost = event.catalog.hosts[0];
-    if (sequence === undefined || !freshHost) {
+    if (!this.progressIds.has(event.progressId) || !freshHost) {
       return null;
     }
     const hostKey = sessionCatalogHostKey(event.catalog.id, freshHost.hostId);
-    if (sequence < (this.hostProgressSequences.get(hostKey) ?? -1)) {
-      return null;
-    }
-    this.hostProgressSequences.set(hostKey, sequence);
     if (this.requestGeneration !== null) {
       this.requestChangedHostKeys.add(hostKey);
     }
     const currentCatalog = params.catalogs.find((catalog) => catalog.id === event.catalog.id);
     let catalogs: SessionCatalog[];
+    let nextCatalog: SessionCatalog;
     if (!currentCatalog) {
-      catalogs = [...params.catalogs, { ...event.catalog, hosts: [freshHost] }].toSorted(
-        (left, right) => left.id.localeCompare(right.id),
+      nextCatalog = { ...event.catalog, hosts: [freshHost] };
+      catalogs = [...params.catalogs, nextCatalog].toSorted((left, right) =>
+        left.id.localeCompare(right.id),
       );
     } else {
       const currentHost = currentCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
+      const discovery = this.discoveryPages.get(hostKey);
+      if (
+        discovery &&
+        !freshHost.pending &&
+        !freshHost.error &&
+        (freshHost.sessions.length > 0 || freshHost.nextCursor !== discovery.headCursor)
+      ) {
+        this.discoveryPages.delete(hostKey);
+      }
       const mergedHost =
-        (params.pageDepths.get(hostKey) ?? 0) > 0
+        freshHost.pending ||
+        (params.pageDepths.get(hostKey) ?? 0) > 0 ||
+        this.discoveryPages.has(hostKey)
           ? preserveExpandedCatalogHost(freshHost, currentHost)
           : freshHost;
       const hosts = currentHost
         ? currentCatalog.hosts.map((host) => (host.hostId === freshHost.hostId ? mergedHost : host))
         : [...currentCatalog.hosts, mergedHost];
+      nextCatalog = {
+        ...event.catalog,
+        hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
+      };
       catalogs = params.catalogs.map((catalog) =>
-        catalog.id === event.catalog.id
-          ? {
-              ...event.catalog,
-              hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
-            }
-          : catalog,
+        catalog.id === event.catalog.id ? nextCatalog : catalog,
       );
     }
-    if (sessionCatalogSnapshot(catalogs) === sessionCatalogSnapshot(params.catalogs)) {
+    const currentHost = currentCatalog?.hosts.find((host) => host.hostId === freshHost.hostId);
+    const nextHost = nextCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
+    const sameCatalogMetadata =
+      currentCatalog !== undefined &&
+      currentCatalog.label === nextCatalog.label &&
+      JSON.stringify(currentCatalog.capabilities) === JSON.stringify(nextCatalog.capabilities) &&
+      JSON.stringify(currentCatalog.error) === JSON.stringify(nextCatalog.error);
+    if (sameCatalogMetadata && JSON.stringify(currentHost) === JSON.stringify(nextHost)) {
       return null;
     }
-    this.sawChange = true;
     return { catalogs, catalogId: event.catalog.id };
   }
 
@@ -401,11 +311,11 @@ export class SessionCatalogLiveState {
     }, delayMs);
   }
 
-  requestRefresh(params: {
+  async requestRefresh(params: {
     visible: boolean;
     connected: boolean;
     generation: number;
-    refresh: () => void;
+    refresh: () => Promise<void>;
   }) {
     if (!params.visible || !params.connected) {
       return;
@@ -413,16 +323,13 @@ export class SessionCatalogLiveState {
     this.cancelTimer();
     if (this.requestGeneration === params.generation) {
       this.refreshPending = true;
-      return;
     }
-    params.refresh();
+    await params.refresh();
   }
 
   cancelActivation() {
-    if (this.activationTimer !== null) {
-      globalThis.clearTimeout(this.activationTimer);
-      this.activationTimer = null;
-    }
+    this.eventRefresh.reset();
+    this.activationRefresh = null;
   }
 
   cancelScheduledRefreshes() {
@@ -430,16 +337,9 @@ export class SessionCatalogLiveState {
     this.cancelActivation();
   }
 
-  scheduleActivation(refresh: () => void) {
-    if (this.activationTimer !== null) {
-      return;
-    }
-    // Browsers fire visibilitychange and focus as one foregrounding pair.
-    // The short window prevents that pair from triggering two fleet scans.
-    this.activationTimer = globalThis.setTimeout(() => {
-      this.activationTimer = null;
-      refresh();
-    }, 50);
+  scheduleActivation(refresh: () => Promise<void> | void) {
+    this.activationRefresh = refresh;
+    this.eventRefresh.schedule();
   }
 }
 
@@ -449,36 +349,41 @@ export async function refreshSessionCatalogsLive(params: {
   client: GatewayBrowserClient;
   agentId: string;
   generation: number;
-  revision: number;
   currentGeneration: () => number;
-  currentRevision: () => number;
   currentClient: () => GatewayBrowserClient | null;
   catalogs: () => SessionCatalog[];
   pageDepths: ReadonlyMap<string, number>;
   connected: () => boolean;
-  applyFinal: (catalogs: SessionCatalog[], revisedCatalogIds: ReadonlySet<string>) => void;
+  catalogChangedEvents: boolean;
+  applyFinal: (catalogs: SessionCatalog[]) => void;
+  /** Finish the finite cursor sweep without repeating the root catalog request. */
+  continueRefresh: () => Promise<void>;
   applyError: (error: unknown) => void;
-  refresh: () => void;
+  refresh: () => Promise<void>;
 }) {
-  const { live, client, generation, revision } = params;
+  const { live, client, generation } = params;
   if (live.requestGeneration === generation) {
     return;
   }
-  const { progressId, progressSequence, requestOwner } = live.beginRequest(generation);
-  const hadCatalogs = params.catalogs().length > 0;
-  const previousSnapshot = sessionCatalogSnapshot(params.catalogs());
-  let refetchOwner: symbol | null = null;
+  // Events and returning tabs share the same cooldown as the scheduled retry.
+  if (live.retryDelayMs > 0) {
+    live.schedule(live.retryDelayMs, params.connected(), () => void params.refresh());
+    return;
+  }
+  const { progressId } = live.beginRequest(generation);
+  let retryDelayMs: number | null = null;
   const requestIsCurrent = () =>
-    live.ownsRequest(requestOwner) &&
-    generation === params.currentGeneration() &&
-    client === params.currentClient();
-  const revisionIsCurrent = () => requestIsCurrent() && revision === params.currentRevision();
+    generation === params.currentGeneration() && client === params.currentClient();
   try {
-    const result = await live.requestList(client, params.agentId, progressId);
-    if (!requestIsCurrent()) {
+    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      agentId: params.agentId,
+      limitPerHost: 40,
+      progressId,
+      allowPartialResults: true,
+    });
+    if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }
-    refetchOwner = live.beginRefetch(params.pageDepths.size > 0);
     const previousCatalogs = params.catalogs();
     const catalogs = await refetchExpandedSessionCatalogPages({
       catalogs: live.mergeFinal(result.catalogs, previousCatalogs),
@@ -486,41 +391,44 @@ export async function refreshSessionCatalogsLive(params: {
       client,
       agentId: params.agentId,
       pageDepths: params.pageDepths,
-      isCurrent: revisionIsCurrent,
+      isCurrent: requestIsCurrent,
+      canRequestPage: () => requestIsCurrent() && document.visibilityState !== "hidden",
     });
-    if (!revisionIsCurrent()) {
+    if (!requestIsCurrent()) {
       return;
     }
-    const revisedCatalogIds = new Set([
-      ...params.catalogs().map((catalog) => catalog.id),
-      ...catalogs.map((catalog) => catalog.id),
-    ]);
-    params.applyFinal(catalogs, revisedCatalogIds);
-    live.markFinal({ catalogs, hadCatalogs, previousSnapshot, progressSequence });
+    live.resetRetry();
+    params.applyFinal(catalogs);
+    await params.continueRefresh();
   } catch (error) {
-    // A transient poll failure must not collapse already visible or expanded pages.
-    if (revisionIsCurrent()) {
-      live.warnRequestError(error);
-      params.applyError(error);
+    // A transient refresh failure must not collapse already visible or expanded pages.
+    if (requestIsCurrent()) {
+      retryDelayMs = live.retryRequest(error);
+      if (live.startupPending) {
+        params.applyError(error);
+      } else if (retryDelayMs === null) {
+        live.warnRequestError(error);
+        params.applyError(error);
+      }
     }
   } finally {
-    live.endRefetch(refetchOwner);
-    const ownsRequest = live.ownsRequest(requestOwner);
-    if (ownsRequest) {
+    if (requestIsCurrent()) {
       live.requestGeneration = null;
     }
-    if (ownsRequest && requestIsCurrent() && params.connected()) {
+    if (requestIsCurrent() && params.connected()) {
       const pending = live.refreshPending;
       live.refreshPending = false;
-      live.schedule(
-        pending
-          ? 0
-          : live.sawChange
-            ? SESSION_CATALOG_CHANGED_REFRESH_MS
-            : SESSION_CATALOG_STABLE_REFRESH_MS,
-        params.connected(),
-        params.refresh,
-      );
+      const interval =
+        retryDelayMs ??
+        (params.catalogChangedEvents
+          ? SESSION_CATALOG_SAFETY_REFRESH_MS
+          : SESSION_CATALOG_STABLE_REFRESH_MS);
+      live.schedule(interval, params.connected(), () => {
+        void params.refresh();
+      });
+      if (pending && retryDelayMs === null) {
+        live.scheduleActivation(params.refresh);
+      }
     }
   }
 }

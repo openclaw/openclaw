@@ -1,9 +1,17 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
+import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { t } from "../../i18n/index.ts";
 import {
+  type ChatGuardianNotice,
+  type ChatItem,
+  type MessageGroup,
+  accumulatedStreamText,
+  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
@@ -12,112 +20,259 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  canvasPreviewsMatch,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
+import { extractToolCardsCached, type CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
 import {
   buildCompactionDividerItem,
+  buildGuardianNoticeItem,
+  buildResetDividerItem,
   clearWorkingProgress,
+  isContextCompactionMessage,
+  matchesCompactionOperation,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { activeChatReasoning } from "./chat-reasoning.ts";
 import {
-  annotateToolTurnOutcome,
-  coalesceToolActivityMessages,
-  groupMessages,
-  isKeyedAssistantStreamFallbackMessage,
-} from "./chat-thread-grouping.ts";
+  hasSessionsYieldCall,
+  pendingSessionsYield,
+  projectSessionsYieldItems,
+} from "./chat-sessions-yield.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
+import {
+  placeChatInputs,
+  type ChatInputOrderState,
+  type ChatInputPlacementProps,
+} from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
-  buildMessageKeys,
+  buildMessageItems,
   canvasPreviewBaseIdentity,
-  chatItemTimestamp,
-  collapseSequentialDuplicateMessages,
   createCanvasAssistantMessage,
   extractChatMessagePreview,
   findCanvasInsertionIndex,
-  findNearestAssistantMessageIndex,
+  findNearestAssistantMessage,
   hasRenderableNormalizedMessage,
-  messageKey,
+  insertionIndexesForBounds,
+  type ChatProjection,
   messageMatchesSearchQuery,
-  queuedSendThreadMessage,
   rawMessageTimestamp,
-  safeNormalizeMessage,
+  readChatThreadMessageIdentity,
+  insertChatItemsByTimestamp,
   sanitizeStreamText,
-  sortChatItemsByVisibleTime,
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
-  turnHasMatchingAssistant,
+  type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
-import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
-import type { PlanStatus } from "./tool-stream.ts";
+import {
+  applyPersistedToolInvocationBounds,
+  findCurrentTurnBounds,
+  createRunTurnLookup,
+  createToolCallLookup,
+  isKeyedAssistantStreamFallbackMessage,
+  optionalBoundaryIdentity,
+  optionalRunIdentity,
+  resolveRunInsertionBounds,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
+import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
+import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
-export type BuildChatItemsProps = {
+export type BuildChatItemsProps = ChatInputPlacementProps & {
   paneId: string;
   sessionKey: string;
+  archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
   runId?: string | null;
+  compactionStatus?: CompactionStatus | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
   messages: unknown[];
   toolMessages: unknown[];
+  guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
+  reasoning?: ChatReasoning | null;
+  showReasoning?: boolean;
   stream: string | null;
   streamStartedAt: number | null;
-  queue?: ChatQueueItem[];
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
-  /** Keeps the status row visible while a running tool is parked for approval. */
-  waitingApproval?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
-  planStatus?: PlanStatus | null;
+  /** Set while a run that handed off is idle and its subagents are still running. */
+  subagentWait?: { startedAt: number; runId: string };
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
-  searchOpen?: boolean;
-  searchQuery?: string;
+  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
+  replyPeople?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  replyLocalPerson?: string;
 };
 
-export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
+function canvasAssistantItemKey(
+  message: unknown,
+  source: Parameters<typeof canvasPreviewBaseIdentity>[1],
+  fallback: string,
+): string {
+  const identity = canvasPreviewBaseIdentity(message, source);
+  return identity ? `canvas:${identity}` : `${fallback}:canvas`;
+}
+
+export function buildChatItems(
+  props: BuildChatItemsProps,
+  inputOrder: ChatInputOrderState = { keys: [] },
+): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const history = props.messages.filter(
-    (message) =>
-      !isAssistantHeartbeatAckForDisplay(message) &&
-      (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+  const tools = props.toolMessages.filter(
+    (message): message is Record<string, unknown> => asRecord(message) !== null,
   );
-  const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
-  const historyKeys = buildMessageKeys(history);
-  const toolKeys = buildMessageKeys(tools, history.length);
-  const liftedCanvasSources = tools.flatMap((message, index) => {
-    const source = extractChatMessagePreview(message);
-    return source ? [{ ...source, message, index }] : [];
+  const toolItems = buildMessageItems(tools).map((item) => {
+    const projection: ChatProjection<typeof item> = {
+      item,
+    };
+    return {
+      projection,
+      runId: normalizeOptionalString(item.message.runId),
+      callId: normalizeOptionalString(item.message.toolCallId),
+      preview: extractChatMessagePreview(item.message),
+    };
   });
+  const queuedSends = props.queue ?? [];
+  const segments = props.streamSegments;
+  const activeReasoning = activeChatReasoning(props.reasoning);
+  let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
+  const resolveProgress = () => {
+    if (progress) {
+      return progress;
+    }
+    // A run that handed off has ended, but its live rows stay until the next
+    // run starts. The status that follows must not take that run's identity or
+    // count from its first tool call.
+    const handedOff = props.runId ? undefined : pendingSessionsYield(props.messages)?.runId;
+    progress = resolveWorkingProgress(
+      props.sessionKey,
+      props.runId ?? null,
+      props.streamStartedAt,
+      queuedSends,
+      handedOff ? segments.filter((segment) => segment.runId !== handedOff) : segments,
+      handedOff ? tools.filter((message) => message.runId !== handedOff) : tools,
+    );
+    return progress;
+  };
+  // Retention and live status share the same explicit or inferred run ownership.
+  const activeCommentaryRunId =
+    props.persistCommentary === false && (props.runWorking || props.runActive)
+      ? normalizeOptionalString(resolveProgress().runId)
+      : undefined;
+  const history = composeTranscriptDisplay(
+    props.messages.filter(
+      (message) =>
+        !isAssistantHeartbeatAckForDisplay(message) &&
+        (props.persistCommentary !== false ||
+          !isKeyedAssistantStreamFallbackMessage(message) ||
+          (activeCommentaryRunId !== undefined &&
+            transcriptRunId(message) === activeCommentaryRunId)),
+    ),
+  );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
+  const hiddenHistoryKeys = new Set<string>();
   const persistedCanvasIdentities = new Set<string>();
-  for (const message of history) {
-    const source = extractChatMessagePreview(message);
-    if (!source) {
+  const normalizedHistory = history.map(safeNormalizeMessage);
+  const permissionInMessage = (message: unknown) =>
+    extractToolCardsCached(message).some((card) =>
+      readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
+    );
+  const historyItems = buildMessageItems(history);
+  let canvasTurn: {
+    previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
+    lastMatchingAssistantIndex: number;
+  } = {
+    previews: [],
+    lastMatchingAssistantIndex: -1,
+  };
+  // Rows in one turn share these facts so a tool result can see the assistant
+  // projection that follows it, without consuming a view from another turn.
+  const canvasTurns = historyItems.map((item, index) => {
+    const message = normalizedHistory[index];
+    const role = message && normalizeRoleForGrouping(message.role);
+    if (role === "user" || role === "system") {
+      canvasTurn = { previews: [], lastMatchingAssistantIndex: -1 };
+    }
+    if (
+      role === "assistant" &&
+      message &&
+      (!searchFiltering ||
+        messageMatchesSearchQuery(history[index], props.searchQuery ?? "", props.messageRecovery))
+    ) {
+      canvasTurn.lastMatchingAssistantIndex = index;
+      canvasTurn.previews.push(
+        ...message.content.flatMap((block) =>
+          block.type === "canvas" ? [{ preview: block.preview, item }] : [],
+        ),
+      );
+    }
+    return canvasTurn;
+  });
+  const compaction = props.compactionStatus;
+  const compactionKey = compaction
+    ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
+    : undefined;
+  let hasPersistedCompaction = false;
+  for (const [i, item] of historyItems.entries()) {
+    const msg = item.message;
+    const itemKey = item.key;
+    const raw = asRecord(msg) ?? {};
+    const marker = asRecord(raw["__openclaw"]);
+    const fallback = readModelFallbackNotice(msg);
+    if (fallback) {
+      items.push({
+        kind: "divider",
+        key: `divider:model-fallback:${itemKey}`,
+        label: t(
+          fallback.phase === "restored"
+            ? "chat.composer.modelRestoredEvent"
+            : "chat.composer.modelFallbackEvent",
+          { from: fallback.fromModel, to: fallback.toModel },
+        ),
+        ...(fallback.reason
+          ? {
+              description: t("chat.composer.fallbackReason", {
+                reason: fallback.reason.replace(/_/g, " "),
+              }),
+            }
+          : {}),
+        timestamp: rawMessageTimestamp(msg) ?? Date.now(),
+      });
       continue;
     }
-    const baseIdentity = canvasPreviewBaseIdentity(message, source);
-    if (baseIdentity) {
-      // fetchMcpAppView assigns a fresh viewId to every invocation. Matching the call and
-      // view therefore identifies the same preview while still tolerating a reused call ID.
-      persistedCanvasIdentities.add(baseIdentity);
+    if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
+      const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
+      const divider = buildCompactionDividerItem(
+        marker ?? {},
+        rawMessageTimestamp(msg) ?? Date.now(),
+        i,
+      );
+      items.push({
+        ...divider,
+        compactionId: divider.key,
+        ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
+      });
+      hasPersistedCompaction ||= matchesLive;
+      continue;
     }
-  }
-  for (let i = 0; i < history.length; i++) {
-    const msg = history[i];
-    const itemKey = historyKeys[i] ?? messageKey(msg, i);
-    const normalized = safeNormalizeMessage(msg);
+    const normalized = normalizedHistory[i];
     if (!normalized) {
       continue;
     }
-    const raw = asRecord(msg) ?? {};
-    const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
-    if (marker && marker.kind === "compaction") {
-      items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
+    if (marker && marker.kind === "reset") {
+      items.push(buildResetDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
 
@@ -132,13 +287,34 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    if (persistedCanvasSource) {
+      const identity = canvasPreviewBaseIdentity(msg, persistedCanvasSource);
+      if (identity) {
+        persistedCanvasIdentities.add(identity);
+      }
+    }
+    const matchingCanvas =
+      persistedCanvasSource &&
+      canvasTurns[i]!.previews.find(({ preview }) =>
+        canvasPreviewsMatch(preview, persistedCanvasSource.preview),
+      );
+    if (persistedCanvasSource && matchingCanvas) {
+      // Enrich the owned display row, including a later assistant shortcode,
+      // without changing transcript input or introducing a second widget card.
+      matchingCanvas.item.message = appendCanvasBlockToAssistantMessage(
+        matchingCanvas.item.message,
+        persistedCanvasSource.preview,
+        persistedCanvasSource.text,
+      );
+    }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
-      (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
+      !matchingCanvas &&
+      (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
       items.push({
         kind: "message",
-        key: `${itemKey}:canvas`,
+        key: canvasAssistantItemKey(msg, persistedCanvasSource, itemKey),
         message: createCanvasAssistantMessage(
           persistedCanvasSource,
           persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
@@ -146,293 +322,409 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       });
     }
 
-    if (!props.showToolCalls && isToolResult) {
+    if (
+      !props.showToolCalls &&
+      isToolResult &&
+      !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
+      !hasSessionsYieldCall(msg) &&
+      !permissionInMessage(msg)
+    ) {
       continue;
     }
 
-    const searchQuery = props.searchQuery ?? "";
-    if (props.searchOpen && searchQuery.trim() && !messageMatchesSearchQuery(msg, searchQuery)) {
-      continue;
-    }
-    if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
-      continue;
-    }
-
-    items.push({
-      kind: "message",
-      key: itemKey,
-      message: msg,
-    });
-  }
-  const queuedSends = props.queue ?? [];
-  // Once authoritative history carries the send id, that message owns the bubble.
-  // Keep the queue row for run progress and delivery retirement, but do not render both copies.
-  const threadQueuedSends = queuedSends.filter(
-    (queued) => !chatMessagesContainQueuedSend(history, queued, true),
-  );
-  const activeRunQueuedSends = threadQueuedSends.filter(
-    (queued) => queued.sendState === "waiting-model",
-  );
-  const futureQueuedSends = threadQueuedSends.filter(
-    (queued) => queued.sendState !== "waiting-model",
-  );
-  const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
-    (earliest, queued) =>
-      earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
-    null,
-  );
-  const appendQueuedSend = (queued: ChatQueueItem) => {
-    if (!shouldRenderQueuedSendInThread(queued)) {
-      return;
-    }
-    const message = queuedSendThreadMessage(queued);
-    if (!message) {
-      return;
-    }
     const searchQuery = props.searchQuery ?? "";
     if (
       props.searchOpen &&
       searchQuery.trim() &&
-      !messageMatchesSearchQuery(message, searchQuery)
+      !messageMatchesSearchQuery(msg, searchQuery, props.messageRecovery)
     ) {
-      return;
+      hiddenHistoryKeys.add(itemKey);
     }
-    items.push({
-      kind: "message",
-      // Mirror buildMessageKeys for a send-identity source key so the pending
-      // row and its history successor resolve to the same Lit key.
-      key: queued.sendRunId ? `msg:send:${queued.sendRunId}:0` : `pending-send:${queued.id}`,
-      message,
-    });
-  };
-  for (const queued of activeRunQueuedSends) {
-    appendQueuedSend(queued);
+    if (
+      !hasRenderableNormalizedMessage(msg, normalized) &&
+      normalized.role.toLowerCase() !== "assistant"
+    ) {
+      continue;
+    }
+
+    items.push(...projectChatSystemNotice(item, normalized));
   }
-  for (const liftedCanvasSource of liftedCanvasSources) {
-    const baseIdentity = canvasPreviewBaseIdentity(liftedCanvasSource.message, liftedCanvasSource);
+  const currentRunId =
+    props.runId ??
+    (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
+      ? resolveProgress().runId
+      : null);
+  const historyTurnBounds = findCurrentTurnBounds(items);
+  const { pendingKeys, historicalKeys, hiddenKeys, activeInputKey } = placeChatInputs(
+    items,
+    history,
+    props,
+    inputOrder,
+    currentRunId,
+  );
+  const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
+  const canvasRunBounds = createRunTurnLookup(executionItems());
+  const currentTurnBounds =
+    (currentRunId ? canvasRunBounds(currentRunId) : null) ??
+    (activeInputKey ? { afterKey: activeInputKey } : historyTurnBounds);
+  const resolveRunBounds = (
+    lookup: typeof canvasRunBounds,
+    runId: unknown,
+    afterUserSendId?: string,
+  ) =>
+    (typeof runId === "string" && afterUserSendId ? lookup(runId, afterUserSendId) : null) ??
+    resolveRunInsertionBounds(lookup, runId, currentRunId, currentTurnBounds) ??
+    (!runId && activeInputKey ? currentTurnBounds : undefined);
+  const boundToPendingInputs = (
+    bounds: TurnInsertionBounds | null | undefined,
+  ): TurnInsertionBounds | undefined => {
+    const { minimum, maximum } = insertionIndexesForBounds(items, bounds ?? undefined);
+    const pending = items.find(
+      (item, index) => index >= minimum && index < maximum && pendingKeys.has(item.key),
+    );
+    return pending ? { ...bounds, beforeKey: pending.key } : (bounds ?? undefined);
+  };
+  for (const { projection, preview } of toolItems) {
+    if (!preview) {
+      continue;
+    }
+    const baseIdentity = canvasPreviewBaseIdentity(projection.item.message, preview);
     if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
       continue;
     }
-    const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
-    if (assistantIndex == null) {
-      if (searchFiltering) {
-        continue;
-      }
-      const insertionIndex = findCanvasInsertionIndex(items, liftedCanvasSource.timestamp);
-      const nextItem = items[insertionIndex];
-      const nextTimestamp =
-        nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
-      const boundaryTimestamp =
-        nextTimestamp == null
-          ? futureQueuedTimestamp
-          : futureQueuedTimestamp == null
-            ? nextTimestamp
-            : Math.min(nextTimestamp, futureQueuedTimestamp);
-      const timestamp =
-        liftedCanvasSource.timestamp != null && boundaryTimestamp != null
-          ? Math.min(liftedCanvasSource.timestamp, boundaryTimestamp)
-          : liftedCanvasSource.timestamp;
-      items.splice(insertionIndex, 0, {
-        kind: "message",
-        key: `${
-          toolKeys[liftedCanvasSource.index] ??
-          messageKey(liftedCanvasSource.message, liftedCanvasSource.index + history.length)
-        }:canvas`,
-        message: createCanvasAssistantMessage(liftedCanvasSource, timestamp),
-      });
-      continue;
-    }
-    const item = items[assistantIndex];
-    if (!item || item.kind !== "message") {
-      continue;
-    }
-    items[assistantIndex] = {
-      ...item,
-      message: appendCanvasBlockToAssistantMessage(
-        item.message as Record<string, unknown>,
-        liftedCanvasSource.preview,
-        liftedCanvasSource.text,
+    const canvasBounds = boundToPendingInputs(
+      resolveRunBounds(
+        canvasRunBounds,
+        projection.item.message.runId,
+        normalizeOptionalString(projection.item.message.openclawToolStreamAfterSendId),
       ),
-    };
-  }
-  for (const queued of futureQueuedSends) {
-    appendQueuedSend(queued);
+    );
+    const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
+      items,
+      canvasBounds ?? undefined,
+    );
+    const assistant = findNearestAssistantMessage(
+      items,
+      preview.timestamp,
+      canvasMinimumIndex,
+      canvasMaximumIndex,
+    );
+    if (assistant) {
+      items[assistant.index] = {
+        ...assistant.item,
+        message: appendCanvasBlockToAssistantMessage(
+          assistant.item.message,
+          preview.preview,
+          preview.text,
+        ),
+      };
+      continue;
+    }
+    if (searchFiltering) {
+      continue;
+    }
+    const insertionIndex = findCanvasInsertionIndex(
+      items,
+      preview.timestamp,
+      canvasMinimumIndex,
+      canvasMaximumIndex,
+    );
+    const nextItem = items[insertionIndex];
+    const nextTimestamp =
+      nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
+    const timestamp =
+      preview.timestamp != null && nextTimestamp != null
+        ? Math.min(preview.timestamp, nextTimestamp)
+        : preview.timestamp;
+    items.splice(insertionIndex, 0, {
+      kind: "message",
+      key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
+      message: createCanvasAssistantMessage(preview, timestamp),
+    });
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
-  const segments = props.streamSegments;
+  const projections: ChatProjection[] = [];
+  if (compaction && compactionKey && !hasPersistedCompaction) {
+    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
+    projections.push({
+      item: {
+        ...buildCompactionDividerItem(
+          {},
+          timestamp,
+          0,
+          compaction.phase === "complete" ? "complete" : "active",
+        ),
+        key: compactionKey,
+      },
+    });
+  }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
-  const toolItems = tools.map((message, index) => ({
-    key: toolKeys[index] ?? messageKey(message, index + history.length),
-    message,
-  }));
-  const toolKeysByCallId = new Map<string, string>();
+  const toolLookup = createToolCallLookup<ChatProjection>();
   for (const tool of toolItems) {
-    const toolCallId = asRecord(tool.message)?.toolCallId;
-    if (typeof toolCallId === "string" && toolCallId.trim()) {
-      toolKeysByCallId.set(toolCallId.trim(), tool.key);
-    }
+    toolLookup.add(tool.runId, tool.callId, tool.projection);
   }
-  const maxLen = Math.max(indexedSegments.length, tools.length);
-  let previousAccumulatedStreamText: string | null = null;
-  const toolStreamPredecessors = new Map<string, string>();
-  for (let i = 0; i < maxLen; i++) {
-    if (i < indexedSegments.length) {
-      const segment = indexedSegments[i];
-      if (!segment) {
+  // Empty user rows may have disappeared since canvas placement. Preserve the
+  // earlier current-turn fallback, but resolve exact bounds over rendered rows.
+  const projectionRunBounds = createRunTurnLookup(executionItems());
+  const resolveProjectionBounds = (
+    runId: unknown,
+    afterUserSendId?: string,
+  ): TurnInsertionBounds | undefined =>
+    boundToPendingInputs(resolveRunBounds(projectionRunBounds, runId, afterUserSendId));
+  if (!searchFiltering) {
+    const recordedPermissions = new Set(
+      props.guardianNotices?.some((notice) => notice.permissionMissing)
+        ? [...props.messages, ...props.toolMessages].flatMap((message) =>
+            extractToolCardsCached(message).flatMap((card) => {
+              const request = readNodePermissionRequest(asRecord(card.details)?.permissionMissing);
+              return request ? [JSON.stringify(request)] : [];
+            }),
+          )
+        : [],
+    );
+    if (props.archiveNotice) {
+      projections.push({ item: props.archiveNotice });
+    }
+    for (const notice of props.guardianNotices ?? []) {
+      if (
+        notice.permissionMissing &&
+        recordedPermissions.has(JSON.stringify(notice.permissionMissing))
+      ) {
         continue;
       }
+      projections.push({
+        item: buildGuardianNoticeItem(notice),
+        bounds: resolveProjectionBounds(notice.runId),
+      });
+    }
+  }
+  const appendStreamSegment = (
+    segment: Pick<ChatStreamSegment, "ts" | "runId" | "afterUserSendId">,
+    key: string,
+    text: string,
+    thinking?: string,
+    beforeKey?: string,
+  ) => {
+    const bounds = resolveProjectionBounds(segment.runId, segment.afterUserSendId);
+    projections.push({
+      item: {
+        kind: "stream",
+        key,
+        text,
+        ...(thinking ? { thinking } : {}),
+        startedAt: segment.ts,
+        isStreaming: false,
+        ...optionalRunIdentity(segment.runId),
+        ...optionalBoundaryIdentity(segment.runId),
+      },
+      bounds: beforeKey ? { ...bounds, beforeKey } : bounds,
+    });
+  };
+  let previousAccumulatedStreamText: string | null = null;
+  const maxLen = Math.max(indexedSegments.length, toolItems.length);
+  for (let i = 0; i < maxLen; i++) {
+    const segment = indexedSegments[i];
+    if (segment) {
       const text = sanitizeStreamText(segment.text);
-      const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
-      const visibleText = usesAccumulatedText
-        ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
-        : text;
-      if (usesAccumulatedText && text.length > 0) {
-        previousAccumulatedStreamText = text;
-      }
-      if (visibleText.length > 0) {
+      const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+      previousAccumulatedStreamText = advanceAccumulatedStreamText(
+        previousAccumulatedStreamText,
+        text,
+      );
+      if (visibleText.length > 0 && segment.persisted !== true) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
-        items.push({
-          kind: "stream",
-          key: streamKey,
-          text: visibleText,
-          startedAt: segment.ts,
-          isStreaming: false,
-        });
-        const toolCallId = segment.toolCallId?.trim();
-        const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
-        if (toolKey) {
+        appendStreamSegment(segment, streamKey, visibleText);
+        const tool = toolLookup.get(
+          normalizeOptionalString(segment.runId),
+          segment.toolCallId?.trim(),
+        );
+        if (tool) {
           // Gateway and browser clocks can disagree. Keep the assistant text that
           // introduced a tool causally before its card even when timestamps do not.
-          toolStreamPredecessors.set(toolKey, streamKey);
+          tool.predecessorKey = streamKey;
         }
       }
     }
     const tool = toolItems[i];
-    if (tool && props.showToolCalls) {
-      items.push({
-        kind: "message",
-        key: tool.key,
-        message: tool.message,
-      });
+    if (
+      tool &&
+      (props.showToolCalls ||
+        hasSessionsYieldCall(tool.projection.item.message) ||
+        permissionInMessage(tool.projection.item.message))
+    ) {
+      tool.projection.bounds = resolveProjectionBounds(
+        tool.runId,
+        normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
+      );
+      projections.push(tool.projection);
     }
   }
+  // Keyed commentary does not advance cumulative text and follows the indexed
+  // stream/tool pairs on timestamp ties.
   for (const segment of keyedSegments) {
     const text = sanitizeStreamText(segment.text);
-    if (text.length === 0) {
-      continue;
-    }
-    const commentaryItem: ChatItem = {
-      kind: "stream",
-      key: `stream-seg:${props.sessionKey}:${segment.itemId}`,
-      text,
-      startedAt: segment.ts,
-      isStreaming: false,
-    };
-    // Merge keyed commentary into the timestamp ordering path instead of
-    // appending it after every tool card. Insert before the first already-built
-    // item whose visible timestamp is strictly later, so a preamble that
-    // arrived before a later tool renders above that tool while the run is live
-    // (not only after final materialization). Tools that share the commentary's
-    // timestamp and are already visible stay above it.
-    const insertionIndex = items.findIndex((existing) => {
-      const existingTimestamp = chatItemTimestamp(existing);
-      return existingTimestamp != null && existingTimestamp > segment.ts;
-    });
-    if (insertionIndex === -1) {
-      items.push(commentaryItem);
-    } else {
-      items.splice(insertionIndex, 0, commentaryItem);
+    if (text.length > 0) {
+      appendStreamSegment(segment, `stream-seg:${props.sessionKey}:${segment.itemId}`, text);
     }
   }
 
-  // Working spark contract: whenever the agent works with nothing visibly
-  // streaming (pre-first-token, or a queued send in flight), the thread shows
-  // the reading indicator where the reply will materialize. Streaming text
-  // and running tool rows take over as the signal once content flows.
-  // A visible running tool row already signals active work, so the spark is
-  // suppressed rather than stacked under it; hidden tool calls keep the spark.
-  const hasVisibleRunningTool =
-    props.showToolCalls &&
-    tools.some((message) => {
-      const record = asRecord(message);
-      return (
-        record?.["__openclawToolStreamLive"] === true &&
-        record["__openclawToolStreamResultReceived"] !== true
-      );
-    });
-  // The initial-load skeleton owns the empty thread; a background reload with
-  // content still visible keeps the spark (it is the only working signal).
-  const initialHistoryLoad = props.loading === true && items.length === 0;
-  const hasPendingResponse =
-    props.stream === null &&
-    ((props.runWorking === true &&
-      (props.waitingApproval === true || !hasVisibleRunningTool) &&
-      !initialHistoryLoad) ||
-      queuedSends.some(
-        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-      ));
-  if (props.runWorking !== true && props.stream === null && !hasPendingResponse) {
-    clearWorkingProgress(props.sessionKey);
-  }
-  const resolveProgress = () =>
-    resolveWorkingProgress(
-      props.sessionKey,
-      props.runId ?? null,
-      props.streamStartedAt,
-      queuedSends,
-      segments,
-      tools,
-    );
-  if (hasPendingResponse) {
-    const progress = resolveProgress();
-    items.push({ kind: "reading-indicator", ...progress });
-  } else if (props.stream !== null) {
-    const text = sanitizeStreamText(props.stream);
-    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
-    if (visibleText.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
-        const progress = resolveProgress();
-        items.push({
-          kind: "stream",
-          key: progress.key,
-          text: visibleText,
-          startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
-          isStreaming: true,
-        });
-      }
-    } else if (props.stream.trim().length === 0) {
-      const progress = resolveProgress();
-      items.push({ kind: "reading-indicator", ...progress });
-    }
-  }
-  if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
-    items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
-  }
   for (const prompt of props.questionPrompts ?? []) {
-    // Pending questions live in the composer dock. Only their terminal summary becomes transcript.
-    if (
-      prompt.status === "pending" ||
-      !prompt.sessionKey ||
-      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
-    ) {
+    // Pending questions live in the composer dock. Their terminal summaries are
+    // timestamped transient projections, so keep their historical placement.
+    if (prompt.status === "pending") {
       continue;
     }
-    items.push({
+    const questionItem: ChatItem = {
       kind: "question",
       key: `question:${prompt.id}`,
       questionId: prompt.id,
       startedAt: prompt.createdAtMs,
+    };
+    projections.push({
+      item: questionItem,
+      bounds: prompt.runId ? resolveProjectionBounds(prompt.runId) : undefined,
     });
   }
 
-  return annotateToolTurnOutcome(
-    groupMessages(
-      collapseSequentialDuplicateMessages(
-        coalesceToolActivityMessages(sortChatItemsByVisibleTime(items, toolStreamPredecessors)),
-      ),
-    ),
+  const visibleText = trimAccumulatedStreamPrefix(
+    sanitizeStreamText(props.stream ?? ""),
+    accumulatedStreamText(segments, sanitizeStreamText),
   );
+  if (props.reasoning) {
+    const { runId } = props.reasoning;
+    for (const reasoning of props.reasoning.items) {
+      if (
+        reasoning === activeReasoning ||
+        !reasoning.text ||
+        (props.showReasoning && reasoning.receipt?.persisted)
+      ) {
+        continue;
+      }
+      const receipt = reasoning.receipt;
+      // Provider timestamps may precede the first token. The receipt keeps
+      // a stream-mode preview before its exact durable tool/answer row.
+      const persisted = receipt?.persisted
+        ? historyItems.find(({ message }) => {
+            const identity = readChatThreadMessageIdentity(message);
+            return (
+              identity?.role === "assistant" &&
+              !identity.isImported &&
+              identity.id === receipt.messageId &&
+              identity.runId === receipt.runId
+            );
+          })
+        : undefined;
+      appendStreamSegment(
+        { runId, ts: reasoning.startedAt },
+        `reasoning:${runId}:${reasoning.itemId}`,
+        "",
+        reasoning.text,
+        persisted?.key,
+      );
+    }
+  }
+
+  // Unowned projections keep their user-turn floor despite clock skew;
+  // identified live tools stay in the canonical invocation's interval.
+  applyPersistedToolInvocationBounds(
+    items,
+    toolItems.map((tool) => tool.projection),
+  );
+  insertChatItemsByTimestamp(items, projections);
+
+  // The active claw is telemetry, not a placeholder: it stays through visible
+  // assistant text and tool cards until the run settles. The initial-load
+  // skeleton still owns an otherwise empty thread, but not an active stream.
+  const initialHistoryLoad = props.stream === null && props.loading === true && items.length === 0;
+  // A non-null empty stream is the acknowledgement bridge before runWorking
+  // catches up.
+  const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;
+  const showWorkingIndicator =
+    (!compaction || compaction.phase === "complete") &&
+    ((props.runWorking === true && !initialHistoryLoad) ||
+      hasEmptyLiveStream ||
+      queuedSends.some(
+        (item) =>
+          (item.sendState === "submitting" || item.sendState === "sending") &&
+          shouldRenderQueuedSendInThread(item),
+      ));
+  if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
+    clearWorkingProgress(props.sessionKey);
+  }
+  const activeTurnBounds = boundToPendingInputs(
+    (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
+      (activeInputKey ? { afterKey: activeInputKey } : null),
+  );
+  const appendActiveRunItem = (
+    item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+  ) => {
+    // Queued custody is a ceiling for the whole live response, not just its text.
+    // Moving its working indicator past that ceiling splits and remeasures the run.
+    if (activeTurnBounds) {
+      const { maximum } = insertionIndexesForBounds(items, activeTurnBounds);
+      items.splice(maximum, 0, item);
+    } else {
+      items.push(item);
+    }
+  };
+  if (
+    activeReasoning ||
+    (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
+  ) {
+    const liveProgress = resolveProgress();
+    const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
+    // Unsaved answer text follows accepted steers at the run's live tail.
+    appendActiveRunItem({
+      kind: "stream",
+      key: liveProgress.key,
+      text: visibleText,
+      thinking: activeReasoning?.text,
+      startedAt: timestampAfterVisibleItems(
+        items,
+        props.streamStartedAt ?? activeReasoning?.startedAt ?? Date.now(),
+      ),
+      isStreaming: true,
+      ...optionalRunIdentity(liveRunId),
+      ...optionalBoundaryIdentity(liveRunId),
+    });
+  }
+  if (showWorkingIndicator) {
+    const workingProgress = resolveProgress();
+    const workingRunId = props.runId ?? workingProgress.runId;
+    appendActiveRunItem({
+      kind: "reading-indicator",
+      key: workingProgress.key,
+      startedAt: workingProgress.startedAt,
+      ...optionalRunIdentity(workingRunId),
+      ...optionalBoundaryIdentity(workingRunId),
+    });
+  } else if (props.subagentWait && !initialHistoryLoad) {
+    // The handoff ended the parent's run, not its work. Carrying that run's
+    // identity keeps the claw in the same frame instead of opening another row.
+    appendActiveRunItem({
+      kind: "reading-indicator",
+      key: `waiting-subagents:${props.sessionKey}`,
+      startedAt: props.subagentWait.startedAt,
+      waitingOn: "subagents",
+      runId: props.subagentWait.runId,
+    });
+  }
+  // Place output against the complete transcript before search hides any rows.
+  // Pending/local inputs contribute people and turn boundaries just like history;
+  // queued future inputs must remain after the live output they do not own.
+  const hidden =
+    hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
+      ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
+      : undefined;
+  const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
+    projectSessionsYieldItems(source, props.showToolCalls, complete);
+  const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
+  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
+    items: complete,
+    people: props.replyPeople,
+    localPerson: props.replyLocalPerson,
+  });
 }

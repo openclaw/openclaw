@@ -4,11 +4,13 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
-import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { setTimeout as delay } from "node:timers/promises";
+import { isPidAlive, runExec } from "openclaw/plugin-sdk/process-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CODEX_ACP_PACKAGE, LEGACY_CODEX_ACP_PACKAGE } from "./codex-adapter.js";
-import { splitCommandParts } from "./command-line.js";
-import { resolveAcpxPluginRoot } from "./config.js";
-import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import type { AcpxAgentCommand } from "./command-line.js";
+import { resolveAcpxPluginRoot, resolveOpenClawRoot } from "./config.js";
+import { readAcpxProcessLeaseIdentity } from "./process-lease.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const GENERATED_WRAPPER_BASENAMES = new Set([
@@ -48,28 +50,24 @@ const ACP_PACKAGE_MARKERS = [
   "/acpx/dist/",
 ];
 
-/** Minimal process-table row used by ACPX cleanup. */
 type AcpxProcessInfo = {
   pid: number;
   ppid: number;
   command: string;
 };
 
-/** Injectable process-listing and termination hooks for tests. */
-export type AcpxProcessCleanupDeps = {
-  listProcesses?: () => Promise<AcpxProcessInfo[]>;
-  killProcess?: (pid: number, signal: NodeJS.Signals) => void;
-  sleep?: (ms: number) => Promise<void>;
-};
-
-/** Result from cleaning up a single ACPX process tree. */
 type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
-  skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
+  skippedReason?:
+    | "missing-root"
+    | "ambiguous-root"
+    | "not-openclaw-owned"
+    | "process-list-unavailable"
+    | "unsupported-platform"
+    | "unverified-root";
 };
 
-/** Result from startup orphan reaping. */
 type AcpxStartupReapResult = {
   inspectedPids: number[];
   terminatedPids: number[];
@@ -88,20 +86,9 @@ function resolvePackageRoot(packageName: string): string | undefined {
   }
 }
 
-function resolveOpenClawInstallRoot(pluginRoot: string): string {
-  if (
-    path.basename(pluginRoot) === "acpx" &&
-    path.basename(path.dirname(pluginRoot)) === "extensions"
-  ) {
-    const parent = path.dirname(path.dirname(pluginRoot));
-    return path.basename(parent) === "dist" ? path.dirname(parent) : parent;
-  }
-  return path.resolve(pluginRoot, "..");
-}
-
 function resolveOwnedAcpPackageRootCandidates(packageName: string): string[] {
   const pluginRoot = resolveAcpxPluginRoot(import.meta.url);
-  const openClawRoot = resolveOpenClawInstallRoot(pluginRoot);
+  const openClawRoot = resolveOpenClawRoot(pluginRoot);
   return [
     resolvePackageRoot(packageName),
     path.join(pluginRoot, "node_modules", packageName),
@@ -121,30 +108,37 @@ function commandMentionsGeneratedWrapper(command: string): boolean {
   return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) => command.includes(basename));
 }
 
-function commandWrapperBelongsToRoot(command: string, wrapperRoot: string | undefined): boolean {
-  if (!wrapperRoot) {
-    return true;
-  }
-  const normalizedCommand = normalizePathLike(command);
+function commandContainsExactWrapperPath(command: string, wrapperPath: string): boolean {
+  const expectedPath = normalizePathLike(wrapperPath);
+  // Process display paths can contain spaces and literal quote characters.
+  return new RegExp(`(?:^|[\\s"'])${escapeRegExp(expectedPath)}(?=$|[\\s"'])`).test(
+    normalizePathLike(command),
+  );
+}
+
+function wrapperPathBelongsToRoot(wrapperPath: string, wrapperRoot: string): boolean {
+  const normalizedPath = normalizePathLike(wrapperPath);
   const normalizedRoot = normalizePathLike(wrapperRoot).replace(/\/+$/, "");
-  return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) =>
-    normalizedCommand.includes(`${normalizedRoot}/${basename}`),
+  return (
+    GENERATED_WRAPPER_BASENAMES.has(path.posix.basename(normalizedPath)) &&
+    normalizedPath.startsWith(`${normalizedRoot}/`)
   );
 }
 
 /** Check whether a command references an OpenClaw-generated ACPX wrapper path. */
 export function isOpenClawLeaseAwareAcpxProcessCommand(params: {
-  command: string | undefined;
+  command: AcpxAgentCommand | undefined;
   wrapperRoot?: string;
 }): boolean {
-  const command = params.command?.trim();
-  if (!command) {
-    return false;
-  }
-  const normalized = normalizePathLike(command);
-  return (
-    commandMentionsGeneratedWrapper(normalized) &&
-    commandWrapperBelongsToRoot(normalized, params.wrapperRoot)
+  // Inspect literal paths; rendering argv would JSON-escape Windows separators.
+  const command = normalizePathLike(
+    Array.isArray(params.command) ? params.command.join(" ") : (params.command ?? ""),
+  );
+  const root = params.wrapperRoot
+    ? `${normalizePathLike(params.wrapperRoot).replace(/\/+$/, "")}/`
+    : "";
+  return Array.from(GENERATED_WRAPPER_BASENAMES).some((basename) =>
+    command.includes(`${root}${basename}`),
   );
 }
 
@@ -155,18 +149,6 @@ function commandsReferToSameRootCommand(liveCommand: string, storedCommand: stri
   return normalizePathLike(liveCommand).trim() === normalizePathLike(storedCommand).trim();
 }
 
-function commandOptionEquals(
-  parts: string[],
-  option: string,
-  expected: string | undefined,
-): boolean {
-  if (!expected) {
-    return true;
-  }
-  const index = parts.indexOf(option);
-  return index >= 0 && parts[index + 1] === expected;
-}
-
 function liveCommandMatchesLeaseIdentity(params: {
   command: string | undefined;
   expectedLeaseId?: string;
@@ -175,10 +157,11 @@ function liveCommandMatchesLeaseIdentity(params: {
   if (!params.expectedLeaseId && !params.expectedGatewayInstanceId) {
     return true;
   }
-  const parts = splitCommandParts(params.command ?? "");
+  const identity = readAcpxProcessLeaseIdentity(params.command);
   return (
-    commandOptionEquals(parts, OPENCLAW_ACPX_LEASE_ID_ARG, params.expectedLeaseId) &&
-    commandOptionEquals(parts, OPENCLAW_GATEWAY_INSTANCE_ID_ARG, params.expectedGatewayInstanceId)
+    (!params.expectedLeaseId || identity?.leaseId === params.expectedLeaseId) &&
+    (!params.expectedGatewayInstanceId ||
+      identity?.gatewayInstanceId === params.expectedGatewayInstanceId)
   );
 }
 
@@ -228,7 +211,6 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
   return processes;
 }
 
-/** List host processes in the compact shape needed by ACPX cleanup. */
 async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
@@ -279,31 +261,16 @@ function uniquePids(processes: AcpxProcessInfo[]): number[] {
   );
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function terminatePids(
   pids: number[],
-  deps: AcpxProcessCleanupDeps | undefined,
+  assertCurrent: (() => void) | undefined,
 ): Promise<number[]> {
-  const killProcess = deps?.killProcess ?? ((pid, signal) => process.kill(pid, signal));
-  const sleep =
-    deps?.sleep ??
-    ((ms) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
   const terminated: number[] = [];
 
   for (const pid of pids) {
+    assertCurrent?.();
     try {
-      killProcess(pid, "SIGTERM");
+      process.kill(pid, "SIGTERM");
       terminated.push(pid);
     } catch {
       // The process may already be gone.
@@ -312,11 +279,12 @@ async function terminatePids(
   if (terminated.length === 0) {
     return terminated;
   }
-  await sleep(750);
+  await delay(750);
   for (const pid of terminated) {
-    if (deps?.killProcess || isProcessAlive(pid)) {
+    assertCurrent?.();
+    if (isPidAlive(pid)) {
       try {
-        killProcess(pid, "SIGKILL");
+        process.kill(pid, "SIGKILL");
       } catch {
         // Best-effort cleanup only.
       }
@@ -332,18 +300,25 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   expectedLeaseId?: string;
   expectedGatewayInstanceId?: string;
   wrapperRoot?: string;
-  deps?: AcpxProcessCleanupDeps;
+  assertCurrent?: () => void;
 }): Promise<AcpxProcessCleanupResult> {
   const rootPid = params.rootPid;
   if (!rootPid || rootPid <= 0 || rootPid === process.pid) {
     return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
   }
+  if (process.platform === "win32") {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
+  }
 
   let processes: AcpxProcessInfo[];
   try {
-    processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
+    processes = await listPlatformProcesses();
   } catch {
-    processes = [];
+    return {
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    };
   }
 
   const listedTree = collectProcessTree(processes, rootPid);
@@ -360,36 +335,14 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   const storedCommandWasGeneratedWrapper = commandMentionsGeneratedWrapper(
     normalizePathLike(params.rootCommand ?? ""),
   );
-  if (!liveCommandWasGeneratedWrapper && storedCommandWasGeneratedWrapper) {
-    return {
-      inspectedPids: listedTree.map((processInfo) => processInfo.pid),
-      terminatedPids: [],
-      skippedReason: "not-openclaw-owned",
-    };
-  }
   if (
-    !liveCommandWasGeneratedWrapper &&
-    !commandsReferToSameRootCommand(rootCommand ?? "", params.rootCommand)
-  ) {
-    return {
-      inspectedPids: listedTree.map((processInfo) => processInfo.pid),
-      terminatedPids: [],
-      skippedReason: "not-openclaw-owned",
-    };
-  }
-  if (
+    (!liveCommandWasGeneratedWrapper &&
+      (storedCommandWasGeneratedWrapper ||
+        !commandsReferToSameRootCommand(rootCommand ?? "", params.rootCommand))) ||
     !isOpenClawOwnedAcpxProcessCommand({
       command: rootCommand,
       wrapperRoot: params.wrapperRoot,
-    })
-  ) {
-    return {
-      inspectedPids: listedTree.map((processInfo) => processInfo.pid),
-      terminatedPids: [],
-      skippedReason: "not-openclaw-owned",
-    };
-  }
-  if (
+    }) ||
     !liveCommandMatchesLeaseIdentity({
       command: rootCommand,
       expectedLeaseId: params.expectedLeaseId,
@@ -406,14 +359,68 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   const pids = uniquePids(listedTree.toReversed());
   return {
     inspectedPids: uniquePids(listedTree),
-    terminatedPids: await terminatePids(pids, params.deps),
+    terminatedPids: await terminatePids(pids, params.assertCurrent),
+  };
+}
+
+/** Recover a pending lease by matching its exact live wrapper identity. */
+export async function cleanupOpenClawOwnedAcpxPendingLease(params: {
+  leaseId: string;
+  gatewayInstanceId: string;
+  wrapperRoot: string;
+  wrapperPath: string;
+  assertCurrent?: () => void;
+}): Promise<AcpxProcessCleanupResult> {
+  if (process.platform === "win32") {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
+  }
+  if (!params.wrapperPath || !wrapperPathBelongsToRoot(params.wrapperPath, params.wrapperRoot)) {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "unverified-root" };
+  }
+
+  let processes: AcpxProcessInfo[];
+  try {
+    processes = await listPlatformProcesses();
+  } catch {
+    return {
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    };
+  }
+
+  const matchingRoots = processes.filter(
+    (processInfo) =>
+      commandContainsExactWrapperPath(processInfo.command, params.wrapperPath) &&
+      liveCommandMatchesLeaseIdentity({
+        command: processInfo.command,
+        expectedLeaseId: params.leaseId,
+        expectedGatewayInstanceId: params.gatewayInstanceId,
+      }),
+  );
+  if (matchingRoots.length === 0) {
+    return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
+  }
+  if (matchingRoots.length > 1) {
+    return {
+      inspectedPids: uniquePids(matchingRoots),
+      terminatedPids: [],
+      skippedReason: "ambiguous-root",
+    };
+  }
+
+  const listedTree = collectProcessTree(processes, matchingRoots[0]!.pid);
+  const pids = uniquePids(listedTree.toReversed());
+  return {
+    inspectedPids: uniquePids(listedTree),
+    terminatedPids: await terminatePids(pids, params.assertCurrent),
   };
 }
 
 /** Reap orphaned OpenClaw-owned ACPX wrapper trees during runtime startup. */
 export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   wrapperRoot: string;
-  deps?: AcpxProcessCleanupDeps;
+  assertCurrent?: () => void;
 }): Promise<AcpxStartupReapResult> {
   if (process.platform === "win32") {
     return { inspectedPids: [], terminatedPids: [], skippedReason: "unsupported-platform" };
@@ -421,7 +428,7 @@ export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
 
   let processes: AcpxProcessInfo[];
   try {
-    processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
+    processes = await listPlatformProcesses();
   } catch {
     return { inspectedPids: [], terminatedPids: [], skippedReason: "process-list-unavailable" };
   }
@@ -429,6 +436,10 @@ export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   const orphans = processes.filter(
     (processInfo) =>
       processInfo.ppid === 1 &&
+      // Lease-aware wrapper roots are recovered one lease at a time. This
+      // temporary marker fallback remains only for direct agents and
+      // reparented descendants that upstream acpx cannot identify yet.
+      !readAcpxProcessLeaseIdentity(processInfo.command) &&
       isOpenClawOwnedAcpxProcessCommand({
         command: processInfo.command,
         wrapperRoot: params.wrapperRoot,
@@ -442,6 +453,6 @@ export async function reapStaleOpenClawOwnedAcpxOrphans(params: {
   const pids = uniquePids(orphanTrees.flatMap((tree) => tree.toReversed()));
   return {
     inspectedPids,
-    terminatedPids: await terminatePids(pids, params.deps),
+    terminatedPids: await terminatePids(pids, params.assertCurrent),
   };
 }

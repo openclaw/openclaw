@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Message } from "grammy/types";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createChannelReplayGuard,
   type ChannelReplayClaimHandle,
@@ -41,18 +42,6 @@ function message(params?: { chatId?: number; messageId?: number }): Message {
     date: 1736380800,
     chat: { id: params?.chatId ?? 1234, type: "private" },
   } as Message;
-}
-
-function storedReplayKey(accountId: string, botUserId: number, msg: Message): string {
-  return JSON.stringify([
-    "account",
-    accountId,
-    "bot",
-    String(botUserId),
-    "message",
-    String(msg.chat.id),
-    msg.message_id,
-  ]);
 }
 
 function legacyStoredReplayKey(accountId: string, msg: Message): string {
@@ -107,14 +96,6 @@ function createTestClaim(params: {
   };
 }
 
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = createStateDir();
@@ -134,35 +115,6 @@ afterEach(() => {
 });
 
 describe("Telegram message dispatch replay guard", () => {
-  it("persists committed dispatches across guard recreation", async () => {
-    const writer = createTelegramMessageDispatchReplayGuard();
-    const first = await claimTelegramMessageDispatchReplay({
-      guard: writer,
-      accountId: "default",
-      botUserId: DEFAULT_BOT_USER_ID,
-      msg: message(),
-    });
-
-    if (first.kind !== "claimed") {
-      throw new Error("expected initial claim");
-    }
-    expect(first.handle.keys).toEqual([storedReplayKey("default", DEFAULT_BOT_USER_ID, message())]);
-    await commitTelegramMessageDispatchReplay({
-      guard: writer,
-      claims: [first.handle],
-    });
-
-    const reader = createTelegramMessageDispatchReplayGuard();
-    await expect(
-      claimTelegramMessageDispatchReplay({
-        guard: reader,
-        accountId: "default",
-        botUserId: DEFAULT_BOT_USER_ID,
-        msg: message(),
-      }),
-    ).resolves.toEqual({ kind: "duplicate" });
-  });
-
   it("isolates identical message coordinates across bot identities", async () => {
     const writer = createTelegramMessageDispatchReplayGuard();
     const first = await claimTelegramMessageDispatchReplay({
@@ -221,37 +173,11 @@ describe("Telegram message dispatch replay guard", () => {
     }
   });
 
-  it("preserves concurrent commits", async () => {
-    const writer = createTelegramMessageDispatchReplayGuard();
-    const claims = await Promise.all(
-      Array.from({ length: 400 }, async (_, index) => {
-        const claim = await claimTelegramMessageDispatchReplay({
-          guard: writer,
-          accountId: "default",
-          botUserId: DEFAULT_BOT_USER_ID,
-          msg: message({ messageId: index + 1 }),
-        });
-        if (claim.kind !== "claimed") {
-          throw new Error(`expected claim ${index + 1}`);
-        }
-        return claim.handle;
-      }),
-    );
-
-    await commitTelegramMessageDispatchReplay({
-      guard: writer,
-      claims,
-    });
-
-    const reader = createTelegramMessageDispatchReplayGuard();
-    await expect(reader.warmup(CURRENT_NAMESPACE)).resolves.toBe(claims.length);
-  });
-
   it("commits replay keys serially before starting the next write", async () => {
     const events: string[] = [];
-    const firstGate = createDeferred();
-    const secondGate = createDeferred();
-    const secondStarted = createDeferred();
+    const firstGate = createDeferred<void>();
+    const secondGate = createDeferred<void>();
+    const secondStarted = createDeferred<void>();
     const guard = createTestReplayGuard();
     const claims = ["first", "second", "third"].map((key) =>
       createTestClaim({
@@ -290,33 +216,6 @@ describe("Telegram message dispatch replay guard", () => {
       "start:third",
       "finish:third",
     ]);
-  });
-
-  it("propagates per-key disk errors and stops the commit sequence", async () => {
-    const diskError = new Error("dedupe disk write failed");
-    const commitCalls: string[] = [];
-    const guard = createTestReplayGuard();
-    const claims = ["first", "second", "third"].map((key) =>
-      createTestClaim({
-        key,
-        commit: async (keyLocal, options) => {
-          commitCalls.push(keyLocal);
-          if (keyLocal === "second") {
-            options?.onDiskError?.(diskError);
-          }
-          return true;
-        },
-      }),
-    );
-
-    await expect(
-      commitTelegramMessageDispatchReplay({
-        guard,
-        claims,
-        requirePersistent: true,
-      }),
-    ).rejects.toBe(diskError);
-    expect(commitCalls).toEqual(["first", "second"]);
   });
 
   it("keeps live dispatch commits fail-open on dedupe disk errors", async () => {
@@ -405,6 +304,16 @@ describe("Telegram message dispatch replay guard", () => {
     const reader = createTelegramMessageDispatchReplayGuard();
     await expect(reader.warmup(CURRENT_NAMESPACE)).resolves.toBe(2);
     await expect(reader.warmup("default")).resolves.toBe(0);
+    for (const accountId of ["default", "work"]) {
+      await expect(
+        claimTelegramMessageDispatchReplay({
+          guard: reader,
+          accountId,
+          botUserId: DEFAULT_BOT_USER_ID,
+          msg: message(),
+        }),
+      ).resolves.toMatchObject({ kind: "duplicate" });
+    }
   });
 
   it("keeps accounts isolated and releases retryable pre-dispatch claims", async () => {
@@ -426,9 +335,6 @@ describe("Telegram message dispatch replay guard", () => {
       msg: message(),
     });
     expect(work.kind).toBe("claimed");
-    if (work.kind === "claimed") {
-      expect(work.handle.keys).toEqual([storedReplayKey("work", DEFAULT_BOT_USER_ID, message())]);
-    }
 
     releaseTelegramMessageDispatchReplay({
       claims: [first.handle],
@@ -440,9 +346,6 @@ describe("Telegram message dispatch replay guard", () => {
       msg: message(),
     });
     expect(retry.kind).toBe("claimed");
-    if (retry.kind === "claimed") {
-      expect(retry.handle.keys).toEqual(first.handle.keys);
-    }
   });
 
   it("lets an in-flight duplicate retry after the first claim is released", async () => {

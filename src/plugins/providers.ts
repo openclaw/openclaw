@@ -1,28 +1,27 @@
-// Registers provider plugins into the provider registry.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
-import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type { PluginLoadOptions } from "./loader.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
   type PluginRegistryRecord,
   type PluginRegistrySnapshot,
 } from "./plugin-registry.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
+import { pluginOwnsProviderRef } from "./provider-owner-index.js";
 
 type ProviderManifestLoadParams = {
   config?: PluginLoadOptions["config"];
@@ -41,6 +40,18 @@ type ProviderRefOwnership =
   | { status: "unowned" }
   | { status: "owned"; pluginIds: string[] }
   | { status: "ambiguous"; pluginIds: string[] };
+type ProviderOwnershipLookupParams = {
+  provider: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId">;
+};
+type ProviderOwnershipContext = {
+  manifestRegistry: PluginManifestRegistry;
+  metadataSnapshot?: ProviderOwnershipLookupParams["metadataSnapshot"];
+};
 
 function loadProviderRegistrySnapshot(params: ProviderManifestLoadParams): PluginRegistrySnapshot {
   if (params.registry) {
@@ -79,45 +90,15 @@ function resolveProviderSurfacePluginIdSet(
   },
 ): ReadonlySet<string> {
   return new Set(
-    resolveManifestRegistry({
-      ...params,
-      includeDisabled: true,
-    }).plugins.flatMap((plugin) => (plugin.providers.length > 0 ? [plugin.id] : [])),
+    resolveManifestRegistry(params).plugins.flatMap((plugin) =>
+      plugin.providers.length > 0 ? [plugin.id] : [],
+    ),
   );
 }
 
-function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider: string): boolean {
-  if (
-    plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider)
-  ) {
-    return true;
-  }
-  for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
-    const alias = normalizeProviderId(rawAlias);
-    const targetProvider = normalizeProviderId(target);
-    if (
-      alias === normalizedProvider &&
-      targetProvider &&
-      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
-    ) {
-      return true;
-    }
-  }
-  for (const [rawAlias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
-    const alias = normalizeProviderId(rawAlias);
-    const targetProvider = normalizeProviderId(target.provider);
-    if (
-      alias === normalizedProvider &&
-      targetProvider &&
-      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boolean {
+export function manifestPluginResolvesRuntimeModelCatalogAugment(
+  plugin: PluginManifestRecord,
+): boolean {
   return (
     plugin.modelCatalog?.runtimeAugment === true ||
     (plugin.origin !== "bundled" && plugin.providers.length > 0)
@@ -126,24 +107,30 @@ function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boole
 
 function resolveProviderOwnerPluginIds(
   params: ProviderRegistryLoadParams & {
-    pluginIds: readonly string[];
+    pluginIds?: readonly string[];
     isEligible: (
       plugin: PluginRegistryRecord,
       normalizedConfig: NormalizedPluginsConfig,
     ) => boolean;
   },
 ): string[] {
-  if (params.pluginIds.length === 0) {
+  if (params.pluginIds?.length === 0) {
     return [];
   }
-  const pluginIdSet = new Set(params.pluginIds);
   const registry = loadProviderRegistrySnapshot(params);
+  const pluginIdSet = params.pluginIds
+    ? new Set(params.pluginIds)
+    : resolveProviderSurfacePluginIdSet({ ...params, registry });
+  const scope = params.pluginIds ? null : createPluginIdScopeSet(params.onlyPluginIds);
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
     manifestRegistry: params.manifestRegistry,
   });
   return listRegistryPluginIds(
     registry,
-    (plugin) => pluginIdSet.has(plugin.pluginId) && params.isEligible(plugin, normalizedConfig),
+    (plugin) =>
+      pluginIdSet.has(plugin.pluginId) &&
+      (!scope || scope.has(plugin.pluginId)) &&
+      params.isEligible(plugin, normalizedConfig),
   );
 }
 
@@ -155,6 +142,7 @@ function resolveEffectiveRegistryPluginActivation(params: {
   return resolveEffectivePluginActivationState({
     id: params.plugin.pluginId,
     origin: params.plugin.origin,
+    channelIds: params.plugin.contributions?.channels,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
@@ -167,14 +155,6 @@ function toManifestOwnerRecord(plugin: PluginRegistryRecord) {
     origin: plugin.origin,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
   };
-}
-
-export function withBundledProviderVitestCompat(params: {
-  config: PluginLoadOptions["config"];
-  pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-}): PluginLoadOptions["config"] {
-  return withBundledPluginVitestCompat(params);
 }
 
 export function resolveBundledProviderCompatPluginIds(params: {
@@ -208,22 +188,15 @@ export function resolveBundledProviderCompatPluginIds(params: {
 }
 
 export function resolveEnabledProviderPluginIds(params: ProviderRegistryLoadParams): string[] {
-  const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry: params.manifestRegistry,
-  });
-  return listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.pluginId)) &&
+  return resolveProviderOwnerPluginIds({
+    ...params,
+    isEligible: (plugin, normalizedConfig) =>
       resolveEffectiveRegistryPluginActivation({
         plugin,
         normalizedConfig,
         rootConfig: params.config,
       }).activated,
-  );
+  });
 }
 
 export function resolveExternalAuthProfileProviderPluginIds(params: {
@@ -232,39 +205,11 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
-  return resolveRegistryManifestContractPluginIds({
-    ...params,
-    contract: "externalAuthProviders",
-  });
-}
-
-function resolveRegistryManifestContractPluginIds(params: {
-  contract: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  origin?: PluginRegistryRecord["origin"];
-  onlyPluginIds?: readonly string[];
-  manifestRegistry?: PluginManifestRegistry;
-}): string[] {
-  const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   return resolveManifestRegistry({
     ...params,
-    registry,
-    includeDisabled: true,
+    registry: loadProviderRegistrySnapshot(params),
   })
-    .plugins.filter((plugin) => {
-      if (params.origin && plugin.origin !== params.origin) {
-        return false;
-      }
-      if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
-        return false;
-      }
-      return (
-        (plugin.contracts?.[params.contract as keyof NonNullable<typeof plugin.contracts>] ?? [])
-          .length > 0
-      );
-    })
+    .plugins.filter((plugin) => (plugin.contracts?.externalAuthProviders?.length ?? 0) > 0)
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -278,27 +223,15 @@ export function resolveDiscoveredProviderPluginIds(params: {
   onlyPluginIds?: readonly string[];
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
-  const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry: params.manifestRegistry,
-  });
-  return listRegistryPluginIds(registry, (plugin) => {
-    if (
-      !(
-        providerSurfacePluginIds.has(plugin.pluginId) &&
-        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.pluginId))
-      )
-    ) {
-      return false;
-    }
-    return isProviderPluginEligibleForSetupDiscovery({
-      plugin,
-      shouldFilterUntrustedWorkspacePlugins,
-      normalizedConfig,
-      rootConfig: params.config,
-    });
+  return resolveProviderOwnerPluginIds({
+    ...params,
+    isEligible: (plugin, normalizedConfig) =>
+      isProviderPluginEligibleForSetupDiscovery({
+        plugin,
+        shouldFilterUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins !== true,
+        normalizedConfig,
+        rootConfig: params.config,
+      }),
   });
 }
 
@@ -308,10 +241,8 @@ function isProviderPluginEligibleForSetupDiscovery(params: {
   normalizedConfig: NormalizedPluginsConfig;
   rootConfig?: PluginLoadOptions["config"];
 }): boolean {
-  if (params.plugin.origin === "workspace") {
-    if (!params.shouldFilterUntrustedWorkspacePlugins) {
-      return true;
-    }
+  if (params.plugin.origin === "workspace" && !params.shouldFilterUntrustedWorkspacePlugins) {
+    return true;
   }
   if (
     !passesManifestOwnerBasePolicy({
@@ -358,22 +289,18 @@ function isProviderPluginEligibleForRuntimeOwnerActivation(params: {
   normalizedConfig: NormalizedPluginsConfig;
   rootConfig?: PluginLoadOptions["config"];
 }): boolean {
-  if (
-    !passesManifestOwnerBasePolicy({
+  return (
+    passesManifestOwnerBasePolicy({
       plugin: toManifestOwnerRecord(params.plugin),
       normalizedConfig: params.normalizedConfig,
-    })
-  ) {
-    return false;
-  }
-  if (params.plugin.origin !== "workspace") {
-    return true;
-  }
-  return isActivatedManifestOwner({
-    plugin: toManifestOwnerRecord(params.plugin),
-    normalizedConfig: params.normalizedConfig,
-    rootConfig: params.rootConfig,
-  });
+    }) &&
+    (params.plugin.origin !== "workspace" ||
+      isActivatedManifestOwner({
+        plugin: toManifestOwnerRecord(params.plugin),
+        normalizedConfig: params.normalizedConfig,
+        rootConfig: params.rootConfig,
+      }))
+  );
 }
 
 export function resolveActivatableProviderOwnerPluginIds(params: {
@@ -383,7 +310,6 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
   env?: PluginLoadOptions["env"];
   registry?: PluginRegistrySnapshot;
   manifestRegistry?: PluginManifestRegistry;
-  includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   return resolveProviderOwnerPluginIds({
     ...params,
@@ -395,8 +321,6 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
       }),
   });
 }
-type ModelSupportMatchKind = "pattern" | "prefix";
-
 function resolveManifestRegistry(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -404,7 +328,6 @@ function resolveManifestRegistry(params: {
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   manifestRegistry?: PluginManifestRegistry;
   registry?: PluginRegistrySnapshot;
-  includeDisabled?: boolean;
 }): PluginManifestRegistry {
   if (params.manifestRegistry) {
     return params.manifestRegistry;
@@ -429,12 +352,8 @@ function resolveManifestRegistry(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    includeDisabled: params.includeDisabled,
+    includeDisabled: true,
   });
-}
-
-function stripModelProfileSuffix(value: string): string {
-  return splitTrailingAuthProfile(value).model;
 }
 
 function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: string } | null {
@@ -444,48 +363,27 @@ function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: 
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    const modelId = stripModelProfileSuffix(trimmed);
+    const modelId = splitTrailingAuthProfile(trimmed).model;
     return modelId ? { modelId } : null;
   }
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelId = stripModelProfileSuffix(trimmed.slice(slash + 1));
+  const modelId = splitTrailingAuthProfile(trimmed.slice(slash + 1)).model;
   if (!provider || !modelId) {
     return null;
   }
   return { provider, modelId };
 }
 
-function resolveModelSupportMatchKind(
-  plugin: PluginManifestRecord,
-  modelId: string,
-): ModelSupportMatchKind | undefined {
-  const patterns = plugin.modelSupport?.modelPatterns ?? [];
-  for (const patternSource of patterns) {
-    // compileSafeRegex rejects patterns with nested repetition (ReDoS risk)
-    // and returns null. Rejected patterns are silently skipped: the plugin
-    // will not match via that pattern but other patterns/prefixes still apply.
-    const regex = compileSafeRegex(patternSource, "u");
-    if (regex?.test(modelId)) {
-      return "pattern";
-    }
-  }
-  const prefixes = plugin.modelSupport?.modelPrefixes ?? [];
-  for (const prefix of prefixes) {
-    if (modelId.startsWith(prefix)) {
-      return "prefix";
-    }
-  }
-  return undefined;
+function matchesModelPattern(plugin: PluginManifestRecord, modelId: string): boolean {
+  return (plugin.modelSupport?.modelPatterns ?? []).some((pattern) =>
+    compileSafeRegex(pattern, "u")?.test(modelId),
+  );
 }
 
 function classifyProviderRefOwnership(pluginIds: string[] | undefined): ProviderRefOwnership {
-  if (!pluginIds || pluginIds.length === 0) {
-    return { status: "unowned" };
-  }
-  if (pluginIds.length === 1) {
-    return { status: "owned", pluginIds };
-  }
-  return { status: "ambiguous", pluginIds };
+  return pluginIds?.length
+    ? { status: pluginIds.length === 1 ? "owned" : "ambiguous", pluginIds }
+    : { status: "unowned" };
 }
 
 function listNormalizedOwnerMapPluginIds(
@@ -535,28 +433,14 @@ function resolvePreferredManifestPluginIds(
     const plugin = registry.plugins.find((entry) => entry.id === pluginId);
     return plugin?.origin !== "bundled";
   });
-  if (nonBundledPluginIds.length === 1) {
-    return nonBundledPluginIds;
-  }
-  if (nonBundledPluginIds.length > 1) {
-    return undefined;
-  }
-  return undefined;
+  return nonBundledPluginIds.length === 1 ? nonBundledPluginIds : undefined;
 }
 
-export function resolveOwningPluginIdsForProvider(params: {
-  provider: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  manifestRegistry?: PluginManifestRegistry;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId">;
-}): string[] | undefined {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (!normalizedProvider) {
-    return undefined;
-  }
-
+function resolveProviderOwnershipContext(
+  params: ProviderOwnershipLookupParams,
+): ProviderOwnershipContext {
+  // Provider and CLI-backend ownership are one fallback decision. Prepare their
+  // process-stable metadata once so a miss cannot rebuild discovery for each branch.
   const metadataSnapshot =
     params.metadataSnapshot ??
     (params.manifestRegistry
@@ -567,6 +451,31 @@ export function resolveOwningPluginIdsForProvider(params: {
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
           allowWorkspaceScopedSnapshot: true,
         }));
+  const manifestRegistry = params.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
+  if (manifestRegistry) {
+    return { manifestRegistry, ...(metadataSnapshot ? { metadataSnapshot } : {}) };
+  }
+  const registryParams = {
+    config: params.config ?? {},
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  };
+  const loaded = loadPluginRegistrySnapshotWithMetadata(registryParams);
+  return {
+    manifestRegistry: loadPluginManifestRegistryForInstalledIndex({
+      ...registryParams,
+      index: loaded.snapshot,
+      manifestRegistry: loaded.manifestRegistry,
+      includeDisabled: true,
+    }),
+  };
+}
+
+function resolveOwningPluginIdsForProviderFromContext(
+  normalizedProvider: string,
+  context: ProviderOwnershipContext,
+): string[] | undefined {
+  const metadataSnapshot = context.metadataSnapshot;
   if (metadataSnapshot) {
     const ownerIds = resolveOwningPluginIdsForProviderFromSnapshot(
       metadataSnapshot,
@@ -577,45 +486,31 @@ export function resolveOwningPluginIdsForProvider(params: {
     }
   }
 
-  const manifestRegistry =
-    params.manifestRegistry ??
-    metadataSnapshot?.manifestRegistry ??
-    loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-    }).manifestRegistry;
-
-  const pluginIds = manifestRegistry.plugins
+  const pluginIds = context.manifestRegistry.plugins
     .filter((plugin) => pluginOwnsProviderRef(plugin, normalizedProvider))
     .map((plugin) => plugin.id);
 
   return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
-function resolveOwningPluginIdsForCliBackend(params: {
-  backend: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  manifestRegistry?: PluginManifestRegistry;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry">;
-}): string[] | undefined {
-  const normalizedBackend = normalizeProviderId(params.backend);
-  if (!normalizedBackend) {
+export function resolveOwningPluginIdsForProvider(
+  params: ProviderOwnershipLookupParams,
+): string[] | undefined {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
     return undefined;
   }
+  return resolveOwningPluginIdsForProviderFromContext(
+    normalizedProvider,
+    resolveProviderOwnershipContext(params),
+  );
+}
 
-  const metadataSnapshot =
-    params.metadataSnapshot ??
-    (params.manifestRegistry
-      ? undefined
-      : getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: params.env,
-          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          allowWorkspaceScopedSnapshot: true,
-        }));
+function resolveOwningPluginIdsForCliBackendFromContext(
+  normalizedBackend: string,
+  context: ProviderOwnershipContext,
+): string[] | undefined {
+  const metadataSnapshot = context.metadataSnapshot;
   if (metadataSnapshot) {
     const ownerIds = listNormalizedOwnerMapPluginIds(
       metadataSnapshot.owners.cliBackends,
@@ -626,16 +521,7 @@ function resolveOwningPluginIdsForCliBackend(params: {
     }
   }
 
-  const manifestRegistry =
-    params.manifestRegistry ??
-    metadataSnapshot?.manifestRegistry ??
-    loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-    }).manifestRegistry;
-
-  const pluginIds = manifestRegistry.plugins
+  const pluginIds = context.manifestRegistry.plugins
     .filter(
       (plugin) =>
         plugin.cliBackends.some(
@@ -651,50 +537,24 @@ function resolveOwningPluginIdsForCliBackend(params: {
   return deduped.length > 0 ? deduped : undefined;
 }
 
-export function resolveOwningPluginIdsForProviderRef(params: {
-  provider: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  manifestRegistry?: PluginManifestRegistry;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId">;
-}): string[] | undefined {
+export function resolveOwningPluginIdsForProviderRef(
+  params: ProviderOwnershipLookupParams,
+): string[] | undefined {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
+    return undefined;
+  }
+  const context = resolveProviderOwnershipContext(params);
   return (
-    resolveOwningPluginIdsForProvider(params) ??
-    resolveOwningPluginIdsForCliBackend({
-      backend: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      manifestRegistry: params.manifestRegistry,
-      metadataSnapshot: params.metadataSnapshot,
-    })
+    resolveOwningPluginIdsForProviderFromContext(normalizedProvider, context) ??
+    resolveOwningPluginIdsForCliBackendFromContext(normalizedProvider, context)
   );
 }
 
-export function resolveProviderRefOwnership(params: {
-  provider: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  manifestRegistry?: PluginManifestRegistry;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId">;
-}): ProviderRefOwnership {
-  const providerOwnerIds = resolveOwningPluginIdsForProvider(params);
-  const providerOwnership = classifyProviderRefOwnership(providerOwnerIds);
-  if (providerOwnership.status !== "unowned") {
-    return providerOwnership;
-  }
-  return classifyProviderRefOwnership(
-    resolveOwningPluginIdsForCliBackend({
-      backend: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      manifestRegistry: params.manifestRegistry,
-      metadataSnapshot: params.metadataSnapshot,
-    }),
-  );
+export function resolveProviderRefOwnership(
+  params: ProviderOwnershipLookupParams,
+): ProviderRefOwnership {
+  return classifyProviderRefOwnership(resolveOwningPluginIdsForProviderRef(params));
 }
 
 export function resolveOwningPluginIdsForModelRef(params: {
@@ -711,44 +571,38 @@ export function resolveOwningPluginIdsForModelRef(params: {
   }
 
   if (parsed.provider) {
-    const providerOwners = resolveOwningPluginIdsForProvider({
+    return resolveOwningPluginIdsForProviderRef({
       provider: parsed.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
       manifestRegistry: params.manifestRegistry,
     });
-    return (
-      providerOwners ??
-      resolveOwningPluginIdsForCliBackend({
-        backend: parsed.provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        manifestRegistry: params.manifestRegistry,
-      })
-    );
   }
 
-  const manifestRegistry = resolveManifestRegistry({
-    ...params,
-    includeDisabled: true,
-  });
-  const matchedByPattern = manifestRegistry.plugins
-    .filter((plugin) => resolveModelSupportMatchKind(plugin, parsed.modelId) === "pattern")
-    .map((plugin) => plugin.id);
+  const manifestRegistry = resolveManifestRegistry(params);
+  const matchedByPattern = manifestRegistry.plugins.filter((plugin) =>
+    matchesModelPattern(plugin, parsed.modelId),
+  );
   const preferredPatternPluginIds = resolvePreferredManifestPluginIds(
     manifestRegistry,
-    matchedByPattern,
+    matchedByPattern.map((plugin) => plugin.id),
   );
   if (preferredPatternPluginIds) {
     return preferredPatternPluginIds;
   }
 
-  const matchedByPrefix = manifestRegistry.plugins
-    .filter((plugin) => resolveModelSupportMatchKind(plugin, parsed.modelId) === "prefix")
-    .map((plugin) => plugin.id);
-  return resolvePreferredManifestPluginIds(manifestRegistry, matchedByPrefix);
+  const patternMatches = new Set(matchedByPattern);
+  return resolvePreferredManifestPluginIds(
+    manifestRegistry,
+    manifestRegistry.plugins
+      .filter(
+        (plugin) =>
+          !patternMatches.has(plugin) &&
+          plugin.modelSupport?.modelPrefixes?.some((prefix) => parsed.modelId.startsWith(prefix)),
+      )
+      .map((plugin) => plugin.id),
+  );
 }
 
 export function resolveOwningPluginIdsForModelRefs(params: {
@@ -758,8 +612,12 @@ export function resolveOwningPluginIdsForModelRefs(params: {
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
-  const registry = params.manifestRegistry ? undefined : loadProviderRegistrySnapshot(params);
-  const manifestRegistry = params.manifestRegistry;
+  const manifestRegistry =
+    params.manifestRegistry ??
+    resolveManifestRegistry({
+      ...params,
+      registry: loadProviderRegistrySnapshot(params),
+    });
   return sortUniqueStrings(
     params.models.flatMap(
       (model) =>
@@ -768,11 +626,32 @@ export function resolveOwningPluginIdsForModelRefs(params: {
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,
-          ...(manifestRegistry ? { manifestRegistry } : {}),
-          ...(registry ? { registry } : {}),
+          manifestRegistry,
         }) ?? [],
     ),
   );
+}
+
+function resolveHookProviderPluginIds(
+  params: ProviderManifestLoadParams & {
+    registry: PluginRegistrySnapshot;
+    manifestRegistry: PluginManifestRegistry;
+  },
+  hasHook: (pluginId: string) => boolean,
+  normalizedConfig: NormalizedPluginsConfig,
+): string[] {
+  const enabledPluginIds = listRegistryPluginIds(
+    params.registry,
+    (plugin) =>
+      hasHook(plugin.pluginId) &&
+      resolveEffectiveRegistryPluginActivation({
+        plugin,
+        normalizedConfig,
+        rootConfig: params.config,
+      }).activated,
+  );
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params).filter(hasHook);
+  return sortUniqueStrings([...enabledPluginIds, ...bundledCompatPluginIds]);
 }
 
 export function resolveCatalogHookProviderPluginIds(params: {
@@ -785,33 +664,20 @@ export function resolveCatalogHookProviderPluginIds(params: {
   const manifestRegistry = resolveManifestRegistry({
     ...params,
     registry,
-    includeDisabled: true,
   });
   const providerSurfacePluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) => (plugin.providers.length > 0 ? [plugin.id] : [])),
   );
   const runtimeAugmentPluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) =>
-      resolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
+      manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
     ),
   );
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const enabledProviderPluginIds = listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      runtimeAugmentPluginIds.has(plugin.pluginId) &&
-      resolveEffectiveRegistryPluginActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }).activated,
+  return resolveHookProviderPluginIds(
+    { ...params, registry, manifestRegistry },
+    (pluginId) => providerSurfacePluginIds.has(pluginId) && runtimeAugmentPluginIds.has(pluginId),
+    normalizePluginsConfigWithRegistry(params.config?.plugins, registry),
   );
-  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds({
-    ...params,
-    manifestRegistry,
-  }).filter((pluginId) => runtimeAugmentPluginIds.has(pluginId));
-  return sortUniqueStrings([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
 }
 
 type UsageHookProviderPluginContract = {
@@ -824,33 +690,23 @@ export function resolveUsageHookProviderPluginContracts(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): UsageHookProviderPluginContract[] {
-  const registry = loadProviderRegistrySnapshot(params);
+  const { snapshot: registry, manifestRegistry: preparedManifestRegistry } =
+    loadPluginRegistrySnapshotWithMetadata(params);
   const manifestRegistry = resolveManifestRegistry({
     ...params,
     registry,
-    includeDisabled: true,
+    manifestRegistry: preparedManifestRegistry,
   });
   const usagePluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) =>
       plugin.contracts?.usageProviders?.length ? [plugin.id] : [],
     ),
   );
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const enabledPluginIds = listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      usagePluginIds.has(plugin.pluginId) &&
-      resolveEffectiveRegistryPluginActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }).activated,
+  const pluginIds = resolveHookProviderPluginIds(
+    { ...params, registry, manifestRegistry },
+    (pluginId) => usagePluginIds.has(pluginId),
+    normalizePluginsConfigWithRegistry(params.config?.plugins, registry, { manifestRegistry }),
   );
-  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds({
-    ...params,
-    manifestRegistry,
-  }).filter((pluginId) => usagePluginIds.has(pluginId));
-  const pluginIds = sortUniqueStrings([...enabledPluginIds, ...bundledCompatPluginIds]);
   const manifestsById = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
   return pluginIds.flatMap((pluginId) => {
     const providerIds = sortUniqueStrings(
@@ -861,4 +717,3 @@ export function resolveUsageHookProviderPluginContracts(params: {
     return providerIds.length > 0 ? [{ pluginId, providerIds }] : [];
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

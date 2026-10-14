@@ -1,28 +1,32 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { syncDirectory, type DirectoryReceipt } from "@openclaw/fs-safe/durability";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
-import { requireDirectorySync, syncDirectoryIfSupported } from "./directory-durability.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  isHardlinkFallbackError,
+  publishFileExclusive,
+  requireDirectorySync,
+  syncDirectoryIfSupported,
+} from "./directory-durability.js";
 
 type BackupArchiveLogger = (message: string) => void;
 
 export type BackupArchivePublication = {
   canonicalOutputPath: string;
   canonicalParentPath: string;
-  parentReceipt: DirectoryReceipt;
+  parentReceipt: { path: string; realPath: string; identity: BigIntStats };
   pendingCleanupArchives: BackupArchiveCleanupReceipt[];
   requestedOutputPath: string;
   requestedParentPath: string;
   stagingDir: string;
-  stagingIdentity: Stats;
+  stagingIdentity: BigIntStats;
   tempArchivePath: string;
 };
 
@@ -46,27 +50,13 @@ async function assertTargetAbsent(targetPath: string): Promise<void> {
   throw new Error(`Refusing to overwrite existing backup archive: ${targetPath}`);
 }
 
-async function assertPublicationParentUnchanged(plan: BackupArchivePublication): Promise<void> {
-  const currentCanonicalParent = await fs.realpath(plan.requestedParentPath);
-  const currentParentIdentity = await fs.lstat(plan.canonicalParentPath);
-  if (
-    !pathsEqual(currentCanonicalParent, plan.canonicalParentPath) ||
-    !currentParentIdentity.isDirectory() ||
-    !sameFileIdentity(plan.parentReceipt.identity, currentParentIdentity)
-  ) {
-    throw new Error(
-      `Backup output directory changed during archive creation: ${plan.requestedParentPath}`,
-    );
-  }
-}
-
 async function removeDirectoryIfOwned(
   directoryPath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
 ): Promise<boolean> {
   // This is a cooperative same-user fence, not hostile local-user isolation;
   // SECURITY.md treats co-equal host mutation as inside the operator boundary.
-  const currentIdentity = await fs.lstat(directoryPath).catch(() => undefined);
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true }).catch(() => undefined);
   if (
     !currentIdentity ||
     !currentIdentity.isDirectory() ||
@@ -82,91 +72,13 @@ async function removeDirectoryIfOwned(
   }
 }
 
-async function removeStagingDirectoryIfOwned(plan: BackupArchivePublication): Promise<boolean> {
-  return await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
-}
-
-async function syncPublishedArchiveCommit(
-  plan: BackupArchivePublication,
-  preparedHandle: FileHandle,
-): Promise<void> {
-  if (process.platform === "win32") {
-    // Windows FlushFileBuffers requires a writable file handle and flushes
-    // buffered file metadata. The prepared handle pins the published inode.
-    await preparedHandle.sync();
-    return;
-  }
-  // Publication success requires a real directory fsync. Unsupported
-  // filesystems fail closed instead of weakening crash durability.
-  const outcome = await syncDirectory(plan.parentReceipt, {
-    label: "backup publication directory",
-  });
-  requireDirectorySync(outcome, "Backup publication directory");
-}
-
-function isUnsupportedHardLinkError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EPERM" ||
-    code === "EXDEV" ||
-    code === "ENOTSUP" ||
-    code === "EOPNOTSUPP" ||
-    code === "ENOSYS"
-  );
-}
-
-async function openPreparedArchive(
-  plan: BackupArchivePublication,
-  prepared: PreparedBackupArchive,
-): Promise<FileHandle> {
-  const accessMode = process.platform === "win32" ? fsConstants.O_RDWR : fsConstants.O_RDONLY;
-  const flags = accessMode | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
-  const handle = await fs.open(prepared.archivePath, flags);
-  try {
-    const openedIdentity = await handle.stat();
-    const currentIdentity = await fs.lstat(prepared.archivePath);
-    if (
-      !pathsEqual(path.dirname(prepared.archivePath), plan.stagingDir) ||
-      !openedIdentity.isFile() ||
-      !currentIdentity.isFile() ||
-      !sameFileIdentity(prepared.identity, openedIdentity) ||
-      !sameFileIdentity(prepared.identity, currentIdentity)
-    ) {
-      throw new Error(
-        `Backup archive staging file changed before publication: ${prepared.archivePath}`,
-      );
-    }
-    return handle;
-  } catch (error) {
-    await handle.close().catch(() => undefined);
-    throw error;
-  }
-}
-
-async function assertPublishedArchiveUnchanged(
-  plan: BackupArchivePublication,
-  handle: FileHandle,
-  expectedIdentity: Stats,
-): Promise<void> {
-  const openedIdentity = await handle.stat();
-  const currentIdentity = await fs.lstat(plan.canonicalOutputPath);
-  if (
-    !openedIdentity.isFile() ||
-    !currentIdentity.isFile() ||
-    !sameFileIdentity(expectedIdentity, openedIdentity) ||
-    !sameFileIdentity(expectedIdentity, currentIdentity)
-  ) {
-    throw new Error(`Published backup archive changed: ${plan.requestedOutputPath}`);
-  }
-}
-
 export async function createBackupArchivePublication(
   outputPath: string,
 ): Promise<BackupArchivePublication> {
   const requestedOutputPath = path.resolve(outputPath);
   const requestedParentPath = path.dirname(requestedOutputPath);
   const canonicalParentPath = await fs.realpath(requestedParentPath);
-  const parentIdentity = await fs.lstat(canonicalParentPath);
+  const parentIdentity = await fs.lstat(canonicalParentPath, { bigint: true });
   if (!parentIdentity.isDirectory()) {
     throw new Error(`Backup output parent is not a directory: ${requestedParentPath}`);
   }
@@ -175,9 +87,9 @@ export async function createBackupArchivePublication(
   const stagingDir = await fs.mkdtemp(
     path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
   );
-  let stagingIdentity: Stats | undefined;
+  let stagingIdentity: BigIntStats | undefined;
   try {
-    stagingIdentity = await fs.lstat(stagingDir);
+    stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
     await fs.chmod(stagingDir, 0o700);
     return {
       canonicalOutputPath,
@@ -210,15 +122,14 @@ function retainArchiveForCleanup(
     if (!pathsEqual(candidate.archivePath, receipt.archivePath)) {
       continue;
     }
-    if (!candidate.identity || !receipt.identity) {
-      if (!candidate.identity && receipt.identity) {
-        plan.pendingCleanupArchives[index] = receipt;
+    if (candidate.identity && receipt.identity) {
+      if (!sameFileIdentity(candidate.identity, receipt.identity)) {
+        continue;
       }
-      return;
+    } else if (!candidate.identity && receipt.identity) {
+      plan.pendingCleanupArchives[index] = receipt;
     }
-    if (sameFileIdentity(candidate.identity, receipt.identity)) {
-      return;
-    }
+    return;
   }
   plan.pendingCleanupArchives.push(receipt);
 }
@@ -230,22 +141,18 @@ async function removePendingBackupArchive(
   if (!pathsEqual(path.dirname(receipt.archivePath), plan.stagingDir)) {
     return false;
   }
-  if (receipt.identity) {
-    return removePreparedBackupArchive(receipt as PreparedBackupArchive);
+  let identity = receipt.identity;
+  if (!identity) {
+    try {
+      identity = await fs.lstat(receipt.archivePath, { bigint: true });
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+    if (!identity.isFile()) {
+      return false;
+    }
   }
-  let currentIdentity: Stats;
-  try {
-    currentIdentity = await fs.lstat(receipt.archivePath);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-  if (!currentIdentity.isFile()) {
-    return false;
-  }
-  return removePreparedBackupArchive({
-    archivePath: receipt.archivePath,
-    identity: currentIdentity,
-  });
+  return removePreparedBackupArchive({ archivePath: receipt.archivePath, identity });
 }
 
 export async function cleanupBackupArchivePublication(
@@ -258,7 +165,7 @@ export async function cleanupBackupArchivePublication(
       retainArchiveForCleanup(plan, receipt);
     }
   }
-  if (await removeStagingDirectoryIfOwned(plan)) {
+  if (await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity)) {
     await syncDirectoryIfSupported(plan.canonicalParentPath).catch(() => undefined);
     return;
   }
@@ -274,98 +181,63 @@ export async function publishPreparedBackupArchive(params: {
   log?: BackupArchiveLogger;
 }): Promise<void> {
   const { plan, prepared } = params;
-  let preparedHandle: FileHandle | undefined;
-  let publishedIdentity: Stats | undefined;
-  let hardLinkCreated = false;
-  let committed = false;
+  let publicationPreserved = false;
+  let publicationFailure: { error: unknown } | undefined;
   try {
-    await assertPublicationParentUnchanged(plan);
-    preparedHandle = await openPreparedArchive(plan, prepared);
-    await assertTargetAbsent(plan.canonicalOutputPath);
-    // Node has no portable link-by-handle primitive. Under OpenClaw's one-user
-    // host trust model, post-link identity checks fence cooperative replacement
-    // races and ensure a changed staging pathname can never produce success.
     try {
-      await fs.link(prepared.archivePath, plan.canonicalOutputPath);
-      hardLinkCreated = true;
+      const publication = await publishFileExclusive({
+        sourcePath: prepared.archivePath,
+        targetPath: plan.canonicalOutputPath,
+        expectedSourceIdentity: prepared.identity,
+        parentReceipt: plan.parentReceipt,
+        strategy: "link-required",
+        onSyncFailure: "preserve",
+      });
+      publicationPreserved = true;
+      requireDirectorySync(publication.directorySync, "Backup publication directory");
     } catch (error) {
+      const details = getPublishFileExclusiveFailureDetails(error);
+      publicationPreserved ||= details?.cleanup === "preserved";
+      let message: string;
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(
-          `Refusing to overwrite existing backup archive: ${plan.requestedOutputPath}`,
-          { cause: error },
-        );
+        message = `Refusing to overwrite existing backup archive: ${plan.requestedOutputPath}`;
+      } else if (isHardlinkFallbackError(error)) {
+        message = `Atomic backup publication requires hard-link support in ${plan.requestedParentPath}.`;
+      } else if ((error as { code?: unknown }).code === "path-mismatch") {
+        message = `Backup archive changed during publication: ${plan.requestedOutputPath}`;
+      } else {
+        throw error;
       }
-      if (isUnsupportedHardLinkError(error)) {
-        throw new Error(
-          `Atomic backup publication requires hard-link support in ${plan.requestedParentPath}.`,
-          { cause: error },
-        );
-      }
-      throw error;
+      throw new Error(message, { cause: error });
     }
-
-    await assertPublicationParentUnchanged(plan);
-    const currentTargetIdentity = await fs.lstat(plan.canonicalOutputPath);
-    const currentStagingIdentity = await fs.lstat(prepared.archivePath);
-    if (
-      !currentTargetIdentity.isFile() ||
-      !currentStagingIdentity.isFile() ||
-      !sameFileIdentity(prepared.identity, currentTargetIdentity) ||
-      !sameFileIdentity(prepared.identity, currentStagingIdentity)
-    ) {
-      throw new Error(`Backup archive changed during publication: ${plan.requestedOutputPath}`);
-    }
-    publishedIdentity = currentTargetIdentity;
-    await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
-
-    // The first parent sync commits the final pathname. After this point,
-    // cleanup failures must not remove or invalidate the durable archive.
-    await syncPublishedArchiveCommit(plan, preparedHandle);
-    committed = true;
-
-    if (!removePreparedBackupArchive(prepared)) {
-      retainArchiveForCleanup(plan, prepared);
+  } catch (error) {
+    publicationFailure = { error };
+  }
+  if (publicationFailure && publicationPreserved) {
+    params.log?.(
+      `Backup archiver preserved the final archive after publication failed: ${plan.requestedOutputPath}.`,
+    );
+  }
+  if (!removePreparedBackupArchive(prepared)) {
+    retainArchiveForCleanup(plan, prepared);
+    if (!publicationFailure) {
       params.log?.(`Backup archiver preserved changed staging file ${prepared.archivePath}.`);
     }
-    if (!(await removeStagingDirectoryIfOwned(plan))) {
-      params.log?.(
-        `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
-      );
-    }
-    await syncDirectoryIfSupported(plan.canonicalParentPath).catch((error: unknown) => {
-      params.log?.(
-        `Backup archiver could not sync cleanup in ${plan.canonicalParentPath}: ${
-          (error as NodeJS.ErrnoException).code ?? String(error)
-        }.`,
-      );
-    });
-    await assertPublicationParentUnchanged(plan);
-    await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
-  } catch (error) {
-    if (!committed) {
-      if (!publishedIdentity && hardLinkCreated) {
-        const currentTargetIdentity = await fs
-          .lstat(plan.canonicalOutputPath)
-          .catch(() => undefined);
-        if (
-          currentTargetIdentity?.isFile() &&
-          sameFileIdentity(currentTargetIdentity, prepared.identity)
-        ) {
-          publishedIdentity = currentTargetIdentity;
-        }
-      }
-      if (publishedIdentity) {
-        params.log?.(
-          `Backup archiver preserved the final archive after publication failed so a concurrent replacement could not be deleted: ${plan.requestedOutputPath}.`,
-        );
-      }
-      if (!removePreparedBackupArchive(prepared)) {
-        retainArchiveForCleanup(plan, prepared);
-      }
-      await removeStagingDirectoryIfOwned(plan);
-    }
-    throw error;
-  } finally {
-    await preparedHandle?.close().catch(() => undefined);
   }
+  const removed = await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
+  if (publicationFailure) {
+    throw publicationFailure.error;
+  }
+  if (!removed) {
+    params.log?.(
+      `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
+    );
+  }
+  await syncDirectoryIfSupported(plan.canonicalParentPath).catch((error: unknown) => {
+    params.log?.(
+      `Backup archiver could not sync cleanup in ${plan.canonicalParentPath}: ${
+        (error as NodeJS.ErrnoException).code ?? String(error)
+      }.`,
+    );
+  });
 }

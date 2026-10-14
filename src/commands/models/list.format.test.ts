@@ -1,13 +1,22 @@
-// Model list formatting tests cover fixed-width terminal cell helpers.
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
-import { pad, truncate } from "./list.format.js";
+import { formatTokenK, truncate } from "./list.format.js";
 
-describe("truncate", () => {
-  it("preserves existing ASCII truncation with an ellipsis suffix", () => {
-    expect(truncate("abcdefghi", 6)).toBe("abc...");
+describe("formatTokenK", () => {
+  it("passes small counts through and switches to K at 1000", () => {
+    expect(formatTokenK(999)).toBe("999");
+    expect(formatTokenK(1_000)).toBe("1k");
   });
 
+  it("returns a dash for missing or non-finite values", () => {
+    expect(formatTokenK(undefined)).toBe("-");
+    expect(formatTokenK(null)).toBe("-");
+    expect(formatTokenK(0)).toBe("-");
+    expect(formatTokenK(Number.NaN)).toBe("-");
+  });
+});
+
+describe("truncate", () => {
   it("keeps ellipsis-suffixed truncation on a terminal-width boundary", () => {
     const grin = String.fromCodePoint(0x1f600);
     const result = truncate(`ab${grin}cde`, 6);
@@ -25,12 +34,5 @@ describe("truncate", () => {
 
   it("sanitizes terminal controls before measuring visible width", () => {
     expect(truncate("ab\u001B]2;hidden\u0007cd", 6)).toBe("abcd");
-  });
-});
-
-describe("pad", () => {
-  it("pads to terminal visible width rather than string length", () => {
-    expect(pad("表", 2)).toBe("表");
-    expect(pad("表", 3)).toBe("表 ");
   });
 });

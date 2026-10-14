@@ -1,5 +1,6 @@
 // Context-engine public types define the pluggable context-management lifecycle.
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { NormalizedUsage } from "../agents/usage.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -7,22 +8,19 @@ import type { MemoryCitationsMode } from "../config/types.memory.js";
 export type AssembleResult = {
   /** Ordered messages to use as model context */
   messages: AgentMessage[];
-  /** Estimated total tokens in assembled context */
+  /** Engine estimate of assembled tokens; does not control host request admission. */
   estimatedTokens: number;
   /**
-   * Controls which token estimate the runner treats as authoritative for
-   * preemptive overflow prechecks. The returned `messages` are always the
-   * prompt sent to the model; this only affects the precheck's token comparison.
+   * Controls the history included in host token-pressure diagnostics.
+   * The returned `messages` remain the model context.
    *
-   * - "assembled": the generic precheck uses only the assembled prompt's estimate
-   *   unless the engine owns compaction; owning engines manage prompt admission.
-   * - "preassembly_may_overflow": the precheck takes the maximum of the
-   *   assembled estimate and the pre-assembly (unwindowed) session-history
-   *   estimate. Engines opt into this when their assembled view can hide an
-   *   overflow that would still affect the underlying transcript. This opt-in
-   *   keeps the generic precheck active even for engines that own compaction.
+   * - "assembled": diagnostics use the host's assembled prompt estimate.
+   * - "preassembly_may_overflow": diagnostics take the maximum of the host's
+   *   assembled and pre-assembly (unwindowed) history estimates. This maximum
+   *   does not block a fitting outgoing request.
    *
-   * Defaults to "assembled".
+   * Defaults to "assembled". Neither value disables host request admission
+   * checks for engines that own compaction.
    */
   promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
@@ -178,7 +176,18 @@ export type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
-  /** True when the engine manages its own compaction lifecycle. */
+  acceptedHostParams?: string[];
+  transcriptSemantics?: {
+    currentTurnFence?: "before-current-turn-entry-v1";
+    turnAdvancementIdempotency?: "atomic-idempotent-v1";
+  };
+  /**
+   * True when the engine manages compaction instead of built-in auto-compaction.
+   * The embedded host checks every outgoing provider request, including the first,
+   * using matching measured current-run usage plus appended content when available,
+   * or a fresh estimate of the actual system prompt, messages, and tools otherwise.
+   * The engine's estimatedTokens never controls host request admission.
+   */
   ownsCompaction?: boolean;
   /**
    * Controls how turn-triggered maintenance should be executed.
@@ -208,7 +217,9 @@ export type TranscriptRewriteReplacement = {
   message: AgentMessage;
 };
 
-export type TranscriptRewriteRequest = {
+// Local-only: engines consume this shape structurally via rewriteTranscriptEntries;
+// the last named importer was the deleted destructive rewrite path (#115271).
+type TranscriptRewriteRequest = {
   /** Message entry replacements to apply in one branch-and-reappend pass. */
   replacements: TranscriptRewriteReplacement[];
   /** Optional entry-id set that must cover every active-branch entry from the first replacement onward. */
@@ -230,26 +241,26 @@ export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
 
 type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
 
-type ContextEnginePromptCacheUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  contextUsage?:
-    | { state: "available"; promptTokens: number; totalTokens: number }
-    | { state: "unavailable" };
-  total?: number;
-};
+type ContextEnginePromptCacheUsage = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "total"
+>;
 
 type ContextEnginePromptCacheObservationChangeCode =
+  | "historyRewrite"
+  | "compaction"
+  | "pruning"
+  | "runtimeContextCarrier"
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"
   | "systemPrompt"
+  | "systemPromptSuffix"
   | "tools"
   | "transport";
 
-type ContextEnginePromptCacheObservationChange = {
+export type ContextEnginePromptCacheObservationChange = {
   code: ContextEnginePromptCacheObservationChangeCode;
   detail: string;
 };
@@ -372,6 +383,11 @@ export interface ContextEngine {
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
+    /**
+     * Optional caller cancellation for maintenance work that may block.
+     * Engines should reject promptly when this signal aborts.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;
 
   /**
@@ -422,6 +438,24 @@ export interface ContextEngine {
   }): Promise<void>;
 
   /**
+   * Atomically and idempotently commit one accepted durable transcript turn.
+   * Messages span the admitted user entry through the accepted terminal entry.
+   * Hosts may retry the same advancement key after process or plugin failure.
+   */
+  commitTurn?(params: {
+    advancementKey: string;
+    admission: import("../config/sessions/transcript-entry-anchor.js").TranscriptTurnAdmission;
+    terminal: import("../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
+    messages: AgentMessage[];
+    sessionId: string;
+    sessionKey?: string;
+    sessionTarget?: ContextEngineSessionTarget;
+    runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
+    isHeartbeat?: boolean;
+  }): Promise<{ status: "committed" | "duplicate" }>;
+
+  /**
    * Assemble model context under a token budget.
    * Returns an ordered set of messages ready for the model.
    */
@@ -440,6 +474,7 @@ export interface ContextEngine {
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<AssembleResult>;
 
   /**

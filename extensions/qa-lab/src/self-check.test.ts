@@ -1,10 +1,17 @@
 // Qa Lab tests cover self check plugin behavior.
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import * as transportRegistry from "./qa-transport-registry.js";
+import * as scenarioModule from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 import type { QaSelfCheckResult } from "./self-check.js";
-import { isQaSelfCheckSuccessful, resolveQaSelfCheckOutputPath } from "./self-check.js";
+import { isQaSelfCheckSuccessful, runQaSelfCheckAgainstState } from "./self-check.js";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function makeSelfCheckResult(params: {
   scenarioStatus: "pass" | "fail";
@@ -45,44 +52,58 @@ describe("isQaSelfCheckSuccessful", () => {
   });
 });
 
-describe("resolveQaSelfCheckOutputPath", () => {
-  it("keeps explicit output paths untouched", () => {
-    expect(
-      resolveQaSelfCheckOutputPath({
-        repoRoot: "/tmp/openclaw-repo",
-        outputPath: "/tmp/custom/self-check.md",
-      }),
-    ).toBe("/tmp/custom/self-check.md");
-  });
+describe("runQaSelfCheckAgainstState", () => {
+  it("writes unique default reports under the repo root and honors an explicit output path", async () => {
+    vi.spyOn(scenarioModule, "runQaScenario").mockResolvedValue({
+      name: "Artifact report fixture",
+      status: "pass",
+      steps: [],
+    });
+    const repoRoot = tempDirs.make("qa-self-check-reports-");
+    const params = { state: createQaBusState(), cfg: {}, repoRoot };
+    const first = await runQaSelfCheckAgainstState(params);
+    const second = await runQaSelfCheckAgainstState(params);
+    const outputPath = path.join(repoRoot, "custom", "self-check.md");
+    const explicit = await runQaSelfCheckAgainstState({ ...params, outputPath });
 
-  it("anchors default self-check reports under unique files in the provided repo root", () => {
-    const repoRoot = path.resolve("/tmp/openclaw-repo");
-    const firstPath = resolveQaSelfCheckOutputPath({ repoRoot });
-    const secondPath = resolveQaSelfCheckOutputPath({ repoRoot });
-
-    expect(path.dirname(firstPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
-    expect(path.basename(firstPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
-    expect(secondPath).not.toBe(firstPath);
+    for (const result of [first, second]) {
+      expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+      expect(path.basename(result.outputPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
+    }
+    expect(second.outputPath).not.toBe(first.outputPath);
+    expect(explicit.outputPath).toBe(outputPath);
+    for (const result of [first, second, explicit]) {
+      expect(result.report).toContain("# OpenClaw QA E2E Self-Check");
+      expect(result.report).toContain("### Artifact report fixture");
+      expect(await readFile(result.outputPath, "utf8")).toBe(result.report);
+    }
   });
 });
 
-describe("createQaSelfCheckScenario", () => {
-  it("binds lifecycle actions to the seeded message thread", async () => {
+describe("self-check scenario execution", () => {
+  function createSelfCheckHarness(delivery?: {
+    directAccountId?: string;
+    directTarget?: string;
+    threadedTarget?: string;
+  }) {
     const state = createQaBusState();
-    const scenario = createQaSelfCheckScenario();
-    const threadStep = scenario.steps[1];
-    const lifecycleStep = scenario.steps[2];
-    if (!threadStep || !lifecycleStep) {
-      throw new Error("self-check thread lifecycle steps are missing");
-    }
     const targets: unknown[] = [];
     const testState = {
       ...state,
       addInboundMessage: (input: Parameters<typeof state.addInboundMessage>[0]) => {
         const inbound = state.addInboundMessage(input);
+        if (input.text === "hello from qa") {
+          state.addOutboundMessage({
+            accountId: delivery?.directAccountId,
+            to: delivery?.directTarget ?? "dm:alice",
+            text: "qa-echo: hello from qa",
+          });
+        }
         if (input.text === "inside thread") {
           state.addOutboundMessage({
-            to: `thread:${input.conversation.id}/${String(input.threadId)}`,
+            to:
+              delivery?.threadedTarget ??
+              `thread:${input.conversation.id}/${String(input.threadId)}`,
             text: "qa-echo: inside thread",
           });
         }
@@ -91,12 +112,21 @@ describe("createQaSelfCheckScenario", () => {
     };
     const performAction = async (action: string, args: Record<string, unknown>) => {
       if (action === "thread-create") {
+        const thread = state.createThread({
+          conversationId: String(args.channelId),
+          title: String(args.title),
+        });
         return {
           details: {
-            target: "thread:qa-room/thread-1",
-            thread: { id: "thread-1" },
+            target: `channel:${thread.conversationId}`,
+            threadId: thread.id,
+            thread,
           },
         };
+      }
+      const message = state.readMessage({ messageId: String(args.messageId) });
+      if (args.to !== `channel:${message.conversation.id}` || args.threadId !== message.threadId) {
+        throw new Error("qa-channel message is not in the selected conversation");
       }
       targets.push(args.to);
       if (action === "react") {
@@ -117,14 +147,123 @@ describe("createQaSelfCheckScenario", () => {
       throw new Error(`unexpected action: ${action}`);
     };
 
-    await threadStep.run({ state: testState, performAction });
-    await lifecycleStep.run({ state: testState, performAction });
+    return {
+      state: testState,
+      targets,
+      performAction,
+      run: async () =>
+        await scenarioModule.runQaScenario(createQaSelfCheckScenario({ waitTimeoutMs: 20 }), {
+          state: testState,
+          performAction,
+        }),
+    };
+  }
 
-    expect(targets).toEqual([
-      "thread:qa-room/thread-1",
-      "thread:qa-room/thread-1",
-      "thread:qa-room/thread-1",
+  it("joins acquired transport cleanup when writing the self-check report fails", async ({
+    signal,
+  }) => {
+    const { state, performAction } = createSelfCheckHarness();
+    const outputPath = tempDirs.make("qa-self-check-write-failure-");
+    const cleanupEntered = Promise.withResolvers<void>();
+    const releaseCleanup = Promise.withResolvers<void>();
+    const createTransport = transportRegistry.createQaTransportAdapter;
+    using _ = vi
+      .spyOn(transportRegistry, "createQaTransportAdapter")
+      .mockImplementation(async (context) => {
+        const acquired = await createTransport(context);
+        return {
+          ...acquired,
+          adapter: {
+            ...acquired.adapter,
+            handleAction: ({ action, args }) => performAction(action, args),
+          },
+          async cleanupWithoutGateway() {
+            cleanupEntered.resolve();
+            await releaseCleanup.promise;
+            await acquired.cleanupWithoutGateway();
+          },
+        };
+      });
+    let settled = false;
+    const run = runQaSelfCheckAgainstState({ state, cfg: {}, outputPath }).finally(() => {
+      settled = true;
+    });
+    void run.catch(() => undefined);
+    const failed = run.then(
+      () => "resolved",
+      (error: unknown) => {
+        expect(error).toMatchObject({ path: outputPath });
+        return "rejected";
+      },
+    );
+    try {
+      const phase = await withinTest(
+        Promise.race([cleanupEntered.promise.then(() => "cleanup"), failed]),
+        signal,
+      );
+      expect(phase).toBe("cleanup");
+      expect(settled).toBe(false);
+      releaseCleanup.resolve();
+      await expect(withinTest(failed, signal)).resolves.toBe("rejected");
+    } finally {
+      releaseCleanup.resolve();
+      await Promise.allSettled([run, failed]);
+    }
+  });
+
+  it("runs every roundtrip and binds lifecycle actions to the seeded message thread", async () => {
+    const { state, targets, run } = createSelfCheckHarness();
+    const result = await run();
+
+    expect(result.status).toBe("pass");
+    expect(result.steps.map((step) => step.name)).toEqual([
+      "DM echo roundtrip",
+      "Thread create and threaded echo",
+      "Reaction, edit, delete lifecycle",
     ]);
-    expect(state.searchMessages({ query: "inside thread" }).at(-1)?.deleted).toBe(true);
+    const thread = state.getSnapshot().threads[0];
+    expect(thread).toBeDefined();
+
+    expect(targets).toEqual(["channel:qa-room", "channel:qa-room", "channel:qa-room"]);
+    const deletedMessage = state.getSnapshot().messages.find((message) => message.deleted);
+    if (!deletedMessage) {
+      throw new Error("self-check did not preserve its deleted message tombstone");
+    }
+    expect(state.readMessage({ messageId: deletedMessage.id }).deleted).toBe(true);
+    expect(
+      state.searchMessages({ query: "inside thread" }).map((message) => message.id),
+    ).not.toContain(deletedMessage.id);
+  });
+
+  it.each([
+    { name: "another conversation", directTarget: "dm:mallory" },
+    { name: "another account", directAccountId: "foreign", directTarget: "dm:alice" },
+  ])("fails the complete self-check when Alice's reply is sent to $name", async (delivery) => {
+    const { state, targets, run } = createSelfCheckHarness(delivery);
+    const result = await run();
+
+    expect(
+      state
+        .searchMessages({ conversationId: "alice", conversationKind: "direct" })
+        .filter((message) => message.direction === "outbound"),
+    ).toHaveLength(0);
+    expect(result.status).toBe("fail");
+    expect(result.steps).toEqual([
+      expect.objectContaining({ name: "DM echo roundtrip", status: "fail" }),
+    ]);
+    expect(targets).toHaveLength(0);
+  });
+
+  it("fails threaded delivery at its owner before running lifecycle actions", async () => {
+    const { targets, run } = createSelfCheckHarness({
+      threadedTarget: "thread:qa-room/unrelated-thread",
+    });
+    const result = await run();
+
+    expect(result.status).toBe("fail");
+    expect(result.steps.at(-1)).toEqual(
+      expect.objectContaining({ name: "Thread create and threaded echo", status: "fail" }),
+    );
+    expect(targets).toHaveLength(0);
   });
 });

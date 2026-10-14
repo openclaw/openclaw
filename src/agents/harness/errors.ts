@@ -1,10 +1,3 @@
-/**
- * Agent harness error helpers.
- *
- * Registry and runtime callers use this stable error type to distinguish missing
- * harness selection from ordinary harness execution failures.
- */
-/** Error thrown when a requested harness id is not registered. */
 export class MissingAgentHarnessError extends Error {
   readonly harnessId: string;
 
@@ -15,7 +8,6 @@ export class MissingAgentHarnessError extends Error {
   }
 }
 
-/** Returns whether an error is a missing harness error. */
 export function isMissingAgentHarnessError(err: unknown): err is MissingAgentHarnessError {
   return err instanceof MissingAgentHarnessError;
 }
@@ -28,12 +20,44 @@ export class AgentHarnessSessionSupersededError extends Error {
   }
 }
 
-/** A model-independent harness preflight failed before an attempt could start. */
-export class AgentHarnessPreflightError extends Error {
+/** Required native cleanup failed; the host must preserve the current session generation. */
+export class AgentHarnessSessionCleanupError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = "AgentHarnessPreflightError";
+    this.name = "AgentHarnessSessionCleanupError";
   }
+}
+
+/** A model-independent harness preflight failed before an attempt could start. */
+export class AgentHarnessPreflightError extends Error {
+  /** Opts fallback into skipping only candidates owned by the selected harness. */
+  readonly scope?: "harness";
+  /** Owner-authored public explanation; message and cause remain diagnostic. */
+  readonly userMessage?: string;
+
+  constructor(
+    message: string,
+    options?: ErrorOptions & { scope?: "harness"; userMessage?: string },
+  ) {
+    super(message, options);
+    this.name = "AgentHarnessPreflightError";
+    this.scope = options?.scope;
+    this.userMessage = options?.userMessage;
+  }
+}
+
+// The host records the selected harness where the attempt runs. Plugins can opt
+// into harness-local fallback, but cannot suppress candidates by naming an owner.
+const agentHarnessPreflightOwners = new WeakMap<AgentHarnessPreflightError, string>();
+
+export function recordAgentHarnessPreflightOwner(error: unknown, harnessId: string): void {
+  if (isAgentHarnessPreflightError(error) && error.scope === "harness") {
+    agentHarnessPreflightOwners.set(error, harnessId);
+  }
+}
+
+export function resolveAgentHarnessPreflightOwner(error: unknown): string | undefined {
+  return isAgentHarnessPreflightError(error) ? agentHarnessPreflightOwners.get(error) : undefined;
 }
 
 /** Returns whether fallback would only repeat the same harness preflight failure. */

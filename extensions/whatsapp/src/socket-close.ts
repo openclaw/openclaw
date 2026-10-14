@@ -1,22 +1,12 @@
 // Whatsapp socket shutdown confirms the underlying Baileys transport is closed.
 import type { WASocket } from "baileys";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 const SOCKET_CLOSE_TIMEOUT_MS = 15_000;
 
 async function withCloseTimeout(task: Promise<unknown>, operationName: string): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    task,
-    new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`WhatsApp ${operationName} timed out`)),
-        SOCKET_CLOSE_TIMEOUT_MS,
-      );
-    }),
-  ]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
+  await withTimeout(task, SOCKET_CLOSE_TIMEOUT_MS, {
+    message: `WhatsApp ${operationName} timed out`,
   });
 }
 
@@ -31,9 +21,6 @@ async function waitForTransportClose(
     : new Promise<void>((resolve) => {
         onClose = resolve;
         ws.once("close", onClose);
-        if (ws.isClosed) {
-          onClose();
-        }
       });
   try {
     await withCloseTimeout(Promise.all([Promise.resolve(operation), closed]), operationName);
@@ -52,11 +39,7 @@ export async function closeWhatsAppSocketAndWait(
   const errors: unknown[] = [];
   try {
     const endResult: unknown = sock.end(new Error(reason));
-    if (sock.ws.isClosed) {
-      await waitForTransportClose(sock.ws, endResult, "socket end");
-      return;
-    }
-    if (sock.ws.isClosing) {
+    if (sock.ws.isClosed || sock.ws.isClosing) {
       await waitForTransportClose(sock.ws, endResult, "socket end");
     } else {
       await withCloseTimeout(Promise.resolve(endResult), "socket end");

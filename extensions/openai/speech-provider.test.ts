@@ -1,6 +1,11 @@
 // Openai tests cover speech provider plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
+
+const OPENAI_TTS_SNAPSHOT = "gpt-4o-mini-tts-2025-12-15";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async ({
@@ -23,7 +28,7 @@ function isSpeechRequestBody(value: unknown): value is {
   speed?: number;
   response_format?: string;
 } {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function parseRequestBody(init: RequestInit | undefined): {
@@ -53,6 +58,23 @@ function mockSpeechFetchExpectingFormat(responseFormat: string) {
   return fetchMock;
 }
 
+function createSpeedDirectiveContext(
+  key: string,
+  value: string,
+  baseUrl = "https://api.openai.com/v1/",
+) {
+  return {
+    key,
+    value,
+    policy: {
+      allowVoice: true,
+      allowModelId: true,
+      allowVoiceSettings: true,
+    },
+    providerConfig: { baseUrl },
+  };
+}
+
 describe("buildOpenAISpeechProvider", () => {
   const originalFetch = globalThis.fetch;
 
@@ -60,6 +82,13 @@ describe("buildOpenAISpeechProvider", () => {
     globalThis.fetch = originalFetch;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("advertises official speech snapshots without changing the default model", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(provider.defaultModel).toBe("gpt-4o-mini-tts");
+    expect(provider.models).toContain(OPENAI_TTS_SNAPSHOT);
   });
 
   it("normalizes provider-owned speech config from raw provider config", () => {
@@ -179,6 +208,23 @@ describe("buildOpenAISpeechProvider", () => {
 
     expect(
       provider.parseDirectiveToken?.({
+        key: "openai_model",
+        value: OPENAI_TTS_SNAPSHOT,
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { model: OPENAI_TTS_SNAPSHOT },
+    });
+
+    expect(
+      provider.parseDirectiveToken?.({
         key: "model",
         value: "kokoro-custom-model",
         policy: {
@@ -194,22 +240,65 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("sends dated speech snapshots through a real loopback HTTP request", async () => {
+    const provider = buildOpenAISpeechProvider();
+    let receivedRequest:
+      | {
+          method: string | undefined;
+          url: string | undefined;
+          body: unknown;
+        }
+      | undefined;
+    await withServer(
+      (request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.on("end", () => {
+          receivedRequest = {
+            method: request.method,
+            url: request.url,
+            body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown,
+          };
+          response.writeHead(200, { "content-type": "audio/mpeg" });
+          response.end(Buffer.from("snapshot-audio"));
+        });
+      },
+      async (baseUrl) => {
+        const result = await provider.synthesize({
+          text: "snapshot request",
+          cfg: {} as never,
+          providerConfig: {
+            apiKey: "sk-test",
+            baseUrl: `${baseUrl}/v1`,
+            model: OPENAI_TTS_SNAPSHOT,
+            voice: "alloy",
+            instructions: " Speak warmly ",
+          },
+          target: "audio-file",
+          timeoutMs: 1_000,
+        });
+
+        expect(receivedRequest).toEqual({
+          method: "POST",
+          url: "/v1/audio/speech",
+          body: {
+            model: OPENAI_TTS_SNAPSHOT,
+            input: "snapshot request",
+            voice: "alloy",
+            response_format: "mp3",
+            instructions: "Speak warmly",
+          },
+        });
+        expect(result.audioBuffer).toEqual(Buffer.from("snapshot-audio"));
+      },
+    );
+  });
+
   it("parses preferred-OpenAI speed directive within the supported range", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "1.5",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "1.5") as never),
     ).toEqual({
       handled: true,
       overrides: { speed: 1.5 },
@@ -220,18 +309,7 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "openai_speed",
-        value: "0.75",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("openai_speed", "0.75") as never),
     ).toEqual({
       handled: true,
       overrides: { speed: 0.75 },
@@ -259,44 +337,11 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
-  it("warns on non-numeric OpenAI speed values", () => {
-    const provider = buildOpenAISpeechProvider();
-
-    expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "fast",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
-    ).toEqual({
-      handled: true,
-      warnings: ['invalid OpenAI speed "fast" (0.25-4.0)'],
-    });
-  });
-
   it("warns on partial OpenAI speed values", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "1.5abc",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "1.5abc") as never),
     ).toEqual({
       handled: true,
       warnings: ['invalid OpenAI speed "1.5abc" (0.25-4.0)'],
@@ -307,18 +352,7 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "5",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "5") as never),
     ).toEqual({
       handled: true,
       warnings: ['invalid OpenAI speed "5" (0.25-4.0)'],
@@ -329,18 +363,9 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "4.5",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://tts.example.com/v1",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(
+        createSpeedDirectiveContext("speed", "4.5", "https://tts.example.com/v1") as never,
+      ),
     ).toEqual({
       handled: true,
       overrides: { speed: 4.5 },

@@ -2,9 +2,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  buildReferenceInputCapabilityFailure,
+  buildVideoGenerationCapabilityFailure,
   resolveProviderWithModelCapabilities,
 } from "./capability-overlays.js";
+import {
+  DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+  DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+} from "./dashscope-compatible.js";
 import type { VideoGenerationProvider, VideoGenerationProviderCapabilities } from "./types.js";
 
 async function resolveCapabilitiesWithOverlay(
@@ -127,43 +131,49 @@ describe("video-generation capability overlays", () => {
     expect(merged.imageToVideo?.providerOptions).toEqual({});
   });
 
-  it("checks reference inputs against overlaid provider capabilities", async () => {
-    const provider: VideoGenerationProvider = {
-      id: "openrouter",
-      capabilities: {
-        imageToVideo: {
-          enabled: true,
-          maxInputImages: 4,
+  it.each(["wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v"])(
+    "enforces bundled Wan catalog modes before provider I/O for %s",
+    async (model) => {
+      const provider: VideoGenerationProvider = {
+        id: "qwen",
+        capabilities: DASHSCOPE_WAN_VIDEO_CAPABILITIES,
+        catalogByModel: DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
+        resolveModelCapabilities: ({ model: selectedModel }) =>
+          DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[selectedModel]?.capabilities,
+        async generateVideo() {
+          throw new Error("should not be called");
         },
-      },
-      resolveModelCapabilities: async () => ({
-        imageToVideo: {
-          enabled: true,
-          maxInputImages: 1,
-        },
-      }),
-      async generateVideo() {
-        throw new Error("should not be called");
-      },
-    };
+      };
+      const activeProvider = await resolveProviderWithModelCapabilities({
+        provider,
+        providerId: "qwen",
+        model,
+        cfg: {} as OpenClawConfig,
+        log: { debug: vi.fn() },
+      });
+      const declaredModes = DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL[model]?.modes ?? [];
+      const requests = [
+        { mode: "generate", inputImageCount: 0, inputVideoCount: 0 },
+        { mode: "imageToVideo", inputImageCount: 1, inputVideoCount: 0 },
+        { mode: "videoToVideo", inputImageCount: 0, inputVideoCount: 1 },
+      ] as const;
 
-    const activeProvider = await resolveProviderWithModelCapabilities({
-      provider,
-      providerId: "openrouter",
-      model: "minimax/hailuo-2.3",
-      cfg: {} as OpenClawConfig,
-      log: { debug: vi.fn() },
-    });
+      for (const request of requests) {
+        const failure = buildVideoGenerationCapabilityFailure({
+          providerId: "qwen",
+          model,
+          provider: activeProvider,
+          inputImageCount: request.inputImageCount,
+          inputVideoCount: request.inputVideoCount,
+          inputAudioCount: 0,
+        });
 
-    expect(
-      buildReferenceInputCapabilityFailure({
-        providerId: "openrouter",
-        model: "minimax/hailuo-2.3",
-        provider: activeProvider,
-        inputImageCount: 2,
-        inputVideoCount: 0,
-        inputAudioCount: 0,
-      }),
-    ).toMatch(/supports at most 1 reference image\(s\), 2 requested/);
-  });
+        if (declaredModes.includes(request.mode)) {
+          expect(failure, `${model}:${request.mode}`).toBeUndefined();
+        } else {
+          expect(failure, `${model}:${request.mode}`).toMatch(/does not support/u);
+        }
+      }
+    },
+  );
 });

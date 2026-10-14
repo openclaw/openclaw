@@ -7,11 +7,49 @@ public enum ChatMarkdownVariant: String, CaseIterable, Sendable {
     case compact
 }
 
+func chatMarkdownDisclosureSummarySource(
+    _ authoredSummary: String?,
+    localizedDefault: () -> String) -> String
+{
+    authoredSummary ?? localizedDefault()
+}
+
 @MainActor
 struct ChatMarkdownRenderer: View {
     enum Context {
         case user
         case assistant
+    }
+
+    enum Typography: Equatable {
+        enum HeadingStyle: Equatable {
+            case hierarchy
+            case prose
+        }
+
+        case response
+        case thinking
+
+        var headingStyle: HeadingStyle {
+            self == .response ? .hierarchy : .prose
+        }
+
+        var proseFont: Font {
+            self == .response
+                ? OpenClawChatTypography.body
+                : OpenClawChatTypography.callout.italic()
+        }
+
+        var inlineMath: InlineMathTypography {
+            self == .response ? .body : .callout
+        }
+
+        func headingFont(level: Int) -> Font {
+            switch self.headingStyle {
+            case .hierarchy: OpenClawChatTypography.heading(level: level)
+            case .prose: self.proseFont
+            }
+        }
     }
 
     struct InlineMathTypography: Equatable {
@@ -25,14 +63,8 @@ struct ChatMarkdownRenderer: View {
     let snapshot: ChatMarkdownRenderSnapshot
     let context: Context
     let variant: ChatMarkdownVariant
-    let font: Font
+    let typography: Typography
     let textColor: Color
-    let inlineMathTypography: InlineMathTypography
-
-    static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
-        SwiftUI.Text(content)
-            .font(font)
-    }
 
     var reveal: ChatMarkdownProseReveal?
 
@@ -43,39 +75,36 @@ struct ChatMarkdownRenderer: View {
         text: String,
         context: Context,
         variant: ChatMarkdownVariant,
-        font: Font,
+        typography: Typography = .response,
         textColor: Color,
-        inlineMathTypography: InlineMathTypography = .body,
         isComplete: Bool = true)
     {
         self.init(
             snapshot: ChatMarkdownRenderSnapshot(text: text, isComplete: isComplete),
             context: context,
             variant: variant,
-            font: font,
-            textColor: textColor,
-            inlineMathTypography: inlineMathTypography)
+            typography: typography,
+            textColor: textColor)
     }
 
     init(
         snapshot: ChatMarkdownRenderSnapshot,
         context: Context,
         variant: ChatMarkdownVariant,
-        font: Font,
+        typography: Typography = .response,
         textColor: Color,
-        inlineMathTypography: InlineMathTypography = .body,
         reveal: ChatMarkdownProseReveal? = nil)
     {
         self.snapshot = snapshot
         self.context = context
         self.variant = variant
-        self.font = font
+        self.typography = typography
         self.textColor = textColor
-        self.inlineMathTypography = inlineMathTypography
         self.reveal = reveal
+        let inlineMath = typography.inlineMath
         self._inlineMathFontSize = ScaledMetric(
-            wrappedValue: inlineMathTypography.size,
-            relativeTo: inlineMathTypography.relativeTo)
+            wrappedValue: inlineMath.size,
+            relativeTo: inlineMath.relativeTo)
     }
 
     var body: some View {
@@ -95,7 +124,7 @@ struct ChatMarkdownRenderer: View {
         switch block {
         case let .prose(prose):
             self.proseText(prose, index: index)
-                .font(self.font)
+                .font(self.typography.proseFont)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
@@ -103,7 +132,7 @@ struct ChatMarkdownRenderer: View {
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
         case let .heading(level, prose):
             self.proseText(prose, index: index)
-                .font(OpenClawChatTypography.heading(level: level))
+                .font(self.typography.headingFont(level: level))
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
@@ -118,6 +147,13 @@ struct ChatMarkdownRenderer: View {
             ChatMarkdownTableView(table: table)
         case let .list(list):
             self.listView(list)
+        case let .disclosure(disclosure):
+            ChatMarkdownDisclosureView(
+                disclosure: disclosure,
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor)
         case .thematicBreak:
             Divider()
                 .accessibilityHidden(true)
@@ -129,9 +165,8 @@ struct ChatMarkdownRenderer: View {
             list: list,
             context: self.context,
             variant: self.variant,
-            font: self.font,
-            textColor: self.textColor,
-            inlineMathTypography: self.inlineMathTypography)
+            typography: self.typography,
+            textColor: self.textColor)
     }
 
     private func proseText(_ prose: ChatMarkdownProse, index: Int) -> SwiftUI.Text {
@@ -164,35 +199,79 @@ struct ChatMarkdownRenderSnapshot {
 
     init(text: String, isComplete: Bool, preparesReveal: Bool = false) {
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
-        self.blocks = ChatMarkdownBlockSegmenter.segments(
+        let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
-            isComplete: isComplete).map { block in
-            switch block {
-            case let .prose(markdown):
-                .prose(ChatMarkdownProse(
-                    markdown: markdown,
-                    isComplete: isComplete,
-                    preparesReveal: preparesReveal))
-            case let .heading(heading):
-                .heading(
-                    level: heading.level,
-                    prose: ChatMarkdownProse(
-                        markdown: heading.markdown,
-                        isComplete: isComplete,
-                        preparesReveal: false))
-            case let .code(code):
-                .code(code)
-            case let .math(math):
-                .math(math)
-            case let .table(table):
-                .table(table)
-            case let .list(list):
-                .list(list)
-            case .thematicBreak:
-                .thematicBreak
+            isComplete: isComplete)
+        let lastProseIndex: Int? = if preparesReveal, !isComplete {
+            segments.lastIndex {
+                if case .prose = $0 {
+                    return true
+                }
+                return false
             }
+        } else {
+            nil
+        }
+        self.blocks = segments.enumerated().map { index, block in
+            Self.renderedBlock(
+                block,
+                isComplete: isComplete,
+                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex))
         }
         self.images = processed.images
+    }
+
+    init(blocks: [ChatMarkdownRenderedBlock], images: [ChatMarkdownPreprocessor.InlineImage] = []) {
+        self.blocks = blocks
+        self.images = images
+    }
+
+    private static func renderedBlock(
+        _ block: ChatMarkdownBlock,
+        isComplete: Bool,
+        preparesReveal: Bool) -> ChatMarkdownRenderedBlock
+    {
+        switch block {
+        case let .prose(markdown):
+            .prose(ChatMarkdownProse(
+                markdown: markdown,
+                isComplete: isComplete,
+                preparesReveal: preparesReveal))
+        case let .heading(heading):
+            .heading(
+                level: heading.level,
+                prose: ChatMarkdownProse(
+                    markdown: heading.markdown,
+                    isComplete: isComplete,
+                    preparesReveal: false))
+        case let .code(code):
+            .code(code)
+        case let .math(math):
+            .math(math)
+        case let .table(table):
+            .table(table)
+        case let .list(list):
+            .list(list)
+        case let .disclosure(disclosure):
+            .disclosure(ChatMarkdownRenderedDisclosure(
+                summary: ChatMarkdownProse(
+                    markdown: chatMarkdownDisclosureSummarySource(disclosure.summary) {
+                        String(localized: "Details")
+                    },
+                    isComplete: true,
+                    preparesReveal: false),
+                isExpanded: disclosure.isExpanded,
+                blocks: disclosure.blocks.map {
+                    // Reveal locations address only top-level blocks. Disclosure content
+                    // uses a nested renderer without reveal state, so render it directly.
+                    Self.renderedBlock(
+                        $0,
+                        isComplete: isComplete,
+                        preparesReveal: false)
+                }))
+        case .thematicBreak:
+            .thematicBreak
+        }
     }
 
     var lastProseIndex: Int? {
@@ -212,7 +291,64 @@ enum ChatMarkdownRenderedBlock {
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
     case list(ChatMarkdownList)
+    case disclosure(ChatMarkdownRenderedDisclosure)
     case thematicBreak
+}
+
+struct ChatMarkdownRenderedDisclosure {
+    let summary: ChatMarkdownProse
+    let isExpanded: Bool
+    let blocks: [ChatMarkdownRenderedBlock]
+}
+
+@MainActor
+private struct ChatMarkdownDisclosureView: View {
+    let disclosure: ChatMarkdownRenderedDisclosure
+    let context: ChatMarkdownRenderer.Context
+    let variant: ChatMarkdownVariant
+    let typography: ChatMarkdownRenderer.Typography
+    let textColor: Color
+
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
+    @State private var isExpanded: Bool
+
+    init(
+        disclosure: ChatMarkdownRenderedDisclosure,
+        context: ChatMarkdownRenderer.Context,
+        variant: ChatMarkdownVariant,
+        typography: ChatMarkdownRenderer.Typography,
+        textColor: Color)
+    {
+        self.disclosure = disclosure
+        self.context = context
+        self.variant = variant
+        self.typography = typography
+        self.textColor = textColor
+        self._isExpanded = State(initialValue: disclosure.isExpanded)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: self.$isExpanded) {
+            ChatMarkdownRenderer(
+                snapshot: ChatMarkdownRenderSnapshot(blocks: self.disclosure.blocks),
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor)
+                .padding(.top, self.variant == .compact ? 4 : 6)
+        } label: {
+            ChatMarkdownRenderer(
+                snapshot: ChatMarkdownRenderSnapshot(blocks: [.prose(self.disclosure.summary)]),
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor)
+                .accessibilityLabel(
+                    self.disclosure.summary.inlineAccessibilityText
+                        ?? String(self.disclosure.summary.attributed.characters))
+        }
+        .tint(self.context == .user ? self.textColor : OpenClawChatTheme.accent)
+    }
 }
 
 @MainActor
@@ -263,16 +399,6 @@ struct ChatMarkdownProse {
             self.prefix = AttributedString()
             self.tail = []
         }
-    }
-
-    // periphery:ignore - package tests inspect parsed math spans without exposing renderer internals.
-    var inlineMathLatex: [String] {
-        self.inlineContent?.compactMap { content in
-            if case let .math(span) = content {
-                return span.latex
-            }
-            return nil
-        } ?? []
     }
 
     var inlineAccessibilityText: String? {
@@ -434,8 +560,19 @@ struct ChatMarkdownProse {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: displayMarkdown, options: options))
+        let parsed = (try? AttributedString(markdown: displayMarkdown, options: options))
             ?? AttributedString(displayMarkdown)
+        // Foundation stores block boundaries as presentation intents, without newline
+        // characters. SwiftUI Text needs explicit separators, including on the reveal path.
+        var rendered = AttributedString()
+        for (_, range) in parsed.runs[\.presentationIntent] {
+            if !rendered.characters.isEmpty {
+                let trailingNewlines = rendered.characters.suffix(2).reversed().prefix { $0 == "\n" }.count
+                rendered.append(AttributedString(String(repeating: "\n", count: 2 - trailingNewlines)))
+            }
+            rendered.append(AttributedString(parsed[range]))
+        }
+        return rendered
     }
 
     private static func tailPieces(
@@ -501,25 +638,14 @@ enum ChatMarkdownDisplayPreprocessor {
         guard lines.count > 1 else { return normalized }
         let codeLines = self.codeLineIndices(in: normalized)
 
-        var output = ""
-        for index in lines.indices {
-            output += lines[index]
-
-            guard index < lines.index(before: lines.endIndex) else {
-                continue
-            }
-
-            if !codeLines.contains(index),
-               !codeLines.contains(index + 1),
-               self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
-            {
-                output += "  \n"
-            } else {
-                output += "\n"
-            }
-        }
-
-        return output
+        return lines.indices.map { index in
+            guard index < lines.index(before: lines.endIndex),
+                  !codeLines.contains(index),
+                  !codeLines.contains(index + 1),
+                  self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
+            else { return lines[index] }
+            return lines[index] + "  "
+        }.joined(separator: "\n")
     }
 
     private static func codeLineIndices(in markdown: String) -> Set<Int> {

@@ -1,13 +1,15 @@
 // Re-exports fs-safe helpers with OpenClaw defaults and wrappers.
-import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ensureDirectoryWithinRoot,
   findExistingAncestor,
-  writeViaSiblingTempPath,
+  readLocalFileFromRoots as readFsSafeLocalFileFromRoots,
 } from "@openclaw/fs-safe/advanced";
-import { root as fsSafeRoot, type ReadResult } from "@openclaw/fs-safe/root";
+import "@openclaw/fs-safe/errors";
+import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
+import { root as fsSafeRoot, type ReadResult, type RootDefaults } from "@openclaw/fs-safe/root";
+import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-safe-compat.js";
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
@@ -25,7 +27,7 @@ export {
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
 export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
-export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
+export { resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
   appendRegularFileSync,
@@ -39,10 +41,8 @@ export {
   openLocalFileSafely,
   readLocalFileSafely,
   resolveOpenedFileRealPathForHandle,
-  root,
   type OpenResult,
   type ReadResult,
-  type Root,
 } from "@openclaw/fs-safe/root";
 export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export {
@@ -58,6 +58,20 @@ export {
   type WalkDirectoryResult,
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
+
+// Root.walk remains core-only on this facade; temp workspace stores keep their shipped full Root.
+export type Root = Omit<CompatibleFsSafeRoot, "walk">;
+
+export const readLocalFileFromRoots: (
+  options: Parameters<typeof readFsSafeLocalFileFromRoots>[0] & LegacyNonBlockingReadOption,
+) => ReturnType<typeof readFsSafeLocalFileFromRoots> = readFsSafeLocalFileFromRoots;
+
+export async function root(
+  rootDir: string,
+  defaults?: RootDefaults & LegacyNonBlockingReadOption,
+): Promise<Root> {
+  return await fsSafeRoot(rootDir, defaults);
+}
 
 export type ExternalFileWriteOptions = {
   rootDir: string;
@@ -78,10 +92,16 @@ export async function ensureAbsoluteDirectory(
   const absolutePath = path.resolve(dirPath);
   const scopeLabel = options?.scopeLabel ?? "directory";
   const existingAncestor = await findExistingAncestor(absolutePath);
-  if (!existingAncestor) {
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  if (existingAncestor && existingAncestor !== absolutePath) {
+    const result = await ensureDirectoryWithinRoot({
+      rootDir: existingAncestor,
+      requestedPath: path.relative(existingAncestor, absolutePath),
+      scopeLabel,
+      mode: options?.mode,
+    });
+    return result.ok ? result : { ok: false, error: new Error(result.error) };
   }
-  if (existingAncestor === absolutePath) {
+  if (existingAncestor) {
     try {
       const stat = await fs.lstat(absolutePath);
       if (!stat.isSymbolicLink() && stat.isDirectory()) {
@@ -90,32 +110,25 @@ export async function ensureAbsoluteDirectory(
     } catch {
       // Fall through to the uniform invalid-path result below.
     }
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
   }
-  const result = await ensureDirectoryWithinRoot({
-    rootDir: existingAncestor,
-    requestedPath: path.relative(existingAncestor, absolutePath),
-    scopeLabel,
-    mode: options?.mode,
-  });
-  if (result.ok) {
-    return result;
-  }
-  return { ok: false, error: new Error(result.error) };
+  return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
 }
 
 export async function writeExternalFileWithinRoot(
   options: ExternalFileWriteOptions,
 ): Promise<ExternalFileWriteResult> {
-  const targetPath = path.resolve(options.rootDir, options.path);
-  await writeViaSiblingTempPath({
+  const requestedPath = path.resolve(options.rootDir, options.path);
+  const result = await writeExternalFileWithinRootBase({
     rootDir: options.rootDir,
-    targetPath,
-    writeTemp: options.write,
-    fallbackFileName: options.fallbackFileName,
-    tempPrefix: options.tempPrefix,
+    path: options.path,
+    write: options.write,
+    staging: "sibling",
+    producerIsolation: "private-directory",
+    fallbackFileName: options.fallbackFileName ?? options.tempPrefix,
   });
-  return { path: targetPath };
+  // Preserve the caller-facing path spelling while carrying forward any
+  // portable basename selected by fs-safe (for example, /var vs /private/var).
+  return { path: path.join(path.dirname(requestedPath), path.basename(result.path)) };
 }
 
 /** @deprecated Use root(rootDir).read(relativePath, options). */
@@ -123,15 +136,15 @@ export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   rejectHardlinks?: boolean;
+  /** @deprecated Omit this hint; safe reads always use nonblocking admission where supported. */
   nonBlockingRead?: boolean;
   allowSymlinkTargetWithinRoot?: boolean;
   maxBytes?: number;
 }): Promise<ReadResult> {
-  const root = await fsSafeRoot(params.rootDir);
-  return await root.read(params.relativePath, {
+  const fsRoot = await fsSafeRoot(params.rootDir);
+  return await fsRoot.read(params.relativePath, {
     hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
     maxBytes: params.maxBytes,
-    nonBlockingRead: params.nonBlockingRead,
     symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
   });
 }
@@ -144,8 +157,8 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  const root = await fsSafeRoot(params.rootDir);
-  await root.write(params.relativePath, params.data, {
+  const fsRoot = await root(params.rootDir);
+  await fsRoot.write(params.relativePath, params.data, {
     encoding: params.encoding,
     mkdir: params.mkdir,
   });

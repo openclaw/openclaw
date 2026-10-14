@@ -1,53 +1,31 @@
 // Control UI sidebar footer flags non-release gateways: a source-checkout
 // gateway off main reports its branch via bootstrap config and the footer
 // renders it in the danger color; release gateways omit it entirely.
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI sidebar dev branch badge E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 const DEV_BRANCH = "feat/dev-branch-badge";
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-describeControlUiE2e("Control UI sidebar dev branch badge E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("renders the dev checkout branch in the footer in the danger color", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, { devGitBranch: DEV_BRANCH });
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page, { devGitBranch: DEV_BRANCH });
 
-    try {
-      const response = await page.goto(server.baseUrl);
+      const response = await page.goto(suite.server.baseUrl);
       expect(response?.status()).toBe(200);
 
       const badge = page.locator(".sidebar-footer-branch");
@@ -79,32 +57,61 @@ describeControlUiE2e("Control UI sidebar dev branch badge E2E", () => {
       expect(colors.danger).not.toBe("");
       expect(colors.badge).toBe(colors.danger);
 
-      const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "dev-branch");
-      await mkdir(artifactDir, { recursive: true });
+      const artifactDir = createControlUiE2eArtifactDir("dev-branch");
       await page
         .locator(".sidebar-shell__footer")
         .screenshot({ path: path.join(artifactDir, "footer-dev-branch.png") });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
-  it("omits the badge when the gateway reports no dev branch", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page);
-
-    try {
-      const response = await page.goto(server.baseUrl);
-      expect(response?.status()).toBe(200);
-      await page.locator(".sidebar-agent-card").waitFor();
-      expect(await page.locator(".sidebar-footer-branch").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+  it.each([
+    { name: "desktop", width: 1280, height: 800, hasTouch: false },
+    { name: "mobile", width: 390, height: 844, hasTouch: true },
+  ])("returns unused footer space to the session pane on $name", async (viewport) => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport, hasTouch: viewport.hasTouch },
+      async ({ page }) => {
+        const sessions = Array.from({ length: 20 }, (_, index) => ({
+          key: `agent:main:review-${index}`,
+          kind: "direct",
+          label: index === 19 ? "CI timer" : `Release review ${index + 1}`,
+          updatedAt: 1_780_000_000_000 - index * 60_000,
+        }));
+        await installMockGateway(page, { sessionKey: sessions[0]!.key, sessions });
+        await page.emulateMedia({ colorScheme: "dark" });
+        const response = await page.goto(suite.server.baseUrl);
+        expect(response?.status()).toBe(200);
+        if (viewport.hasTouch) {
+          await page
+            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+            .first()
+            .click();
+        }
+        const sidebar = page.locator("openclaw-app-sidebar .sidebar");
+        const body = sidebar.locator(".sidebar-shell__body");
+        await body.waitFor();
+        await sidebar.locator(".sidebar-identity-card").waitFor();
+        await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
+        await sidebar.getByText("CI timer", { exact: true }).waitFor();
+        const frame = await takeControlUiScreenshotFrame(page, sidebar, [body], {
+          animations: "disabled",
+          scrollTo: sidebar.getByText("CI timer", { exact: true }),
+          elements: [sidebar],
+        });
+        const artifactDir = createControlUiE2eArtifactDir(`sidebar-footer-space-${viewport.name}`);
+        await writeFile(path.join(artifactDir, "sidebar.png"), frame.elements[0]!.png);
+        const gap = await body.evaluate((element) => {
+          const shell = element.closest(".sidebar-shell")!;
+          const style = getComputedStyle(shell);
+          return (
+            shell.getBoundingClientRect().bottom -
+            element.getBoundingClientRect().bottom -
+            Number.parseFloat(style.paddingBottom)
+          );
+        });
+        expect(gap).toBeLessThanOrEqual(1);
+        expect(await sidebar.locator(".sidebar-footer-branch").count()).toBe(0);
+      },
+    );
   });
 });

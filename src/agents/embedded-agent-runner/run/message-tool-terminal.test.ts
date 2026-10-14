@@ -1,13 +1,12 @@
-// Message-tool delivery tests cover message_tool_only delivery, where a
-// successful source message send records source reply evidence without ending
-// the run before the model can observe the tool result.
+// Confirmed final replies end the turn; progress and unconfirmed delivery keep it open.
 import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
-import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 
 async function recordsDeliveredSourceReply(params: {
   sourceReplyDeliveryMode?: Parameters<
-    typeof installMessageToolOnlyTerminalHook
+    typeof installMessageToolTerminalHook
   >[0]["sourceReplyDeliveryMode"];
   context: AfterToolCallContext;
   hookResult?: Awaited<ReturnType<NonNullable<Agent["afterToolCall"]>>>;
@@ -16,7 +15,7 @@ async function recordsDeliveredSourceReply(params: {
     ? { afterToolCall: vi.fn(async () => params.hookResult) }
     : {}) as unknown as Agent;
   const onDeliveredSourceReply = vi.fn();
-  installMessageToolOnlyTerminalHook({
+  installMessageToolTerminalHook({
     agent,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     onDeliveredSourceReply,
@@ -28,7 +27,7 @@ async function recordsDeliveredSourceReply(params: {
 type TerminalHookCase = {
   label: string;
   sourceReplyDeliveryMode?: Parameters<
-    typeof installMessageToolOnlyTerminalHook
+    typeof installMessageToolTerminalHook
   >[0]["sourceReplyDeliveryMode"];
   context: AfterToolCallContext;
   hookResult?: Awaited<ReturnType<NonNullable<Agent["afterToolCall"]>>>;
@@ -71,13 +70,13 @@ describe("message-tool-only source replies", () => {
       context: createAfterToolCallContext({
         toolName: "message",
         args: { action: "send", message: "visible reply" },
-        result: createSuppressedSendResult(),
+        result: { content: [], details: {} },
       }),
       hookResult: { details: { result: { messageId: "discord-message-2" } } },
       expected: true,
     },
     {
-      label: "automatic delivery mode",
+      label: "unconfirmed automatic delivery",
       sourceReplyDeliveryMode: "automatic",
       context: createAfterToolCallContext({
         toolName: "message",
@@ -119,6 +118,24 @@ describe("message-tool-only source replies", () => {
       expected: false,
     },
     {
+      label: "partial send",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "incomplete reply" },
+        result: {
+          content: [],
+          details: {
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: true,
+              createdThreadIds: [],
+            },
+          },
+        },
+      }),
+      expected: false,
+    },
+    {
       label: "dry-run argument",
       context: createAfterToolCallContext({
         toolName: "message",
@@ -136,15 +153,6 @@ describe("message-tool-only source replies", () => {
           details: { payload: { deliveryStatus: "dry_run", dryRun: true } },
         },
       }),
-      expected: false,
-    },
-    {
-      label: "dry-run hook result",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "preview reply" },
-      }),
-      hookResult: { details: { deliveryStatus: "dry_run" } },
       expected: false,
     },
     {
@@ -181,14 +189,62 @@ describe("message-tool-only source replies", () => {
     },
   );
 
-  it("preserves existing after-tool-call output while recording delivered source replies", async () => {
-    const previousAfterToolCall = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "rewritten" }],
-      details: { rewritten: true },
-    }));
-    const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
+  it.each(
+    (["automatic", "message_tool_only"] as const).flatMap((sourceReplyDeliveryMode) =>
+      ["send", "reply", "thread-reply", "poll", "react"].map((action) => ({
+        sourceReplyDeliveryMode,
+        action,
+      })),
+    ),
+  )(
+    "preserves rewritten output while terminating after a recorded source $action ($sourceReplyDeliveryMode)",
+    async ({ action, sourceReplyDeliveryMode }) => {
+      const rewritten = {
+        content: [{ type: "text" as const, text: "rewritten" }],
+        details: {
+          messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+        },
+      };
+      const previousAfterToolCall = vi.fn(async () => rewritten);
+      const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
+      const onDeliveredSourceReply = vi.fn();
+      installMessageToolTerminalHook({
+        agent,
+        sourceReplyDeliveryMode,
+        onDeliveredSourceReply,
+      });
+
+      await expect(
+        agent.afterToolCall?.(
+          createAfterToolCallContext({
+            toolName: "message",
+            args: { action, target: "channel:source", message: "visible reply", final: true },
+            result: {
+              content: [],
+              details: {
+                messageDelivery: {
+                  status: "settled",
+                  partialDelivery: false,
+                  createdThreadIds: [],
+                  sourceReplyDelivered: true,
+                },
+              },
+            },
+          }),
+        ),
+      ).resolves.toEqual({
+        ...rewritten,
+        terminate: true,
+      });
+      expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
+      expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("terminates after a delivered completed source reply", async () => {
+    const agent = {} as unknown as Agent;
     const onDeliveredSourceReply = vi.fn();
-    installMessageToolOnlyTerminalHook({
+    installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
       onDeliveredSourceReply,
@@ -201,32 +257,93 @@ describe("message-tool-only source replies", () => {
           args: { action: "send", message: "visible reply" },
         }),
       ),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: "rewritten" }],
-      details: { rewritten: true },
-    });
-    expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
+    ).resolves.toEqual({ terminate: true });
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 
-  it("records delivery evidence without rewriting the default result", async () => {
+  it("continues after delivered progress", async () => {
     const agent = {} as unknown as Agent;
-    const onDeliveredSourceReply = vi.fn();
-    installMessageToolOnlyTerminalHook({
+    installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
-      onDeliveredSourceReply,
     });
 
     await expect(
       agent.afterToolCall?.(
         createAfterToolCallContext({
           toolName: "message",
-          args: { action: "send", message: "visible reply" },
+          args: { action: "send", message: "still working", final: false },
         }),
       ),
     ).resolves.toBeUndefined();
-    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      label: "the exact source route",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: true,
+    },
+    {
+      label: "the same target in another account",
+      accountId: "account-2",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: false,
+    },
+    {
+      label: "the same target in another thread",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-2",
+      expected: false,
+    },
+    {
+      label: "another target",
+      accountId: "account-1",
+      target: "chat456",
+      threadId: "thread-1",
+      expected: false,
+    },
+  ])("records explicit sends only for $label", async (testCase) => {
+    const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    installMessageToolTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+      config: {},
+      currentProvider: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+      sessionKey: "agent:main:test-channel:chat123",
+    } as Parameters<typeof installMessageToolTerminalHook>[0] & {
+      config: object;
+      currentProvider: string;
+      currentAccountId: string;
+      currentChannelId: string;
+      currentThreadId: string;
+      sessionKey: string;
+    });
+
+    await agent.afterToolCall?.(
+      createAfterToolCallContext({
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "test-channel",
+          accountId: testCase.accountId,
+          target: testCase.target,
+          threadId: testCase.threadId,
+          message: "explicit reply",
+        },
+      }),
+    );
+
+    expect(onDeliveredSourceReply.mock.calls.length > 0).toBe(testCase.expected);
   });
 
   it("leaves existing after-tool-call output alone when the send failed", async () => {
@@ -237,7 +354,7 @@ describe("message-tool-only source replies", () => {
     }));
     const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
     const onDeliveredSourceReply = vi.fn();
-    installMessageToolOnlyTerminalHook({
+    installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
       onDeliveredSourceReply,
@@ -248,6 +365,7 @@ describe("message-tool-only source replies", () => {
         createAfterToolCallContext({
           toolName: "message",
           args: { action: "send", message: "failed reply" },
+          isError: true,
         }),
       ),
     ).resolves.toEqual({
@@ -259,17 +377,50 @@ describe("message-tool-only source replies", () => {
     expect(onDeliveredSourceReply).not.toHaveBeenCalled();
   });
 
-  it("does not install a wrapper for non-message-tool-only delivery", async () => {
+  it("preserves a committed final source reply when later presentation fails", async () => {
+    const failure = { details: { error: "presentation failed" }, isError: true };
+    const agent = { afterToolCall: async () => failure } as unknown as Agent;
+    installMessageToolTerminalHook({ agent, sourceReplyDeliveryMode: "automatic" });
+
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "Delivered once." },
+          result: {
+            content: [],
+            details: {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: false,
+                sourceReplyDelivered: true,
+                createdThreadIds: [],
+              },
+            },
+          },
+        }),
+      ),
+    ).resolves.toEqual({ ...failure, terminate: true });
+  });
+
+  it("preserves existing output for unconfirmed automatic delivery", async () => {
     const previousAfterToolCall = vi.fn(async () => ({
       details: { untouched: true },
     }));
     const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
-    installMessageToolOnlyTerminalHook({
+    installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "automatic",
     });
 
-    expect(agent.afterToolCall).toBe(previousAfterToolCall);
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", target: "elsewhere", message: "reply" },
+        }),
+      ),
+    ).resolves.toEqual({ details: { untouched: true } });
   });
 });
 
@@ -298,6 +449,11 @@ function createAfterToolCallContext(params: {
       details: {
         status: "ok",
         deliveryStatus: "sent",
+        messageDelivery: {
+          status: params.args.dryRun ? "dryRun" : params.isError ? "failed" : "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
         sourceReplySink: "internal-ui",
         sourceReply: { text: params.args.message },
       },
@@ -326,7 +482,15 @@ function createDirectSendResult(params: { messageId: string }): AfterToolCallCon
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "settled",
+        primaryPlatformMessageId: params.messageId,
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 
@@ -341,7 +505,14 @@ function createSuppressedSendResult(): AfterToolCallContext["result"] {
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "suppressed",
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 
@@ -362,14 +533,7 @@ function createToolCallAssistant(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "toolUse",
     timestamp: 0,
   };

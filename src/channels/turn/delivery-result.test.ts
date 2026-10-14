@@ -1,10 +1,116 @@
 // Delivery result tests cover channel turn delivery result normalization.
 import { describe, expect, it } from "vitest";
+import type { MessageReceipt } from "../message/types.js";
 import {
+  createAcceptedChannelDeliveryResult,
+  createChannelDeliveryAccumulator,
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "./delivery-result.js";
+import {
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+} from "./dispatch-result.js";
+
+describe("createChannelDeliveryAccumulator", () => {
+  it("suppresses an empty batch and leaves failures before acceptance unchanged", () => {
+    const accepted = createChannelDeliveryAccumulator();
+    const error = new Error("send rejected");
+
+    expect(accepted.result()).toEqual({
+      visibleReplySent: false,
+      suppression: { reason: "no_visible_result" },
+    });
+    expect(accepted.partialError(error)).toBe(error);
+    expect(
+      accepted.partialError(
+        createChannelPartialDeliveryError(error, {
+          visibleReplySent: true,
+          messageIds: ["accepted-attachment"],
+        }),
+      ),
+    ).toMatchObject({
+      deliveryResult: { visibleReplySent: true, messageIds: ["accepted-attachment"], content: "" },
+    });
+  });
+
+  it("keeps immutable snapshots and a nested failure's accepted subset in send order", () => {
+    const accepted = createChannelDeliveryAccumulator({ kind: "media", replyToId: "parent" });
+    accepted.add({ messageId: "first" }, "first accepted text");
+    const snapshot = accepted.result();
+    accepted.add({ messageId: "attachment" }, "");
+    const failure = accepted.partialError(
+      createChannelPartialDeliveryError(new Error("last caption rejected"), {
+        visibleReplySent: true,
+        messageIds: ["last-attachment"],
+        content: "last accepted text",
+      }),
+    );
+
+    expect(failure).toMatchObject({
+      deliveryResult: {
+        visibleReplySent: true,
+        messageIds: ["first", "attachment", "last-attachment"],
+        content: "first accepted text\nlast accepted text",
+        receipt: { primaryPlatformMessageId: "first", replyToId: "parent" },
+      },
+    });
+    expect(snapshot).toMatchObject({
+      messageIds: ["first"],
+      content: "first accepted text",
+      receipt: { raw: [{ messageId: "first" }] },
+    });
+    expect(accepted.result()).toMatchObject({
+      messageIds: ["first", "attachment"],
+      content: "first accepted text",
+    });
+  });
+});
+
+describe("createAcceptedChannelDeliveryResult", () => {
+  it("retains accepted prefixes and nested partial receipt identities", () => {
+    const nestedReceipt: MessageReceipt = {
+      primaryPlatformMessageId: "attachment",
+      platformMessageIds: ["attachment", "caption"],
+      parts: [
+        { platformMessageId: "attachment", kind: "media", index: 0, threadId: "native-thread" },
+      ],
+      sentAt: 123,
+    };
+    const result = createAcceptedChannelDeliveryResult({
+      results: [{ messageId: "prefix" }],
+      deliveryResults: [
+        {
+          visibleReplySent: true,
+          messageIds: ["stale-legacy-id"],
+          receipt: nestedReceipt,
+        },
+      ],
+      kind: "media",
+      content: "accepted prefix\naccepted attachment",
+    });
+
+    expect(result.messageIds).toEqual(["prefix", "attachment", "caption"]);
+    expect(result.content).toBe("accepted prefix\naccepted attachment");
+    expect(result.visibleReplySent).toBe(true);
+    expect(result).not.toHaveProperty("threadId");
+    expect(result.receipt.parts[0]?.platformMessageId).toBe("prefix");
+    expect(result.receipt.parts[1]).toEqual(nestedReceipt.parts[0]);
+  });
+
+  it("preserves identityless accepted delivery without inventing routing or text", () => {
+    const result = createAcceptedChannelDeliveryResult({});
+    expect(result).toMatchObject({
+      messageIds: [],
+      receipt: { platformMessageIds: [], parts: [] },
+      visibleReplySent: true,
+    });
+    expect(result).not.toHaveProperty("content");
+    expect(result).not.toHaveProperty("threadId");
+  });
+});
 
 describe("createChannelDeliveryResultFromReceipt", () => {
   it("keeps legacy messageIds while attaching the receipt", () => {
@@ -12,13 +118,14 @@ describe("createChannelDeliveryResultFromReceipt", () => {
       primaryPlatformMessageId: "m1",
       platformMessageIds: ["m1", "m2"],
       parts: [],
+      threadId: "canonical-thread",
       sentAt: 123,
     };
 
     expect(
       createChannelDeliveryResultFromReceipt({
         receipt,
-        threadId: "thread-1",
+        threadId: "requested-thread",
         replyToId: "reply-1",
         visibleReplySent: true,
         deliveryIntent: {
@@ -30,7 +137,7 @@ describe("createChannelDeliveryResultFromReceipt", () => {
     ).toEqual({
       messageIds: ["m1", "m2"],
       receipt,
-      threadId: "thread-1",
+      threadId: "canonical-thread",
       replyToId: "reply-1",
       visibleReplySent: true,
       deliveryIntent: {
@@ -39,6 +146,26 @@ describe("createChannelDeliveryResultFromReceipt", () => {
         queuePolicy: "required",
       },
     });
+  });
+
+  it("does not restore the requested route when provider receipt parts conflict", () => {
+    const receipt: MessageReceipt = {
+      platformMessageIds: ["m1", "m2"],
+      parts: [
+        { platformMessageId: "m1", kind: "text", index: 0, threadId: "thread-1" },
+        { platformMessageId: "m2", kind: "text", index: 1, threadId: "thread-2" },
+      ],
+      sentAt: 123,
+    };
+
+    const result = createChannelDeliveryResultFromReceipt({
+      receipt,
+      threadId: "requested-thread",
+      visibleReplySent: true,
+    });
+
+    expect(result).not.toHaveProperty("threadId");
+    expect(result.receipt).toBe(receipt);
   });
 
   it("preserves suppressed receipt results without synthetic message ids", () => {
@@ -82,19 +209,42 @@ describe("channel partial delivery errors", () => {
     });
     expect(isChannelPartialDeliveryError(error)).toBe(true);
   });
+});
 
-  it("recognizes the documented structural envelope", () => {
+describe("channel turn dispatch results", () => {
+  it("normalizes visible dispatch checks", () => {
+    expect(hasVisibleChannelTurnDispatch(undefined)).toBe(false);
     expect(
-      isChannelPartialDeliveryError({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        deliveryResult: { visibleReplySent: true },
+      hasVisibleChannelTurnDispatch({
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      }),
+    ).toBe(false);
+    expect(
+      hasVisibleChannelTurnDispatch({
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: { tool: { delivered: 1, failedAfterSend: 0 } },
+        },
       }),
     ).toBe(true);
     expect(
-      isChannelPartialDeliveryError({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        deliveryResult: { visibleReplySent: false },
+      hasVisibleChannelTurnDispatch(undefined, {
+        observedReplyDelivery: true,
+      }),
+    ).toBe(true);
+    expect(
+      hasFinalChannelTurnDispatch({
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: { tool: { delivered: 1, failedAfterSend: 0 } },
+        },
       }),
     ).toBe(false);
+    expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
   });
 });

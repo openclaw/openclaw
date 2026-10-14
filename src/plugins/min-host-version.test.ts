@@ -48,6 +48,7 @@ describe("min-host-version", () => {
       raw: ">=2026.5.1+20260501",
       minimumLabel: "2026.5.1+20260501",
     });
+    expect(parseMinHostVersionRequirement(">=2026.5.1-beta..1")).toBeNull();
   });
 
   it("can parse legacy bare semver floors for runtime upgrade compatibility", () => {
@@ -56,16 +57,24 @@ describe("min-host-version", () => {
       minimumLabel: "2026.3.22",
     });
     expect(
+      parseMinHostVersionRequirement("2026.7.2-beta.2+build.7", {
+        allowLegacyBareSemver: true,
+      }),
+    ).toEqual({
+      raw: "2026.7.2-beta.2+build.7",
+      minimumLabel: "2026.7.2-beta.2+build.7",
+    });
+    expect(
       checkMinHostVersion({
-        currentVersion: "2026.3.22",
-        minHostVersion: "2026.3.22",
+        currentVersion: "2026.8.1",
+        minHostVersion: "2026.7.2-beta.2",
         allowLegacyBareSemver: true,
       }),
     ).toEqual({
       ok: true,
       requirement: {
-        raw: "2026.3.22",
-        minimumLabel: "2026.3.22",
+        raw: "2026.7.2-beta.2",
+        minimumLabel: "2026.7.2-beta.2",
       },
     });
   });
@@ -97,11 +106,4 @@ describe("min-host-version", () => {
       expected,
     });
   });
-
-  it.each(["2026.3.22", "2026.4.0"] as const)(
-    "accepts equal or newer hosts: %s",
-    (currentVersion) => {
-      expectValidHostCheck(currentVersion, ">=2026.3.22");
-    },
-  );
 });

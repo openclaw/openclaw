@@ -222,7 +222,7 @@ describeLive("xai plugin live", () => {
         usedCodeExecution?: boolean;
       };
 
-      expect(details.model).toBe("grok-4.3");
+      expect(details.model).toBe("grok-4.7");
       expect(details.usedCodeExecution).toBe(true);
       expect(details.content).toContain("42");
     });
@@ -257,7 +257,7 @@ describeLive("xai plugin live", () => {
         usedCodeExecution?: boolean;
       };
 
-      expect(details.model).toBe("grok-4.3");
+      expect(details.model).toBe("grok-4.7");
       expect(details.usedCodeExecution).toBe(true);
       expect(details.content).toContain("5050");
     });
@@ -478,7 +478,10 @@ describeLive("xai plugin live", () => {
 
   it("runs realtime voice audio, tool, barge-in, and resumed-context flow", async () => {
     const { speechProviders } = await registerXaiPlugin();
-    const realtimeProvider = registerXaiRealtimeVoiceProvider();
+    const { buildXaiRealtimeVoiceProvider } = await import("./realtime-voice-provider.js");
+    // Socket failure injection belongs to the transport owner. The tool-call live
+    // case below separately exercises the registered lazy provider.
+    const realtimeProvider = buildXaiRealtimeVoiceProvider();
     const speechProvider = requireRegisteredProvider(speechProviders, "xai");
     const cfg = createLiveConfig();
     const marker = "OPENCLAW_XAI_RESUME_42";
@@ -614,9 +617,11 @@ describeLive("xai plugin live", () => {
         "server-VAD audio barge-in",
         () => {
           const serverBargeInEvents = new Set(serverEvents.slice(bargeInServerEventStart));
+          // xAI does not consistently echo `conversation.item.truncated`; the
+          // outbound truncate plus cleared playback and continued response prove
+          // the user-visible interruption contract without depending on that ack.
           return (
             serverBargeInEvents.has("input_audio_buffer.speech_started") &&
-            serverBargeInEvents.has("conversation.item.truncated") &&
             clientEvents.slice(bargeInClientEventStart).includes("conversation.item.truncate") &&
             clearAudioReasons.includes("barge-in")
           );
@@ -710,9 +715,71 @@ describeLive("xai plugin live", () => {
       );
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   }, 240_000);
+
+  it("runs realtime voice tool calls with valid object arguments and continuation", async () => {
+    const realtimeProvider = registerXaiRealtimeVoiceProvider();
+    const marker = "OPENCLAW_XAI_TOOL_ARGS_OK";
+    const finalAssistantTranscripts: string[] = [];
+    const toolCalls: Array<{ callId: string; name: string; args: unknown }> = [];
+    const errors: Error[] = [];
+    const bridge: RealtimeVoiceBridge = realtimeProvider.createBridge({
+      cfg: createLiveConfig(),
+      providerConfig: {
+        apiKey: XAI_API_KEY,
+        baseUrl: "https://api.x.ai/v1",
+        model: "grok-voice-latest",
+        voice: "eve",
+      },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      instructions:
+        "When asked, call openclaw_live_probe with the exact token. After the tool result, say its marker exactly.",
+      tools: [
+        {
+          type: "function",
+          name: "openclaw_live_probe",
+          description: "Return the live validation marker.",
+          parameters: {
+            type: "object",
+            properties: { token: { type: "string" } },
+            required: ["token"],
+          },
+        },
+      ],
+      onAudio: () => {},
+      onClearAudio: () => {},
+      onMark: (markName) => bridge.acknowledgeMark(markName),
+      onTranscript: (role, text, isFinal) => {
+        if (role === "assistant" && isFinal) {
+          finalAssistantTranscripts.push(text);
+        }
+      },
+      onToolCall: (event) => toolCalls.push(event),
+      onError: (error) => errors.push(error),
+    });
+
+    try {
+      await bridge.connect();
+      bridge.sendUserMessage?.("Call openclaw_live_probe now with token bluebird.");
+      await waitForXaiLive("valid object tool arguments", () => toolCalls.length > 0);
+      expect(toolCalls[0]).toEqual({
+        callId: expect.any(String),
+        itemId: expect.any(String),
+        name: "openclaw_live_probe",
+        args: { token: "bluebird" },
+      });
+
+      await bridge.submitToolResult(toolCalls[0]?.callId ?? "", { marker });
+      await waitForXaiLive("tool result continuation", () =>
+        finalAssistantTranscripts.some((text) => text.includes(marker)),
+      );
+      expect(errors).toStrictEqual([]);
+    } finally {
+      await bridge.close();
+    }
+  }, 120_000);
 
   it("generates and edits images through the registered image provider", async () => {
     await runXaiLiveCase("image", async () => {

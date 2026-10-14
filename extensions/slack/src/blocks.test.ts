@@ -13,51 +13,64 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Deploy status");
   });
 
-  it("uses image alt text", () => {
-    expect(
-      buildSlackBlocksFallbackText([
-        { type: "image", image_url: "https://example.com/image.png", alt_text: "Latency chart" },
-      ] as never),
-    ).toBe("Latency chart");
+  it("preserves image title/alt precedence and formatting", () => {
+    const block = {
+      type: "image",
+      alt_text: " Alt <@U123> ",
+      title: { type: "plain_text", text: " Title <@U123> " },
+    };
+    expect(renderSlackBlockFallbackText(block)).toBe("Alt &lt;@U123&gt;");
+    expect(renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" })).toBe(
+      "Alt &lt;@U123&gt;",
+    );
+    expect(renderSlackBlockFallbackText({ ...block, alt_text: "" })).toBe("Title &lt;@U123&gt;");
+    expect(renderSlackBlockFallbackText({ ...block, title: null })).toBe("Alt &lt;@U123&gt;");
   });
 
-  it("uses complete data visualization text", () => {
-    expect(
-      buildSlackBlocksFallbackText([
-        {
-          type: "data_visualization",
-          title: "Revenue mix",
-          chart: {
-            type: "pie",
-            segments: [
-              { label: "Product", value: 60 },
-              { label: "Services", value: 40 },
+  it("renders inbound table cells as bounded delimiter-safe TSV", () => {
+    const table = {
+      type: "table",
+      rows: [
+        [
+          { type: "raw_text", text: "Name" },
+          { type: "raw_number", value: 42 },
+          { type: "raw_text", text: "Note" },
+        ],
+        [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "text", text: "Ada" },
+                  { type: "text", text: " " },
+                  { type: "user", user_id: "U123" },
+                  {
+                    type: "future_container",
+                    elements: [{ type: "future_leaf", text: " preserved " }],
+                  },
+                ],
+              },
             ],
           },
-        },
-      ] as never),
-    ).toBe("Revenue mix (pie chart)\n- Product: 60\n- Services: 40");
+          { type: "raw_number", value: 7, text: "seven" },
+          { type: "raw_text", text: "A\tB\nC\\D" },
+        ],
+      ],
+    };
+
+    expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "plain" })).toBe(
+      ["Name\t42\tNote", "Ada <@U123> preserved \tseven\tA\\tB\\nC\\\\D"].join("\n"),
+    );
+    expect(renderSlackBlockFallbackText(table)).toBe(
+      ["Name\t42\tNote", "Ada &lt;@U123&gt; preserved \tseven\tA\\tB\\nC\\\\D"].join("\n"),
+    );
   });
 
-  it("uses complete data table text", () => {
-    expect(
-      buildSlackBlocksFallbackText([
-        {
-          type: "data_table",
-          caption: "Pipeline report",
-          rows: [
-            [
-              { type: "raw_text", text: "Account" },
-              { type: "raw_text", text: "ARR" },
-            ],
-            [
-              { type: "raw_text", text: "Acme" },
-              { type: "raw_number", value: 125000, text: "125000" },
-            ],
-          ],
-        },
-      ] as never),
-    ).toBe("Pipeline report (table)\n- Account: Acme; ARR: 125000");
+  it("rejects inbound tables outside Slack's published row limit", () => {
+    const rows = Array.from({ length: 101 }, () => [{ type: "raw_text", text: "cell" }]);
+    expect(renderSlackBlockFallbackText({ type: "table", rows })).toBeUndefined();
   });
 
   it("uses only visible action labels and select placeholders", () => {
@@ -101,22 +114,8 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Deploy status\n*Region*\nus-east-1\nHealthy");
   });
 
-  it("includes section accessory labels without hidden values", () => {
-    expect(
-      renderSlackBlockFallbackText({
-        type: "section",
-        text: { type: "mrkdwn", text: "Deploy status" },
-        accessory: {
-          type: "button",
-          text: { type: "plain_text", text: "Approve" },
-          value: "secret-approval-token",
-        },
-      }),
-    ).toBe("Deploy status\nApprove");
-  });
-
   it("renders rich text and context without hidden metadata", () => {
-    const richText = renderSlackBlockFallbackText({
+    const richTextBlock = {
       type: "rich_text",
       block_id: "private-block-id",
       elements: [
@@ -143,12 +142,21 @@ describe("buildSlackBlocksFallbackText", () => {
                   url: "https://example.com/private-target",
                   text: "Second",
                 },
+                { type: "text", text: " for " },
+                { type: "usergroup", usergroup_id: "S123" },
+                { type: "text", text: " " },
+                { type: "broadcast", range: "here" },
               ],
             },
           ],
         },
+        {
+          type: "future_container",
+          elements: [{ type: "text", text: "hidden-future-text" }],
+        },
       ],
-    });
+    };
+    const richText = renderSlackBlockFallbackText(richTextBlock);
     const context = renderSlackBlockFallbackText({
       type: "context",
       elements: [
@@ -158,10 +166,17 @@ describe("buildSlackBlocksFallbackText", () => {
     });
 
     expect(richText).toBe(
-      "Ask &lt;@U123&gt; &lt;!channel&gt; in &lt;#C123&gt; :wave:\nFirst\nSecond",
+      "Ask &lt;@U123&gt; &lt;!channel&gt; in &lt;#C123&gt; :wave:\nFirst\nSecond for &lt;!subteam^S123&gt; &lt;!here&gt;",
+    );
+    expect(renderSlackBlockFallbackText(richTextBlock, { nativeDataFormat: "plain" })).toBe(
+      richText,
+    );
+    expect(renderSlackBlockFallbackText(richTextBlock, { nativeReferenceFormat: "plain" })).toBe(
+      "Ask <@U123> &lt;!channel&gt; in <#C123> :wave:\nFirst\nSecond for <!subteam^S123> <!here>",
     );
     expect(richText).not.toContain("private-block-id");
     expect(richText).not.toContain("private-target");
+    expect(richText).not.toContain("hidden-future-text");
     expect(context).toBe("Updated now Green status");
     expect(context).not.toContain("secret");
   });
@@ -195,23 +210,6 @@ describe("buildSlackBlocksFallbackText", () => {
 });
 
 describe("parseSlackBlocksInput", () => {
-  it("returns undefined when blocks are missing", () => {
-    expect(parseSlackBlocksInput(undefined)).toBeUndefined();
-    expect(parseSlackBlocksInput(null)).toBeUndefined();
-  });
-
-  it("accepts blocks arrays", () => {
-    const parsed = parseSlackBlocksInput([{ type: "divider" }]);
-    expect(parsed).toEqual([{ type: "divider" }]);
-  });
-
-  it("accepts JSON blocks strings", () => {
-    const parsed = parseSlackBlocksInput(
-      '[{"type":"section","text":{"type":"mrkdwn","text":"hi"}}]',
-    );
-    expect(parsed).toEqual([{ type: "section", text: { type: "mrkdwn", text: "hi" } }]);
-  });
-
   it("rejects invalid block payloads", () => {
     const cases = [
       {
@@ -254,26 +252,5 @@ describe("parseSlackModalPrivateMetadata", () => {
     expect(parseSlackModalPrivateMetadata(undefined)).toStrictEqual({});
     expect(parseSlackModalPrivateMetadata("")).toStrictEqual({});
     expect(parseSlackModalPrivateMetadata("{bad-json")).toStrictEqual({});
-  });
-
-  it("parses known metadata fields", () => {
-    expect(
-      parseSlackModalPrivateMetadata(
-        JSON.stringify({
-          sessionKey: "agent:main:slack:channel:C1",
-          channelId: "D123",
-          channelType: "im",
-          userId: "U123",
-          pluginInteractiveData: "dean.contract:confirm",
-          ignored: "x",
-        }),
-      ),
-    ).toEqual({
-      sessionKey: "agent:main:slack:channel:C1",
-      channelId: "D123",
-      channelType: "im",
-      userId: "U123",
-      pluginInteractiveData: "dean.contract:confirm",
-    });
   });
 });

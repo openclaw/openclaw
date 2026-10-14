@@ -1,33 +1,32 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatTokenK, loadValidConfigOrThrow, updateConfig } from "./shared.js";
+import { loadValidConfigSnapshotOrThrow, resolveModelsTargetAgent } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
-  replaceConfigFile: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
 }));
 
 describe("models/shared", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockClear();
-    mocks.replaceConfigFile.mockClear();
   });
 
-  it("returns config when snapshot is valid", async () => {
-    const cfg = { providers: {} } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
+  it("returns the paired source and runtime config when the snapshot is valid", async () => {
+    const cfg: OpenClawConfig = { logging: { level: "debug" } };
+    const snapshot = {
       valid: true,
+      sourceConfig: {},
       runtimeConfig: cfg,
-      config: cfg,
-    });
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
 
-    await expect(loadValidConfigOrThrow()).resolves.toBe(cfg);
+    await expect(loadValidConfigSnapshotOrThrow()).resolves.toEqual(snapshot);
   });
 
   it("throws formatted issues when snapshot is invalid", async () => {
@@ -37,84 +36,49 @@ describe("models/shared", () => {
       issues: [{ path: "providers.openai.apiKey", message: "Required" }],
     });
 
-    await expect(loadValidConfigOrThrow()).rejects.toThrowError(
+    await expect(loadValidConfigSnapshotOrThrow()).rejects.toThrowError(
       "Invalid config at /tmp/openclaw.json\n- providers.openai.apiKey: Required",
     );
   });
 
-  it("updateConfig writes mutated config", async () => {
-    const cfg = { update: { channel: "stable" } } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "config-1",
-      sourceConfig: cfg,
-      config: cfg,
-    });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
-
-    await updateConfig((current) => ({
-      ...current,
-      update: { channel: "beta" },
-    }));
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.nextConfig.update).toEqual({ channel: "beta" });
-    expect(replaceParams?.baseHash).toBe("config-1");
-  });
-
-  it("updateConfig exposes runtime config without writing runtime defaults", async () => {
-    const sourceConfig = {
-      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
-    } as unknown as OpenClawConfig;
-    const runtimeConfig = {
+  it("resolves unscoped model reads through the configured system agent", () => {
+    const cfg: OpenClawConfig = {
       agents: {
-        defaults: {
-          models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
-        },
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "helper" } },
+        entries: { main: {}, helper: {} },
       },
-    } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "config-2",
-      sourceConfig,
-      runtimeConfig,
-      config: runtimeConfig,
-    });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    };
 
-    await updateConfig((current, context) => {
-      expect(current).toEqual(sourceConfig);
-      expect(context.runtimeConfig).toEqual(runtimeConfig);
-      return current;
-    });
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.nextConfig).toEqual(sourceConfig);
-    expect(replaceParams?.baseHash).toBe("config-2");
+    expect(resolveModelsTargetAgent(cfg, undefined, { kind: "read" }).agentId).toBe("helper");
+    expect(resolveModelsTargetAgent(cfg, "main", { kind: "read" }).agentId).toBe("main");
+    expect(() => resolveModelsTargetAgent(cfg, "", { kind: "read" })).toThrow(
+      "--agent must not be blank",
+    );
+    expect(() =>
+      resolveModelsTargetAgent(
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "missing" } },
+            entries: { main: {}, helper: {} },
+          },
+        },
+        undefined,
+        { kind: "read" },
+      ),
+    ).toThrow('Unknown agent id "missing".');
   });
 
-  describe("formatTokenK", () => {
-    // Token context windows are decimal, so round windows must not shrink
-    // (regression: /1024 rendered 200000 as "195k" instead of "200k").
-    it("renders round token context windows in decimal K", () => {
-      expect(formatTokenK(200_000)).toBe("200k");
-      expect(formatTokenK(128_000)).toBe("128k");
-      expect(formatTokenK(1_000_000)).toBe("1000k");
-      expect(formatTokenK(195_000)).toBe("195k");
-    });
-
-    it("passes small counts through and switches to K at 1000", () => {
-      expect(formatTokenK(999)).toBe("999");
-      expect(formatTokenK(1_000)).toBe("1k");
-    });
-
-    it("returns a dash for missing or non-finite values", () => {
-      expect(formatTokenK(undefined)).toBe("-");
-      expect(formatTokenK(null)).toBe("-");
-      expect(formatTokenK(0)).toBe("-");
-      expect(formatTokenK(Number.NaN)).toBe("-");
-    });
+  it("keeps credential mutations explicit on an ambiguous roster", () => {
+    expect(() =>
+      resolveModelsTargetAgent(
+        { agents: { ownership: "explicit", entries: { main: {}, helper: {} } } },
+        undefined,
+        { kind: "mutation" },
+      ),
+    ).toThrow(
+      "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
+    );
   });
 });

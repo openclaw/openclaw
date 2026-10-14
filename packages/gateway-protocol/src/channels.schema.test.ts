@@ -33,42 +33,20 @@ describe("WebLoginWaitParamsSchema", () => {
   });
 });
 
-describe("ChannelsStatusResultSchema", () => {
-  /** Compiled status validator for channel docking diagnostics. */
-  const validate = Compile(ChannelsStatusResultSchema);
-
-  it("accepts gateway event-loop diagnostics emitted by channels.status", () => {
+it("keeps channel sampling intervals integral while accepting fractional metrics", () => {
+  const eventLoop = Compile(ChannelsStatusResultSchema.properties.eventLoop);
+  for (const intervalMs of [0, 1, 0.5, -1]) {
     expect(
-      validate.Check({
-        ts: Date.now(),
-        channelOrder: ["discord"],
-        channelLabels: { discord: "Discord" },
-        channels: { discord: { configured: true } },
-        channelAccounts: {
-          discord: [
-            {
-              accountId: "default",
-              enabled: true,
-              configured: true,
-              running: true,
-              connected: false,
-              healthState: "stale-socket",
-            },
-          ],
-        },
-        channelDefaultAccountId: { discord: "default" },
-        partial: true,
-        warnings: ["discord:default probe timed out after 1000ms"],
-        eventLoop: {
-          degraded: true,
-          reasons: ["event_loop_delay", "cpu"],
-          intervalMs: 62_000,
-          delayP99Ms: 1_250.5,
-          delayMaxMs: 62_000,
-          utilization: 0.98,
-          cpuCoreRatio: 1.2,
-        },
+      eventLoop.Check({
+        degraded: false,
+        reasons: [],
+        intervalMs,
+        delayP99Ms: 1.25,
+        delayMaxMs: 2.5,
+        utilization: 0.2,
+        cpuCoreRatio: 1.5,
       }),
-    ).toBe(true);
-  });
+      `intervalMs=${intervalMs}`,
+    ).toBe(intervalMs === 0 || intervalMs === 1);
+  }
 });

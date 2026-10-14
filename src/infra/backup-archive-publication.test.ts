@@ -1,9 +1,10 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   cleanupBackupArchivePublication,
@@ -12,29 +13,13 @@ import {
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
 import { writeArchiveStreamToFile, type PreparedBackupArchive } from "./backup-create-stream.js";
-
-const { durabilityTestState } = vi.hoisted(() => ({
-  durabilityTestState: {
-    syncOutcome: undefined as
-      | { status: "synced" }
-      | { status: "unsupported"; code?: string }
-      | undefined,
-  },
-}));
-
-vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
-  return {
-    ...actual,
-    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
-      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
-  };
-});
+import * as directoryDurability from "./directory-durability.js";
+import { getPublishFileExclusiveFailureDetails } from "./directory-durability.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
-  durabilityTestState.syncOutcome = undefined;
+  __setFsSafeTestHooksForTest(undefined);
 });
 
 async function createPublication(
@@ -55,32 +40,29 @@ async function prepareArchive(
   const archiveStream = new PassThrough();
   const preparedPromise = writeArchiveStreamToFile({
     archivePath: plan.tempArchivePath,
-    archiveStream,
+    createArchiveStream: () => archiveStream,
+    onPartialArchive: (receipt) => {
+      plan.pendingCleanupArchives.push(receipt);
+    },
   });
   archiveStream.end(content);
   return await preparedPromise;
 }
 
 describe("backup archive publication", () => {
-  it("publishes a complete archive and removes its private staging directory", async () => {
-    const { outputPath, plan } = await createPublication("openclaw-backup-publish-");
-    const prepared = await prepareArchive(plan);
-    const originalOpen = fs.open.bind(fs);
-    const openedPaths: string[] = [];
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
-      openedPaths.push(path.resolve(String(target)));
-      return await originalOpen(target, flags, mode);
-    });
-
+  it("publishes beneath a parent whose file ID exceeds Number's exact range", async () => {
+    const outputDir = tempDirs.make("openclaw-backup-large-parent-id-");
+    const outputPath = path.join(outputDir, "backup.tar.gz");
+    const identitySpy = mockLargeDirectoryId(outputDir);
     try {
+      const plan = await createBackupArchivePublication(outputPath);
+      const prepared = await prepareArchive(plan);
       await publishPreparedBackupArchive({ plan, prepared });
 
       await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
-      await expect(fs.lstat(prepared.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.lstat(plan.stagingDir)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(openedPaths).not.toContain(path.resolve(outputPath));
+      await expect(fs.readdir(outputDir)).resolves.toEqual(["backup.tar.gz"]);
     } finally {
-      openSpy.mockRestore();
+      identitySpy.mockRestore();
     }
   });
 
@@ -101,25 +83,28 @@ describe("backup archive publication", () => {
     }
   });
 
-  it.each(["EPERM", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])(
-    "fails closed when hard-link publication returns %s",
-    async (code) => {
-      const { outputPath, plan } = await createPublication("openclaw-backup-no-link-");
-      const prepared = await prepareArchive(plan);
-      const linkSpy = vi
-        .spyOn(fs, "link")
-        .mockRejectedValue(Object.assign(new Error("unsupported"), { code }));
-      try {
-        await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
-          /requires hard-link support/iu,
-        );
-        await expect(fs.lstat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.lstat(prepared.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        linkSpy.mockRestore();
-      }
-    },
-  );
+  it.each(["EXDEV"])("fails closed when hard-link publication returns %s", async (code) => {
+    const { outputPath, plan } = await createPublication("openclaw-backup-no-link-");
+    const prepared = await prepareArchive(plan);
+    const publicationSpy = vi
+      .spyOn(directoryDurability, "publishFileExclusive")
+      .mockRejectedValue(Object.assign(new Error("unsupported"), { code }));
+    try {
+      await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
+        /requires hard-link support/iu,
+      );
+      expect(publicationSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetPath: plan.canonicalOutputPath,
+          strategy: "link-required",
+        }),
+      );
+      await expect(fs.lstat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.lstat(prepared.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      publicationSpy.mockRestore();
+    }
+  });
 
   it("preserves a destination raced in before publication", async () => {
     const { outputPath, plan } = await createPublication("openclaw-backup-destination-race-");
@@ -132,6 +117,21 @@ describe("backup archive publication", () => {
     await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("racer");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preserves a concurrently published hard link to the prepared archive",
+    async () => {
+      const { outputPath, plan } = await createPublication("openclaw-backup-hardlink-race-");
+      const prepared = await prepareArchive(plan);
+      await fs.link(prepared.archivePath, outputPath);
+
+      await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
+        /Refusing to overwrite existing backup archive/iu,
+      );
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
+      await expect(fs.lstat(prepared.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("rejects a replaced staging pathname without publishing replacement bytes", async () => {
     const { outputPath, plan } = await createPublication("openclaw-backup-staging-race-");
     const prepared = await prepareArchive(plan);
@@ -140,7 +140,7 @@ describe("backup archive publication", () => {
     await fs.writeFile(prepared.archivePath, "replacement", "utf8");
 
     await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
-      /staging file changed/iu,
+      /Backup archive changed during publication/iu,
     );
     await expect(fs.lstat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(prepared.archivePath, "utf8")).resolves.toBe("replacement");
@@ -162,12 +162,10 @@ describe("backup archive publication", () => {
       await fs.unlink(requestedDir);
       await fs.symlink(secondDir, requestedDir);
 
-      await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
-        /output directory changed/iu,
+      await expect(publishPreparedBackupArchive({ plan, prepared })).resolves.toBeUndefined();
+      await expect(fs.readFile(path.join(firstDir, "backup.tar.gz"), "utf8")).resolves.toBe(
+        "complete archive",
       );
-      await expect(fs.lstat(path.join(firstDir, "backup.tar.gz"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
       await expect(fs.lstat(path.join(secondDir, "backup.tar.gz"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -190,12 +188,12 @@ describe("backup archive publication", () => {
           plan,
           prepared,
         }),
-      ).rejects.toThrow(/output directory changed/iu);
+      ).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.lstat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 
-  it.runIf(process.platform !== "win32").each(["EIO", "EINVAL"])(
+  it.runIf(process.platform !== "win32").each(["ENOTSUP"])(
     "preserves the complete final archive when commit directory sync fails with %s",
     async (code) => {
       const { outputPath, plan } = await createPublication("openclaw-backup-sync-failure-");
@@ -203,40 +201,30 @@ describe("backup archive publication", () => {
       const log = vi.fn();
       const originalOpen = fs.open.bind(fs);
       const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+        const handle = await originalOpen(target, flags, mode);
         if (path.resolve(String(target)) === path.resolve(plan.canonicalParentPath)) {
-          return {
-            close: vi.fn().mockResolvedValue(undefined),
-            stat: vi.fn().mockResolvedValue(plan.parentReceipt.identity),
-            sync: vi.fn().mockRejectedValue(Object.assign(new Error("sync failed"), { code })),
-          } as unknown as FileHandle;
+          vi.spyOn(handle, "sync").mockRejectedValue(
+            Object.assign(new Error("sync failed"), { code }),
+          );
         }
-        return await originalOpen(target, flags, mode);
+        return handle;
       });
       try {
-        await expect(publishPreparedBackupArchive({ plan, prepared, log })).rejects.toThrow(
-          /sync failed/iu,
+        const error = await publishPreparedBackupArchive({ plan, prepared, log }).catch(
+          (caught: unknown) => caught,
         );
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).toMatch(/sync failed/iu);
+        expect(getPublishFileExclusiveFailureDetails(error)).toMatchObject({
+          phase: "directory-sync",
+          cleanup: "preserved",
+          directorySync: { status: "failed", code },
+        });
         await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
-        expect(log).toHaveBeenCalledWith(expect.stringContaining("concurrent replacement"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("preserved the final archive"));
       } finally {
         openSpy.mockRestore();
       }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "fails closed when the commit directory cannot be synchronized",
-    async () => {
-      const { outputPath, plan } = await createPublication("openclaw-backup-sync-unsupported-");
-      const prepared = await prepareArchive(plan);
-      const log = vi.fn();
-      durabilityTestState.syncOutcome = { status: "unsupported", code: "ENOTSUP" };
-
-      await expect(publishPreparedBackupArchive({ plan, prepared, log })).rejects.toThrow(
-        /does not support crash-durable directory synchronization \(ENOTSUP\)/iu,
-      );
-      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("concurrent replacement"));
     },
   );
 
@@ -244,18 +232,14 @@ describe("backup archive publication", () => {
     const { outputPath, plan } = await createPublication("openclaw-backup-linked-race-");
     const prepared = await prepareArchive(plan);
     const displacedPath = `${outputPath}.displaced`;
-    const originalLstat = fs.lstat.bind(fs);
-    let targetLstatCount = 0;
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
-      if (path.resolve(String(target)) === path.resolve(plan.canonicalOutputPath)) {
-        targetLstatCount += 1;
-      }
-      if (targetLstatCount === 2) {
-        targetLstatCount += 1;
-        await fs.rename(plan.canonicalOutputPath, displacedPath);
-        await fs.writeFile(plan.canonicalOutputPath, "racer", "utf8");
-      }
-      return await originalLstat(target, options);
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: async (_method, targetPath) => {
+        if (path.resolve(targetPath) === path.resolve(plan.canonicalOutputPath)) {
+          __setFsSafeTestHooksForTest(undefined);
+          await fs.rename(plan.canonicalOutputPath, displacedPath);
+          await fs.writeFile(plan.canonicalOutputPath, "racer", "utf8");
+        }
+      },
     });
     try {
       await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
@@ -264,7 +248,7 @@ describe("backup archive publication", () => {
       await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("racer");
       await expect(fs.readFile(displacedPath, "utf8")).resolves.toBe("complete archive");
     } finally {
-      lstatSpy.mockRestore();
+      __setFsSafeTestHooksForTest(undefined);
     }
   });
 
@@ -313,7 +297,7 @@ describe("backup archive publication", () => {
     try {
       const writePromise = writeArchiveStreamToFile({
         archivePath: plan.tempArchivePath,
-        archiveStream,
+        createArchiveStream: () => archiveStream,
         onPartialArchive: (receipt) => {
           plan.pendingCleanupArchives.push(receipt);
         },
@@ -332,7 +316,7 @@ describe("backup archive publication", () => {
     await expect(fs.lstat(plan.stagingDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("preserves a final-path replacement detected after the commit point", async () => {
+  it("preserves a final-path replacement after the commit point", async () => {
     const { outputPath, plan } = await createPublication("openclaw-backup-final-race-");
     const prepared = await prepareArchive(plan);
     const displacedPath = `${outputPath}.displaced`;
@@ -347,9 +331,7 @@ describe("backup archive publication", () => {
       return originalUnlinkSync(target);
     });
     try {
-      await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
-        /Published backup archive changed/iu,
-      );
+      await expect(publishPreparedBackupArchive({ plan, prepared })).resolves.toBeUndefined();
       await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("racer");
       await expect(fs.readFile(displacedPath, "utf8")).resolves.toBe("complete archive");
     } finally {

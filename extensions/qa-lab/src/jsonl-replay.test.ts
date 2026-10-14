@@ -1,6 +1,5 @@
 // Qa Lab tests cover jsonl replay plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -8,13 +7,15 @@ import {
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
 } from "./jsonl-replay.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 type JsonlReplayCellRunner = NonNullable<
   NonNullable<Parameters<typeof runJsonlReplay>[1]>["runCell"]
 >;
 
-const tempRoots: string[] = [];
+const tempDirs = createTempDirHarness();
 
 function makeCell(
   runtime: RuntimeId,
@@ -45,21 +46,13 @@ function makeToolCall(overrides: Partial<RuntimeParityToolCall> = {}): RuntimePa
   };
 }
 
-async function makeTempDir() {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "jsonl-replay-"));
-  tempRoots.push(tempRoot);
-  return tempRoot;
-}
-
 afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
-  );
+  await tempDirs.cleanup();
 });
 
 describe("jsonl replay", () => {
   it("extracts user-turn boundaries while ignoring system, tool-only, empty, and malformed rows", async () => {
-    const transcriptDir = await makeTempDir();
+    const transcriptDir = await tempDirs.makeTempDir("jsonl-replay-");
     await fs.writeFile(
       path.join(transcriptDir, "turns.jsonl"),
       [
@@ -68,7 +61,7 @@ describe("jsonl replay", () => {
         `{"message":{"role":"user","content":"   "}}`,
         `{not-json`,
         `{"message":{"role":"assistant","content":"Ready."}}`,
-        `{"message":{"role":"user","content":[{"type":"text","text":"Plan the release"},{"type":"tool_result","content":"ignored"}]}}`,
+        `{"message":{"role":"user","content":["  Plan  ",null,0,{"type":"text","text":"the release","content":"ignored fallback"},{"type":"tool_result","text":"ignored text","content":"ignored"}]}}`,
         `{"role":"user","content":[{"type":"input_text","text":"Check the follow-up"}]}`,
       ].join("\n"),
       "utf8",
@@ -92,7 +85,7 @@ describe("jsonl replay", () => {
       expect.objectContaining({
         turn: 1,
         lineNumber: 6,
-        userText: "Plan the release",
+        userText: "Plan\nthe release",
       }),
       expect.objectContaining({
         turn: 2,
@@ -105,7 +98,7 @@ describe("jsonl replay", () => {
   });
 
   it("reports the earliest divergent turn using runtime parity drift classes", async () => {
-    const transcriptDir = await makeTempDir();
+    const transcriptDir = await tempDirs.makeTempDir("jsonl-replay-");
     await fs.writeFile(
       path.join(transcriptDir, "three-turns.jsonl"),
       [

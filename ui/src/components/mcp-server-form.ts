@@ -1,6 +1,9 @@
 import { html, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import type { McpServerTransport } from "../lib/config/mcp-servers.ts";
+
+registerMcpEnglish();
 
 export type McpServerForm = {
   name: string;
@@ -12,6 +15,7 @@ export function renderMcpServerForm(props: {
   busy: boolean;
   disabled?: boolean;
   blockedReason?: string | null;
+  autofocus?: boolean;
   onSubmit: (form: McpServerForm) => void;
   onCancel: () => void;
 }): TemplateResult {
@@ -40,6 +44,7 @@ export function renderMcpServerForm(props: {
           required
           placeholder="context7"
           autocomplete="off"
+          ?autofocus=${props.autofocus ?? false}
           title=${props.blockedReason ?? ""}
           ?disabled=${disabled}
         />

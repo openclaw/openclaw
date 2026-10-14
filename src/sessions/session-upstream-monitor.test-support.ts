@@ -1,4 +1,4 @@
-import type { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import type { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import type { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
@@ -8,6 +8,7 @@ import "./session-upstream-monitor.js";
 type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
+  signal?: AbortSignal;
   loadEntry?: typeof loadSessionEntry;
   isRunActive?: typeof isEmbeddedAgentRunActive;
   loadOwnRecentUserTexts?: (params: {

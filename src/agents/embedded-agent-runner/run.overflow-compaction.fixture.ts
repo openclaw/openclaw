@@ -3,15 +3,32 @@
  */
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
-import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./run/attempt-result.js";
+import { buildAttemptReplayMetadata } from "./run/attempt-terminal-evidence.js";
 
 const DEFAULT_OVERFLOW_ERROR_MESSAGE =
   "request_too_large: Request size exceeds model context window";
 
 export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSAGE): Error {
   return new Error(message);
+}
+
+type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
+  observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
+};
+
+export function makeMockRuntimePlan(): MockRuntimePlan {
+  return {
+    auth: {
+      authProfileProviderForAuth: "openai",
+      providerForAuth: "openai",
+    },
+    observability: {
+      harnessId: "codex",
+    },
+  };
 }
 
 export function makeCompactionSuccess(params: {
@@ -38,7 +55,7 @@ export function makeCompactionSuccess(params: {
   };
 }
 
-type AttemptResultOverrides = Partial<EmbeddedRunAttemptResult> &
+type AttemptResultOverrides = Partial<EmbeddedRunAttemptWithReceiptEvidence> &
   Parameters<typeof normalizeAgentRunAttemptTerminal>[0];
 
 function resolveFixtureTerminal(overrides: AttemptResultOverrides) {
@@ -47,7 +64,7 @@ function resolveFixtureTerminal(overrides: AttemptResultOverrides) {
 
 export function makeAttemptResult(
   overrides: AttemptResultOverrides = {},
-): EmbeddedRunAttemptResult {
+): EmbeddedRunAttemptWithReceiptEvidence {
   const toolMetas = (overrides.toolMetas ?? []).map((entry) =>
     Object.assign({}, entry, {
       replaySafe: entry.replaySafe ?? isAgentToolReplaySafe({ name: entry.toolName }),
@@ -104,65 +121,4 @@ export function makeAttemptResult(
     ...canonicalOverrides,
     toolMetas,
   };
-}
-
-type MockRunEmbeddedAttempt = {
-  mockResolvedValueOnce: (value: EmbeddedRunAttemptResult) => unknown;
-};
-
-type MockCompactDirect = {
-  mockResolvedValueOnce: (value: {
-    ok: true;
-    compacted: true;
-    result: {
-      summary: string;
-      firstKeptEntryId?: string;
-      tokensBefore?: number;
-      tokensAfter?: number;
-      sessionId?: string;
-      sessionFile?: string;
-      sessionTarget?: ContextEngineSessionTarget;
-    };
-  }) => unknown;
-};
-
-export function mockOverflowRetrySuccess(params: {
-  runEmbeddedAttempt: MockRunEmbeddedAttempt;
-  compactDirect: MockCompactDirect;
-  overflowMessage?: string;
-}) {
-  const overflowError = makeOverflowError(params.overflowMessage);
-
-  params.runEmbeddedAttempt.mockResolvedValueOnce(
-    makeAttemptResult({ terminal: { kind: "failed", source: "prompt", error: overflowError } }),
-  );
-  params.runEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
-
-  params.compactDirect.mockResolvedValueOnce(
-    makeCompactionSuccess({
-      summary: "Compacted session",
-      firstKeptEntryId: "entry-5",
-      tokensBefore: 150000,
-    }),
-  );
-
-  return overflowError;
-}
-
-export function queueOverflowAttemptWithOversizedToolOutput(
-  runEmbeddedAttempt: MockRunEmbeddedAttempt,
-  overflowError: Error = makeOverflowError(),
-): Error {
-  runEmbeddedAttempt.mockResolvedValueOnce(
-    makeAttemptResult({
-      terminal: { kind: "failed", source: "prompt", error: overflowError },
-      messagesSnapshot: [
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: "x".repeat(80_000) }],
-        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-      ],
-    }),
-  );
-  return overflowError;
 }

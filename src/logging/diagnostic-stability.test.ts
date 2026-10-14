@@ -1,17 +1,20 @@
 // Diagnostic stability tests cover stable diagnostic output under repeated events.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
+  recordDiagnosticExporterHealth,
   resetDiagnosticStabilityRecorderForTest,
   selectDiagnosticStabilitySnapshot,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
+  type DiagnosticExporterHealthUpdate,
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
 
@@ -32,87 +35,10 @@ describe("diagnostic stability recorder", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     stopDiagnosticStabilityRecorder();
     resetDiagnosticStabilityRecorderForTest();
     resetDiagnosticEventsForTest();
-  });
-
-  it("records a bounded payload-free projection of diagnostic events", async () => {
-    startDiagnosticStabilityRecorder();
-
-    emitDiagnosticEvent({
-      type: "webhook.error",
-      channel: "telegram",
-      chatId: "chat-secret",
-      error: "raw upstream error with content",
-    });
-    emitDiagnosticEvent({
-      type: "tool.loop",
-      sessionId: "session-1",
-      toolName: "poll",
-      level: "warning",
-      action: "warn",
-      detector: "known_poll_no_progress",
-      count: 3,
-      message: "message that should not be stored",
-    });
-    emitDiagnosticEvent({
-      type: "talk.event",
-      sessionId: "talk-session-secret",
-      turnId: "talk-turn-secret",
-      captureId: "talk-capture-secret",
-      talkEventType: "latency.metrics",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-      final: true,
-      durationMs: 12,
-      byteLength: 345,
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
-
-    expect(snapshot.count).toBe(3);
-    expectFields(snapshot.summary.byType, {
-      "webhook.error": 1,
-      "tool.loop": 1,
-      "talk.event": 1,
-    });
-    expectFields(snapshot.events[0], {
-      type: "webhook.error",
-      channel: "telegram",
-    });
-    expect(snapshot.events[0]).not.toHaveProperty("error");
-    expect(snapshot.events[0]).not.toHaveProperty("chatId");
-    expectFields(snapshot.events[1], {
-      type: "tool.loop",
-      toolName: "poll",
-      level: "warning",
-      action: "warn",
-      detector: "known_poll_no_progress",
-      count: 3,
-    });
-    expect(snapshot.events[1]).not.toHaveProperty("message");
-    expect(snapshot.events[1]).not.toHaveProperty("sessionId");
-    expect(snapshot.events[1]).not.toHaveProperty("sessionKey");
-    expectFields(snapshot.events[2], {
-      type: "talk.event",
-      talkEventType: "latency.metrics",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-      final: true,
-      durationMs: 12,
-      bytes: 345,
-    });
-    expect(snapshot.events[2]).not.toHaveProperty("sessionId");
-    expect(snapshot.events[2]).not.toHaveProperty("turnId");
-    expect(snapshot.events[2]).not.toHaveProperty("captureId");
   });
 
   it("keeps stable reason codes but drops free-form reason text", () => {
@@ -331,6 +257,8 @@ describe("diagnostic stability recorder", () => {
       requestPayloadBytes: 1234,
       responseStreamBytes: 567,
       timeToFirstByteMs: 89,
+      providerProcessingMs: 0.25,
+      providerWaitEstimateMs: 0.75,
       errorCategory: "TypeError",
       failureKind: "terminated",
       memory: {
@@ -341,9 +269,7 @@ describe("diagnostic stability recorder", () => {
         arrayBuffersBytes: 10,
       },
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -360,6 +286,8 @@ describe("diagnostic stability recorder", () => {
       requestBytes: 1234,
       responseBytes: 567,
       timeToFirstByteMs: 89,
+      providerProcessingMs: 0.25,
+      providerWaitEstimateMs: 0.75,
       reason: "TypeError",
       failureKind: "terminated",
       memory: {
@@ -451,6 +379,388 @@ describe("diagnostic stability recorder", () => {
     expectFields(snapshot.events[0], { seq: 6, queueDepth: 5 });
   });
 
+  it("keeps trusted exporter state sticky and rejects spoofed untrusted facts", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      status: "failure",
+      reason: "emit_failed",
+    });
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      endpointMode: "default_endpoint",
+      status: "started",
+      reason: "configured",
+    });
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      endpointMode: "default_endpoint",
+      status: "failure",
+      reason: "export_failed",
+      errorCategory: "https://collector.example/private",
+    });
+    for (let index = 0; index < 1005; index += 1) {
+      emitDiagnosticEvent({
+        type: "message.queued",
+        source: "test",
+        queueDepth: index,
+      });
+    }
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    });
+    const defaultSnapshot = getDiagnosticStabilitySnapshot({ limit: 1000 });
+
+    expect(snapshot.capacity).toBe(16);
+    expect(snapshot.count).toBe(1);
+    expect(snapshot.events).toEqual([
+      expect.objectContaining({
+        type: "telemetry.exporter",
+        source: "diagnostics-otel",
+        target: "traces",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "export_failed",
+        mode: "default_endpoint",
+      }),
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("collector.example");
+    expect(defaultSnapshot.count).toBe(1000);
+    expect(defaultSnapshot.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message.queued",
+          source: "test",
+        }),
+      ]),
+    );
+    expect(defaultSnapshot.events).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "telemetry.exporter" })]),
+    );
+  });
+
+  it("retains exporter ownership through recovery", async () => {
+    startDiagnosticStabilityRecorder();
+
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      endpointMode: "configured",
+      status: "started",
+      reason: "configured",
+    });
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "export_failed",
+    });
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      status: "recovered",
+      reason: "export_failed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({
+        type: "telemetry.exporter",
+        limit: 1000,
+      }).events,
+    ).toEqual([
+      expect.objectContaining({
+        target: "metrics",
+        outcome: "recovered",
+        reason: "export_failed",
+        mode: "configured",
+      }),
+    ]);
+  });
+
+  it("preserves explicit and dependency-default ownership on startup failures", async () => {
+    startDiagnosticStabilityRecorder();
+
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      endpointMode: "default_endpoint",
+      status: "failure",
+      reason: "start_failed",
+    });
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      endpointMode: "configured",
+      status: "failure",
+      reason: "start_failed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({
+        type: "telemetry.exporter",
+        limit: 1000,
+      }).events,
+    ).toEqual([
+      expect.objectContaining({
+        target: "traces",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "start_failed",
+        mode: "default_endpoint",
+      }),
+      expect.objectContaining({
+        target: "metrics",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "start_failed",
+        mode: "configured",
+      }),
+    ]);
+  });
+
+  it("keeps safe generic codes while dropping unsafe sources and redacting transports", async () => {
+    startDiagnosticStabilityRecorder();
+
+    recordDiagnosticExporterHealth("diagnostics-prometheus", {
+      signal: "metrics",
+      transport: "prometheus-scrape",
+      status: "started",
+      reason: "configured",
+    });
+    recordDiagnosticExporterHealth("custom-exporter", {
+      signal: "logs",
+      transport: "collector.internal:4318",
+      endpointMode:
+        "https://private.example/mode" as DiagnosticExporterHealthUpdate["endpointMode"],
+      status: "failure",
+      reason: "queue_full",
+      errorCategory: "TypeError",
+    });
+    recordDiagnosticExporterHealth("https://private.example/exporter", {
+      signal: "traces",
+      transport: "vendor-proto",
+      status: "failure",
+      reason: "export_failed",
+    });
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "private-signal",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "export_failed",
+    } as unknown as DiagnosticExporterHealthUpdate);
+    recordDiagnosticExporterHealth("diagnostics-otel", {
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "private-status",
+      reason: "export_failed",
+    } as unknown as DiagnosticExporterHealthUpdate);
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    });
+    expect(snapshot.events).toEqual([
+      expect.objectContaining({
+        source: "diagnostics-prometheus",
+        transport: "prometheus-scrape",
+      }),
+      expect.objectContaining({
+        source: "custom-exporter",
+        outcome: "failure",
+        reason: "queue_full",
+        errorCategory: "TypeError",
+      }),
+    ]);
+    expect(snapshot.events[1]).not.toHaveProperty("transport");
+    expect(snapshot.events[1]).not.toHaveProperty("mode");
+    expect(JSON.stringify(snapshot)).not.toContain("collector.internal");
+    expect(JSON.stringify(snapshot)).not.toContain("private.example");
+    expect(JSON.stringify(snapshot)).not.toContain("private-signal");
+    expect(JSON.stringify(snapshot)).not.toContain("private-status");
+  });
+
+  it("replaces retired routes while retaining every current logs both route", async () => {
+    startDiagnosticStabilityRecorder();
+    const emitExporter = (event: DiagnosticExporterHealthUpdate & { exporter: string }) => {
+      const { exporter, ...update } = event;
+      recordDiagnosticExporterHealth(exporter, update);
+    };
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "external-sdk",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events,
+    ).toEqual([
+      expect.objectContaining({
+        target: "traces",
+        transport: "external-sdk",
+        outcome: "started",
+      }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "external-sdk",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "unsupported_protocol",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    let events = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    }).events;
+    expect(events.filter((event) => event.target === "traces")).toEqual([
+      expect.objectContaining({
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "unsupported_protocol",
+      }),
+    ]);
+    expect(events.filter((event) => event.target === "logs")).toEqual([
+      expect.objectContaining({ transport: "otlp-http-protobuf", outcome: "started" }),
+      expect.objectContaining({ transport: "stdout", outcome: "started" }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events.filter(
+        (event) => event.target === "traces",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        transport: "otlp-http-protobuf",
+        outcome: "started",
+      }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    events = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    }).events;
+    expect(events.filter((event) => event.target === "logs")).toEqual([
+      expect.objectContaining({ transport: "stdout", outcome: "started" }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    events = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    }).events;
+    expect(events.filter((event) => event.target === "logs")).toEqual([
+      expect.objectContaining({ transport: "otlp-http-protobuf", outcome: "started" }),
+      expect.objectContaining({ transport: "stdout", outcome: "started" }),
+    ]);
+  });
+
   it("filters snapshots by type, sequence, and limit", () => {
     startDiagnosticStabilityRecorder();
 
@@ -471,6 +781,43 @@ describe("diagnostic stability recorder", () => {
       type: "payload.large",
       action: "chunked",
     });
+  });
+
+  it("records sanitized trusted model request instrumentation", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "private-run-id",
+      callId: "private-call-id",
+      sessionKey: "private-session-key",
+      provider: "openai",
+      model: "gpt-5.4",
+      observationUnit: "request",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticStabilitySnapshot({ type: "model.call.started" }).events).toEqual([
+      expect.objectContaining({
+        type: "model.call.started",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ]);
+    expect(JSON.stringify(getDiagnosticStabilitySnapshot())).not.toContain("private-");
+  });
+
+  it("rejects trusted non-model events before copying their payloads", () => {
+    startDiagnosticStabilityRecorder();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage: { total: 42 } });
+    expect(clone).not.toHaveBeenCalled();
+    emitDiagnosticEvent({ type: "model.usage", usage: { total: 7 } });
+
+    expect(getDiagnosticStabilitySnapshot().events).toEqual([
+      expect.objectContaining({ type: "model.usage", seq: 2, usage: { total: 7 } }),
+    ]);
   });
 
   it("keeps async queue drop summaries after drained queued events for sinceSeq polling", async () => {
@@ -592,6 +939,61 @@ describe("diagnostic stability recorder", () => {
     );
     expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: -1 })).toThrow(
       "sinceSeq must be a non-negative integer",
+    );
+  });
+
+  it("rejects blank stability query limit, sinceSeq, and type", () => {
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: "" })).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: "" })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "" })).toThrow(
+      "type must be a non-empty string",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "   " })).toThrow(
+      "type must be a non-empty string",
+    );
+  });
+
+  it("rejects non-decimal stability query integer strings", () => {
+    for (const malformed of ["0x2", "1e2", "+5", " 5 "]) {
+      expect(() => normalizeDiagnosticStabilityQuery({ limit: malformed })).toThrow(
+        "limit must be a non-negative integer",
+      );
+      expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: malformed })).toThrow(
+        "sinceSeq must be a non-negative integer",
+      );
+    }
+    expect(normalizeDiagnosticStabilityQuery({ sinceSeq: "0" }).sinceSeq).toBe(0);
+    expect(normalizeDiagnosticStabilityQuery({ limit: "42" }).limit).toBe(42);
+    expect(normalizeDiagnosticStabilityQuery({ limit: 7 }).limit).toBe(7);
+  });
+
+  it("rejects unsafe integers for stability query limit and sinceSeq", () => {
+    const safe = Number.MAX_SAFE_INTEGER;
+    const unsafe = safe + 1;
+    // sinceSeq has no upper bound: safe integers are accepted, unsafe rejected.
+    expect(normalizeDiagnosticStabilityQuery({ sinceSeq: safe }).sinceSeq).toBe(safe);
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: unsafe })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    expect(normalizeDiagnosticStabilityQuery({ sinceSeq: String(safe) }).sinceSeq).toBe(safe);
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: String(unsafe) })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    // limit is additionally capped at 1000: a safe but out-of-range value hits
+    // the range error, while an unsafe integer is rejected by the integer gate
+    // first, identically for numeric and string input.
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: safe })).toThrow(
+      "limit must be between 1 and 1000",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: unsafe })).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: String(unsafe) })).toThrow(
+      "limit must be a non-negative integer",
     );
   });
 });

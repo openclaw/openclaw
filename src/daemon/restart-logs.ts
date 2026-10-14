@@ -1,9 +1,8 @@
-/** Resolves daemon log paths and shell snippets for restart handoff diagnostics. */
 import fs from "node:fs";
 import path from "node:path";
 import { quoteCmdScriptArg } from "./cmd-argv.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import type { GatewayLifecycleMutationMode, GatewayServiceEnv } from "./service-types.js";
 
 const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
@@ -24,21 +23,10 @@ type GatewayLogPaths = {
   stderrPath: string;
 };
 
-// Restart logs capture supervisor handoff output when normal service logs are unavailable.
-function resolveGatewayLogPrefix(env: GatewayServiceEnv): string {
-  return env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
-}
-
-function resolveMacLaunchAgentLogPrefix(env: GatewayServiceEnv): string {
-  return (
-    env.OPENCLAW_LOG_PREFIX?.trim() || `gateway${resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE)}`
-  );
-}
-
 export function resolveGatewayLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
   const stateDir = resolveGatewayStateDir(env);
   const logDir = path.join(stateDir, "logs");
-  const prefix = resolveGatewayLogPrefix(env);
+  const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
   return {
     logDir,
     stdoutPath: path.join(logDir, `${prefix}.log`),
@@ -46,26 +34,18 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): GatewayLogPaths 
   };
 }
 
-function resolveMacLaunchAgentLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
-  const home = resolveHomeDir(env).replaceAll("\\", "/");
+/** launchd supervisors write outside the state directory in ~/Library/Logs. */
+export function resolveGatewaySupervisorLogPaths(env: GatewayServiceEnv): GatewayLogPaths {
+  const home = resolveDaemonHomeDir(env).replaceAll("\\", "/");
   const logDir = path.posix.join(home, "Library", "Logs", "openclaw");
-  const prefix = resolveMacLaunchAgentLogPrefix(env);
+  const prefix =
+    env.OPENCLAW_LOG_PREFIX?.trim() ||
+    `gateway${resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE)}`;
   return {
     logDir,
     stdoutPath: path.posix.join(logDir, `${prefix}.log`),
     stderrPath: path.posix.join(logDir, `${prefix}.err.log`),
   };
-}
-
-export function resolveGatewaySupervisorLogPaths(
-  env: GatewayServiceEnv,
-  options?: { platform?: NodeJS.Platform },
-): GatewayLogPaths {
-  // launchd supervisors write to ~/Library/Logs; systemd and schtasks use the
-  // OpenClaw state dir so generated service users can create the directory.
-  return (options?.platform ?? process.platform) === "darwin"
-    ? resolveMacLaunchAgentLogPaths(env)
-    : resolveGatewayLogPaths(env);
 }
 
 export function resolveGatewayRestartLogPath(env: GatewayServiceEnv): string {
@@ -97,13 +77,13 @@ export function appendGatewayLifecycleAuditLog(
   }
 }
 
-export function shellEscapeRestartLogValue(value: string): string {
+function shellEscapeRestartLogValue(value: string): string {
   return value.replace(/'/g, "'\\''");
 }
 
 export function renderPosixRestartLogSetup(env: GatewayServiceEnv): string {
-  const logDir = path.dirname(resolveGatewayRestartLogPath(env));
   const logPath = resolveGatewayRestartLogPath(env);
+  const logDir = path.dirname(logPath);
   const escapedLogDir = shellEscapeRestartLogValue(logDir);
   const escapedLogPath = shellEscapeRestartLogValue(logPath);
   // Logging is best-effort; restart handoffs must still run when the log path

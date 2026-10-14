@@ -4,26 +4,16 @@ import {
   streamSimple,
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
-  buildManifestModelProviderConfig,
-  readManifestProviderDefaultModelRef,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
+  buildAssistantMessage,
+  createEmptyTransportUsage,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const GROQ_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "groq")!;
 const GROQ_OVERSIZED_RECOVERY_MODEL_ID = "llama-3.3-70b-versatile";
 const GROQ_FALLBACK_MAX_TOKENS = 1_024;
-
-function buildGroqCatalogProvider() {
-  return buildManifestModelProviderConfig({
-    providerId: "groq",
-    catalog: manifest.modelCatalog.providers.groq,
-  });
-}
 
 function hasWireMaxTokens(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -94,7 +84,6 @@ function wrapGroqOversizedRequestRecovery(
     // retain the caller-visible throw semantics of the underlying transport.
     const initial = underlying(model, context, options);
     const output = createAssistantMessageEventStream();
-    const writable = output as unknown as { push(event: unknown): void; end(): void };
 
     void (async () => {
       try {
@@ -106,40 +95,32 @@ function wrapGroqOversizedRequestRecovery(
             retryWithoutTools = true;
             break;
           }
-          writable.push(event);
+          output.push(event);
           forwarded = true;
         }
         if (retryWithoutTools) {
           const fallback = await Promise.resolve(withoutTools(model, context, options));
           for await (const event of fallback) {
-            writable.push(event);
+            output.push(event);
           }
         }
       } catch (error) {
-        writable.push({
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        output.push({
           type: "error",
           reason: "error",
           error: {
-            role: "assistant",
-            content: [],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "error",
-            errorMessage: error instanceof Error ? error.message : String(error),
-            timestamp: Date.now(),
+            ...buildAssistantMessage({
+              model,
+              content: [],
+              usage: createEmptyTransportUsage(),
+              stopReason: "error",
+            }),
+            errorMessage,
           },
         });
       } finally {
-        writable.end();
+        output.end();
       }
     })();
 
@@ -147,61 +128,27 @@ function wrapGroqOversizedRequestRecovery(
   };
 }
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: "groq",
   name: "Groq Provider",
   description: "Bundled Groq provider plugin",
+  manifest,
+  provider: {
+    label: "Groq",
+    docsPath: "/providers/groq",
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
+    wrapStreamFn: (ctx) =>
+      wrapGroqOversizedRequestRecovery(
+        ctx.streamFn,
+        // Older compatible hosts omit this provenance. Only a known discovered default
+        // is safe to replace; an unknown value could be a user-configured cap.
+        ctx.modelId === GROQ_OVERSIZED_RECOVERY_MODEL_ID &&
+          !hasExplicitMaxTokens(ctx.extraParams) &&
+          !hasExplicitMaxTokens(ctx.model?.params) &&
+          ctx.model?.maxTokensSource === "discovered",
+      ),
+  },
   register(api) {
-    api.registerProvider({
-      id: "groq",
-      label: "Groq",
-      docsPath: "/providers/groq",
-      envVars: ["GROQ_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: "groq",
-          methodId: "api-key",
-          label: "Groq API key",
-          hint: "Fast OpenAI-compatible inference",
-          optionKey: "groqApiKey",
-          flagName: "--groq-api-key",
-          envVar: "GROQ_API_KEY",
-          promptMessage: "Enter Groq API key",
-          defaultModel: GROQ_DEFAULT_MODEL_REF,
-          wizard: {
-            choiceId: "groq-api-key",
-            choiceLabel: "Groq API key",
-            choiceHint: "Fast OpenAI-compatible inference",
-            groupId: "groq",
-            groupLabel: "Groq",
-            groupHint: "Fast OpenAI-compatible inference",
-          },
-        }),
-      ],
-      catalog: {
-        order: "simple",
-        run: (ctx) =>
-          buildOpenAICompatibleProviderCatalog({
-            ctx,
-            providerId: "groq",
-            buildProvider: buildGroqCatalogProvider,
-          }),
-      },
-      staticCatalog: {
-        order: "simple",
-        run: async () => ({ provider: buildGroqCatalogProvider() }),
-      },
-      wrapStreamFn: (ctx) =>
-        wrapGroqOversizedRequestRecovery(
-          ctx.streamFn,
-          // Older compatible hosts omit this provenance. Only a known discovered default
-          // is safe to replace; an unknown value could be a user-configured cap.
-          ctx.modelId === GROQ_OVERSIZED_RECOVERY_MODEL_ID &&
-            !hasExplicitMaxTokens(ctx.extraParams) &&
-            !hasExplicitMaxTokens(ctx.model?.params) &&
-            ctx.model?.maxTokensSource === "discovered",
-        ),
-    });
     api.registerMediaUnderstandingProvider(groqMediaUnderstandingProvider);
   },
 });

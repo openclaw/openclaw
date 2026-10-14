@@ -4,11 +4,11 @@ import {
   beginPendingSubmit,
   clearPendingSubmit,
   clearPendingSubmitDraft,
-  disconnectedTuiChatSubmitMessage,
   getPendingSubmitAcceptedRunId,
   getPendingSubmitDraft,
   reconcilePendingSubmitHistory,
   resolveTuiChatSubmitAdmission,
+  tuiSessionActionBlockedMessage,
   type TuiPendingSubmit,
 } from "./tui-submit-state.js";
 
@@ -22,15 +22,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: null,
       message: "hello",
-      expected: "allowed",
-    },
-    {
-      name: "active run",
-      isConnected: true,
-      activeChatRunId: "run-active",
-      pendingSubmit: null,
-      message: "follow up",
-      expected: "allowed",
+      expected: { status: "allowed" },
     },
     {
       name: "disconnected",
@@ -38,7 +30,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: null,
       message: "send after reconnect",
-      expected: "disconnected",
+      expected: { status: "blocked", reason: "disconnected" },
     },
     {
       name: "sending",
@@ -46,23 +38,7 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: { phase: "sending", runId: "run-send", draftText: "hello" },
       message: "another",
-      expected: "pending",
-    },
-    {
-      name: "accepted",
-      isConnected: true,
-      activeChatRunId: null,
-      pendingSubmit: { phase: "accepted", runId: "run-pending", draftText: "hello" },
-      message: "another",
-      expected: "pending",
-    },
-    {
-      name: "stop active run",
-      isConnected: true,
-      activeChatRunId: "run-active",
-      pendingSubmit: null,
-      message: "please stop",
-      expected: "allowed",
+      expected: { status: "blocked", reason: "pending" },
     },
     {
       name: "stop accepted run",
@@ -70,10 +46,17 @@ describe("resolveTuiChatSubmitAdmission", () => {
       activeChatRunId: null,
       pendingSubmit: { phase: "accepted", runId: "run-pending", draftText: null },
       message: "please stop",
-      expected: "allowed",
+      expected: { status: "allowed" },
     },
-  ] as const)("returns $expected while $name", ({ expected, ...params }) => {
-    expect(resolveTuiChatSubmitAdmission(params)).toBe(expected);
+  ] as const)("resolves admission while $name", ({ expected, ...params }) => {
+    expect(
+      resolveTuiChatSubmitAdmission({
+        ...params,
+        historyLoaded: true,
+        transition: { active: null, boundary: null, epoch: 0 },
+        allowDuringPending: false,
+      }),
+    ).toEqual(expected);
   });
 });
 
@@ -132,22 +115,6 @@ describe("pending submit transitions", () => {
     expect(state.pendingSubmit).toBeNull();
   });
 
-  it("does not accept an already accepted submit again", () => {
-    const state: State = {
-      pendingSubmit: { phase: "accepted", runId: "run-accepted", draftText: null },
-    };
-
-    expect(
-      acceptPendingSubmit({
-        state,
-        provisionalRunId: "run-accepted",
-        acceptedRunId: "run-other",
-        preserveDraft: false,
-      }),
-    ).toBe(false);
-    expect(state.pendingSubmit?.runId).toBe("run-accepted");
-  });
-
   it("keeps draft ownership while a submit is still sending", () => {
     const state: State = {
       pendingSubmit: { phase: "sending", runId: "run-sending", draftText: "hello" },
@@ -167,13 +134,13 @@ describe("pending submit transitions", () => {
   });
 });
 
-describe("disconnectedTuiChatSubmitMessage", () => {
+describe("tuiSessionActionBlockedMessage", () => {
   it("uses the connection message for the selected runtime", () => {
-    expect(disconnectedTuiChatSubmitMessage(false)).toBe(
-      "not connected to gateway — message not sent",
-    );
-    expect(disconnectedTuiChatSubmitMessage(true)).toBe(
-      "local runtime not ready — message not sent",
-    );
+    expect(
+      tuiSessionActionBlockedMessage({ status: "blocked", reason: "disconnected" }, false),
+    ).toBe("not connected to gateway — message not sent");
+    expect(
+      tuiSessionActionBlockedMessage({ status: "blocked", reason: "disconnected" }, true),
+    ).toBe("local runtime not ready — message not sent");
   });
 });

@@ -1,0 +1,221 @@
+import { browserElement, browserTarget, requireWindowTarget } from "./action-targets.js";
+import type { CuaComputerActParams } from "./action-targets.js";
+import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
+import {
+  browserBinding,
+  browserDialogEnvelope,
+  browserObservation,
+  browserToolEnvelope,
+  callWindowTool,
+} from "./driver-result.js";
+import type { CuaExecutionResources } from "./execution-resources.js";
+import {
+  invalidateBrowserObservation,
+  resolveBrowserObservation,
+  resolveDialogRef,
+  resolveWindowRef,
+  verifyGeneration,
+  type CuaFrameState,
+} from "./frame.js";
+
+export async function handleBrowserAct(
+  driver: CuaDriverSession,
+  state: CuaFrameState,
+  resources: CuaExecutionResources,
+  input: CuaComputerActParams,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  switch (input.action) {
+    case "get_browser_state": {
+      verifyGeneration(state, driver.generation);
+      if (input.windowRef) {
+        const window = resolveWindowRef(state, input.windowRef);
+        const result = await callWindowTool(
+          driver,
+          state,
+          "get_browser_state",
+          { pid: window.pid, window_id: window.windowId },
+          signal,
+        );
+        return JSON.stringify(browserBinding(result, state, input.windowRef));
+      }
+      const target = browserTarget(driver, state, input);
+      const snapshotFormat = input.snapshotFormat ?? "dom_refs_v1";
+      if (
+        snapshotFormat === "dom_refs_v1" &&
+        (input.elementRef || input.query || input.continuation)
+      ) {
+        throw new Error(
+          "COMPUTER_INVALID_REQUEST: elementRef, query, and continuation require snapshotFormat=semantic_v2",
+        );
+      }
+      const scopeRef = browserElement(state, input, target);
+      const result = await callWindowTool(
+        driver,
+        state,
+        "get_browser_state",
+        {
+          target_id: target.targetId,
+          tab_id: target.tabId,
+          snapshot_format: snapshotFormat,
+          include_screenshot: input.includeScreenshot ?? true,
+          ...(scopeRef ? { scope_ref: scopeRef } : {}),
+          ...(input.query ? { query: input.query } : {}),
+          ...(input.continuation ? { continuation: input.continuation } : {}),
+        },
+        signal,
+      );
+      return JSON.stringify(browserObservation(result, state, target));
+    }
+    case "browser_prepare": {
+      const { target } = requireWindowTarget(driver, state, input);
+      const profile = input.profile ?? "isolated_new";
+      if (profile === "isolated_named" && !input.profileName) {
+        throw new Error(
+          "COMPUTER_INVALID_REQUEST: profileName is required for an isolated_named browser profile",
+        );
+      }
+      if (profile === "isolated_new" && input.profileName) {
+        throw new Error(
+          "COMPUTER_INVALID_REQUEST: profileName is valid only for an isolated_named browser profile",
+        );
+      }
+      const result = await callWindowTool(
+        driver,
+        state,
+        "browser_prepare",
+        {
+          pid: target.pid,
+          allow_launch: true,
+          profile: {
+            mode: profile,
+            ...(input.profileName ? { name: input.profileName } : {}),
+          },
+        },
+        signal,
+      );
+      return JSON.stringify(browserToolEnvelope(result, "browser_prepare"));
+    }
+    case "browser_navigate":
+    case "browser_click":
+    case "browser_type":
+    case "browser_pointer": {
+      const target = browserTarget(driver, state, input);
+      const args: Record<string, unknown> = {
+        target_id: target.targetId,
+        tab_id: target.tabId,
+      };
+      if (input.action === "browser_navigate") {
+        args.url = input.url;
+      } else if (input.action === "browser_type") {
+        Object.assign(args, {
+          ref: browserElement(state, input, target)!,
+          text: input.text,
+          ...(input.mode ? { mode: input.mode } : {}),
+          ...(input.replace !== undefined ? { replace: input.replace } : {}),
+        });
+      } else {
+        resolveBrowserObservation(state, input.observationId!, target.browserRef, target.pageRef);
+        const ref = browserElement(state, input, target);
+        if (input.action === "browser_pointer") {
+          const destinationRef = browserElement(state, input, target, input.destinationElementRef);
+          Object.assign(args, {
+            action: input.pointerAction,
+            ...(destinationRef ? { destination_ref: destinationRef } : {}),
+            ...(input.toX !== undefined ? { to_x: input.toX } : {}),
+            ...(input.toY !== undefined ? { to_y: input.toY } : {}),
+            ...(input.deltaX !== undefined ? { delta_x: input.deltaX } : {}),
+            ...(input.deltaY !== undefined ? { delta_y: input.deltaY } : {}),
+          });
+        }
+        Object.assign(args, {
+          ...(ref ? { ref } : {}),
+          ...(input.x !== undefined ? { x: input.x } : {}),
+          ...(input.y !== undefined ? { y: input.y } : {}),
+          ...(input.inputRoute ? { input_route: input.inputRoute } : {}),
+        });
+      }
+      const result = await callWindowTool(driver, state, input.action, args, signal);
+      if (input.action === "browser_navigate") {
+        invalidateBrowserObservation(state);
+      }
+      return JSON.stringify(browserToolEnvelope(result, input.action));
+    }
+    case "browser_dialog": {
+      const target = browserTarget(driver, state, input);
+      const dialogId =
+        input.dialogAction === "inspect"
+          ? undefined
+          : resolveDialogRef(state, input.dialogRef!, target.browserRef, target.pageRef);
+      const result = await callWindowTool(
+        driver,
+        state,
+        "browser_dialog",
+        {
+          target_id: target.targetId,
+          tab_id: target.tabId,
+          action: input.dialogAction,
+          ...(dialogId ? { dialog_id: dialogId } : {}),
+          ...(input.promptText !== undefined ? { prompt_text: input.promptText } : {}),
+          ...(input.deliveryMode ? { delivery_mode: input.deliveryMode } : {}),
+        },
+        signal,
+      );
+      if (input.dialogAction !== "inspect") {
+        state.dialog = undefined;
+      }
+      return JSON.stringify(browserDialogEnvelope(result, state, target));
+    }
+    case "browser_set_input_files":
+    case "browser_download": {
+      const target = browserTarget(driver, state, input);
+      const ref = browserElement(state, input, target)!;
+      const resource =
+        input.action === "browser_download"
+          ? await resources.createDirectory("browser-download")
+          : undefined;
+      const resourceArgs = resource
+        ? { destination_root: resource.path }
+        : { files: await resources.resolveFiles(input.resourceHandles ?? []) };
+      let result: CuaToolResult;
+      try {
+        result = await callWindowTool(
+          driver,
+          state,
+          input.action,
+          {
+            target_id: target.targetId,
+            tab_id: target.tabId,
+            ref,
+            ...resourceArgs,
+          },
+          signal,
+        );
+      } catch (error) {
+        if (resource) {
+          await resources.discard(resource.handle).catch(() => {});
+        }
+        signal?.throwIfAborted();
+        throw new Error(
+          `COMPUTER_DRIVER_ERROR: ${input.action} failed; inspect node logs and resource state before retrying`,
+          { cause: error },
+        );
+      }
+      const envelope = browserToolEnvelope(result, input.action);
+      if (!resource) {
+        return JSON.stringify(envelope);
+      }
+      const fileResourceHandles = await resources.captureFiles(resource.handle);
+      return JSON.stringify({
+        ...envelope,
+        details: {
+          ...envelope.details,
+          resourceHandle: resource.handle,
+          fileResourceHandles,
+        },
+      });
+    }
+    default:
+      return undefined;
+  }
+}

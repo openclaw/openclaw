@@ -29,46 +29,7 @@ import { listReactionsFeishu } from "./reactions.js";
 describe("listReactionsFeishu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("reads the SDK's nested operator ownership fields", async () => {
-    listMock.mockResolvedValue({
-      code: 0,
-      data: {
-        items: [
-          {
-            reaction_id: "r-app",
-            reaction_type: { emoji_type: "THUMBSUP" },
-            operator: { operator_type: "app", operator_id: "cli_main" },
-          },
-          {
-            reaction_id: "r-user",
-            reaction_type: { emoji_type: "HEART" },
-            operator: { operator_type: "user", operator_id: "ou_user" },
-          },
-        ],
-      },
-    });
-
-    await expect(
-      listReactionsFeishu({
-        cfg: {} as ClawdbotConfig,
-        messageId: "om_message",
-      }),
-    ).resolves.toEqual([
-      {
-        reactionId: "r-app",
-        emojiType: "THUMBSUP",
-        operatorType: "app",
-        operatorId: "cli_main",
-      },
-      {
-        reactionId: "r-user",
-        emojiType: "HEART",
-        operatorType: "user",
-        operatorId: "ou_user",
-      },
-    ]);
+    listMock.mockReset();
   });
 
   it("fails closed for missing or unrecognized operator metadata", async () => {
@@ -108,5 +69,102 @@ describe("listReactionsFeishu", () => {
         operatorId: "tenant-1",
       },
     ]);
+  });
+
+  it("drains every reaction page while retaining the requested emoji filter", async () => {
+    listMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            {
+              reaction_id: "r-first",
+              reaction_type: { emoji_type: "HEART" },
+              operator: { operator_type: "user", operator_id: "ou_user" },
+            },
+          ],
+          has_more: true,
+          page_token: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            {
+              reaction_id: "r-bot",
+              reaction_type: { emoji_type: "HEART" },
+              operator: { operator_type: "app", operator_id: "cli_main" },
+            },
+          ],
+          has_more: false,
+        },
+      });
+
+    const reactions = await listReactionsFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_message",
+      emojiType: "HEART",
+    });
+
+    expect(reactions).toEqual([
+      {
+        reactionId: "r-first",
+        emojiType: "HEART",
+        operatorType: "user",
+        operatorId: "ou_user",
+      },
+      {
+        reactionId: "r-bot",
+        emojiType: "HEART",
+        operatorType: "app",
+        operatorId: "cli_main",
+      },
+    ]);
+    expect(listMock).toHaveBeenNthCalledWith(1, {
+      path: { message_id: "om_message" },
+      params: { reaction_type: "HEART" },
+    });
+    expect(listMock).toHaveBeenNthCalledWith(2, {
+      path: { message_id: "om_message" },
+      params: { reaction_type: "HEART", page_token: "page-2" },
+    });
+  });
+
+  it("rejects a continuation response without its required page token", async () => {
+    listMock.mockResolvedValue({
+      code: 0,
+      data: { items: [], has_more: true },
+    });
+
+    await expect(
+      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
+    ).rejects.toThrow(/page token/i);
+    expect(listMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects repeated reaction page tokens", async () => {
+    listMock.mockResolvedValue({
+      code: 0,
+      data: { items: [], has_more: true, page_token: "same-page" },
+    });
+
+    await expect(
+      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
+    ).rejects.toThrow(/repeated page token/i);
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates API failures from continuation pages", async () => {
+    listMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { items: [], has_more: true, page_token: "page-2" },
+      })
+      .mockResolvedValueOnce({ code: 9999, msg: "continuation unavailable" });
+
+    await expect(
+      listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
+    ).rejects.toThrow("Feishu list reactions failed: continuation unavailable");
   });
 });

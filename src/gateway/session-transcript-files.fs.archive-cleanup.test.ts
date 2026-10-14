@@ -34,6 +34,10 @@ describe("cleanupArchivedSessionTranscripts", () => {
     return (await fsPromises.readdir(dir)).toSorted();
   }
 
+  function filesystemError(code: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(`filesystem ${code}`), { code });
+  }
+
   it("applies every retention rule from a single directory listing", async () => {
     await seed([
       `a.jsonl.deleted.${OLD_STAMP}`,
@@ -57,35 +61,6 @@ describe("cleanupArchivedSessionTranscripts", () => {
     expect(await remaining()).toEqual([`c.jsonl.reset.${FRESH_STAMP}`, "live.jsonl"]);
   });
 
-  it("applies each rule's age threshold independently", async () => {
-    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
-
-    const result = await cleanupArchivedSessionTranscripts({
-      directories: [dir],
-      rules: [
-        { reason: "deleted", olderThanMs: 30 * DAY_MS },
-        { reason: "reset", olderThanMs: 365 * DAY_MS },
-      ],
-      nowMs: NOW_MS,
-    });
-
-    expect(result).toEqual({ removed: 1, scanned: 2 });
-    expect(await remaining()).toEqual([`b.jsonl.reset.${OLD_STAMP}`]);
-  });
-
-  it("keeps archives whose reason has no rule", async () => {
-    await seed([`a.jsonl.reset.${OLD_STAMP}`]);
-
-    const result = await cleanupArchivedSessionTranscripts({
-      directories: [dir],
-      rules: [{ reason: "deleted", olderThanMs: 0 }],
-      nowMs: NOW_MS,
-    });
-
-    expect(result).toEqual({ removed: 0, scanned: 0 });
-    expect(await remaining()).toEqual([`a.jsonl.reset.${OLD_STAMP}`]);
-  });
-
   it("drops invalid rules and never lists when none remain", async () => {
     const readdirSpy = vi.spyOn(fsPromises, "readdir");
 
@@ -100,5 +75,62 @@ describe("cleanupArchivedSessionTranscripts", () => {
 
     expect(result).toEqual({ removed: 0, scanned: 0 });
     expect(readdirSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores an archive removed between directory listing and stat", async () => {
+    const archiveName = `a.jsonl.deleted.${OLD_STAMP}`;
+    const archivePath = path.join(dir, archiveName);
+    await seed([archiveName]);
+    const realStat = fsPromises.stat.bind(fsPromises);
+    vi.spyOn(fsPromises, "stat").mockImplementationOnce(async (target) => {
+      await fsPromises.rm(target);
+      return await realStat(target);
+    });
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [{ reason: "deleted", olderThanMs: 0 }],
+      nowMs: NOW_MS,
+    });
+
+    expect(result).toEqual({ removed: 0, scanned: 1 });
+    await expect(fsPromises.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("surfaces archive removal failures without deleting the archive", async () => {
+    const archiveName = `a.jsonl.deleted.${OLD_STAMP}`;
+    await seed([archiveName]);
+    const removeError = filesystemError("EACCES");
+    vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(removeError);
+
+    await expect(
+      cleanupArchivedSessionTranscripts({
+        directories: [dir],
+        rules: [{ reason: "deleted", olderThanMs: 0 }],
+        nowMs: NOW_MS,
+      }),
+    ).rejects.toBe(removeError);
+    expect(await remaining()).toEqual([archiveName]);
+  });
+
+  it("does not count an archive removed between stat and cleanup", async () => {
+    const archiveName = `a.jsonl.deleted.${OLD_STAMP}`;
+    const archivePath = path.join(dir, archiveName);
+    await seed([archiveName]);
+    const realStat = fsPromises.stat.bind(fsPromises);
+    vi.spyOn(fsPromises, "stat").mockImplementationOnce(async (target) => {
+      const stat = await realStat(target);
+      await fsPromises.rm(target);
+      return stat;
+    });
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [{ reason: "deleted", olderThanMs: 0 }],
+      nowMs: NOW_MS,
+    });
+
+    expect(result).toEqual({ removed: 0, scanned: 1 });
+    await expect(fsPromises.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

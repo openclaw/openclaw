@@ -1,4 +1,3 @@
-// Discord plugin module owns the reply pipeline, draft preview, and delivery correlation setup.
 import {
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
@@ -6,30 +5,91 @@ import {
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
-import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import type { RequestClient } from "../internal/discord.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { formatDiscordReplySkip } from "./reply-delivery.js";
 import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 
 type DiscordMessageProcessContext = NonNullable<
   Awaited<ReturnType<typeof buildDiscordMessageProcessContext>>
 >;
 
+export function formatDiscordGroupThreadReply(text: string, participant: { name: string }): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}
+
+export function formatDiscordReasoningQuote(quoteText: string): string | undefined {
+  const lines = quoteText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    return undefined;
+  }
+  lines[0] = `🧠 ${lines[0]}`;
+  return lines.map((line) => `> ${line}`).join("\n");
+}
+
+export function createDiscordBeforePayloadDelivery(params: {
+  abortSignal?: AbortSignal;
+  getDeliverTarget: () => string;
+  sessionKey?: string;
+  draftPreview: ReturnType<typeof createDiscordDraftPreviewController>;
+  isFallbackOnlyToolWarningFinal: (payload: ReplyPayload) => boolean;
+}) {
+  return (payload: ReplyPayload, info: { kind: ReplyDispatchKind }): ReplyPayload | null => {
+    if (params.abortSignal?.aborted) {
+      logVerbose(
+        formatDiscordReplySkip({
+          kind: info.kind,
+          reason: "aborted before delivery",
+          target: params.getDeliverTarget(),
+          sessionKey: params.sessionKey,
+        }),
+      );
+      return null;
+    }
+    if (payload.isReasoning || payload.isCommentary) {
+      return payload;
+    }
+    if (
+      params.draftPreview.draftStream &&
+      params.draftPreview.isProgressMode &&
+      info.kind === "block" &&
+      !resolveSendableOutboundReplyParts(payload).hasMedia &&
+      !payload.isError
+    ) {
+      return null;
+    }
+    if (info.kind === "final" && !params.isFallbackOnlyToolWarningFinal(payload)) {
+      params.draftPreview.freezeProgress();
+    }
+    return payload;
+  };
+}
+
 export function createDiscordMessageReplyRuntime(params: {
   ctx: DiscordMessagePreflightContext;
   processContext: DiscordMessageProcessContext;
+  replyReference: DiscordMessageProcessContext["replyPlan"]["replyReference"];
   sourceRepliesAreToolOnly: boolean;
   shouldDisableCoreTypingKeepalive: boolean;
   isRoomEvent: boolean;
   dispatchStartedAt: number;
   feedbackRest: RequestClient;
   deliveryRest: RequestClient;
+  onFinalReplyStart?: () => void;
+  onFinalReplyDelivered?: () => void;
 }) {
   const { ctx, processContext } = params;
   const {
@@ -44,9 +104,9 @@ export function createDiscordMessageReplyRuntime(params: {
     isDirectMessage,
     route,
   } = ctx;
-  const { ctxPayload, deliverTarget, replyReference } = processContext;
-  const typingChannelId = deliverTarget.startsWith("channel:")
-    ? deliverTarget.slice("channel:".length)
+  const { ctxPayload, replyPlan } = processContext;
+  const deliverChannelId = replyPlan.deliverTarget.startsWith("channel:")
+    ? replyPlan.deliverTarget.slice("channel:".length)
     : messageChannelId;
   let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
   const getTypingFeedback = () =>
@@ -54,7 +114,7 @@ export function createDiscordMessageReplyRuntime(params: {
       cfg,
       token,
       accountId,
-      channelId: typingChannelId,
+      channelId: deliverChannelId,
       rest: params.feedbackRest,
       log: logVerbose,
       keepaliveIntervalMs: params.shouldDisableCoreTypingKeepalive ? undefined : 0,
@@ -91,7 +151,7 @@ export function createDiscordMessageReplyRuntime(params: {
   };
   const beginDeliveryCorrelation = () =>
     params.isRoomEvent
-      ? beginDiscordInboundEventDeliveryCorrelation(
+      ? discordInboundEventDelivery.begin(
           ctxPayload.SessionKey,
           {
             outboundTo: messageChannelId,
@@ -110,7 +170,7 @@ export function createDiscordMessageReplyRuntime(params: {
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-      const sessionEntry = getSessionEntry({
+      const sessionEntry = await getSessionEntryAsync({
         agentId: route.agentId,
         sessionKey,
         storePath,
@@ -134,21 +194,21 @@ export function createDiscordMessageReplyRuntime(params: {
     }
   };
 
-  const deliverChannelId = deliverTarget.startsWith("channel:")
-    ? deliverTarget.slice("channel:".length)
-    : messageChannelId;
   const draftPreview = createDiscordDraftPreviewController({
+    groupThread: Boolean(ctxPayload.GroupThread),
+    isRoomEvent: params.isRoomEvent,
     cfg,
     discordConfig,
     accountId,
+    abortSignal: ctx.abortSignal,
+    isPolicyCurrent: ctx.isPolicyCurrent,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,
     deliverChannelId,
-    replyReference,
-    tableMode,
-    maxLinesPerMessage,
-    chunkMode,
+    replyReference: params.replyReference,
+    onFinalReplyStart: params.onFinalReplyStart,
+    onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,
   });
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
@@ -162,7 +222,6 @@ export function createDiscordMessageReplyRuntime(params: {
     beginQueuedDeliveryCorrelation: beginDeliveryCorrelation,
     endDeliveryCorrelation,
     resolveCurrentTurnTranscriptFinalText,
-    deliverChannelId,
     draftPreview,
     resolvedBlockStreamingEnabled,
   };

@@ -1,13 +1,16 @@
 // Discord tests cover gateway websocket transport options.
-import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayPlugin } from "./gateway.js";
 
-const { webSocketCtorCalls } = vi.hoisted(() => ({
-  webSocketCtorCalls: [] as Array<{ url: string; options: unknown }>,
-}));
+const { webSocketCtorCalls, mockOwner } = vi.hoisted(() => {
+  const calls: Array<{ url: string; options: unknown }> = [];
+  const owner: { constructor: unknown } = { constructor: undefined };
+  return { webSocketCtorCalls: calls, mockOwner: owner };
+});
 
-vi.mock("ws", () => ({
-  WebSocket: class MockWebSocket extends EventEmitter {
+vi.mock("./ws-runtime.js", async () => {
+  const { EventEmitter } = await import("node:events");
+  class MockWebSocket extends EventEmitter {
     readyState = 1;
     send = vi.fn();
     close = vi.fn();
@@ -16,20 +19,21 @@ vi.mock("ws", () => ({
       super();
       webSocketCtorCalls.push({ url, options });
     }
-  },
-}));
+  }
+  mockOwner.constructor = MockWebSocket;
+  return { WebSocket: MockWebSocket };
+});
+
+import { WebSocket } from "./ws-runtime.js";
 
 describe("GatewayPlugin websocket options", () => {
-  let GatewayPlugin: typeof import("./gateway.js").GatewayPlugin;
-
-  beforeEach(async () => {
+  beforeEach(() => {
     webSocketCtorCalls.length = 0;
-    ({ GatewayPlugin } = await import("./gateway.js"));
   });
 
-  it("bounds inbound gateway websocket payloads", () => {
+  it("bounds inbound gateway websocket payloads and the opening handshake", () => {
+    expect(WebSocket).toBe(mockOwner.constructor);
     const gateway = new GatewayPlugin({
-      autoInteractions: false,
       url: "wss://gateway.example.test",
     });
 
@@ -38,7 +42,7 @@ describe("GatewayPlugin websocket options", () => {
     expect(webSocketCtorCalls).toHaveLength(1);
     expect(webSocketCtorCalls[0]).toEqual({
       url: "wss://gateway.example.test/?v=10&encoding=json",
-      options: { maxPayload: 16 * 1024 * 1024 },
+      options: { maxPayload: 16 * 1024 * 1024, handshakeTimeout: 30_000 },
     });
   });
 });

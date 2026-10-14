@@ -1,47 +1,128 @@
+import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardSnapshot } from "../../lib/board/types.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
-  catalogRawRecord,
-  clampText,
-  createDockPanelLayout,
-  type BoardFace,
-  type BoardProvider,
-  type BoardTab,
-  type BoardViewSnapshot,
-  type ChatPageHost,
-  type ControlUiSessionPullRequest,
-  type GatewayBrowserClient,
-  type SessionCatalogPullRequestSummary,
-  type ApplicationContext,
-} from "./chat-pane-deps.ts";
+  PANE_SESSION_HANDOFF_TTL_MS,
+  paneSessionHandoffs,
+  removePaneSessionHandoffs,
+  type PaneSessionHandoff,
+  type PendingPaneSessionHandoff,
+} from "./chat-pane-handoff-lifecycle.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
-export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
-export type VisibleBoardDock = Exclude<BoardTab["chatDock"], "hidden">;
+const PANE_SESSION_HANDOFF_LIMIT = 4;
+
+function paneHandoffs(
+  context: ApplicationContext,
+  paneId: string,
+  create: boolean,
+): PendingPaneSessionHandoff[] | undefined {
+  let byPane = paneSessionHandoffs.get(context);
+  if (!byPane && create) {
+    byPane = new Map();
+    paneSessionHandoffs.set(context, byPane);
+  }
+  let pending = byPane?.get(paneId);
+  if (!pending && create) {
+    pending = [];
+    byPane?.set(paneId, pending);
+  }
+  if (pending) {
+    const now = Date.now();
+    removePaneSessionHandoffs(pending, (handoff) => handoff.expiresAt <= now);
+  }
+  return pending;
+}
+
+export function preparePaneSessionHandoff(
+  context: ApplicationContext,
+  paneId: string,
+  sessionKey: string,
+  handoff: PaneSessionHandoff,
+): void {
+  const pending = paneHandoffs(context, paneId, true)!;
+  removePaneSessionHandoffs(pending, (candidate) =>
+    areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  );
+  const owner = context.gateway.snapshot.client;
+  const sameConnection = capturePlacementStartupConnection(context.gateway, {
+    gatewayUrl: context.gateway.connection.gatewayUrl,
+    recoveryScope: owner?.recoveryScope || undefined,
+  });
+  const stored = {
+    sessionKey,
+    value: { ...handoff },
+    isCurrent: () => context.gateway.snapshot.client === owner && sameConnection(),
+    expiresAt: Date.now() + PANE_SESSION_HANDOFF_TTL_MS,
+  };
+  pending.push(stored);
+  globalThis.setTimeout(() => {
+    paneHandoffs(context, paneId, false);
+  }, PANE_SESSION_HANDOFF_TTL_MS);
+  while (pending.length > PANE_SESSION_HANDOFF_LIMIT) {
+    pending.shift();
+  }
+}
+
+export function consumePaneSessionHandoff(
+  context: ApplicationContext,
+  paneId: string,
+  sessionKey: string,
+): PaneSessionHandoff | null {
+  const pending = paneHandoffs(context, paneId, false);
+  const index = pending?.findIndex(
+    (candidate) =>
+      candidate.isCurrent() && areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  );
+  if (!pending || index === undefined || index < 0) {
+    return null;
+  }
+  return pending.splice(index, 1)[0]!.value;
+}
+
+export function clearPaneSessionHandoff(
+  context: ApplicationContext,
+  paneId: string,
+  sessionKey: string,
+): void {
+  removePaneSessionHandoffs(paneHandoffs(context, paneId, false), (handoff) =>
+    areUiSessionKeysEquivalent(handoff.sessionKey, sessionKey),
+  );
+}
+
+export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
+  const byPane = paneSessionHandoffs.get(context);
+  if (!byPane?.delete(paneId)) {
+    return;
+  }
+  if (byPane.size === 0) {
+    paneSessionHandoffs.delete(context);
+  }
+}
+
 export type ResolvedBoardView = {
   provider: BoardProvider;
-  snapshot: BoardViewSnapshot;
+  snapshot: BoardSnapshot;
+  available: boolean;
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;
-  activeTabReadOnly: boolean;
-  dock: BoardTab["chatDock"];
-  reopenDock: VisibleBoardDock;
 };
 
-export const boardChatDockLayout = createDockPanelLayout({
-  storageKey: "openclaw.control.board-chat-dock.v1",
-  minHeight: 180,
-  minWidth: 320,
-  defaultDock: "right",
-  supportedDocks: ["bottom", "left", "right"],
-  defaultHeight: 320,
-  defaultWidth: 420,
-});
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
-export const CHAT_HISTORY_INTENT_EDGE_PX = 300;
+// One distance owns both halves of early history loading: upward intent within
+// this range arms the sentinel observer, and the observer's rootMargin fires
+// the same distance out. Splitting them re-creates the wall at the smaller value.
+export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
-export const headerPlatformByClient = new WeakMap<GatewayBrowserClient, Promise<string | null>>();
 
 export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
@@ -58,91 +139,117 @@ export function catalogRawString(raw: unknown, keys: readonly string[]): string 
 }
 export function catalogRawResult(raw: unknown): string | null {
   const result = catalogRawRecord(raw)?.result;
-  if (result === undefined) {
-    return null;
-  }
   try {
-    const text = JSON.stringify(result);
-    return text ? clampText(text, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
+    return JSON.stringify(result) || null;
   } catch {
     return null;
-  }
-}
-export function nativeHistoryMessageIdentity(message: unknown): string | null {
-  const record = catalogRawRecord(message);
-  const metadata = catalogRawRecord(record?.["__openclaw"]);
-  const seq = metadata?.seq;
-  const id = metadata?.id ?? record?.messageId;
-  const sourceIdentity =
-    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0
-      ? `seq:${seq}`
-      : typeof id === "string" && id.trim()
-        ? `id:${id}`
-        : null;
-  if (!sourceIdentity) {
-    return null;
-  }
-  try {
-    // One transcript record can project to multiple visible siblings. Include
-    // the projection bytes so partial page overlap removes the matching sibling.
-    return `${sourceIdentity}:${JSON.stringify(message)}`;
-  } catch {
-    return sourceIdentity;
   }
 }
 
 export type ChatPaneConnectionScope = {
-  context: ChatPageContext;
+  context: ApplicationContext;
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
-  sessions: ChatPageContext["sessions"];
+  headerOutcomeOwner: string;
+  sessions: ApplicationContext["sessions"];
 };
-export const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
+const CHAT_OPEN_DETAILS_SELECTOR =
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
-export const CHAT_TEXT_ENTRY_SELECTOR =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
-export const CHAT_SPACE_ACTIVATION_SELECTOR =
-  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
-export const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
-// One automatic page can fill a short initial tail without serially walking a
-// collapsed or sparse transcript to exhaustion.
-export const CHAT_HISTORY_BOOTSTRAP_PAGE_LIMIT = 1;
+// Menus without typeahead own activation/navigation, not printable input.
+// Keeping those key classes separate prevents an open menu from silently dropping a letter.
+const CHAT_PRINTABLE_KEY_TARGET_SELECTOR =
+  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='textbox'], [data-chat-autotype-exempt]";
+const CHAT_SPACE_ACTIVATION_SELECTOR =
+  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='listbox'], [role='menu'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='option'], [role='radio'], [role='switch'], [role='tab']";
+const CHAT_DROPDOWN_KEYS = new Set([
+  " ",
+  "Enter",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "Escape",
+]);
 
-/* Pane-width thresholds (CSS px). Split panes and compact windows can be far
- * narrower than the viewport, so side-by-side layouts key off the pane's own
- * measured width, never viewport media queries. */
-// Side rail (230-280px) plus a readable thread; below this the rail docks bottom.
-export const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
-// Widest the rail's grid column gets; a side-docked rail takes this from the
-// width available to the chat + detail-panel split.
-export const WORKSPACE_RAIL_MAX_WIDTH = 280;
-export const SESSION_RAIL_DOCK_MIN_WIDTH = 1080;
+// Shortcut menus own only advertised, enabled keys; every other printable key
+// can still transfer to the composer through the normal browser input pipeline.
+function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
+  return (
+    /^[a-z0-9]$/iu.test(key) &&
+    target.matches("wa-dropdown, [data-chat-autotype-shortcuts][open]") &&
+    target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
+  );
+}
+
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new thread after the active run or queued messages finish.";
+  "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Thread list is still refreshing. Try New Chat again in a moment.";
+  "Session list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
 
-export function summarizeSessionPullRequests(
-  pullRequests: readonly ControlUiSessionPullRequest[],
-): SessionCatalogPullRequestSummary | undefined {
-  const current = pullRequests[0];
-  if (!current) {
-    return undefined;
-  }
-  return {
-    numbers: [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
-      .slice(0, 20)
-      .toSorted((left, right) => left - right),
-    state: current.state,
-  };
-}
-
-export function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
+function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
   return event
     .composedPath()
-    .some((target) => target instanceof Element && target.matches(selector));
+    .some(
+      (target) =>
+        target instanceof HTMLElement &&
+        (target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
+          keyboardShortcutTargetOwnsKey(target, event.key) ||
+          (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
+    );
+}
+
+function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
+  const surface = root instanceof Element ? (root.closest("openclaw-app") ?? root) : root;
+  return [...surface.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
+    (dropdown) =>
+      dropdown.open === true &&
+      !dropdown.closest("[inert]") &&
+      (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
+  );
+}
+
+/** Close this pane's disclosures, except those containing the current pointer event. */
+export function closeChatPaneDetails(
+  root: ParentNode,
+  retainedPath: readonly EventTarget[] = [],
+): boolean {
+  let changed = false;
+  root.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
+    if (!retainedPath.includes(details)) {
+      details.open = false;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+export function focusChatComposerFromPrintableKeydown(
+  root: ParentNode,
+  event: KeyboardEvent,
+): void {
+  if (
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    openDropdownOwnsKey(root, event.key) ||
+    event.key.length !== 1 ||
+    keyboardEventPathHasInteractiveTarget(event) ||
+    document.openClawModalLayers?.size ||
+    document.querySelector("dialog[open], [aria-modal='true']")
+  ) {
+    return;
+  }
+  const composer = root.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+  if (!composer || composer.disabled || composer.readOnly) {
+    return;
+  }
+  // Focus transfers ownership; block old-target dropdown typeahead from cancelling input.
+  composer.focus({ preventScroll: true });
+  event.stopImmediatePropagation();
 }

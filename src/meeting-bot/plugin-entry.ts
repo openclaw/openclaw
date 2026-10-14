@@ -1,8 +1,12 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TObject } from "typebox";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
-import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "../agents/tools/common.js";
-import { jsonResult } from "../agents/tools/common.js";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  jsonResult,
+} from "../agents/tools/common.js";
 import { callGatewayFromCli } from "../cli/gateway-rpc.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,6 +14,8 @@ import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginConfigSchema } from "../plugins/plugin-config-schema.types.js";
 import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import type { MeetingPluginConfig as SharedMeetingPluginConfig } from "./plugin-config.js";
+import type { MeetingPluginJoinRequest } from "./session-types.js";
 import {
   createMeetingTranscriptSourceProvider,
   type MeetingTranscriptSourceRuntime,
@@ -19,22 +25,11 @@ type MeetingToolAction = "join" | "leave" | "status" | "transcript" | "speak";
 type MeetingMode = "agent" | "bidi" | "transcribe";
 type MeetingTransport = "chrome" | "chrome-node";
 
-type MeetingJoinRequest = {
-  agentId?: string;
-  message?: string;
-  mode?: MeetingMode;
-  requesterSessionKey?: string;
-  timeoutMs?: number;
-  transport?: MeetingTransport;
-  url: string;
-};
+export type MeetingJoinRequest = MeetingPluginJoinRequest<MeetingTransport, MeetingMode>;
 
-type MeetingPluginConfig = {
-  enabled: boolean;
-  chromeNode: { node?: string };
-};
+export type MeetingPluginConfig = Pick<SharedMeetingPluginConfig, "enabled" | "chromeNode">;
 
-type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
+export type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
   Partial<MeetingTranscriptSourceRuntime> & {
     join(request: Request): Promise<unknown>;
     leave(sessionId: string): Promise<unknown>;
@@ -46,9 +41,10 @@ type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
     testListen(request: Request): Promise<unknown>;
     testSpeech(request: Request): Promise<unknown>;
     transcript(sessionId: string, options: { sinceIndex?: number }): Promise<unknown>;
+    reconcileTranscriptPolicy?(enabled: boolean): Promise<void>;
   };
 
-type MeetingPluginEntryOptions<
+export type MeetingPluginEntryOptions<
   Config extends MeetingPluginConfig,
   Request extends MeetingJoinRequest,
   Runtime extends MeetingPluginRuntime<Request>,
@@ -65,7 +61,10 @@ type MeetingPluginEntryOptions<
   isInvalidRequest(error: unknown): boolean;
   name: string;
   nodeCommand: string;
-  nodeHandler(paramsJSON?: string | null): Promise<string>;
+  nodeHandler: {
+    (paramsJSON?: string | null): Promise<string>;
+    hasActiveWork?: () => boolean;
+  };
   normalizeRequesterSessionKey(value: unknown, trustedOwner: boolean): string | undefined;
   normalizeToolAgentId(agentId: string | undefined): string | undefined;
   normalizeUrl(url: string): string;
@@ -87,12 +86,6 @@ type MeetingPluginEntryOptions<
   };
   unknownActionMessage: string;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function readErrorDetails(error: unknown): unknown {
   return error && typeof error === "object" && "details" in error
@@ -219,15 +212,31 @@ export function createMeetingPluginEntryOptions<
     configSchema: options.configSchema,
     register(api: OpenClawPluginApi) {
       const config = options.configSchema.parse(api.pluginConfig) as Config;
+      let transcriptsEnabled = api.config.transcripts?.enabled !== false;
       let runtime: Runtime | undefined;
       const ensureRuntime = async () => {
         if (!config.enabled) {
           throw new Error(options.disabledMessage);
         }
-        runtime ??= options.createRuntime({ api, config });
+        if (!runtime) {
+          runtime = options.createRuntime({ api, config });
+          await runtime.reconcileTranscriptPolicy?.(transcriptsEnabled);
+        }
         return runtime;
       };
       if (options.transcriptSource) {
+        api.registerService({
+          id: `${options.id}-transcripts`,
+          reload: { configPrefixes: ["transcripts.enabled"] },
+          start: ({ config: current }) => {
+            transcriptsEnabled = current.transcripts?.enabled !== false;
+            return runtime?.reconcileTranscriptPolicy?.(transcriptsEnabled);
+          },
+          stop: () => {
+            transcriptsEnabled = false;
+            return runtime?.reconcileTranscriptPolicy?.(false);
+          },
+        });
         api.registerTranscriptSourceProvider(
           createMeetingTranscriptSourceProvider({
             ...options.transcriptSource,
@@ -241,149 +250,79 @@ export function createMeetingPluginEntryOptions<
           }),
         );
       }
-      const sendError = (
-        respond: GatewayRequestHandlerOptions["respond"],
-        error: unknown,
-        code: Parameters<typeof errorShape>[0] = ErrorCodes.UNAVAILABLE,
+      const registerGatewayMethod = (
+        method: string,
+        run: (request: GatewayRequestHandlerOptions) => Promise<unknown>,
       ) => {
-        const payload = { error: formatErrorMessage(error) };
-        respond(false, payload, errorShape(code, payload.error, { details: payload }));
+        api.registerGatewayMethod(`${options.gatewayMethodPrefix}.${method}`, async (request) => {
+          const { respond } = request;
+          try {
+            respond(true, await run(request));
+          } catch (error) {
+            const code = options.isInvalidRequest(error)
+              ? ErrorCodes.INVALID_REQUEST
+              : ErrorCodes.UNAVAILABLE;
+            const payload = { error: formatErrorMessage(error) };
+            respond(false, payload, errorShape(code, payload.error, { details: payload }));
+          }
+        });
       };
-      const sendRequestError = (respond: GatewayRequestHandlerOptions["respond"], error: unknown) =>
-        sendError(
-          respond,
-          error,
-          options.isInvalidRequest(error) ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-        );
 
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.join`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = keepTrustedToolContext(asRecord(params), client);
-            respond(true, await (await ensureRuntime()).join(joinRequest(raw)));
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
+      registerGatewayMethod("join", async ({ params, client }) => {
+        const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
+        return await (await ensureRuntime()).join(joinRequest(raw));
+      });
+      registerGatewayMethod("leave", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const agentId = trustedToolAgentId(raw, client);
+        const sessionId = requireString(raw.sessionId, "sessionId");
+        const rt = await ensureRuntime();
+        return agentId && !rt.ownsSession(agentId, sessionId)
+          ? { found: false }
+          : await rt.leave(sessionId);
+      });
+      registerGatewayMethod("status", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const agentId = trustedToolAgentId(raw, client);
+        const rt = await ensureRuntime();
+        return agentId
+          ? await rt.statusForAgent(agentId, normalizeOptionalString(raw.sessionId))
+          : await rt.status(normalizeOptionalString(raw.sessionId));
+      });
+      registerGatewayMethod("transcript", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const sessionId = requireString(raw.sessionId, "sessionId");
+        const sinceIndex = readSinceIndex(raw);
+        const agentId = trustedToolAgentId(raw, client);
+        const rt = await ensureRuntime();
+        return agentId && !rt.ownsSession(agentId, sessionId)
+          ? { found: false }
+          : await rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex });
+      });
+      registerGatewayMethod("speak", async ({ params, client }) => {
+        const raw = asOptionalRecord(params) ?? {};
+        const sessionId = requireString(raw.sessionId, "sessionId");
+        const agentId = trustedToolAgentId(raw, client);
+        const rt = await ensureRuntime();
+        return agentId && !rt.ownsSession(agentId, sessionId)
+          ? { found: false, spoken: false }
+          : await rt.speak(sessionId, normalizeOptionalString(raw.message));
+      });
+      registerGatewayMethod(
+        "setup",
+        async ({ params }) =>
+          await (
+            await ensureRuntime()
+          ).setupStatus({
+            mode: normalizeMode(params?.mode),
+            transport: normalizeTransport(params?.transport),
+          }),
       );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.leave`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asRecord(params);
-            const agentId = trustedToolAgentId(raw, client);
-            const sessionId = requireString(raw.sessionId, "sessionId");
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId && !rt.ownsSession(agentId, sessionId)
-                ? { found: false }
-                : await rt.leave(sessionId),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.status`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asRecord(params);
-            const agentId = trustedToolAgentId(raw, client);
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId
-                ? await rt.statusForAgent(agentId, normalizeOptionalString(raw.sessionId))
-                : await rt.status(normalizeOptionalString(raw.sessionId)),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.transcript`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asRecord(params);
-            const sessionId = requireString(raw.sessionId, "sessionId");
-            const sinceIndex = readSinceIndex(raw);
-            const agentId = trustedToolAgentId(raw, client);
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId && !rt.ownsSession(agentId, sessionId)
-                ? { found: false }
-                : await rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.speak`,
-        async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            const raw = asRecord(params);
-            const sessionId = requireString(raw.sessionId, "sessionId");
-            const agentId = trustedToolAgentId(raw, client);
-            const rt = await ensureRuntime();
-            respond(
-              true,
-              agentId && !rt.ownsSession(agentId, sessionId)
-                ? { found: false, spoken: false }
-                : await rt.speak(sessionId, normalizeOptionalString(raw.message)),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      api.registerGatewayMethod(
-        `${options.gatewayMethodPrefix}.setup`,
-        async ({ params, respond }: GatewayRequestHandlerOptions) => {
-          try {
-            respond(
-              true,
-              await (
-                await ensureRuntime()
-              ).setupStatus({
-                mode: normalizeMode(params?.mode),
-                transport: normalizeTransport(params?.transport),
-              }),
-            );
-          } catch (error) {
-            sendRequestError(respond, error);
-          }
-        },
-      );
-      for (const [method, run] of [
-        [
-          `${options.gatewayMethodPrefix}.testSpeech`,
-          (rt: Runtime, raw: Record<string, unknown>) =>
-            rt.testSpeech(joinRequest(raw, { allowTimeout: true })),
-        ],
-        [
-          `${options.gatewayMethodPrefix}.testListen`,
-          (rt: Runtime, raw: Record<string, unknown>) =>
-            rt.testListen(joinRequest(raw, { allowTimeout: true })),
-        ],
-      ] as const) {
-        api.registerGatewayMethod(
-          method,
-          async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
-            try {
-              const raw = keepTrustedToolContext(asRecord(params), client);
-              respond(true, await run(await ensureRuntime(), raw));
-            } catch (error) {
-              sendRequestError(respond, error);
-            }
-          },
-        );
+      for (const method of ["testSpeech", "testListen"] as const) {
+        registerGatewayMethod(method, async ({ params, client }) => {
+          const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
+          return await (await ensureRuntime())[method](joinRequest(raw, { allowTimeout: true }));
+        });
       }
       api.registerTool(
         (toolContext) => ({
@@ -392,7 +331,7 @@ export function createMeetingPluginEntryOptions<
           description: options.toolDescription,
           parameters: options.toolParameters,
           async execute(_toolCallId, params) {
-            const raw = asRecord(params);
+            const raw = asOptionalRecord(params) ?? {};
             const action = raw.action as MeetingToolAction;
             const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
             const contextAgentId =
@@ -428,6 +367,7 @@ export function createMeetingPluginEntryOptions<
           cap: options.cap,
           dangerous: true,
           handle: (paramsJSON) => options.nodeHandler(paramsJSON),
+          hasActiveWork: options.nodeHandler.hasActiveWork,
         });
         api.registerNodeInvokePolicy(options.createNodePolicy(config));
       }

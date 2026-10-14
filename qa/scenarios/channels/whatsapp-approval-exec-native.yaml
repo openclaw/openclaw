@@ -11,8 +11,10 @@ scenario:
     timeoutMs: 60000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-approval-exec-native }
+    config:
+      whatsappScenario: whatsappQaApprovalExecNativeScenario
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppApprovalExecNativeScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }

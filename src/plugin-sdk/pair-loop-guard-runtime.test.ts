@@ -77,29 +77,64 @@ describe("createPairLoopGuard", () => {
     expect(guard.recordAndCheck({ ...base, scopeId: "scope-2" })).toEqual({ suppressed: false });
   });
 
-  it("prunes inactive pair entries opportunistically", () => {
+  it("does not consume another budget slot when the same event is retried", () => {
     const guard = createPairLoopGuard();
-    const base = { scopeId: "scope-1", conversationId: "conversation-1", settings };
-
-    guard.recordAndCheck({
-      ...base,
+    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
+    const base = {
+      scopeId: "scope-1",
+      conversationId: "conversation-1",
       senderId: "participant-a",
       receiverId: "participant-b",
-      nowMs: 1_000,
-    });
-    expect(guard.snapshot()).toHaveLength(1);
+      settings: strictSettings,
+    };
 
-    guard.recordAndCheck({
-      ...base,
-      senderId: "participant-c",
-      receiverId: "participant-d",
-      nowMs: 61_001,
+    expect(guard.recordAndCheck({ ...base, eventId: "event-1", nowMs: 1_000 })).toEqual({
+      suppressed: false,
     });
+    expect(guard.recordAndCheck({ ...base, eventId: "event-1", nowMs: 1_000 })).toEqual({
+      suppressed: false,
+    });
+    const second = guard.recordAndCheck({ ...base, eventId: "event-2", nowMs: 1_001 });
+    expect(second).toEqual({
+      suppressed: true,
+      cooldownUntilMs: 1_001 + strictSettings.cooldownMs,
+    });
+    expect(guard.recordAndCheck({ ...base, eventId: "event-2", nowMs: 1_001 })).toEqual(second);
+  });
 
-    const trackedPairs = guard.snapshot();
-    expect(trackedPairs).toHaveLength(1);
-    expect(trackedPairs[0]?.key).toContain("participant-c");
-    expect(trackedPairs[0]?.key).toContain("participant-d");
+  it("does not retain distinct suppressed event identities during cooldown", () => {
+    const guard = createPairLoopGuard();
+    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
+    const base = {
+      scopeId: "scope-cooldown",
+      conversationId: "conversation-cooldown",
+      senderId: "participant-a",
+      receiverId: "participant-b",
+      settings: strictSettings,
+    };
+
+    expect(guard.recordAndCheck({ ...base, eventId: "event-1", nowMs: 1_000 })).toEqual({
+      suppressed: false,
+    });
+    expect(guard.recordAndCheck({ ...base, eventId: "event-2", nowMs: 1_001 }).suppressed).toBe(
+      true,
+    );
+    for (let index = 0; index < 1_000; index += 1) {
+      expect(
+        guard.recordAndCheck({
+          ...base,
+          eventId: `suppressed-${index}`,
+          nowMs: 1_002 + index,
+        }).suppressed,
+      ).toBe(true);
+    }
+
+    expect(guard.snapshot()).toEqual([
+      expect.objectContaining({
+        recentCount: 0,
+        cooldownUntilMs: 1_001 + strictSettings.cooldownMs,
+      }),
+    ]);
   });
 
   it("uses each tracked pair's own window when pruning inactive entries", () => {
@@ -186,20 +221,6 @@ describe("createPairLoopGuard", () => {
 });
 
 describe("mergePairLoopGuardConfig", () => {
-  it("layers partial child config over parent config field-by-field", () => {
-    expect(
-      mergePairLoopGuardConfig(
-        { enabled: true, maxEventsPerWindow: 8, windowSeconds: 120, cooldownSeconds: 30 },
-        { maxEventsPerWindow: 2 },
-      ),
-    ).toEqual({
-      enabled: true,
-      maxEventsPerWindow: 2,
-      windowSeconds: 120,
-      cooldownSeconds: 30,
-    });
-  });
-
   it("preserves explicit false and ignores undefined override fields", () => {
     expect(mergePairLoopGuardConfig({ enabled: false }, { windowSeconds: undefined })).toEqual({
       enabled: false,
@@ -209,16 +230,6 @@ describe("mergePairLoopGuardConfig", () => {
 });
 
 describe("resolvePairLoopGuardSettings", () => {
-  it("uses built-in channel loop guard defaults when no config is set", () => {
-    expect(resolvePairLoopGuardSettings({ defaultEnabled: true })).toEqual(
-      DEFAULT_PAIR_LOOP_GUARD_SETTINGS,
-    );
-  });
-
-  it("keeps the guard disabled when the channel has no bot-to-bot path", () => {
-    expect(resolvePairLoopGuardSettings({ defaultEnabled: false }).enabled).toBe(false);
-  });
-
   it("lets channel config override shared channel defaults field-by-field", () => {
     const resolved = resolvePairLoopGuardSettings({
       config: { maxEventsPerWindow: 4, windowSeconds: 10 },

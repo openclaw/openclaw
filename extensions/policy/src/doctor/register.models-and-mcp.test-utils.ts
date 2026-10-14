@@ -1,7 +1,7 @@
 // Imported by register.test.ts to keep its mocked suite in one Vitest module graph.
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { runDoctorLintChecks, type OpenClawConfig } from "openclaw/plugin-sdk/health";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectPolicyEvidence } from "../policy-state.js";
 import {
@@ -10,26 +10,43 @@ import {
   ctx,
   repairCtx,
   registerChecks,
+  type RawLegacyDoctorConfig,
   runPolicyChecks,
   runPolicyDoctorLint,
   runPolicyRepairCheck,
-  describe0BeforeEach0,
-  describe0AfterEach1,
+  setupPolicyDoctorTest,
+  teardownPolicyDoctorTest,
+  writePolicyFixture,
 } from "./register.test-harness.js";
 
-const scanPolicyMcpServers = (cfg: object) =>
-  collectPolicyEvidence(cfg as Record<string, unknown>).mcpServers;
-const scanPolicyIngress = (cfg: object) =>
-  collectPolicyEvidence(cfg as Record<string, unknown>).ingress ?? [];
+const scanPolicyMcpServers = (cfg: Record<string, unknown>) =>
+  collectPolicyEvidence(cfg).mcpServers;
+const scanPolicyIngress = (cfg: Record<string, unknown>) =>
+  collectPolicyEvidence(cfg).ingress ?? [];
+
+function writeModelPolicyFixture(providers: object): Promise<string> {
+  return writePolicyFixture({ models: { providers } });
+}
+
+async function runModelPolicyFixture(providers: object, cfg: OpenClawConfig) {
+  return runPolicyDoctorLint(ctx(await writeModelPolicyFixture(providers), cfg));
+}
+
+function writeMcpPolicyFixture(servers: object): Promise<string> {
+  return writePolicyFixture({ mcp: { servers } });
+}
+
+function writeIngressPolicyFixture(ingress: object): Promise<string> {
+  return writePolicyFixture({ ingress });
+}
 
 describe("registerPolicyDoctorChecks", () => {
-  beforeEach(describe0BeforeEach0);
+  beforeEach(setupPolicyDoctorTest);
 
-  afterEach(describe0AfterEach1);
+  afterEach(teardownPolicyDoctorTest);
 
   it("repairs required agent workspace deny tool findings", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: RawLegacyDoctorConfig = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       agents: {
         list: [
@@ -39,20 +56,15 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          reviewer: {
-            agentIds: ["reviewer"],
-            agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
-          },
+    };
+    const configPath = await writePolicyFixture({
+      scopes: {
+        reviewer: {
+          agentIds: ["reviewer"],
+          agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/agents-tool-not-denied",
@@ -65,34 +77,64 @@ describe("registerPolicyDoctorChecks", () => {
       "Added write to agents.list[0].tools.deny for policy conformance.",
     ]);
     expect(result.remainingFindings).toEqual([]);
-    expect(result.config.agents?.list?.[0]).toMatchObject({
+    const rawConfig: RawLegacyDoctorConfig = result.config;
+    expect(rawConfig.agents?.list?.[0]).toMatchObject({
       id: "reviewer",
       tools: { deny: ["exec", "edit", "write"] },
     });
   });
 
+  it("repairs required keyed agent workspace deny tool findings", async () => {
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      agents: {
+        ownership: "explicit",
+        entries: {
+          reviewer: { tools: { deny: ["exec"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const configPath = await writePolicyFixture({
+      scopes: {
+        reviewer: {
+          agentIds: ["reviewer"],
+          agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
+        },
+      },
+    });
+
+    const result = await runPolicyRepairCheck(
+      "policy/agents-tool-not-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Added edit to agents.entries.reviewer.tools.deny for policy conformance.",
+      "Added write to agents.entries.reviewer.tools.deny for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.agents?.entries?.reviewer).toMatchObject({
+      tools: { deny: ["exec", "edit", "write"] },
+    });
+  });
+
   it("skips scoped required deny repairs that would mutate root tools deny", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       tools: { deny: ["exec"] },
       agents: {
-        list: [{ id: "reviewer" }],
+        entries: { reviewer: {} },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          reviewer: {
-            agentIds: ["reviewer"],
-            tools: { denyTools: ["exec", "write"] },
-          },
+    } satisfies OpenClawConfig;
+    const configPath = await writePolicyFixture({
+      scopes: {
+        reviewer: {
+          agentIds: ["reviewer"],
+          tools: { denyTools: ["exec", "write"] },
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyRepairCheck(
       "policy/tools-required-deny-missing",
@@ -106,7 +148,7 @@ describe("registerPolicyDoctorChecks", () => {
       "Skipped scoped deny repair for write. The finding reports inherited root tools.deny, so changing it would affect more than the scoped policy target.",
     ]);
     expect(result.config.tools?.deny).toEqual(["exec"]);
-    expect(result.config.agents?.list?.[0]).toEqual({ id: "reviewer" });
+    expect(result.config.agents?.entries?.reviewer).toEqual({});
     expect(result.remainingFindings).toEqual([
       expect.objectContaining({
         checkId: "policy/tools-required-deny-missing",
@@ -125,30 +167,24 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report denied providers for disabled channels", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       channels: { telegram: { enabled: false } },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify(
-        {
-          channels: {
-            denyRules: [
-              {
-                id: "no-telegram",
-                when: { provider: "telegram" },
-                reason: "Telegram is not approved for this workspace.",
-              },
-            ],
-          },
+    } satisfies OpenClawConfig;
+    const configPath = await writePolicyFixture(
+      {
+        channels: {
+          denyRules: [
+            {
+              id: "no-telegram",
+              when: { provider: "telegram" },
+              reason: "Telegram is not approved for this workspace.",
+            },
+          ],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      null,
+      2,
     );
 
     await expect(runPolicyChecks(ctx(configPath, cfg))).resolves.toMatchObject({
@@ -157,21 +193,21 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not run policy checks for empty category namespaces", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       channels: { telegram: { enabled: true } },
       mcp: { servers: { untrusted: { command: "uvx", args: ["untrusted-mcp"] } } },
       models: { providers: { openrouter: {} } },
       browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ channels: {}, mcp: {}, models: {}, network: {}, tools: {} }),
-      "utf-8",
-    );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    };
+    const configPath = await writePolicyFixture({
+      channels: {},
+      mcp: {},
+      models: {},
+      network: {},
+      tools: {},
+    });
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -179,18 +215,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports invalid requireMetadata policy entries", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { requireMetadata: ["risk", "unsupported"] } }),
-      "utf-8",
-    );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
-
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
+    const configPath = await writePolicyFixture({
+      tools: { requireMetadata: ["risk", "unsupported"] },
     });
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -203,17 +233,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports blank requireMetadata policy entries", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { requireMetadata: ["risk", " "] } }),
-      "utf-8",
-    );
+    const configPath = await writePolicyFixture({ tools: { requireMetadata: ["risk", " "] } });
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -234,11 +256,8 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(
+    const result = await runPolicyDoctorLint(
       ctx(configPath, cfgWithPolicy({ path: "workspace.policy.jsonc" })),
-      {
-        checks: registerChecks(),
-      },
     );
 
     expect(result.findings).toEqual([
@@ -251,18 +270,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports governed tools missing risk and sensitivity metadata", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
-      "utf-8",
-    );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
-
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
+    const configPath = await writePolicyFixture({
+      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
     });
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toHaveLength(3);
     expect(result.findings).toEqual(
@@ -270,71 +283,136 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/tools-missing-risk-level",
           severity: "error",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-sensitivity-token",
           severity: "error",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-owner",
           severity: "error",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
       ]),
     );
   });
 
-  it("reports governed bullet tools missing required metadata", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
+  it("blocks governed tool evaluation until TOOLS.md is migrated into AGENTS.md", async () => {
+    const configPath = await writePolicyFixture({ tools: { requireMetadata: ["risk"] } });
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "### deploy\n", "utf-8");
+
+    const beforeMigration = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+
+    expect(beforeMigration.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-md-migration-required",
+        severity: "error",
+        message:
+          "TOOLS.md contains unmigrated governed tool declarations; run `openclaw doctor --fix` to migrate them into the AGENTS.md `## Tools` section before policy evaluation can pass.",
+        path: "TOOLS.md",
+      }),
+    ]);
+
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    await fs.rm(join(workspaceDir, "TOOLS.md"));
+
+    const afterMigration = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+
+    expect(afterMigration.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-missing-risk-level",
+        path: "AGENTS.md",
+        ocPath: "oc://AGENTS.md/tools/deploy",
+      }),
+    ]);
+  });
+
+  it("runs required metadata checks for a tool literally named tools", async () => {
+    const configPath = await writePolicyFixture({
+      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
+    });
     await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
+      join(workspaceDir, "AGENTS.md"),
+      "# Tools\n\n## Local notes\n\n- SSH: prod-host\n\n## tools risk: high\n",
       "utf-8",
     );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n- deploy: deploys\n", "utf-8");
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-missing-sensitivity-token",
+          ocPath: "oc://AGENTS.md/tools/tools",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-missing-owner",
+          ocPath: "oc://AGENTS.md/tools/tools",
+        }),
+      ]),
+    );
+  });
+
+  it("does not capture an unrelated nested Tools section as governed evidence", async () => {
+    const configPath = await writePolicyFixture({
+      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
     });
+    await fs.writeFile(
+      join(workspaceDir, "AGENTS.md"),
+      "## Build\n\n### Tools\n\n- npm: install dependencies\n",
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports governed bullet tools missing required metadata", async () => {
+    const configPath = await writePolicyFixture({
+      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
+    });
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n- deploy: deploys\n", "utf-8");
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toHaveLength(3);
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "policy/tools-missing-risk-level",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          severity: "error",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-sensitivity-token",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          severity: "error",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
         expect.objectContaining({
           checkId: "policy/tools-missing-owner",
-          path: "TOOLS.md",
-          ocPath: "oc://TOOLS.md/tools/deploy",
+          severity: "error",
+          path: "AGENTS.md",
+          ocPath: "oc://AGENTS.md/tools/deploy",
         }),
       ]),
     );
   });
 
   it("accepts governed tool metadata declared on following lines", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
+    const configPath = await writePolicyFixture({
+      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
+    });
     await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
-      "utf-8",
-    );
-    await fs.writeFile(
-      join(workspaceDir, "TOOLS.md"),
+      join(workspaceDir, "AGENTS.md"),
       [
         "## Tools",
         "",
@@ -353,13 +431,11 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
-    const evidence = await collectPolicyEvidence(
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+    const evidence = collectPolicyEvidence(
       {},
       {
-        toolsRaw: await fs.readFile(join(workspaceDir, "TOOLS.md"), "utf-8"),
+        toolsRaw: await fs.readFile(join(workspaceDir, "AGENTS.md"), "utf-8"),
       },
     );
 
@@ -367,7 +443,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(evidence.tools).toEqual([
       {
         id: "deploy",
-        source: "oc://TOOLS.md/tools/deploy",
+        source: "oc://AGENTS.md/tools/deploy",
         line: 3,
         risk: "critical",
         sensitivity: "restricted",
@@ -376,7 +452,7 @@ describe("registerPolicyDoctorChecks", () => {
       },
       {
         id: "inspect",
-        source: "oc://TOOLS.md/tools/inspect",
+        source: "oc://AGENTS.md/tools/inspect",
         line: 9,
         risk: "low",
         sensitivity: "public",
@@ -386,35 +462,26 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports unknown governed tool risk metadata", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
+    const configPath = await writePolicyFixture({ tools: { requireMetadata: ["risk"] } });
     await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
-      "utf-8",
-    );
-    await fs.writeFile(
-      join(workspaceDir, "TOOLS.md"),
+      join(workspaceDir, "AGENTS.md"),
       "## Tools\n\n### deploy risk:critcal\n",
       "utf-8",
     );
 
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
-      checks: registerChecks(),
-    });
+    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/tools-unknown-risk-level",
         severity: "error",
-        path: "TOOLS.md",
-        ocPath: "oc://TOOLS.md/tools/deploy",
+        path: "AGENTS.md",
+        ocPath: "oc://AGENTS.md/tools/deploy",
       }),
     ]);
   });
 
   it("reports model providers denied by policy", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       models: {
@@ -430,19 +497,8 @@ describe("registerPolicyDoctorChecks", () => {
           model: "openrouter/openai/gpt-5.5",
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { deny: ["openrouter"] },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    } satisfies OpenClawConfig;
+    const result = await runModelPolicyFixture({ deny: ["openrouter"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -461,8 +517,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("compares canonical model provider refs for deny policy checks", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       models: {
         providers: {
@@ -474,19 +529,8 @@ describe("registerPolicyDoctorChecks", () => {
           model: "OpenRouter/openai/gpt-5.5",
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { deny: ["openrouter", "amazon-bedrock"] },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    };
+    const result = await runModelPolicyFixture({ deny: ["openrouter", "amazon-bedrock"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -499,8 +543,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("compares canonical model provider refs for allow policy checks", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       models: {
         providers: {
@@ -512,19 +555,8 @@ describe("registerPolicyDoctorChecks", () => {
           model: "OpenRouter/openai/gpt-5.5",
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { allow: ["openrouter", "amazon-bedrock"] },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    };
+    const result = await runModelPolicyFixture({ allow: ["openrouter", "amazon-bedrock"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -537,7 +569,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports model refs outside the policy allowlist", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       agents: {
@@ -548,19 +579,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { allow: ["openai"] },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    } satisfies OpenClawConfig;
+    const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -573,7 +593,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports model allowlist keys outside the policy allowlist", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       agents: {
@@ -583,19 +602,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { allow: ["openai"] },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    } satisfies OpenClawConfig;
+    const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -608,65 +616,40 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports per-agent model allowlist keys outside the policy allowlist", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       agents: {
-        list: [
-          {
-            id: "research",
+        entries: {
+          research: {
             models: {
               "openrouter/*": {},
             },
           },
-        ],
-      },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { allow: ["openai"] },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+      },
+    } satisfies OpenClawConfig;
+    const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/models-unapproved-provider",
         severity: "error",
-        ocPath: 'oc://openclaw.config/agents/list/#0/models/"openrouter/*"',
+        ocPath: 'oc://openclaw.config/agents/entries/research/models/"openrouter/*"',
         requirement: "oc://policy.jsonc/models/providers/allow",
       }),
     ]);
   });
 
   it("reports configured model providers outside the policy allowlist", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       models: {
         providers: {
           anthropic: {},
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { allow: ["openai"] },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    };
+    const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -679,7 +662,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports non-default agent model refs outside the policy allowlist", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       agents: {
@@ -690,19 +672,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { allow: ["openai"] },
-        },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+    } satisfies OpenClawConfig;
+    const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -715,54 +686,31 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports per-agent model refs outside the policy allowlist", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       agents: {
-        list: [
-          {
-            id: "research",
+        entries: {
+          research: {
             model: { primary: "openrouter/openai/gpt-5.5" },
           },
-        ],
-      },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { deny: ["openrouter"] },
         },
-      }),
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+      },
+    } satisfies OpenClawConfig;
+    const result = await runModelPolicyFixture({ deny: ["openrouter"] }, cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/models-denied-provider",
         severity: "error",
-        ocPath: "oc://openclaw.config/agents/list/#0/model/primary",
+        ocPath: "oc://openclaw.config/agents/entries/research/model/primary",
         requirement: "oc://policy.jsonc/models/providers/deny",
       }),
     ]);
   });
 
   it("does not enable tool metadata checks from a model-only policy block", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        models: {
-          providers: { allow: ["openai"] },
-        },
-      }),
-      "utf-8",
-    );
-    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+    const configPath = await writeModelPolicyFixture({ allow: ["openai"] });
+    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
     const result = await runPolicyDoctorLint(
       ctx(configPath, cfgWithPolicy({ enabled: undefined })),
@@ -772,7 +720,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports MCP servers denied by policy", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       mcp: {
@@ -783,17 +730,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        mcp: {
-          servers: { deny: ["untrusted"] },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeMcpPolicyFixture({ deny: ["untrusted"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -808,7 +746,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("preserves MCP server casing for deny rules", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       mcp: {
@@ -819,17 +756,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        mcp: {
-          servers: { deny: ["DocsServer"] },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeMcpPolicyFixture({ deny: ["DocsServer"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -844,7 +772,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports MCP servers outside the policy allowlist", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       mcp: {
@@ -859,17 +786,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        mcp: {
-          servers: { allow: ["docs"] },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeMcpPolicyFixture({ allow: ["docs"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -884,7 +802,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("preserves MCP server casing for allowlists", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       mcp: {
@@ -895,17 +812,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        mcp: {
-          servers: { allow: ["DocsServer"] },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeMcpPolicyFixture({ allow: ["DocsServer"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -952,25 +860,15 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not enable model checks from an MCP-only policy block", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy({ enabled: undefined }),
       models: {
         providers: {
           openrouter: {},
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        mcp: {
-          servers: { allow: ["docs"] },
-        },
-      }),
-      "utf-8",
-    );
+    };
+    const configPath = await writeMcpPolicyFixture({ allow: ["docs"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -978,8 +876,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports ingress channel access conformance findings", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       session: { dmScope: "main" },
       channels: {
@@ -992,22 +889,15 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          session: { requireDmScope: "per-channel-peer" },
-          channels: {
-            allowDmPolicies: ["pairing", "allowlist", "disabled"],
-            denyOpenGroups: true,
-            requireMentionInGroups: true,
-          },
-        },
-      }),
-      "utf-8",
-    );
+    };
+    const configPath = await writeIngressPolicyFixture({
+      session: { requireDmScope: "per-channel-peer" },
+      channels: {
+        allowDmPolicies: ["pairing", "allowlist", "disabled"],
+        denyOpenGroups: true,
+        requireMentionInGroups: true,
+      },
+    });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -1043,21 +933,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("normalizes mixed-case session DM scope before checking ingress policy", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       session: { dmScope: "Per-Channel-Peer" },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          session: { requireDmScope: "per-channel-peer" },
-        },
-      }),
-      "utf-8",
-    );
+    };
+    const configPath = await writeIngressPolicyFixture({
+      session: { requireDmScope: "per-channel-peer" },
+    });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -1071,8 +953,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies channel-scoped ingress claims to matching channel posture", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       session: { dmScope: "main" },
       channels: {
@@ -1084,29 +965,24 @@ describe("registerPolicyDoctorChecks", () => {
           requireMention: false,
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          session: { requireDmScope: "per-channel-peer" },
-        },
-        scopes: {
-          telegramIngress: {
-            channelIds: ["telegram"],
-            ingress: {
-              channels: {
-                allowDmPolicies: ["pairing"],
-                denyOpenGroups: true,
-                requireMentionInGroups: true,
-              },
+    };
+    const configPath = await writePolicyFixture({
+      ingress: {
+        session: { requireDmScope: "per-channel-peer" },
+      },
+      scopes: {
+        telegramIngress: {
+          channelIds: ["telegram"],
+          ingress: {
+            channels: {
+              allowDmPolicies: ["pairing"],
+              denyOpenGroups: true,
+              requireMentionInGroups: true,
             },
           },
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -1134,8 +1010,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not apply channel-scoped ingress claims from invalid scopes", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       channels: {
         telegram: {
@@ -1144,27 +1019,22 @@ describe("registerPolicyDoctorChecks", () => {
           requireMention: false,
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        scopes: {
-          telegramIngress: {
-            channelIds: ["telegram"],
-            agents: {},
-            ingress: {
-              channels: {
-                allowDmPolicies: ["pairing"],
-                denyOpenGroups: true,
-                requireMentionInGroups: true,
-              },
+    };
+    const configPath = await writePolicyFixture({
+      scopes: {
+        telegramIngress: {
+          channelIds: ["telegram"],
+          agents: {},
+          ingress: {
+            channels: {
+              allowDmPolicies: ["pairing"],
+              denyOpenGroups: true,
+              requireMentionInGroups: true,
             },
           },
         },
-      }),
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -1186,8 +1056,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not treat wildcard groupPolicy as channel ingress posture", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       channels: {
         telegram: {
@@ -1203,23 +1072,16 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            denyOpenGroups: true,
-            requireMentionInGroups: true,
-          },
-        },
-      }),
-      "utf-8",
-    );
+    };
+    const configPath = await writeIngressPolicyFixture({
+      channels: {
+        denyOpenGroups: true,
+        requireMentionInGroups: true,
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.ingress).toEqual(
       expect.arrayContaining([
@@ -1239,8 +1101,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("honors wildcard mention ingress for channel posture", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       channels: {
         telegram: {
@@ -1253,22 +1114,15 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            requireMentionInGroups: true,
-          },
-        },
-      }),
-      "utf-8",
-    );
+    };
+    const configPath = await writeIngressPolicyFixture({
+      channels: {
+        requireMentionInGroups: true,
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.ingress).toEqual(
       expect.arrayContaining([
@@ -1287,8 +1141,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("honors strict channel group policy defaults", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...cfgWithPolicy(),
       channels: {
         signal: {
@@ -1298,22 +1151,15 @@ describe("registerPolicyDoctorChecks", () => {
           requireMention: true,
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            denyOpenGroups: true,
-          },
-        },
-      }),
-      "utf-8",
-    );
+    };
+    const configPath = await writeIngressPolicyFixture({
+      channels: {
+        denyOpenGroups: true,
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.ingress).toEqual(
       expect.arrayContaining([
@@ -1334,7 +1180,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("treats disabled nested DM config as disabled ingress", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       channels: {
@@ -1344,22 +1189,15 @@ describe("registerPolicyDoctorChecks", () => {
           groupPolicy: "allowlist",
         },
       },
-    } as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            allowDmPolicies: ["disabled"],
-          },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeIngressPolicyFixture({
+      channels: {
+        allowDmPolicies: ["disabled"],
+      },
+    });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.ingress).toEqual(
       expect.arrayContaining([
@@ -1476,29 +1314,21 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses effective ingress defaults when policy governs omitted fields", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       session: { dmScope: "per-channel-peer" },
       channels: {
         qqbot: {},
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          session: { requireDmScope: "per-channel-peer" },
-          channels: {
-            allowDmPolicies: ["pairing", "allowlist", "disabled"],
-            denyOpenGroups: true,
-            requireMentionInGroups: true,
-          },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeIngressPolicyFixture({
+      session: { requireDmScope: "per-channel-peer" },
+      channels: {
+        allowDmPolicies: ["pairing", "allowlist", "disabled"],
+        denyOpenGroups: true,
+        requireMentionInGroups: true,
+      },
+    });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -1511,7 +1341,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("infers allowlist group posture from configured groups", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       session: { dmScope: "per-channel-peer" },
@@ -1523,24 +1352,17 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            allowDmPolicies: ["pairing"],
-            denyOpenGroups: true,
-            requireMentionInGroups: true,
-          },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeIngressPolicyFixture({
+      channels: {
+        allowDmPolicies: ["pairing"],
+        denyOpenGroups: true,
+        requireMentionInGroups: true,
+      },
+    });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.ingress).toEqual(
       expect.arrayContaining([
@@ -1560,7 +1382,6 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not infer allowlist posture from Slack channel entries", async () => {
-    const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
       session: { dmScope: "per-channel-peer" },
@@ -1572,22 +1393,15 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
-    await fs.writeFile(configPath, "{}", "utf-8");
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({
-        ingress: {
-          channels: {
-            denyOpenGroups: true,
-          },
-        },
-      }),
-      "utf-8",
-    );
+    } satisfies OpenClawConfig;
+    const configPath = await writeIngressPolicyFixture({
+      channels: {
+        denyOpenGroups: true,
+      },
+    });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.ingress).toEqual(
       expect.arrayContaining([

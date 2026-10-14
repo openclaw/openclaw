@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Deploy OpenClaw to Kubernetes.
 #
 # Secrets are generated in a temp directory and applied server-side.
@@ -8,7 +12,9 @@
 #   ./scripts/k8s/deploy.sh                   # Deploy (requires API key in env or secret already in cluster)
 #   ./scripts/k8s/deploy.sh --create-secret   # Create or update the K8s Secret from env vars
 #   ./scripts/k8s/deploy.sh --show-token      # Print the gateway token after deploy
-#   ./scripts/k8s/deploy.sh --delete          # Tear down
+#   ./scripts/k8s/deploy.sh --delete          # Tear down safely for the selected namespace
+#   ./scripts/k8s/deploy.sh --delete-resources # Delete OpenClaw resources only
+#   ./scripts/k8s/deploy.sh --delete-namespace # Delete the namespace and all resources
 #
 # Environment:
 #   OPENCLAW_NAMESPACE   Kubernetes namespace (default: openclaw)
@@ -18,15 +24,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFESTS="$SCRIPT_DIR/manifests"
 NS="${OPENCLAW_NAMESPACE:-openclaw}"
 
-# Check prerequisites
 for cmd in kubectl openssl; do
   command -v "$cmd" &>/dev/null || { echo "Missing: $cmd" >&2; exit 1; }
 done
 kubectl cluster-info &>/dev/null || { echo "Cannot connect to cluster. Check kubeconfig." >&2; exit 1; }
 
-# ---------------------------------------------------------------------------
-# -h / --help
-# ---------------------------------------------------------------------------
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   cat <<'HELP'
 Usage: ./scripts/k8s/deploy.sh [OPTION]
@@ -34,7 +36,11 @@ Usage: ./scripts/k8s/deploy.sh [OPTION]
   (no args)        Deploy OpenClaw (creates secret from env if needed)
   --create-secret  Create or update the K8s Secret from env vars without deploying
   --show-token     Print the gateway token after deploy or secret creation
-  --delete         Delete the namespace and all resources
+  --delete         Delete the default namespace, or resources only in a custom namespace
+  --delete-resources
+                  Delete OpenClaw resources from the namespace
+  --delete-namespace
+                  Delete the namespace and all resources in it
   -h, --help       Show this help
 
 Environment:
@@ -51,11 +57,8 @@ MODE="deploy"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --create-secret)
-      MODE="create-secret"
-      ;;
-    --delete)
-      MODE="delete"
+    --create-secret | --delete | --delete-resources | --delete-namespace)
+      MODE="${1#--}"
       ;;
     --show-token)
       SHOW_TOKEN=true
@@ -69,19 +72,25 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# ---------------------------------------------------------------------------
-# --delete
-# ---------------------------------------------------------------------------
-if [[ "$MODE" == "delete" ]]; then
+if [[ "$MODE" == "delete" && "$NS" != "openclaw" ]]; then
+  MODE="delete-resources"
+fi
+
+if [[ "$MODE" == "delete" || "$MODE" == "delete-namespace" ]]; then
   echo "Deleting namespace '$NS' and all resources..."
   kubectl delete namespace "$NS" --ignore-not-found
   echo "Done."
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Create and apply Secret to the cluster
-# ---------------------------------------------------------------------------
+if [[ "$MODE" == "delete-resources" ]]; then
+  echo "Deleting OpenClaw resources from namespace '$NS'..."
+  kubectl delete -k "$MANIFESTS" -n "$NS" --ignore-not-found
+  kubectl delete secret openclaw-secrets -n "$NS" --ignore-not-found
+  echo "Done."
+  exit 0
+fi
+
 _apply_secret() {
   local TMP_DIR
   local EXISTING_SECRET=false
@@ -158,9 +167,6 @@ _apply_secret() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# --create-secret
-# ---------------------------------------------------------------------------
 if [[ "$MODE" == "create-secret" ]]; then
   HAS_KEY=false
   for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
@@ -184,9 +190,6 @@ if [[ "$MODE" == "create-secret" ]]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Check that the secret exists in the cluster
-# ---------------------------------------------------------------------------
 if ! kubectl get secret openclaw-secrets -n "$NS" &>/dev/null; then
   HAS_KEY=false
   for key in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY; do
@@ -207,9 +210,6 @@ if ! kubectl get secret openclaw-secrets -n "$NS" &>/dev/null; then
   fi
 fi
 
-# ---------------------------------------------------------------------------
-# Deploy
-# ---------------------------------------------------------------------------
 echo "Deploying to namespace '$NS'..."
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl apply -k "$MANIFESTS" -n "$NS"

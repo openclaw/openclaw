@@ -10,17 +10,25 @@ enum ChatWorkingClawStance: CaseIterable, Equatable, Sendable {
     case zen
     case drummer
     case peekaboo
+    case nodOff
+    case curious
+    case omNom
+    case fakeOut
 
     static let weightedStances: [(stance: Self, weight: Double)] = [
-        (.standard, 63),
-        (.southpaw, 19),
+        (.standard, 55),
+        (.southpaw, 18),
         (.flurry, 5),
         (.spin, 4),
         (.shadowbox, 3),
         (.backflip, 2),
         (.zen, 2),
-        (.drummer, 1),
-        (.peekaboo, 1),
+        (.drummer, 2),
+        (.peekaboo, 2),
+        (.nodOff, 2),
+        (.curious, 2),
+        (.omNom, 2),
+        (.fakeOut, 1),
     ]
 
     static func seeded(_ key: String, salt: UInt32) -> Self {
@@ -81,19 +89,18 @@ enum ChatWorkingPhrase {
 }
 
 enum ChatWorkingDurationFormatter {
+    private static let compactUnits = [
+        (suffix: "d", seconds: 86400),
+        (suffix: "h", seconds: 3600),
+        (suffix: "m", seconds: 60),
+        (suffix: "s", seconds: 1),
+    ]
+
     static func compact(milliseconds: Double) -> String {
-        let finiteMilliseconds = milliseconds.isFinite ? milliseconds : 1000
-        let roundedSeconds = (max(1000, finiteMilliseconds) / 1000).rounded()
-        let totalSeconds = max(1, Int(min(roundedSeconds, Double(Int.max / 2))))
-        let units = [
-            (suffix: "d", seconds: 86400),
-            (suffix: "h", seconds: 3600),
-            (suffix: "m", seconds: 60),
-            (suffix: "s", seconds: 1),
-        ]
+        let totalSeconds = self.totalSeconds(milliseconds: milliseconds)
         var remainder = totalSeconds
         var parts: [String] = []
-        for unit in units {
+        for unit in self.compactUnits {
             let value = remainder / unit.seconds
             remainder %= unit.seconds
             if value > 0 {
@@ -104,6 +111,25 @@ enum ChatWorkingDurationFormatter {
             }
         }
         return parts.joined(separator: " ")
+    }
+
+    static func full(milliseconds: Double, locale: Locale = .current) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute, .second]
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 2
+        formatter.zeroFormattingBehavior = .dropAll
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        formatter.calendar = calendar
+        return formatter.string(from: TimeInterval(self.totalSeconds(milliseconds: milliseconds))) ??
+            String(localized: "1 second", locale: locale)
+    }
+
+    private static func totalSeconds(milliseconds: Double) -> Int {
+        let finiteMilliseconds = milliseconds.isFinite ? milliseconds : 1000
+        let roundedSeconds = (max(1000, finiteMilliseconds) / 1000).rounded()
+        return max(1, Int(min(roundedSeconds, Double(Int.max / 2))))
     }
 }
 
@@ -134,7 +160,7 @@ enum ChatTurnRecapText {
         String(
             format: String(localized: "Done in %@", locale: locale),
             locale: locale,
-            ChatWorkingDurationFormatter.compact(milliseconds: runtimeMs))
+            ChatWorkingDurationFormatter.full(milliseconds: runtimeMs, locale: locale))
     }
 
     static func tokens(_ outputTokens: Int?, locale: Locale = .current) -> String? {
@@ -178,27 +204,21 @@ struct ChatTurnRecapSessionRow: Equatable, Sendable {
     }
 }
 
-/// Watches the turn whose working indicator was visible. Most anomalous
-/// interleavings fail quiet; without a row run ID, an unrelated completion
-/// inside the settle window remains an accepted cosmetic attribution risk.
+/// Recap attribution is best effort without a per-run row ID: missing initial
+/// rows or late unrelated completions can supply the next footer.
 struct ChatTurnRecapResolver {
     private struct Watch {
         var watching: Bool
-        var baselineKnown: Bool
-        var baselineEndedAt: Double?
-        var absorbedTerminal: Bool
-        var settleStartedAt: Date?
+        let baselineEndedAt: Double?
         var settled: ChatTurnRecap?
     }
 
-    private static let settleWindow: TimeInterval = 30
     private var watches: [String: Watch] = [:]
 
     mutating func resolve(
         sessionKey: String,
         indicatorVisible: Bool,
-        row: ChatTurnRecapSessionRow?,
-        now: Date = Date()) -> ChatTurnRecap?
+        row: ChatTurnRecapSessionRow?) -> ChatTurnRecap?
     {
         var watch = self.watches[sessionKey]
         let rowEndedAt = row?.endedAt
@@ -207,19 +227,8 @@ struct ChatTurnRecapResolver {
             if watch == nil || watch?.watching == false {
                 watch = Watch(
                     watching: true,
-                    baselineKnown: row != nil,
                     baselineEndedAt: rowEndedAt,
-                    absorbedTerminal: false,
-                    settleStartedAt: nil,
                     settled: nil)
-            } else if watch?.baselineKnown == false {
-                if row != nil {
-                    watch?.baselineKnown = true
-                    watch?.baselineEndedAt = rowEndedAt
-                }
-            } else if let rowEndedAt, rowEndedAt != watch?.baselineEndedAt {
-                watch?.baselineEndedAt = rowEndedAt
-                watch?.absorbedTerminal = true
             }
             self.watches[sessionKey] = watch
             return nil
@@ -228,22 +237,7 @@ struct ChatTurnRecapResolver {
         guard var watch else { return nil }
         watch.watching = false
         if let settled = watch.settled {
-            self.watches[sessionKey] = watch
             return settled
-        }
-        if watch.absorbedTerminal || !watch.baselineKnown {
-            // Without an attributable baseline, later terminal rows could belong
-            // to background work, so consume this watch unresolved.
-            self.watches[sessionKey] = nil
-            return nil
-        }
-        if let settleStartedAt = watch.settleStartedAt {
-            if now.timeIntervalSince(settleStartedAt) > Self.settleWindow {
-                self.watches[sessionKey] = nil
-                return nil
-            }
-        } else {
-            watch.settleStartedAt = now
         }
 
         let isStale: Bool = if let rowEndedAt, let baselineEndedAt = watch.baselineEndedAt {

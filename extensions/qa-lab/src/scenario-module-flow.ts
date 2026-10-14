@@ -1,20 +1,168 @@
-// QA Lab scenario module references normalize into the canonical flow shape.
 import { z } from "zod";
 
+const qaFlowModuleExportArgSchema = z
+  .object({
+    moduleExport: z.string().trim().min(1),
+  })
+  .strict();
+const qaFlowModuleArgSchema = z.unknown().superRefine((arg, ctx) => {
+  if (
+    typeof arg !== "object" ||
+    arg === null ||
+    !("moduleExport" in arg) ||
+    qaFlowModuleExportArgSchema.safeParse(arg).success
+  ) {
+    return;
+  }
+  ctx.addIssue({
+    code: "custom",
+    message: "moduleExport arguments require a non-empty string export name",
+  });
+});
 const qaFlowModuleSchema = z.object({
   module: z.string().trim().min(1),
   call: z.string().trim().min(1),
-  args: z.array(z.unknown()).optional(),
+  args: z.array(qaFlowModuleArgSchema).optional(),
 });
+const qaSharedFlowSchema = z
+  .object({
+    shared: z.enum(["channel-access-control", "channel-restart-resume"]),
+  })
+  .strict();
+const qaFlowProviderModeSchema = z.enum(["aimock", "live-frontier", "mock-openai"]);
 const qaFlowExecutionShape = {
-  providerMode: z.enum(["aimock", "live-frontier", "mock-openai"]).optional(),
+  providerMode: qaFlowProviderModeSchema.optional(),
   retryCount: z.number().int().min(0).max(1).optional(),
   runtime: z.enum(["openclaw", "codex"]).optional(),
+  liveConfiguredRuntime: z
+    .object({ id: z.literal("codex"), model: z.string().trim().min(1) })
+    .strict()
+    .optional(),
   timeoutMs: z.number().int().positive().optional(),
 };
 
 type QaScenarioModuleFlow = z.infer<typeof qaFlowModuleSchema>;
+type QaScenarioSharedFlow = z.infer<typeof qaSharedFlowSchema>;
 type QaScenarioFlowShape = { steps: unknown[] };
+
+const qaSharedFlowPreparationActions = [
+  { call: "waitForGatewayHealthy", args: [{ ref: "env" }, 60_000] },
+  { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
+  { resetTransport: true },
+] as const;
+// The DSL branch value is an action array, never a callable JavaScript `then`.
+const qaSharedFlowPositiveBranch = ["th", "en"].join("");
+
+function sendSharedFlowMarker(marker: string) {
+  return {
+    sendInbound: {
+      conversation: {
+        id: { ref: "config.conversationId" },
+        kind: { ref: "config.conversationKind" },
+      },
+      senderId: { ref: "config.senderId" },
+      senderName: "QA Driver",
+      text: {
+        expr: "`${config.mentionPrefix}Reply with only this exact marker: ${" + marker + "}`",
+      },
+    },
+  };
+}
+
+function setSharedFlowMarker(marker: string, prefix: string) {
+  return {
+    set: marker,
+    value: { expr: "`${config." + prefix + "}_${randomUUID().slice(0, 8).toUpperCase()}`" },
+  };
+}
+
+function waitForSharedFlowMarker(marker: string) {
+  return {
+    waitForOutbound: {
+      textIncludes: { ref: marker },
+      timeoutMs: { ref: "config.timeoutMs" },
+    },
+  };
+}
+
+const qaSharedFlows = {
+  "channel-access-control": {
+    steps: [
+      {
+        name: "enforces configured access policy",
+        actions: [
+          ...qaSharedFlowPreparationActions,
+          setSharedFlowMarker("marker", "markerPrefix"),
+          {
+            set: "outboundCount",
+            value: {
+              expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length",
+            },
+          },
+          sendSharedFlowMarker("marker"),
+          {
+            if: {
+              expr: "config.expectReply",
+              [qaSharedFlowPositiveBranch]: [waitForSharedFlowMarker("marker")],
+              else: [
+                {
+                  waitForNoOutbound: {
+                    quietMs: { ref: "config.timeoutMs" },
+                    sinceIndex: { ref: "outboundCount" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`",
+      },
+    ],
+  },
+  "channel-restart-resume": {
+    steps: [
+      {
+        name: "resumes after restart without replay",
+        actions: [
+          ...qaSharedFlowPreparationActions,
+          setSharedFlowMarker("firstMarker", "firstPrefix"),
+          sendSharedFlowMarker("firstMarker"),
+          waitForSharedFlowMarker("firstMarker"),
+          {
+            assert: {
+              expr: "typeof env.gateway.restartAfterStateMutation === 'function'",
+              message: "qa gateway child does not expose restartAfterStateMutation",
+            },
+          },
+          {
+            call: "env.gateway.restartAfterStateMutation",
+            args: [
+              {
+                lambda: {
+                  async: true,
+                  params: ["ctx"],
+                  expr: "Promise.resolve()",
+                },
+              },
+            ],
+          },
+          { call: "waitForGatewayHealthy", args: [{ ref: "env" }, 60_000] },
+          { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
+          setSharedFlowMarker("secondMarker", "secondPrefix"),
+          sendSharedFlowMarker("secondMarker"),
+          waitForSharedFlowMarker("secondMarker"),
+        ],
+        detailsExpr: "`${firstMarker} -> restart -> ${secondMarker}`",
+      },
+    ],
+  },
+} satisfies Record<QaScenarioSharedFlow["shared"], QaScenarioFlowShape>;
+
+function resolveQaScenarioFlowKind(
+  flow: QaScenarioFlowShape | QaScenarioModuleFlow | QaScenarioSharedFlow | undefined,
+): "module" | "steps" | undefined {
+  return flow ? ("module" in flow ? "module" : "steps") : undefined;
+}
 
 function normalizeQaScenarioFileMetadata<
   T extends { objective?: string; successCriteria?: string[] },
@@ -27,12 +175,25 @@ function normalizeQaScenarioFileMetadata<
   };
 }
 
+function resolveQaScenarioModuleArg(arg: unknown) {
+  const parsed = qaFlowModuleExportArgSchema.safeParse(arg);
+  if (!parsed.success) {
+    return arg;
+  }
+  return {
+    expr: `scenarioModule[${JSON.stringify(parsed.data.moduleExport)}]`,
+  };
+}
+
 function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
-  flow: TFlow | QaScenarioModuleFlow | undefined,
+  flow: TFlow | QaScenarioModuleFlow | QaScenarioSharedFlow | undefined,
   title: string,
 ) {
   if (!flow || "steps" in flow) {
     return flow;
+  }
+  if ("shared" in flow) {
+    return qaSharedFlows[flow.shared];
   }
   return {
     steps: [
@@ -45,12 +206,13 @@ function resolveQaScenarioFileFlow<TFlow extends QaScenarioFlowShape>(
           },
           {
             call: `scenarioModule.${flow.call}`,
-            ...(flow.args ? { args: flow.args } : {}),
+            ...(flow.args ? { args: flow.args.map(resolveQaScenarioModuleArg) } : {}),
             saveAs: "result",
           },
         ],
         detailsExpr:
           "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
+        resultExpr: "result",
       },
     ],
   };
@@ -71,5 +233,8 @@ export const qaScenarioModuleFlow = {
   moduleSchema: qaFlowModuleSchema,
   executionShape: qaFlowExecutionShape,
   normalizeMetadata: normalizeQaScenarioFileMetadata,
+  providerModeSchema: qaFlowProviderModeSchema,
+  resolveKind: resolveQaScenarioFlowKind,
   resolveFlow: resolveQaScenarioFileFlow,
+  sharedSchema: qaSharedFlowSchema,
 };

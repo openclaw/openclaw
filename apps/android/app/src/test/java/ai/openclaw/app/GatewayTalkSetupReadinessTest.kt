@@ -4,6 +4,7 @@ import ai.openclaw.app.i18n.NativeText
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,16 +22,16 @@ class GatewayTalkSetupReadinessTest {
       assertEquals(title, target.title)
       val issueCases =
         listOf(
-          GatewayTalkSetupIssue.GroupMissing(target) to "Gateway did not return \${issue.target.title} setup",
-          GatewayTalkSetupIssue.NoProvider(target) to
+          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.GroupMissing, target) to "Gateway did not return \${issue.target.title} setup",
+          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.NoProvider, target) to
             "No \${issue.target.title} provider is configured on the Gateway",
-          GatewayTalkSetupIssue.MissingReadiness(target) to
+          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingReadiness, target) to
             "Gateway did not return \${issue.target.title} readiness",
-          GatewayTalkSetupIssue.ConfigureProvider(target) to
+          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, target) to
             "Configure a \${issue.target.title} provider on the Gateway",
-          GatewayTalkSetupIssue.MissingActiveProvider(target) to
+          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingActiveProvider, target) to
             "Gateway did not identify the active \${issue.target.title} provider",
-          GatewayTalkSetupIssue.UnsupportedProvider(target) to
+          GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.UnsupportedProvider, target) to
             "Choose a supported \${issue.target.title} provider on the Gateway",
         )
       for ((issue, template) in issueCases) {
@@ -90,6 +91,15 @@ class GatewayTalkSetupReadinessTest {
     val dictation = readiness.dictation as GatewayTalkSetupState.Ready
     assertEquals("OpenAI Realtime", realtime.provider?.label)
     assertEquals("Deepgram", dictation.provider.label)
+  }
+
+  @Test
+  fun browserOnlyModelsSkipAndroidRealtimeRelay() {
+    assertFalse(isAndroidRealtimeRelayModelSupported("gpt-live"))
+    assertFalse(isAndroidRealtimeRelayModelSupported(" GPT-LIVE-future "))
+    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-realtime-2.1"))
+    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-liveness"))
+    assertTrue(isAndroidRealtimeRelayModelSupported(null))
   }
 
   @Test

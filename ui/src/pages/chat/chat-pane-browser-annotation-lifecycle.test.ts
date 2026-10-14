@@ -1,0 +1,421 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+/* @vitest-environment-options {"url":"http://chat-pane-browser-annotation-lifecycle.test/"} */
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import "../../lib/toast-host.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
+  createSessionCapabilityFixture,
+  createPaneTestHost,
+  getPaneTestRuntime,
+  createSessionContext,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("staged attachment composer adoption", () => {
+  function annotationEvent() {
+    return new CustomEvent<BrowserAnnotationDraft>("openclaw:browser-annotation", {
+      detail: {
+        modelContext: "Generated page context",
+        dataUrl: "data:image/png;base64,aGVsbG8=",
+        fileName: "annotated-page.png",
+        card: {
+          title: "Example Domain",
+          displayUrl: "example.com",
+          markedRegionCount: 2,
+          inspectedElement: true,
+        },
+      },
+      cancelable: true,
+    });
+  }
+
+  function storedAttachment(id: string, browserAnnotation: boolean) {
+    return registerChatAttachmentPayload({
+      attachment: {
+        id,
+        mimeType: "image/png",
+        ...(browserAnnotation
+          ? {
+              browserAnnotation: {
+                modelContext: "Context",
+                title: "Page",
+                displayUrl: "example.com",
+                markedRegionCount: 1,
+                inspectedElement: false,
+              },
+            }
+          : {}),
+      },
+      dataUrl: `data:image/png;base64,${id}`,
+      file: new File([id], `${id}.png`, { type: "image/png" }),
+    });
+  }
+
+  function connectPaneThroughAttachmentRestore(
+    context: ApplicationContext,
+    paneId: string,
+    sessionKey: string,
+  ): TestChatPane {
+    // SAFETY: The fixture uses the real pane runtime and its forwarded test surface.
+    const pane = createPaneTestHost(
+      "openclaw-chat-runtime-test",
+      ChatPaneRuntime,
+    ) as unknown as TestChatPane;
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+    pane.context = context;
+    pane.paneId = paneId;
+    pane.sessionKey = sessionKey;
+    const stopAfterRestore = new Error("stop after attachment restore");
+    vi.spyOn(pane.chatState.composerPersistence, "start").mockImplementation(() => {
+      throw stopAfterRestore;
+    });
+    expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterRestore);
+    return pane;
+  }
+
+  it("transfers the mounted package and releases fallback-only payloads on disconnect", () => {
+    const owner = {} as GatewayBrowserClient;
+    const context = createSessionContext(owner, createSessionCapabilityFixture());
+    const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:current");
+    const state = pane.state;
+    const shared = storedAttachment("shared-annotation", true);
+    const fallback = storedAttachment("fallback-annotation", true);
+    const ordinary = storedAttachment("ordinary", false);
+    state.chatAttachments = [shared, ordinary];
+    state.chatComposerFallbackByScope = {
+      fallback: {
+        attachments: [shared, fallback, ordinary],
+        message: "",
+        sequence: 1,
+        storageFailed: false,
+      },
+    };
+    const scopeKey = storedChatOutboxScopeKey(
+      resolveUiConversationIdentity(state, state.sessionKey),
+    );
+
+    pane.disconnectedCallback();
+
+    expect(getChatAttachmentDataUrl(shared)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(fallback)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
+    const transferred = pane.context.chatAttachmentHandoff.consume({
+      owner,
+      paneId: pane.paneId,
+      scopeKey,
+    });
+    expect(transferred?.attachments).toEqual([shared, ordinary]);
+    expect(transferred?.attachments[0]).toBe(shared);
+    expect(transferred?.attachments[1]).toBe(ordinary);
+    expect(transferred?.fallbacks.fallback).toMatchObject({
+      message: "",
+      sequence: 1,
+      storageFailed: false,
+    });
+    expect(transferred?.fallbacks.fallback?.attachments).toEqual([shared, fallback, ordinary]);
+    releaseChatAttachmentPayload(shared.id);
+    releaseChatAttachmentPayload(fallback.id);
+    releaseChatAttachmentPayload(ordinary.id);
+  });
+
+  it("releases a real pane's late disconnect after application disposal", () => {
+    const owner = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client: owner,
+      sessions: {} as SessionCapability,
+    });
+    pane.active = true;
+    (
+      pane as TestChatPane & { receiveBrowserAnnotation: (candidate: Event) => void }
+    ).receiveBrowserAnnotation(annotationEvent());
+    const annotation = state.chatAttachments[0]!;
+    const ordinary = storedAttachment("late-dispose-ordinary", false);
+    state.chatAttachments.push(ordinary);
+    const scopeKey = storedChatOutboxScopeKey(
+      resolveUiConversationIdentity(state, state.sessionKey),
+    );
+    pane.context.chatAttachmentHandoff.dispose();
+
+    pane.disconnectedCallback();
+
+    expect(getChatAttachmentDataUrl(annotation)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+    expect(
+      pane.context.chatAttachmentHandoff.consume({
+        owner,
+        paneId: pane.paneId,
+        scopeKey,
+      }),
+    ).toBeNull();
+  });
+
+  it("restores each retained session package under the same logical pane", () => {
+    const owner = {} as GatewayBrowserClient;
+    const context = createSessionContext(owner, createSessionCapabilityFixture());
+    const first = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:first");
+    const second = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:second");
+    const firstAttachment = storedAttachment("retained-first", false);
+    const secondAttachment = storedAttachment("retained-second", false);
+    first.state.chatAttachments = [firstAttachment];
+    second.state.chatAttachments = [secondAttachment];
+
+    first.disconnectedCallback();
+    second.disconnectedCallback();
+
+    const secondRemount = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:second");
+    const firstRemount = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:first");
+    expect(secondRemount.state.chatAttachments).toEqual([secondAttachment]);
+    expect(firstRemount.state.chatAttachments).toEqual([firstAttachment]);
+    secondRemount.discardStagedAttachments?.();
+    firstRemount.discardStagedAttachments?.();
+    secondRemount.disconnectedCallback();
+    firstRemount.disconnectedCallback();
+  });
+
+  it.each(["split", "dock"] as const)(
+    "lets only the active %s pane consume a shared annotation event",
+    (surface) => {
+      const first = createTestChatPane({
+        client: {} as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      const second = createTestChatPane({
+        client: {} as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      second.pane.context = first.pane.context;
+      first.pane.active = surface === "dock";
+      if (surface === "dock") {
+        (second.pane as TestChatPane & { inputRegion: string }).inputRegion = "dock";
+        chatInputOwnerForContext(first.pane.context).claim("dock");
+      }
+      second.pane.active = true;
+      first.state.chatAttachments = [];
+      second.state.chatAttachments = [];
+      const event = new CustomEvent<BrowserAnnotationDraft>("openclaw:browser-annotation", {
+        detail: {
+          modelContext: "Context",
+          dataUrl: "data:image/png;base64,aGVsbG8=",
+          fileName: "annotated-page.png",
+          card: {
+            title: "",
+            displayUrl: "example.com",
+            markedRegionCount: 1,
+            inspectedElement: false,
+          },
+        },
+        cancelable: true,
+      });
+
+      const receive = (pane: TestChatPane) =>
+        (
+          pane as TestChatPane & { receiveBrowserAnnotation: (candidate: Event) => void }
+        ).receiveBrowserAnnotation(event);
+      receive(first.pane);
+      receive(second.pane);
+      receive(first.pane);
+
+      expect(first.state.chatAttachments).toEqual([]);
+      expect(second.state.chatAttachments).toHaveLength(1);
+      expect(event.defaultPrevented).toBe(true);
+      second.pane.discardStagedAttachments?.();
+    },
+  );
+
+  it("restores through a new pane after a null mount acquires its first Gateway client", () => {
+    const client = {} as GatewayBrowserClient;
+    const context = createSessionContext(client, createSessionCapabilityFixture());
+    (context.gateway.snapshot as { client: GatewayBrowserClient | null }).client = null;
+    const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:delayed-client");
+    pane.active = true;
+    (context.gateway.snapshot as { client: GatewayBrowserClient | null }).client = client;
+
+    (
+      pane as TestChatPane & { receiveBrowserAnnotation: (candidate: Event) => void }
+    ).receiveBrowserAnnotation(annotationEvent());
+    const captured = pane.state.chatAttachments[0]!;
+    pane.disconnectedCallback();
+
+    const remount = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:delayed-client");
+    remount.applyGatewaySnapshot(context.gateway.snapshot);
+    expect(remount.state.chatAttachments[0]).toBe(captured);
+    remount.discardStagedAttachments?.();
+    remount.disconnectedCallback();
+  });
+
+  it("rejects a new pane after client replacement instead of relabeling staged annotations", () => {
+    const owner = {} as GatewayBrowserClient;
+    const replacement = {} as GatewayBrowserClient;
+    const context = createSessionContext(owner, createSessionCapabilityFixture());
+    const pane = connectPaneThroughAttachmentRestore(context, "p1", "agent:main:replaced-client");
+    pane.active = true;
+    (
+      pane as TestChatPane & { receiveBrowserAnnotation: (candidate: Event) => void }
+    ).receiveBrowserAnnotation(annotationEvent());
+    const captured = pane.state.chatAttachments[0]!;
+    (context.gateway.snapshot as { client: GatewayBrowserClient | null }).client = replacement;
+
+    pane.disconnectedCallback();
+    const remount = connectPaneThroughAttachmentRestore(
+      context,
+      "p1",
+      "agent:main:replaced-client",
+    );
+    expect(remount.state.chatAttachments).toEqual([]);
+    expect(getChatAttachmentDataUrl(captured)).toBeNull();
+    remount.disconnectedCallback();
+  });
+
+  it("preserves the package on same-client reconnect and clears it on replacement", () => {
+    const owner = {} as GatewayBrowserClient;
+    const replacement = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client: owner,
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    (
+      pane as TestChatPane & { receiveBrowserAnnotation: (candidate: Event) => void }
+    ).receiveBrowserAnnotation(annotationEvent());
+    pane.active = false;
+    const current = state.chatAttachments[0]!;
+    const fallback = storedAttachment("replacement-fallback", true);
+    const ordinary = storedAttachment("replacement-ordinary", false);
+    state.chatAttachments.push(ordinary);
+    state.chatComposerFallbackByScope = {
+      fallback: {
+        attachments: [fallback, ordinary],
+        message: "",
+        sequence: 1,
+        storageFailed: false,
+      },
+    };
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client: owner,
+      phase: "reconnecting",
+      hello: null,
+    });
+    expect(state.chatAttachments).toEqual([current, ordinary]);
+    expect(getChatAttachmentDataUrl(current)).not.toBeNull();
+
+    const stopAfterAnnotationOwner = new Error("stop after annotation owner");
+    const cancelHeaderRename = vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
+      throw stopAfterAnnotationOwner;
+    });
+    expect(() =>
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        client: owner,
+        phase: "connected",
+      }),
+    ).toThrow(stopAfterAnnotationOwner);
+    cancelHeaderRename.mockRestore();
+    expect(state.chatAttachments).toEqual([current, ordinary]);
+    expect(getChatAttachmentDataUrl(current)).not.toBeNull();
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client: replacement,
+      phase: "reconnecting",
+      hello: null,
+    });
+    // Rotation invalidates annotation-backed attachments only; plain payloads
+    // are client-local and survive (live state and fallbacks alike).
+    expect(state.chatAttachments).toEqual([ordinary]);
+    expect(state.chatComposerFallbackByScope.fallback?.attachments).toEqual([ordinary]);
+    expect(getChatAttachmentDataUrl(current)).toBeNull();
+    expect(getChatAttachmentDataUrl(fallback)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
+  });
+
+  it("discards a staged package captured without a client when the first client arrives", () => {
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    pane.connectedClient = null;
+    (pane.context.gateway.snapshot as { client: GatewayBrowserClient | null }).client = null;
+    (
+      pane as TestChatPane & { receiveBrowserAnnotation: (candidate: Event) => void }
+    ).receiveBrowserAnnotation(annotationEvent());
+    const annotation = state.chatAttachments[0]!;
+    const ordinary = storedAttachment("no-client-ordinary", false);
+    state.chatAttachments.push(ordinary);
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(state.chatAttachments).toEqual([ordinary]);
+    expect(getChatAttachmentDataUrl(annotation)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
+  });
+
+  it("invalidates annotation Undo when the logical Gateway client is replaced", async () => {
+    const owner = {} as GatewayBrowserClient;
+    const replacement = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client: owner,
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    (
+      pane as TestChatPane & { receiveBrowserAnnotation: (candidate: Event) => void }
+    ).receiveBrowserAnnotation(annotationEvent());
+    const annotation = state.chatAttachments[0]!;
+    const ordinary = storedAttachment("undo-ordinary", false);
+    state.chatAttachments.push(ordinary);
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+
+    (
+      pane as TestChatPane & {
+        removeBrowserAnnotation: (attachment: (typeof state.chatAttachments)[number]) => void;
+      }
+    ).removeBrowserAnnotation(annotation);
+    await waitForSolid(() =>
+      expect(toastHost.querySelector(".app-toast__action")?.textContent).toBe("Undo"),
+    );
+    expect(state.chatAttachments).toEqual([ordinary]);
+    expect(getChatAttachmentDataUrl(annotation)).not.toBeNull();
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client: replacement,
+      phase: "reconnecting",
+      hello: null,
+    });
+    toastHost.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+
+    expect(state.chatAttachments).toEqual([ordinary]);
+    expect(getChatAttachmentDataUrl(annotation)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
+    toastHost.remove();
+  });
+});

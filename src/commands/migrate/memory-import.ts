@@ -3,10 +3,7 @@ import { MAX_MEMORY_MIGRATION_ITEMS } from "../../../packages/gateway-protocol/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindMemoryMigrationPlanSources } from "../../plugin-sdk/memory-migration-source.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
-import {
-  ensureStandaloneMigrationProviderRegistryLoaded,
-  resolvePluginMigrationProviders,
-} from "../../plugins/migration-provider-runtime.js";
+import { withPluginMigrationProviders } from "../../plugins/migration-provider-runtime.js";
 import type {
   MigrationApplyResult,
   MigrationDetection,
@@ -26,10 +23,17 @@ const silentRuntime: RuntimeEnv = {
   },
 };
 
-export function listMemoryMigrationProviders(config: OpenClawConfig): MigrationProviderPlugin[] {
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: config });
-  return resolvePluginMigrationProviders({ cfg: config }).filter((provider) =>
-    provider.supportedItemKinds?.includes(MEMORY_ITEM_KIND),
+export async function withMemoryMigrationProviders<T>(
+  config: OpenClawConfig,
+  run: (providers: MigrationProviderPlugin[]) => Promise<T>,
+  onCleanupError?: (error: unknown) => void | Promise<void>,
+): Promise<T> {
+  return await withPluginMigrationProviders(
+    { cfg: config, onCleanupError },
+    async (providers) =>
+      await run(
+        providers.filter((provider) => provider.supportedItemKinds?.includes(MEMORY_ITEM_KIND)),
+      ),
   );
 }
 
@@ -103,6 +107,7 @@ export async function applyProviderMemoryImport(params: {
   overwrite?: boolean;
   preflightPlan: MigrationPlan;
   runtime?: RuntimeEnv;
+  onApplyCompleted?: () => void;
 }): Promise<MigrationApplyResult> {
   return await runMigrationApply({
     // Default silent: embedded surfaces (wizard, gateway) render their own
@@ -110,6 +115,7 @@ export async function applyProviderMemoryImport(params: {
     runtime: params.runtime ?? silentRuntime,
     providerId: params.provider.id,
     provider: params.provider,
+    onApplyCompleted: params.onApplyCompleted,
     opts: {
       yes: true,
       json: true,

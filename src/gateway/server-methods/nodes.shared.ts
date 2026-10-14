@@ -2,16 +2,19 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   isNodePairingGenerationCurrent,
   type NodePairingGeneration,
-} from "../../infra/node-pairing-state.js";
+} from "../../infra/device-pairing-node-state.js";
 import type { NodeSession } from "../node-registry.js";
 import { isNodeWakeLifecycleCurrent, type NodeWakeLifecycle } from "../node-wake-state.js";
 import type { RespondFn } from "./shared-types.js";
 
-export function respondPairingChanged(respond: RespondFn) {
+export function respondPairingChanged(
+  respond: RespondFn,
+  operation: "invocation" | "pending work" = "invocation",
+) {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed while invocation was active", {
+    errorShape(ErrorCodes.UNAVAILABLE, `node pairing changed while ${operation} was active`, {
       retryable: true,
       details: { code: "PAIRING_CHANGED" },
     }),

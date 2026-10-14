@@ -54,7 +54,8 @@ function firstFetchUrl(fetchSpy: ReturnType<typeof setMockFetch>): string {
 function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
   useTrustedEnvProxy?: boolean;
-  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
+  ssrfPolicy?: ssrf.SsrFPolicy;
+  hostnameAllowlist?: string[];
   cacheTtlMinutes?: number;
 }) {
   return createWebFetchTool({
@@ -84,6 +85,7 @@ function createWebFetchToolForTest(params?: {
       },
     },
     lookupFn: lookupMock,
+    hostnameAllowlistRef: { value: params?.hostnameAllowlist },
   });
 }
 
@@ -134,6 +136,19 @@ describe("web_fetch SSRF protection", () => {
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
+  it("allows loopback with an explicit private-network opt-in", async () => {
+    lookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("local ok"));
+    const tool = createWebFetchToolForTest({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+
+    const result = await tool?.execute?.("call", { url: "http://127.0.0.1/test" });
+
+    expectRawFetchSuccessDetails(result?.details);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
   it("blocks when DNS resolves to private addresses", async () => {
     lookupMock.mockImplementation(async (hostname: string) => {
       if (hostname === "public.test") {
@@ -165,44 +180,97 @@ describe("web_fetch SSRF protection", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("allows public hosts", async () => {
+  it("blocks a turn-scoped domain-policy miss with recovery guidance", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("not permitted"));
+    const tool = createWebFetchToolForTest({
+      hostnameAllowlist: ["example.com", "*.example.com"],
+    });
 
-    setMockFetch().mockResolvedValue(textResponse("ok"));
-    const tool = createWebFetchToolForTest();
+    await expectBlockedUrl(
+      tool,
+      "https://www.nytimes.com/",
+      /domain policy: blocked hostname.*example\.com.*Try a URL on a permitted domain/i,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
 
-    const result = await tool?.execute?.("call", { url: "https://example.com" });
+  it("allows a turn-scoped domain-policy match", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("permitted"));
+    const tool = createWebFetchToolForTest({
+      hostnameAllowlist: ["example.com", "*.example.com"],
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/" });
+
     expectRawFetchSuccessDetails(result?.details);
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
-  it("preserves trailing Unicode URL text through tool argument parsing", async () => {
+  it("does not reuse an unrestricted cache entry across a domain policy", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ok"));
-    const tool = createWebFetchToolForTest();
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("cached outside content"));
+    const url = "https://outside.test/cached-policy-boundary";
+    const unrestricted = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await unrestricted?.execute?.("call", { url });
+    const restricted = createWebFetchToolForTest({
+      ssrfPolicy: { hostnameAllowlist: ["example.com", "*.example.com"] },
+      cacheTtlMinutes: 1,
+    });
 
-    await tool?.execute?.("call", { url: "https://example.com/a\u00a0" });
-
-    expect(firstFetchUrl(fetchSpy)).toBe("https://example.com/a%C2%A0");
+    await expectBlockedUrl(
+      restricted,
+      url,
+      /domain policy: blocked hostname.*example\.com.*Try a URL on a permitted domain/i,
+    );
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
-  it("trims leading Unicode whitespace through tool argument parsing", async () => {
+  it.each([
+    {
+      name: "removes whitespace between scheme and authority (reported bug)",
+      input: "https:// docs.openclaw.ai",
+      expectedUrl: "https://docs.openclaw.ai",
+      expectedFetchUrl: "https://docs.openclaw.ai/",
+    },
+    {
+      name: "trims leading Unicode whitespace",
+      input: "\u00a0\ufeffhttps://example.com",
+      expectedUrl: "https://example.com",
+      expectedFetchUrl: "https://example.com/",
+    },
+    {
+      name: "trims trailing newlines",
+      input: "https://example.com\n",
+      expectedUrl: "https://example.com",
+      expectedFetchUrl: "https://example.com/",
+    },
+    {
+      name: "preserves trailing Unicode whitespace in paths",
+      input: "https://example.com/a\u00a0",
+      expectedUrl: "https://example.com/a\u00a0",
+      expectedFetchUrl: "https://example.com/a%C2%A0",
+    },
+    {
+      name: "trims trailing Unicode whitespace after a bare authority",
+      input: "https://example.com\u00a0",
+      expectedUrl: "https://example.com",
+      expectedFetchUrl: "https://example.com/",
+    },
+  ])("$name through web_fetch", async ({ input, expectedUrl, expectedFetchUrl }) => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ok"));
+    const fetchSpy = setMockFetch().mockResolvedValue(
+      new Response("ok", { headers: { "content-type": "text/plain" } }),
+    );
     const tool = createWebFetchToolForTest();
 
-    await tool?.execute?.("call", { url: "\u00a0\ufeffhttps://example.com" });
+    const result = await tool?.execute?.("call", { url: input });
 
-    expect(firstFetchUrl(fetchSpy)).toBe("https://example.com/");
-  });
-
-  it("trims trailing Unicode whitespace after a bare authority", async () => {
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ok"));
-    const tool = createWebFetchToolForTest();
-
-    await tool?.execute?.("call", { url: "https://example.com\u2003" });
-
-    expect(firstFetchUrl(fetchSpy)).toBe("https://example.com/");
+    expect(result?.details).toMatchObject({ url: expectedUrl, status: 200, extractor: "raw" });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(firstFetchUrl(fetchSpy)).toBe(expectedFetchUrl);
   });
 
   it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {

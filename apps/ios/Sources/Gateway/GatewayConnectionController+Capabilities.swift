@@ -16,13 +16,38 @@ struct GatewayManualTransportPresentation: Equatable {
 }
 
 extension GatewayConnectionController {
-    func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
-        let scheme = useTLS ? "wss" : "ws"
-        var components = URLComponents()
-        components.scheme = scheme
-        components.host = host
-        components.port = port
-        return components.url
+    /// Rebuild connect options from current local settings (caps/commands/permissions)
+    /// and re-apply the active gateway config so capability changes take effect immediately.
+    @discardableResult
+    func refreshActiveGatewayRegistrationFromSettings() -> Task<Void, Never> {
+        Task { [weak self] in
+            guard let self, let appModel = self.appModel,
+                  let cfg = appModel.activeGatewayConnectConfig,
+                  appModel.gatewayAutoReconnectEnabled
+            else { return }
+            let generation = appModel.gatewayConnectGeneration
+            var refreshedConfig = cfg
+            refreshedConfig.nodeOptions = await self.makeConnectOptions(
+                deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
+                allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+            guard !Task.isCancelled,
+                  !self.hasPendingForgetCleanup(stableID: cfg.stableID),
+                  cfg.ingressAuthorization?.isCurrent() != false else { return }
+            appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+        }
+    }
+
+    func buildGatewayURL(
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        contextPath: String? = nil) -> URL?
+    {
+        GatewayConnectEndpoint(
+            host: host,
+            port: port,
+            tls: useTLS,
+            contextPath: contextPath).websocketURL
     }
 
     func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
@@ -51,45 +76,30 @@ extension GatewayConnectionController {
             helperText: helperText)
     }
 
-    func manualStableID(host: String, port: Int) -> String {
-        ManualAuthOverride.manualStableID(host: host, port: port)
+    func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {
+        ManualAuthOverride.manualStableID(host: host, port: port, contextPath: contextPath)
     }
 
     func makeConnectOptions(
-        stableID: String?,
         deviceAuthGatewayID: String?,
         allowStoredDeviceAuth: Bool = true) async -> GatewayConnectOptions
     {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
-        let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
         let permissions = await self.currentPermissions()
+        let caps = self.currentCaps()
 
         return GatewayConnectOptions(
             role: "node",
             scopes: [],
-            caps: self.currentCaps(),
-            commands: self.currentCommands(),
+            caps: caps,
+            commands: Self.commands(for: caps),
             permissions: permissions,
-            clientId: resolvedClientId,
+            clientId: "openclaw-ios",
             clientMode: "node",
             clientDisplayName: displayName,
             allowStoredDeviceAuth: allowStoredDeviceAuth,
             deviceAuthGatewayID: GatewayStableIdentifier.exact(deviceAuthGatewayID))
-    }
-
-    private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
-        if let stableID,
-           let override = GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID)
-        {
-            return override
-        }
-        let manualClientId = defaults.string(forKey: "gateway.manual.clientId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if manualClientId?.isEmpty == false {
-            return manualClientId!
-        }
-        return "openclaw-ios"
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
@@ -107,10 +117,7 @@ extension GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [
-            OpenClawCapability.canvas.rawValue,
-            OpenClawCapability.screen.rawValue,
-        ]
+        var caps = [OpenClawCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
@@ -145,16 +152,8 @@ extension GatewayConnectionController {
         return caps
     }
 
-    private func currentCommands() -> [String] {
-        var commands: [String] = [
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
+    private static func commands(for caps: [String]) -> [String] {
+        [
             OpenClawScreenCommand.record.rawValue,
             OpenClawSystemCommand.notify.rawValue,
             OpenClawChatCommand.push.rawValue,
@@ -162,49 +161,36 @@ extension GatewayConnectionController {
             OpenClawTalkCommand.pttStop.rawValue,
             OpenClawTalkCommand.pttCancel.rawValue,
             OpenClawTalkCommand.pttOnce.rawValue,
-        ]
-
-        let caps = Set(self.currentCaps())
-        if caps.contains(OpenClawCapability.camera.rawValue) {
-            commands.append(OpenClawCameraCommand.list.rawValue)
-            commands.append(OpenClawCameraCommand.snap.rawValue)
-            commands.append(OpenClawCameraCommand.clip.rawValue)
+        ] + caps.flatMap { capability -> [String] in
+            switch capability {
+            case OpenClawCapability.camera.rawValue:
+                [
+                    OpenClawCameraCommand.list.rawValue,
+                    OpenClawCameraCommand.snap.rawValue,
+                    OpenClawCameraCommand.clip.rawValue,
+                ]
+            case OpenClawCapability.location.rawValue:
+                [OpenClawLocationCommand.get.rawValue]
+            case OpenClawCapability.device.rawValue:
+                [OpenClawDeviceCommand.status.rawValue, OpenClawDeviceCommand.info.rawValue]
+            case OpenClawCapability.watch.rawValue:
+                [OpenClawWatchCommand.status.rawValue, OpenClawWatchCommand.notify.rawValue]
+            case OpenClawCapability.photos.rawValue:
+                [OpenClawPhotosCommand.latest.rawValue]
+            case OpenClawCapability.contacts.rawValue:
+                [OpenClawContactsCommand.search.rawValue, OpenClawContactsCommand.add.rawValue]
+            case OpenClawCapability.calendar.rawValue:
+                [OpenClawCalendarCommand.events.rawValue, OpenClawCalendarCommand.add.rawValue]
+            case OpenClawCapability.reminders.rawValue:
+                [OpenClawRemindersCommand.list.rawValue, OpenClawRemindersCommand.add.rawValue]
+            case OpenClawCapability.motion.rawValue:
+                [OpenClawMotionCommand.activity.rawValue, OpenClawMotionCommand.pedometer.rawValue]
+            case OpenClawCapability.health.rawValue:
+                [OpenClawHealthCommand.summary.rawValue]
+            default:
+                []
+            }
         }
-        if caps.contains(OpenClawCapability.location.rawValue) {
-            commands.append(OpenClawLocationCommand.get.rawValue)
-        }
-        if caps.contains(OpenClawCapability.device.rawValue) {
-            commands.append(OpenClawDeviceCommand.status.rawValue)
-            commands.append(OpenClawDeviceCommand.info.rawValue)
-        }
-        if caps.contains(OpenClawCapability.watch.rawValue) {
-            commands.append(OpenClawWatchCommand.status.rawValue)
-            commands.append(OpenClawWatchCommand.notify.rawValue)
-        }
-        if caps.contains(OpenClawCapability.photos.rawValue) {
-            commands.append(OpenClawPhotosCommand.latest.rawValue)
-        }
-        if caps.contains(OpenClawCapability.contacts.rawValue) {
-            commands.append(OpenClawContactsCommand.search.rawValue)
-            commands.append(OpenClawContactsCommand.add.rawValue)
-        }
-        if caps.contains(OpenClawCapability.calendar.rawValue) {
-            commands.append(OpenClawCalendarCommand.events.rawValue)
-            commands.append(OpenClawCalendarCommand.add.rawValue)
-        }
-        if caps.contains(OpenClawCapability.reminders.rawValue) {
-            commands.append(OpenClawRemindersCommand.list.rawValue)
-            commands.append(OpenClawRemindersCommand.add.rawValue)
-        }
-        if caps.contains(OpenClawCapability.motion.rawValue) {
-            commands.append(OpenClawMotionCommand.activity.rawValue)
-            commands.append(OpenClawMotionCommand.pedometer.rawValue)
-        }
-        if caps.contains(OpenClawCapability.health.rawValue) {
-            commands.append(OpenClawHealthCommand.summary.rawValue)
-        }
-
-        return commands
     }
 
     private func currentPermissions() async -> [String: Bool] {
@@ -213,10 +199,9 @@ extension GatewayConnectionController {
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
         let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
-        let locationServicesEnabled = await Self.locationServicesEnabled()
-        permissions["location"] = Self.isLocationAvailable(
-            servicesEnabled: locationServicesEnabled,
-            status: locationStatus)
+        permissions["location"] = await Self.isLocationAvailable(
+            status: locationStatus,
+            servicesEnabled: LocationService.servicesEnabled)
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
         permissions["photos"] = PhotoLibraryAccess.canRead(PhotoLibraryAccess.authorizationStatus())
@@ -236,19 +221,17 @@ extension GatewayConnectionController {
         return permissions
     }
 
-    private static func locationServicesEnabled() async -> Bool {
-        await Task.detached(priority: .utility) {
-            CLLocationManager.locationServicesEnabled()
-        }.value
-    }
-
-    private static func isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
-        guard servicesEnabled else { return false }
+    private static func isLocationAvailable(
+        status: CLAuthorizationStatus,
+        servicesEnabled: @MainActor () async -> Bool) async -> Bool
+    {
+        // An unauthorized app cannot use location regardless of the global switch;
+        // registration need not wait for that system probe to report false.
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            return true
+            await servicesEnabled()
         default:
-            return false
+            false
         }
     }
 
@@ -267,12 +250,8 @@ extension GatewayConnectionController {
         self.resolvedDisplayName(defaults: defaults)
     }
 
-    func _test_currentCaps() -> [String] {
-        self.currentCaps()
-    }
-
     func _test_currentCommands() -> [String] {
-        self.currentCommands()
+        Self.commands(for: self.currentCaps())
     }
 
     func _test_currentPermissions() async -> [String: Bool] {
@@ -283,8 +262,11 @@ extension GatewayConnectionController {
         self.hasEventKitReadAccess(status)
     }
 
-    static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
-        self.isLocationAvailable(servicesEnabled: servicesEnabled, status: status)
+    static func _test_isLocationAvailable(
+        status: CLAuthorizationStatus,
+        servicesEnabled: @MainActor () async -> Bool) async -> Bool
+    {
+        await self.isLocationAvailable(status: status, servicesEnabled: servicesEnabled)
     }
 
     func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {

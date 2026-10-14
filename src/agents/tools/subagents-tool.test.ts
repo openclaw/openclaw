@@ -1,166 +1,175 @@
-// Subagents tool tests cover requester-scoped task listing and cancellation.
-import { describe, expect, it, vi } from "vitest";
-import type { TaskRecord, TaskRuntime, TaskStatus } from "../../tasks/task-registry.types.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { createSubagentsTool } from "./subagents-tool.js";
-
-function task(params: {
-  taskId: string;
-  runtime: TaskRuntime;
-  status?: TaskStatus;
-  ownerKey?: string;
-  requesterSessionKey?: string;
-  childSessionKey?: string;
-  label?: string;
-  progressSummary?: string;
-  terminalSummary?: string;
-}): TaskRecord {
+const owner = vi.hoisted(() => ({
+  runs: [] as SubagentRunRecord[],
+  listeners: new Set<() => void>(),
+  cancel: vi.fn(),
+}));
+vi.mock("../subagents/registry/subagent-control.js", () => ({
+  DEFAULT_RECENT_MINUTES: 30,
+  MAX_RECENT_MINUTES: 1440,
+  resolveSubagentController: () => ({
+    controllerSessionKey: "agent:main:main",
+    controllerAgentId: "main",
+    callerSessionKey: "agent:main:main",
+    callerIsSubagent: false,
+    controlScope: "children",
+  }),
+  buildControlledSubagentRunsReadContext: async () => ({ list: {} }),
+  killSubagentRunAdmin: owner.cancel,
+}));
+vi.mock("../subagents/registry/subagent-control-scope.js", async (importOriginal) => {
+  const { resolveSubagentController, resolveSubagentControllerIdentity } =
+    await importOriginal<typeof import("../subagents/registry/subagent-control-scope.js")>();
   return {
-    taskId: params.taskId,
-    runtime: params.runtime,
-    ownerKey: params.ownerKey ?? "agent:main:main",
-    requesterSessionKey: params.requesterSessionKey ?? "agent:main:main",
-    scopeKind: "session",
-    task: params.taskId,
-    status: params.status ?? "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "done_only",
-    createdAt: Date.now(),
-    lastEventAt: Date.now(),
-    ...(params.childSessionKey ? { childSessionKey: params.childSessionKey } : {}),
-    ...(params.label ? { label: params.label } : {}),
-    ...(params.progressSummary ? { progressSummary: params.progressSummary } : {}),
-    ...(params.terminalSummary ? { terminalSummary: params.terminalSummary } : {}),
+    resolveSubagentController,
+    resolveSubagentControllerIdentity,
+    ensureSubagentControllerOwnsRun: () => undefined,
+    listControlledSubagentRunFacts: (key: string) =>
+      owner.runs.filter((entry) => entry.requesterSessionKey === key),
   };
+});
+vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
+  getSubagentSessionListReadSnapshotIdentity: () => "ready",
+  prepareSubagentSessionListReadCache: async () => {},
+  prepareSubagentRunsSnapshotForRunIds: async () => ({
+    consume: (read: (snapshot: ReadonlyMap<string, SubagentRunRecord>) => unknown) => ({
+      ready: true,
+      value: read(new Map(owner.runs.map((entry) => [entry.runId, entry]))),
+    }),
+  }),
+}));
+vi.mock("../subagents/registry/subagent-registry-publication.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../subagents/registry/subagent-registry-publication.js")>();
+  return {
+    ...actual,
+    subscribeSubagentRunChanges: ((phase, listener) => {
+      if (phase === "projection") {
+        return actual.subscribeSubagentRunChanges(phase, listener);
+      }
+      const wake = () => listener({ runIds: undefined, sessionKeys: undefined });
+      owner.listeners.add(wake);
+      return () => owner.listeners.delete(wake);
+    }) satisfies typeof actual.subscribeSubagentRunChanges,
+  };
+});
+vi.mock("../subagents/registry/subagent-list.js", () => ({
+  readSubagentListSessionEntries: () => new Map(),
+  buildSubagentList: () => ({
+    total: owner.runs.length,
+    active: [],
+    recent: [],
+    text: "native subagents",
+  }),
+}));
+beforeEach(() => {
+  owner.runs = [];
+  owner.listeners.clear();
+  owner.cancel.mockReset();
+});
+function run() {
+  const entry = createSubagentRunRecord({
+    runId: "native-one",
+    childSessionKey: "agent:main:subagent:one",
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    generation: 1,
+  });
+  owner.runs = [entry];
+  return entry;
 }
-
-describe("subagents tool", () => {
-  it("advertises the unified task ledger", () => {
-    const tool = createSubagentsTool();
-
-    expect(tool.description).toBe("Background work: subagents, media gen, cron runs. list/cancel.");
-  });
-
-  it("lists cross-runtime tasks in the caller session tree", async () => {
-    const tasks = [
-      task({
-        taskId: "subagent-task",
-        runtime: "subagent",
-        childSessionKey: "agent:main:dashboard:child",
-        label: "Research",
-        progressSummary: "Reading",
-      }),
-      task({ taskId: "acp-task", runtime: "acp", status: "succeeded", terminalSummary: "Done" }),
-      task({ taskId: "cli-task", runtime: "cli" }),
-      task({ taskId: "cron-task", runtime: "cron" }),
-      task({
-        taskId: "outside-owner",
-        runtime: "cli",
-        ownerKey: "agent:other:main",
-        requesterSessionKey: "agent:main:main",
-      }),
-      task({
-        taskId: "child-task",
-        runtime: "cli",
-        ownerKey: "agent:main:dashboard:child",
-        requesterSessionKey: "agent:main:dashboard:child",
-      }),
-      task({
-        taskId: "outside",
-        runtime: "cron",
-        ownerKey: "agent:other:main",
-        requesterSessionKey: "agent:other:main",
-      }),
-    ];
-    const tool = createSubagentsTool({
-      agentSessionKey: "agent:main:main",
-      config: {},
-      listTasks: () => tasks,
+function tool() {
+  return createSubagentsTool({ config: {}, agentId: "main", agentSessionKey: "agent:main:main" });
+}
+describe("subagents native run contract", () => {
+  it("subscribes before reading and does not consume the completed result's delivery obligation", async () => {
+    const entry = run();
+    entry.delivery = { status: "pending" };
+    const pending = tool().execute("wait", { action: "wait", runIds: [entry.runId] });
+    expect(owner.listeners.size).toBe(1);
+    entry.execution = { status: "terminal", endedAt: 100, outcome: { status: "ok" } };
+    for (const emit of owner.listeners) {
+      emit();
+    }
+    expect((await pending).details).toMatchObject({
+      reason: "completed",
+      completed: [entry.runId],
+      runs: [{ runId: entry.runId, deliveryStatus: "pending" }],
     });
-
-    const result = await tool.execute("list", { action: "list" });
-
-    expect(result.details).toMatchObject({ status: "ok", taskTotal: 5 });
-    const rows = (result.details as { tasks: Array<Record<string, unknown>> }).tasks;
-    expect(rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          taskId: "subagent-task",
-          runtime: "subagent",
-          status: "running",
-          label: "Research",
-          progressSummary: "Reading",
-        }),
-        expect.objectContaining({
-          taskId: "acp-task",
-          runtime: "acp",
-          status: "completed",
-          terminalSummary: "Done",
-        }),
-        expect.objectContaining({ taskId: "cli-task", runtime: "cli" }),
-        expect.objectContaining({ taskId: "cron-task", runtime: "cron" }),
-        expect.objectContaining({ taskId: "child-task", runtime: "cli" }),
-      ]),
-    );
-    expect(rows).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ taskId: "outside" }),
-        expect.objectContaining({ taskId: "outside-owner" }),
-      ]),
-    );
+    expect(owner.listeners.size).toBe(0);
+    expect(entry.delivery.status).toBe("pending");
   });
-
-  it("cancels only tasks in the caller session tree", async () => {
-    const tasks = [
-      task({ taskId: "inside", runtime: "cli" }),
-      task({
-        taskId: "outside",
-        runtime: "cron",
-        ownerKey: "agent:other:main",
-        requesterSessionKey: "agent:other:main",
-      }),
-      task({
-        taskId: "outside-owner",
-        runtime: "cli",
-        ownerKey: "agent:other:main",
-        requesterSessionKey: "agent:main:main",
-      }),
-    ];
-    const cancelTask = vi.fn(async () => ({ found: true, cancelled: true }));
-    const tool = createSubagentsTool({
-      agentSessionKey: "agent:main:main",
-      config: {},
-      listTasks: () => tasks,
-      cancelTask: cancelTask as never,
+  it("rechecks wait ownership without disclosing revoked results and reports suspended delivery", async () => {
+    const entry = run();
+    const pending = tool().execute("wait", { action: "wait", runIds: [entry.runId] });
+    entry.requesterSessionKey = "agent:other:main";
+    entry.execution = {
+      status: "terminal",
+      endedAt: 100,
+      outcome: { status: "error", error: "FORMER_CHILD_PRIVATE_RESULT" },
+    };
+    for (const emit of owner.listeners) {
+      emit();
+    }
+    const revoked = await pending;
+    expect(revoked.details).toMatchObject({
+      reason: "unavailable",
+      unavailable: [entry.runId],
+      runs: [],
     });
-
-    await expect(tool.execute("cancel", { action: "cancel", taskId: "inside" })).resolves.toEqual(
-      expect.objectContaining({ details: expect.objectContaining({ status: "cancelled" }) }),
-    );
-    expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "inside" });
-
-    await expect(
-      tool.execute("cancel-outside", { action: "cancel", taskId: "outside" }),
-    ).resolves.toEqual(
-      expect.objectContaining({ details: expect.objectContaining({ status: "forbidden" }) }),
-    );
-    expect(cancelTask).toHaveBeenCalledTimes(1);
-
-    await expect(
-      tool.execute("cancel-outside-owner", { action: "cancel", taskId: "outside-owner" }),
-    ).resolves.toEqual(
-      expect.objectContaining({ details: expect.objectContaining({ status: "forbidden" }) }),
-    );
-    expect(cancelTask).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(revoked.details)).not.toContain("FORMER_CHILD_PRIVATE_RESULT");
+    entry.requesterSessionKey = "agent:main:main";
+    entry.delivery = { status: "suspended" };
+    expect(
+      (
+        await tool().execute("attention", {
+          action: "wait",
+          runIds: [entry.runId],
+          timeoutSeconds: 0,
+        })
+      ).details,
+    ).toMatchObject({ reason: "attention", attention: [entry.runId] });
+    expect(owner.cancel).not.toHaveBeenCalled();
   });
-
-  it.each([0, 1.5])("rejects invalid recentMinutes value %s", async (recentMinutes) => {
-    const tool = createSubagentsTool();
-
+  it("zero-timeout and abort do not cancel execution", async () => {
+    const entry = run();
+    expect(
+      (await tool().execute("wait", { action: "wait", runIds: [entry.runId], timeoutSeconds: 0 }))
+        .details,
+    ).toMatchObject({ reason: "timeout" });
+    expect(tool().parameters).toMatchObject({
+      properties: {
+        timeoutSeconds: {
+          description: expect.stringMatching(/integer.*0–60.*default: 30.*0.*snapshot/),
+        },
+      },
+    });
+    const controller = new AbortController();
+    const pending = tool().execute(
+      "wait",
+      { action: "wait", runIds: [entry.runId] },
+      controller.signal,
+    );
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(owner.cancel).not.toHaveBeenCalled();
+    expect(owner.listeners.size).toBe(0);
+  });
+  it("never lets a revoked controller selection cancel after an await", async () => {
+    const entry = run();
+    owner.cancel.mockImplementation(
+      async (_params: unknown, control: { assertCurrent: () => void }) => {
+        control.assertCurrent();
+        owner.runs = [];
+        await Promise.resolve();
+        control.assertCurrent();
+      },
+    );
     await expect(
-      tool.execute("call-1", {
-        action: "list",
-        recentMinutes,
-      }),
-    ).rejects.toThrow("recentMinutes must be a positive integer");
+      tool().execute("cancel", { action: "cancel", runId: entry.runId }),
+    ).rejects.toThrow("cancellation owner changed");
   });
 });

@@ -1,5 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizedString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 
 // Lifecycle notes are transient UI state, so bound them for long-lived board tabs.
 const MAX_TRACKED_SWARM_GROUPS = 10_000;
@@ -7,26 +10,10 @@ const MAX_TRACKED_SWARM_GROUPS = 10_000;
 // supported lifetime membership ceiling rather than only the live-child cap.
 const MAX_TRACKED_SWARM_CHILDREN = 100_000;
 
-type SwarmDisplayCarrier = {
-  swarmPhaseRank?: number;
-  swarmLog?: string;
-  swarmPhase?: string;
-};
-
-function normalizedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
   map.delete(key);
   map.set(key, value);
-  while (map.size > limit) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    map.delete(oldest);
-  }
+  pruneMapToMaxSize(map, limit);
 }
 
 /** Tracks transient, group-scoped Swarm notes across canonical session-list refreshes. */
@@ -103,27 +90,17 @@ export class SwarmActivityTracker {
   }
 
   decorate(result: SessionsListResult | null): SessionsListResult | null {
-    if (!result) {
-      return result;
-    }
-    let changed = false;
-    const sessions = result.sessions.map((row): GatewaySessionRow => {
-      const carrier = row as GatewaySessionRow & SwarmDisplayCarrier;
-      const phase = this.phaseByChild.get(row.key) ?? carrier.swarmPhase;
+    return mapSessionResultRows(result, (row): GatewaySessionRow => {
+      const phase = this.phaseByChild.get(row.key) ?? row.swarmPhase;
       const groupId = row.swarmGroupId?.trim();
-      const log = (groupId ? this.latestLogByGroup.get(groupId) : undefined) ?? carrier.swarmLog;
+      const log = (groupId ? this.latestLogByGroup.get(groupId) : undefined) ?? row.swarmLog;
       const phaseRank =
         (phase && groupId
           ? this.phaseRankByGroupPhase.get(`${groupId}\u0000${phase}`)
-          : undefined) ?? carrier.swarmPhaseRank;
-      if (
-        phase === carrier.swarmPhase &&
-        log === carrier.swarmLog &&
-        phaseRank === carrier.swarmPhaseRank
-      ) {
+          : undefined) ?? row.swarmPhaseRank;
+      if (phase === row.swarmPhase && log === row.swarmLog && phaseRank === row.swarmPhaseRank) {
         return row;
       }
-      changed = true;
       return {
         ...row,
         ...(phase ? { swarmPhase: phase } : {}),
@@ -131,6 +108,5 @@ export class SwarmActivityTracker {
         ...(log ? { swarmLog: log } : {}),
       };
     });
-    return changed ? { ...result, sessions } : result;
   }
 }

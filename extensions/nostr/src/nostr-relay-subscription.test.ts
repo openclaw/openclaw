@@ -12,12 +12,20 @@ function createHarness() {
       handlers.push(nextHandlers);
       nextHandlers.abort?.addEventListener(
         "abort",
-        () => nextHandlers.onclose?.([String(nextHandlers.abort?.reason ?? "aborted")]),
+        () =>
+          nextHandlers.onclose?.([
+            {
+              url: "wss://test.example",
+              reason: String(nextHandlers.abort?.reason ?? "aborted"),
+            },
+          ]),
         { once: true },
       );
       return {
         close: vi.fn(async (reason?: string) => {
-          nextHandlers.onclose?.([reason ?? "closed by caller"]);
+          nextHandlers.onclose?.([
+            { url: "wss://test.example", reason: reason ?? "closed by caller" },
+          ]);
         }),
       };
     },
@@ -32,7 +40,6 @@ function createHarness() {
     onEvent: (_event: Event) => {},
     onBackfillComplete,
     onClose,
-    eoseConfirmDeadlineMs: 10,
   });
   group.start();
   return { abortController, group, handlers, onBackfillComplete, onClose, subscribeMany };
@@ -57,7 +64,7 @@ describe("Nostr relay subscriptions", () => {
     vi.useFakeTimers();
     const { group, handlers, onBackfillComplete } = createHarness();
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(10_000);
     handlers[0]?.oneose?.();
     handlers[1]?.oneose?.();
     await Promise.resolve();
@@ -70,7 +77,7 @@ describe("Nostr relay subscriptions", () => {
     const { group, handlers, onBackfillComplete } = createHarness();
 
     handlers[0]?.oneose?.();
-    handlers[0]?.onclose?.(["relay closed"]);
+    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
     handlers[1]?.oneose?.();
     await Promise.resolve();
 
@@ -90,7 +97,7 @@ describe("Nostr relay subscriptions", () => {
   it("still reports closes initiated by the relay", async () => {
     const { group, handlers, onClose } = createHarness();
 
-    handlers[0]?.onclose?.(["relay unavailable"]);
+    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay unavailable" }]);
 
     expect(onClose).toHaveBeenCalledWith("wss://one.example", ["relay unavailable"]);
     await group.close("test complete");

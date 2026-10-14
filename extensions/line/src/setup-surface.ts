@@ -1,4 +1,4 @@
-// Line plugin module implements setup surface behavior.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   createAllowFromSection,
@@ -6,24 +6,16 @@ import {
   createStandardChannelSetupStatus,
   createSetupTranslator,
   defineTokenCredential,
-  parseSetupEntriesWithParser,
-} from "openclaw/plugin-sdk/setup";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDefaultLineAccountId } from "./accounts.js";
-import {
-  isLineConfigured,
-  listLineAccountIds,
-  parseLineAllowFromId,
-  patchLineAccountConfig,
-} from "./setup-core.js";
-import {
-  DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  resolveLineAccount,
+  parseSetupEntriesWithParser,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupWizard,
-} from "./setup-runtime-api.js";
+} from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseLineAllowFromId } from "./account-helpers.js";
+import { listLineAccountIds, resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
+import { isLineConfigured, patchLineAccountConfig } from "./setup-core.js";
 
 const t = createSetupTranslator();
 
@@ -86,6 +78,53 @@ const lineDmPolicy = createChannelDmPolicy({
   promptAllowFrom: promptLineAllowFrom,
 });
 
+function createLineTokenCredential(params: {
+  inputKey: "token" | "password";
+  configKey: "channelAccessToken" | "channelSecret";
+  fileKey: "tokenFile" | "secretFile";
+  providerHint: string;
+  credentialLabel: string;
+  envVar: string;
+  envPrompt: string;
+  keepPrompt: string;
+  inputPrompt: string;
+}) {
+  return defineTokenCredential({
+    inputKey: params.inputKey,
+    configKey: params.configKey,
+    configuredFields: [params.configKey, params.fileKey],
+    providerHint: params.providerHint,
+    credentialLabel: params.credentialLabel,
+    preferredEnvVar: params.envVar,
+    helpTitle: t("wizard.line.messagingApiTitle"),
+    helpLines: LINE_SETUP_HELP_LINES,
+    envPrompt: params.envPrompt,
+    keepPrompt: params.keepPrompt,
+    inputPrompt: params.inputPrompt,
+    allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
+    resolveAccount: ({ cfg, accountId }) => resolveLineAccount({ cfg, accountId }),
+    accountConfigured: (account) =>
+      Boolean(
+        normalizeOptionalString(account.channelAccessToken) &&
+        normalizeOptionalString(account.channelSecret),
+      ),
+    hasConfiguredValue: (account) =>
+      Boolean(
+        normalizeOptionalString(account.config[params.configKey]) ??
+        normalizeOptionalString(account.config[params.fileKey]),
+      ),
+    resolvedValue: (account) => normalizeOptionalString(account[params.configKey]),
+    envValue: ({ accountId }) =>
+      accountId === DEFAULT_ACCOUNT_ID
+        ? normalizeOptionalString(process.env[params.envVar])
+        : undefined,
+    patchAccount: ({ cfg, accountId, patch, clearFields }) =>
+      patchLineAccountConfig({ cfg, accountId, enabled: true, clearFields, patch }),
+    useEnv: { clearFields: [params.configKey, params.fileKey] },
+    set: { clearFields: [params.fileKey], value: "resolved" },
+  });
+}
+
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,
   status: createStandardChannelSetupStatus({
@@ -99,7 +138,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
     includeStatusLine: true,
     resolveConfigured: ({ cfg, accountId }) =>
       isLineConfigured(cfg, accountId ?? resolveDefaultLineAccountId(cfg)),
-    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length}`],
   }),
   introNote: {
     title: t("wizard.line.messagingApiTitle"),
@@ -108,85 +147,27 @@ export const lineSetupWizard: ChannelSetupWizard = {
       !isLineConfigured(cfg, accountId ?? resolveDefaultLineAccountId(cfg)),
   },
   credentials: [
-    defineTokenCredential({
+    createLineTokenCredential({
       inputKey: "token",
       configKey: "channelAccessToken",
-      configuredFields: ["channelAccessToken", "tokenFile"],
+      fileKey: "tokenFile",
       providerHint: channel,
       credentialLabel: t("wizard.line.channelAccessToken"),
-      preferredEnvVar: "LINE_CHANNEL_ACCESS_TOKEN",
-      helpTitle: t("wizard.line.messagingApiTitle"),
-      helpLines: LINE_SETUP_HELP_LINES,
+      envVar: "LINE_CHANNEL_ACCESS_TOKEN",
       envPrompt: t("wizard.line.tokenEnvPrompt"),
       keepPrompt: t("wizard.line.tokenKeepPrompt"),
       inputPrompt: t("wizard.line.tokenInputPrompt"),
-      allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      resolveAccount: ({ cfg, accountId }) => resolveLineAccount({ cfg, accountId }),
-      accountConfigured: (account) =>
-        Boolean(
-          normalizeOptionalString(account.channelAccessToken) &&
-          normalizeOptionalString(account.channelSecret),
-        ),
-      hasConfiguredValue: (account) =>
-        Boolean(
-          normalizeOptionalString(account.config.channelAccessToken) ??
-          normalizeOptionalString(account.config.tokenFile),
-        ),
-      resolvedValue: (account) => normalizeOptionalString(account.channelAccessToken),
-      envValue: ({ accountId }) =>
-        accountId === DEFAULT_ACCOUNT_ID
-          ? normalizeOptionalString(process.env.LINE_CHANNEL_ACCESS_TOKEN)
-          : undefined,
-      patchAccount: ({ cfg, accountId, patch, clearFields }) =>
-        patchLineAccountConfig({
-          cfg,
-          accountId,
-          enabled: true,
-          clearFields,
-          patch,
-        }),
-      useEnv: { clearFields: ["channelAccessToken", "tokenFile"] },
-      set: { clearFields: ["tokenFile"], value: "resolved" },
     }),
-    defineTokenCredential({
+    createLineTokenCredential({
       inputKey: "password",
       configKey: "channelSecret",
-      configuredFields: ["channelSecret", "secretFile"],
+      fileKey: "secretFile",
       providerHint: "line-secret",
       credentialLabel: t("wizard.line.channelSecret"),
-      preferredEnvVar: "LINE_CHANNEL_SECRET",
-      helpTitle: t("wizard.line.messagingApiTitle"),
-      helpLines: LINE_SETUP_HELP_LINES,
+      envVar: "LINE_CHANNEL_SECRET",
       envPrompt: t("wizard.line.secretEnvPrompt"),
       keepPrompt: t("wizard.line.secretKeepPrompt"),
       inputPrompt: t("wizard.line.secretInputPrompt"),
-      allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      resolveAccount: ({ cfg, accountId }) => resolveLineAccount({ cfg, accountId }),
-      accountConfigured: (account) =>
-        Boolean(
-          normalizeOptionalString(account.channelAccessToken) &&
-          normalizeOptionalString(account.channelSecret),
-        ),
-      hasConfiguredValue: (account) =>
-        Boolean(
-          normalizeOptionalString(account.config.channelSecret) ??
-          normalizeOptionalString(account.config.secretFile),
-        ),
-      resolvedValue: (account) => normalizeOptionalString(account.channelSecret),
-      envValue: ({ accountId }) =>
-        accountId === DEFAULT_ACCOUNT_ID
-          ? normalizeOptionalString(process.env.LINE_CHANNEL_SECRET)
-          : undefined,
-      patchAccount: ({ cfg, accountId, patch, clearFields }) =>
-        patchLineAccountConfig({
-          cfg,
-          accountId,
-          enabled: true,
-          clearFields,
-          patch,
-        }),
-      useEnv: { clearFields: ["channelSecret", "secretFile"] },
-      set: { clearFields: ["secretFile"], value: "resolved" },
     }),
   ],
   allowFrom: createAllowFromSection({

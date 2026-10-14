@@ -4,17 +4,16 @@ import type { OpenClawConfig } from "../config/config.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
-function hasFinding(
-  checkId:
-    | "tools.exec.host_sandbox_no_sandbox_defaults"
-    | "tools.exec.host_sandbox_no_sandbox_agents",
-  findings: SecurityAuditFinding[],
-) {
+type SandboxHostCheckId =
+  | "tools.exec.host_sandbox_no_sandbox_defaults"
+  | "tools.exec.host_sandbox_no_sandbox_agents";
+
+function hasFinding(checkId: SandboxHostCheckId, findings: SecurityAuditFinding[]) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === "warn");
 }
 
 describe("security audit exec sandbox host findings", () => {
-  it.each([
+  it.each<{ name: string; cfg: OpenClawConfig; checkId: SandboxHostCheckId }>([
     {
       name: "defaults host is sandbox",
       cfg: {
@@ -24,7 +23,7 @@ describe("security audit exec sandbox host findings", () => {
           },
         },
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: {
             sandbox: {
               mode: "off",
@@ -48,17 +47,15 @@ describe("security audit exec sandbox host findings", () => {
               mode: "off",
             },
           },
-          list: [
-            {
-              id: "ops",
-              default: true,
+          entries: {
+            ops: {
               tools: {
                 exec: {
                   host: "sandbox",
                 },
               },
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig,
       checkId: "tools.exec.host_sandbox_no_sandbox_agents" as const,

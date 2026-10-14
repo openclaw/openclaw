@@ -1,16 +1,22 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
-import { createCronServiceState } from "./state.js";
-import { applyJobResult } from "./timer.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.test-support.js";
+import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
+import { runPostPersistCronNotifications } from "./store.js";
+import type { CronJobRunResult } from "./timer-execution-timeout.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
+import { applyJobResult, applyOutcomeToAuthoritativeJob } from "./timer-outcomes.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
 const STARTED_AT = ENDED_AT - 1_000;
 
 function makeState() {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: "/tmp/cron-pacing-timer/jobs.json",
     cronEnabled: true,
     log: createNoopLogger(),
@@ -21,7 +27,7 @@ function makeState() {
   });
 }
 
-function makePacedJob(pacing: CronPacing, everyMs = 60 * 60_000): CronJob {
+function makePacedJob(pacing: CronPacing = { min: "15m", max: "4h" }, everyMs = 3_600_000) {
   return makeCronJob({
     pacing,
     schedule: { kind: "every", everyMs, anchorMs: STARTED_AT },
@@ -29,64 +35,126 @@ function makePacedJob(pacing: CronPacing, everyMs = 60 * 60_000): CronJob {
   });
 }
 
-describe("applyJobResult dynamic cadence", () => {
-  it.each([
-    ["honors an in-range proposal", { min: "15m", max: "4h" }, 60 * 60_000, 60 * 60_000],
-    ["clamps below the minimum", { min: "15m", max: "4h" }, 5 * 60_000, 15 * 60_000],
-    ["clamps above the maximum", { min: "15m", max: "4h" }, 6 * 60 * 60_000, 4 * 60 * 60_000],
-    ["clamps a minimum-only job", { min: "15m" }, 5 * 60_000, 15 * 60_000],
-    ["clamps a maximum-only job", { max: "4h" }, 6 * 60 * 60_000, 4 * 60 * 60_000],
-  ] as const)("%s", (_label, pacing, delayMs, expectedDelayMs) => {
-    const job = makePacedJob(pacing);
+function complete(job: CronJob, result: Partial<CronJobRunResult>, preserve = false) {
+  applyJobResult(
+    makeState(),
+    job,
+    { status: "ok", startedAt: STARTED_AT, endedAt: ENDED_AT, ...result },
+    { deferredNotifications: [], scheduleMode: preserve ? "preserve" : "advance" },
+  );
+}
 
-    applyJobResult(makeState(), job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs },
+function maintain(job: CronJob) {
+  const state = makeState();
+  state.store = { version: 1, jobs: [job] };
+  recomputeNextRunsForMaintenance(state, { deferredNotifications: [], nowMs: ENDED_AT + 1_000 });
+}
+
+describe("cron dynamic cadence", () => {
+  it.each(["recurring retry", "pacing"])(
+    "auto-disables a job when %s cannot produce a Date-valid next run",
+    async (scenario) => {
+      const endedAt = MAX_DATE_TIMESTAMP_MS - 1_000;
+      const state = makeState();
+      const deferredNotifications: DeferredCronNotifications = [];
+      const job = makeCronJob({
+        schedule: { kind: "every", everyMs: 1_000, anchorMs: 0 },
+        state: { nextRunAtMs: endedAt },
+        ...(scenario === "pacing" ? { pacing: { min: "1s" } } : {}),
+      });
+      const times = { startedAt: endedAt - 1, endedAt };
+      const retry = scenario === "recurring retry";
+      applyJobResult(
+        state,
+        job,
+        {
+          ...times,
+          status: retry ? "error" : "ok",
+          ...(retry
+            ? {
+                error: "temporary timeout",
+                errorClassification: { kind: "reason" as const, reason: "timeout" as const },
+                executionStarted: true,
+              }
+            : {}),
+          ...(scenario === "pacing" ? { nextCheck: { delayMs: 2_000 } } : {}),
+        },
+        { deferredNotifications },
+      );
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.pacedNextRunAtMs).toBeUndefined();
+      expect(job.state.autoDisabled).toEqual({
+        reason: "schedule-errors",
+        atMs: ENDED_AT,
+        consecutiveErrors: 1,
+      });
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(deferredNotifications).toHaveLength(1);
+      await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("disables an exhausted every schedule instead of synthesizing a backoff-only run", () => {
+    const endedAt = MAX_DATE_TIMESTAMP_MS - 39_000;
+    const job = makeCronJob({
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
+      state: { nextRunAtMs: endedAt },
     });
-
-    expect(job.state.nextRunAtMs).toBe(ENDED_AT + expectedDelayMs);
-    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + expectedDelayMs);
+    complete(job, {
+      status: "error",
+      error: "permanent failure",
+      errorClassification: { kind: "permanent" },
+      startedAt: endedAt - 1_000,
+      endedAt,
+    });
+    expect(endedAt + 30_000).toBeLessThanOrEqual(MAX_DATE_TIMESTAMP_MS);
+    expect(job.enabled).toBe(false);
+    expect(job.state.nextRunAtMs).toBeUndefined();
   });
 
-  it("keeps existing schedule math when no proposal was recorded", () => {
-    const job = makePacedJob({ min: "15m", max: "4h" });
-    job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
-    job.state.forcePreservedNextRunAtMs = job.state.nextRunAtMs;
-
-    applyJobResult(makeState(), job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-    });
-
-    expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
-    expect(job.state.pacedNextRunAtMs).toBeUndefined();
-    expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
+  it("clamps a maximum-only job", () => {
+    const job = makePacedJob({ max: "4h" });
+    complete(job, { nextCheck: { delayMs: 6 * 3_600_000 } });
+    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 4 * 3_600_000);
+    expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 4 * 3_600_000);
   });
 
-  it.each([
-    ["without a new proposal", undefined],
-    ["when the forced run records a new proposal", 2 * 60 * 60_000],
-  ] as const)("preserves the exact paced slot on a forced run %s", (_label, delayMs) => {
-    const job = makePacedJob({ min: "15m", max: "4h" });
-    const pendingSlot = ENDED_AT + 45 * 60_000;
-    job.state.nextRunAtMs = pendingSlot;
-    job.state.pacedNextRunAtMs = pendingSlot;
-
-    applyJobResult(
-      makeState(),
+  it("preserves an edited pacing override and force marker after a stale quiet trigger", () => {
+    const state = makeState();
+    const job = makePacedJob();
+    const admittedJob = structuredClone(job);
+    const nextRunAtMs = ENDED_AT + 45 * 60_000;
+    const forcePreservedNextRunAtMs = ENDED_AT + 15 * 60_000;
+    job.schedule = { kind: "every", everyMs: 2 * 3_600_000, anchorMs: STARTED_AT };
+    job.state = { nextRunAtMs, pacedNextRunAtMs: nextRunAtMs, forcePreservedNextRunAtMs };
+    state.store = { version: 1, jobs: [job] };
+    applyOutcomeToAuthoritativeJob(
+      state,
       job,
-      {
+      authorCronRunCompletion(admittedJob, {
+        jobId: job.id,
+        job: admittedJob,
         status: "ok",
         startedAt: STARTED_AT,
         endedAt: ENDED_AT,
-        ...(delayMs !== undefined ? { nextCheck: { delayMs } } : {}),
-      },
-      { scheduleMode: "preserve" },
+        triggerEval: { fired: false, stateChanged: false },
+      }),
+      { deferredNotifications: [] },
     );
+    expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+    expect(job.state.pacedNextRunAtMs).toBe(nextRunAtMs);
+    expect(job.state.forcePreservedNextRunAtMs).toBe(forcePreservedNextRunAtMs);
+  });
 
+  it("preserves the exact paced slot when a forced run records a new proposal", () => {
+    const job = makePacedJob();
+    const pendingSlot = ENDED_AT + 45 * 60_000;
+    job.state = { nextRunAtMs: pendingSlot, pacedNextRunAtMs: pendingSlot };
+    complete(job, { nextCheck: { delayMs: 2 * 3_600_000 } }, true);
     expect(job.state.nextRunAtMs).toBe(pendingSlot);
     expect(job.state.pacedNextRunAtMs).toBe(pendingSlot);
   });
@@ -94,108 +162,29 @@ describe("applyJobResult dynamic cadence", () => {
   it("applies the built-in trigger floor after the job-local pacing clamp", () => {
     const job = makePacedJob({ min: "1s", max: "2m" });
     job.trigger = { script: "return true" };
-
-    applyJobResult(makeState(), job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs: 1_000 },
-    });
-
+    complete(job, { nextCheck: { delayMs: 1_000 } });
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30_000);
     expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 30_000);
   });
 
-  it("discards proposals on error so normal backoff wins", () => {
-    const job = makePacedJob({ min: "1h", max: "2h" }, 10_000);
-    job.state.pacedNextRunAtMs = ENDED_AT + 90 * 60_000;
-
-    applyJobResult(makeState(), job, {
-      status: "error",
-      error: "temporary failure",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs: 90 * 60_000 },
-    });
-
-    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30_000);
-    expect(job.state.pacedNextRunAtMs).toBeUndefined();
-  });
-
   it("preserves a paced cron-expression override during future-slot repair", () => {
-    const state = makeState();
-    const job = makeCronJob({
-      pacing: { min: "15m", max: "4h" },
-      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-      state: { nextRunAtMs: STARTED_AT },
-    });
-    state.store = { version: 1, jobs: [job] };
-
-    applyJobResult(state, job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-      nextCheck: { delayMs: 30 * 60_000 },
-    });
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
-
+    const job = makePacedJob();
+    job.schedule = { kind: "cron", expr: "* * * * *", tz: "UTC" };
+    complete(job, { nextCheck: { delayMs: 30 * 60_000 } });
+    maintain(job);
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 30 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBe(ENDED_AT + 30 * 60_000);
   });
 
-  it("repairs an unmarked future slot even when it falls within pacing bounds", () => {
-    const state = makeState();
-    const job = makeCronJob({
-      pacing: { min: "15m", max: "4h" },
-      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-      state: { nextRunAtMs: STARTED_AT },
-    });
-    state.store = { version: 1, jobs: [job] };
-
-    applyJobResult(state, job, {
-      status: "ok",
-      startedAt: STARTED_AT,
-      endedAt: ENDED_AT,
-    });
-    job.state.nextRunAtMs = ENDED_AT + 30 * 60_000 + 1_234;
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
-
-    expect(job.state.nextRunAtMs).toBe(ENDED_AT + 60_000);
-  });
-
   it("repairs a future slot whose persisted pacing marker does not match", () => {
-    const state = makeState();
-    const job = makeCronJob({
-      pacing: { min: "15m", max: "4h" },
-      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-      state: {
-        nextRunAtMs: ENDED_AT + 30 * 60_000 + 1_234,
-        pacedNextRunAtMs: ENDED_AT + 45 * 60_000,
-      },
-    });
-    state.store = { version: 1, jobs: [job] };
-
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
-
+    const job = makePacedJob();
+    job.schedule = { kind: "cron", expr: "* * * * *", tz: "UTC" };
+    job.state = {
+      nextRunAtMs: ENDED_AT + 30 * 60_000 + 1_234,
+      pacedNextRunAtMs: ENDED_AT + 45 * 60_000,
+    };
+    maintain(job);
     expect(job.state.nextRunAtMs).toBe(ENDED_AT + 60_000);
-    expect(job.state.pacedNextRunAtMs).toBeUndefined();
-  });
-
-  it("clears a paced marker when maintenance normalizes the schedule", () => {
-    const state = makeState();
-    const pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
-    const job = makeCronJob({
-      createdAtMs: STARTED_AT,
-      updatedAtMs: STARTED_AT,
-      pacing: { min: "15m" },
-      schedule: { kind: "every", everyMs: 60 * 60_000 },
-      state: { nextRunAtMs: pacedNextRunAtMs, pacedNextRunAtMs },
-    });
-    state.store = { version: 1, jobs: [job] };
-
-    recomputeNextRunsForMaintenance(state, { nowMs: ENDED_AT + 1_000 });
-
-    expect(job.schedule).toEqual({ kind: "every", everyMs: 60 * 60_000, anchorMs: STARTED_AT });
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
   });
 });

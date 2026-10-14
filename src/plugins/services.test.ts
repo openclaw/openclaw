@@ -1,8 +1,7 @@
-// Covers plugin service registration and lookup behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { createEmptyPluginRegistry } from "./registry.js";
-import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import type { OpenClawPluginServiceContext } from "./types.js";
 
 const mockedLogger = vi.hoisted(() => ({
   info: vi.fn<(msg: string) => void>(),
@@ -16,188 +15,271 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => mockedLogger,
 }));
 
-import { STATE_DIR } from "../config/paths.js";
-import { registerPluginHttpRoute } from "./http-registry.js";
 import {
-  pinActivePluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "./runtime.js";
-import { startPluginServices } from "./services.js";
+  emitTrustedDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import { markHostPluginUsageDiagnosticEvent } from "../infra/diagnostic-plugin-usage-provenance.js";
+import {
+  formatPropagatedDiagnosticTraceparent,
+  resetDiagnosticTracePropagationForTest,
+} from "../infra/diagnostic-trace-propagation.js";
+import {
+  getDiagnosticStabilitySnapshot,
+  resetDiagnosticStabilityRecorderForTest,
+  type DiagnosticExporterHealthUpdate,
+} from "../logging/diagnostic-stability.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { queuePluginSessionsChanged } from "./gateway-events.js";
+import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { listPluginServiceHealthFailures } from "./service-health.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "./services.js";
+import {
+  createRegistry,
+  startPluginServices,
+  type PluginServicesHandle,
+} from "./services.test-support.js";
 
-function createRegistry(
-  services: OpenClawPluginService[],
-  pluginId = "plugin:test",
-  origin: PluginOrigin = "workspace",
-  trustedOfficialInstall = false,
+type TrustedExporterInternalDiagnostics = NonNullable<
+  OpenClawPluginServiceContext["internalDiagnostics"]
+> & {
+  reportExporterHealth?: (update: DiagnosticExporterHealthUpdate) => void;
+};
+
+const handles = new Set<PluginServicesHandle>();
+afterEach(async () => {
+  await Promise.all([...handles].map((handle) => handle.stop()));
+  handles.clear();
+});
+
+function start(
+  registry: PluginRegistry,
+  options: Pick<
+    Parameters<typeof startPluginServices>[0],
+    "startupTrace" | "broadcastPluginEvent"
+  > = {},
 ) {
-  const registry = createEmptyPluginRegistry();
-  registry.services = services.map((service) => ({
-    pluginId,
-    service,
-    source: "test",
-    origin,
-    ...(trustedOfficialInstall ? { trustedOfficialInstall } : {}),
-    rootDir: "/plugins/test-plugin",
-  })) as typeof registry.services;
-  return registry;
-}
-
-function createServiceConfig() {
-  return {} as Parameters<typeof startPluginServices>[0]["config"];
-}
-
-function expectServiceContext(
-  ctx: OpenClawPluginServiceContext,
-  config: Parameters<typeof startPluginServices>[0]["config"],
-) {
-  expect(ctx.config).toBe(config);
-  expect(ctx.workspaceDir).toBe("/tmp/workspace");
-  expect(ctx.stateDir).toBe(STATE_DIR);
-  expectServiceLogger(ctx);
-}
-
-function expectServiceLogger(ctx: OpenClawPluginServiceContext) {
-  expect(typeof ctx.logger.info).toBe("function");
-  expect(typeof ctx.logger.warn).toBe("function");
-  expect(typeof ctx.logger.error).toBe("function");
-}
-
-function expectServiceContexts(
-  contexts: OpenClawPluginServiceContext[],
-  config: Parameters<typeof startPluginServices>[0]["config"],
-) {
-  expect(contexts).not.toHaveLength(0);
-  contexts.forEach((ctx) => {
-    expectServiceContext(ctx, config);
-  });
-}
-
-function expectServiceLifecycleState(params: {
-  starts: string[];
-  stops: string[];
-  contexts: OpenClawPluginServiceContext[];
-  config: Parameters<typeof startPluginServices>[0]["config"];
-}) {
-  expect(params.starts).toEqual(["a", "b", "c"]);
-  expect(params.stops).toEqual(["c", "a"]);
-  expect(params.contexts).toHaveLength(3);
-  expectServiceContexts(params.contexts, params.config);
-}
-
-function requireLoggerErrorMessage(index = 0): string {
-  const call = mockedLogger.error.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected logger error call ${index}`);
-  }
-  return call[0];
-}
-
-async function startTrackingServices(params: {
-  services: OpenClawPluginService[];
-  config?: Parameters<typeof startPluginServices>[0]["config"];
-  workspaceDir?: string;
-  startupTrace?: Parameters<typeof startPluginServices>[0]["startupTrace"];
-}) {
   return startPluginServices({
-    registry: createRegistry(params.services),
-    config: params.config ?? createServiceConfig(),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.startupTrace ? { startupTrace: params.startupTrace } : {}),
+    registry,
+    config: {},
+    ...options,
+    onHandle: (handle) => handles.add(handle),
   });
 }
 
-function createTrackingService(
-  id: string,
-  params: {
-    starts?: string[];
-    stops?: string[];
-    contexts?: OpenClawPluginServiceContext[];
-    failOnStart?: boolean;
-    failOnStop?: boolean;
-    stopSpy?: () => void;
-  } = {},
-): OpenClawPluginService {
-  return {
-    id,
-    start: (ctx) => {
-      if (params.failOnStart) {
-        throw new Error("start failed");
-      }
-      params.starts?.push(id.at(-1) ?? id);
-      params.contexts?.push(ctx);
+function unreadableError(message: string) {
+  return Object.defineProperty(new Error(message), "message", {
+    get() {
+      throw new Error("message getter failed");
     },
-    stop: params.stopSpy
-      ? () => {
-          params.stopSpy?.();
-        }
-      : params.stops || params.failOnStop
-        ? () => {
-            if (params.failOnStop) {
-              throw new Error("stop failed");
-            }
-            params.stops?.push(id.at(-1) ?? id);
-          }
-        : undefined,
-  };
+  });
 }
 
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticEventsForTest();
+    resetDiagnosticTracePropagationForTest();
+    resetDiagnosticStabilityRecorderForTest();
     resetPluginRuntimeStateForTest();
   });
 
-  it("starts services and stops them in reverse order", async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
+  it("fences service health reporters to their owning generation", async () => {
     const contexts: OpenClawPluginServiceContext[] = [];
-
-    const config = createServiceConfig();
-    const handle = await startTrackingServices({
-      services: [
-        createTrackingService("service-a", { starts, stops, contexts }),
-        createTrackingService("service-b", { starts, contexts }),
-        createTrackingService("service-c", { starts, stops, contexts }),
-      ],
-      config,
-      workspaceDir: "/tmp/workspace",
-    });
-    await handle.stop();
-
-    expectServiceLifecycleState({ starts, stops, contexts, config });
+    const registry = createRegistry([
+      {
+        id: "service",
+        start: (ctx) => {
+          contexts.push(ctx);
+        },
+      },
+    ]);
+    const generationA = await start(registry);
+    await start(registry);
+    contexts[0]?.serviceHealth?.reportFailure(new Error("stale failure"));
+    expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+    contexts[1]?.serviceHealth?.reportFailure(new Error("current failure"));
+    expect(listPluginServiceHealthFailures(registry)).toMatchObject([
+      { serviceId: "service", error: "current failure" },
+    ]);
+    await generationA.stop();
+    expect(listPluginServiceHealthFailures(registry)).toHaveLength(1);
+    contexts[1]?.serviceHealth?.clearFailure();
+    expect(listPluginServiceHealthFailures(registry)).toEqual([]);
   });
 
-  it("binds gateway events to the owning plugin namespace and scope", async () => {
-    const broadcastPluginEvent = vi.fn();
-    await startPluginServices({
-      registry: createRegistry(
-        [
-          {
-            id: "events",
-            start: (ctx) => {
-              ctx.gatewayEvents?.emit("changed", { revision: 1 }, { scope: "operator.read" });
-            },
+  it.each([false, true])(
+    "drains producers before exporters and retains failures (strict=%s)",
+    async (strict) => {
+      const order: string[] = [];
+      const producerError = unreadableError("producer stop failed");
+      const exporterError = new Error("exporter stop failed");
+      const registry = createRegistry([
+        {
+          id: "producer",
+          start() {},
+          stop() {
+            order.push("producer");
+            emitTrustedDiagnosticEvent({
+              type: "log.record",
+              level: "INFO",
+              message: "queued during shutdown",
+            });
+            throw producerError;
           },
-        ],
-        "workboard",
-      ),
-      config: createServiceConfig(),
-      broadcastPluginEvent,
-    });
+        },
+        {
+          id: "sibling",
+          start() {},
+          stop() {
+            order.push("sibling");
+          },
+        },
+      ]);
+      for (const id of ["diagnostics-prometheus", "diagnostics-otel"]) {
+        registry.services.push(
+          ...createRegistry(
+            [
+              {
+                id,
+                start(ctx) {
+                  if (id === "diagnostics-otel") {
+                    ctx.internalDiagnostics!.onEvent((event) => {
+                      if (event.type === "log.record") {
+                        order.push("event");
+                      }
+                    });
+                  }
+                },
+                stop() {
+                  order.push(id);
+                  if (id === "diagnostics-otel") {
+                    throw exporterError;
+                  }
+                },
+              },
+            ],
+            id,
+            "bundled",
+          ).services,
+        );
+      }
+      const handle = await start(registry);
+      if (strict) {
+        await expect(
+          handle.stop({ strict: true, deadlineAtMs: Date.now() + 5_000 }),
+        ).rejects.toMatchObject({
+          errors: [
+            {
+              cause: producerError,
+              message: expect.stringContaining("plugin=plugin:test, service=producer"),
+            },
+            {
+              cause: exporterError,
+              message: expect.stringContaining("plugin=diagnostics-otel, service=diagnostics-otel"),
+            },
+          ],
+        });
+      } else {
+        await expect(handle.stop()).resolves.toEqual({ errors: [producerError, exporterError] });
+      }
+      await waitForDiagnosticEventsDrained();
+      expect(order).toEqual([
+        "sibling",
+        "producer",
+        "event",
+        "diagnostics-otel",
+        "diagnostics-prometheus",
+      ]);
+      await handle.stop();
+      expect(order).toHaveLength(5);
+    },
+  );
 
-    expect(broadcastPluginEvent).toHaveBeenCalledWith(
-      "plugin.workboard.changed",
-      { revision: 1 },
+  it("rolls back partially started services even when their error message is inaccessible", async () => {
+    const acquired = new Set<string>();
+    const received = vi.fn();
+    const siblingStart = vi.fn(() => {
+      expect(acquired.size).toBe(0);
+    });
+    let context: OpenClawPluginServiceContext | undefined;
+    const rollback = vi.fn((ctx: OpenClawPluginServiceContext) => {
+      acquired.delete("failed");
+      ctx.gatewayEvents?.emit("rolled-back", {}, { scope: "operator.read" });
+    });
+    const broadcastPluginEvent = vi.fn();
+    const handle = await start(
+      createRegistry([
+        {
+          id: "failed",
+          start(ctx) {
+            context = ctx;
+            acquired.add("failed");
+            ctx.gatewayEvents?.onSessionsChanged(received);
+            throw unreadableError("startup failed");
+          },
+          stop: rollback,
+        },
+        { id: "sibling", start: siblingStart },
+      ]),
+      { broadcastPluginEvent },
+    );
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(acquired.size).toBe(0);
+    expect(siblingStart).toHaveBeenCalledOnce();
+    expect(broadcastPluginEvent).toHaveBeenCalledExactlyOnceWith(
+      "plugin.plugin:test.rolled-back",
+      {},
       "operator.read",
+    );
+    expect(() => context?.gatewayEvents?.emit("late", {}, { scope: "operator.read" })).toThrow(
+      "no longer active",
+    );
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+    expect(received).not.toHaveBeenCalled();
+    await handle.stop();
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("logs throwing and rejecting sessions.changed handlers without blocking siblings", async () => {
+    const received = vi.fn();
+    const rejectingHandler = (() =>
+      Promise.reject(new Error("async handler failed"))) as () => void;
+    await start(
+      createRegistry([
+        {
+          id: "events",
+          start(ctx) {
+            ctx.gatewayEvents?.onSessionsChanged(() => {
+              throw new Error("handler failed");
+            });
+            ctx.gatewayEvents?.onSessionsChanged(rejectingHandler);
+            ctx.gatewayEvents?.onSessionsChanged(received);
+          },
+        },
+      ]),
+      { broadcastPluginEvent: vi.fn() },
+    );
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", phase: "message" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledOnce();
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: handler failed",
+    );
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: async handler failed",
     );
   });
 
   it("rejects unsafe event names, scopes, and payloads", async () => {
     let context: OpenClawPluginServiceContext | undefined;
     const broadcastPluginEvent = vi.fn();
-    await startPluginServices({
-      registry: createRegistry([
+    await start(
+      createRegistry([
         {
           id: "events",
           start: (ctx) => {
@@ -205,15 +287,13 @@ describe("startPluginServices", () => {
           },
         },
       ]),
-      config: createServiceConfig(),
-      broadcastPluginEvent,
-    });
+      { broadcastPluginEvent },
+    );
     const emit = context?.gatewayEvents?.emit as unknown as (
       event: string,
       payload: unknown,
       opts: { scope: string },
     ) => void;
-
     expect(() => emit("other.changed", {}, { scope: "operator.read" })).toThrow(
       "invalid plugin gateway event name",
     );
@@ -224,297 +304,541 @@ describe("startPluginServices", () => {
     expect(broadcastPluginEvent).not.toHaveBeenCalled();
   });
 
-  it("revokes gateway event emitters after failed start and stop", async () => {
-    const contexts: OpenClawPluginServiceContext[] = [];
-    const broadcastPluginEvent = vi.fn();
-    const handle = await startPluginServices({
-      registry: createRegistry([
-        {
-          id: "events",
-          start: (ctx) => {
-            contexts.push(ctx);
-          },
-          stop: (ctx) => {
-            ctx.gatewayEvents?.emit("stopping", {}, { scope: "operator.read" });
-          },
-        },
-        {
-          id: "failed-events",
-          start: (ctx) => {
-            contexts.push(ctx);
-            throw new Error("start failed");
-          },
-        },
-      ]),
-      config: createServiceConfig(),
-      broadcastPluginEvent,
-    });
-
-    expect(() =>
-      contexts[1]?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
-    ).toThrow("no longer active");
-    await handle.stop();
-    expect(() =>
-      contexts[0]?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
-    ).toThrow("no longer active");
-    expect(broadcastPluginEvent).toHaveBeenCalledOnce();
-    expect(broadcastPluginEvent).toHaveBeenCalledWith(
-      "plugin.plugin:test.stopping",
-      {},
-      "operator.read",
-    );
-  });
-
   it("registers dynamic HTTP routes into the service registry scope", async () => {
-    const serviceRegistry = createRegistry([
+    const registry = createRegistry([
       {
         id: "route-service",
-        start: () => {
-          registerPluginHttpRoute({
-            path: "/service-route",
-            auth: "plugin",
-            handler: vi.fn(),
-          });
+        start() {
+          registerPluginHttpRoute({ path: "/service-route", auth: "plugin", handler: vi.fn() });
         },
       },
     ]);
     const pinnedRegistry = createEmptyPluginRegistry();
-
     setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
-
-    const handle = await startPluginServices({
-      registry: serviceRegistry,
-      config: createServiceConfig(),
-    });
-
-    expect(serviceRegistry.httpRoutes.map((route) => route.path)).toEqual(["/service-route"]);
+    await start(registry);
+    expect(registry.httpRoutes.map((route) => route.path)).toEqual(["/service-route"]);
     expect(pinnedRegistry.httpRoutes).toHaveLength(0);
-
-    await handle.stop();
   });
 
-  it("logs start/stop failures and continues", async () => {
-    const stopOk = vi.fn();
-    const stopThrows = vi.fn(() => {
-      throw new Error("stop failed");
-    });
-
-    const handle = await startTrackingServices({
-      services: [
-        createTrackingService("service-start-fail", {
-          failOnStart: true,
-          stopSpy: vi.fn(),
-        }),
-        createTrackingService("service-ok", { stopSpy: stopOk }),
-        createTrackingService("service-stop-fail", { stopSpy: stopThrows }),
-      ],
-    });
-
-    await handle.stop();
-
-    expect(mockedLogger.error.mock.calls).toEqual([
-      [
-        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin): start failed",
-      ],
-    ]);
-    expect(requireLoggerErrorMessage()).not.toContain("\n");
-    expect(mockedLogger.warn.mock.calls).toEqual([
-      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
-    ]);
-    expect(stopOk).toHaveBeenCalledOnce();
-    expect(stopThrows).toHaveBeenCalledOnce();
-  });
-
-  it("emits per-service startup trace spans and summary", async () => {
-    const measured: string[] = [];
-    const details: Array<{
-      name: string;
-      metrics: ReadonlyArray<readonly [string, number | string]>;
-    }> = [];
-    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
-      measure: async (name, run) => {
-        measured.push(name);
-        return await run();
-      },
-      detail: (name, metrics) => {
-        details.push({ name, metrics });
-      },
-    };
-
-    await startTrackingServices({
-      services: [
-        createTrackingService("service-a"),
-        createTrackingService("service-fail", { failOnStart: true }),
-      ],
-      startupTrace,
-    });
-
-    expect(measured).toEqual([
-      "sidecars.plugin-services.plugin~003Atest.service-a",
-      "sidecars.plugin-services.plugin~003Atest.service-fail",
-    ]);
-    expect(details).toEqual([
-      {
-        name: "sidecars.plugin-services.summary",
-        metrics: [
-          ["serviceCount", 2],
-          ["startedCount", 1],
-          ["failedCount", 1],
+  it("retains trusted exporter startup health after host rollback", async () => {
+    const rollback = vi.fn();
+    const handle = await start(
+      createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start(ctx) {
+              const diagnostics = ctx.internalDiagnostics as TrustedExporterInternalDiagnostics;
+              diagnostics.reportExporterHealth?.({
+                signal: "traces",
+                transport: "otlp-http-protobuf",
+                endpointMode: "configured",
+                status: "failure",
+                reason: "start_failed",
+                errorCategory: "TypeError",
+              });
+              throw new TypeError("SDK startup failed");
+            },
+            stop: rollback,
+          },
         ],
-      },
+        "diagnostics-otel",
+        "bundled",
+      ),
+    );
+    expect(rollback).toHaveBeenCalledOnce();
+    await handle.stop();
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(
+      getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events,
+    ).toEqual([
+      expect.objectContaining({
+        source: "diagnostics-otel",
+        target: "traces",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "start_failed",
+        errorCategory: "TypeError",
+      }),
     ]);
   });
 
   it("passes a scoped startup trace through service context for owned subspans", async () => {
-    const contexts: OpenClawPluginServiceContext[] = [];
     const measured: string[] = [];
-    const details: Array<{
-      name: string;
-      metrics: ReadonlyArray<readonly [string, number | string]>;
-    }> = [];
-    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
-      measure: async (name, run) => {
-        measured.push(name);
-        return await run();
-      },
-      detail: (name, metrics) => {
-        details.push({ name, metrics });
-      },
-    };
-
-    await startTrackingServices({
-      services: [
+    const detail = vi.fn();
+    await start(
+      createRegistry([
         {
           id: "service-a",
-          start: async (ctx) => {
-            contexts.push(ctx);
+          async start(ctx) {
             ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
             await ctx.startupTrace?.measure("config:resolve", async () => {});
           },
         },
-      ],
-      startupTrace,
-    });
-
-    expect(contexts[0]?.startupTrace).not.toBe(startupTrace);
+      ]),
+      {
+        startupTrace: {
+          detail,
+          measure: async (name, run) => {
+            measured.push(name);
+            return await run();
+          },
+        },
+      },
+    );
     expect(measured).toEqual([
       "sidecars.plugin-services.plugin~003Atest.service-a",
       "sidecars.plugin-services.plugin~003Atest.service-a.config~003Aresolve",
     ]);
-    expect(details).toEqual([
-      {
-        name: "sidecars.plugin-services.plugin~003Atest.service-a.probe.result",
-        metrics: [["healthyCount", 1]],
-      },
-      {
-        name: "sidecars.plugin-services.summary",
-        metrics: [
+    expect(detail.mock.calls).toEqual([
+      ["sidecars.plugin-services.plugin~003Atest.service-a.probe.result", [["healthyCount", 1]]],
+      [
+        "sidecars.plugin-services.summary",
+        [
           ["serviceCount", 1],
           ["startedCount", 1],
           ["failedCount", 0],
         ],
-      },
+      ],
     ]);
-  });
-
-  it("keeps distinct service trace ownership keys non-colliding", async () => {
-    const measured: string[] = [];
-    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
-      measure: async (name, run) => {
-        measured.push(name);
-        return await run();
-      },
-    };
-
-    await startPluginServices({
-      registry: createRegistry(
-        [createTrackingService("service:a"), createTrackingService("service_a")],
-        "plugin:test",
-      ),
-      config: createServiceConfig(),
-      startupTrace,
-    });
-
-    expect(measured).toEqual([
-      "sidecars.plugin-services.plugin~003Atest.service~003Aa",
-      "sidecars.plugin-services.plugin~003Atest.service_a",
-    ]);
-    expect(new Set(measured).size).toBe(measured.length);
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {
-    const contexts: OpenClawPluginServiceContext[] = [];
-    const diagnosticsService = createTrackingService("diagnostics-otel", { contexts });
-    await startPluginServices({
-      registry: createRegistry([diagnosticsService], "diagnostics-otel", "bundled"),
-      config: createServiceConfig(),
-    });
+    const startExporter = async (
+      serviceId: string,
+      origin: PluginOrigin,
+      trusted = false,
+      pluginId = serviceId,
+    ) => {
+      let context: OpenClawPluginServiceContext | undefined;
+      const registry = createRegistry(
+        [
+          {
+            id: serviceId,
+            start: (ctx) => {
+              context = ctx;
+            },
+          },
+        ],
+        pluginId,
+        origin,
+      );
+      registry.services[0]!.trustedOfficialInstall = trusted;
+      await start(registry);
+      return context?.internalDiagnostics;
+    };
+    expect(await startExporter("diagnostics-otel", "config", true)).toBeDefined();
+    expect(await startExporter("diagnostics-otel", "workspace")).toBeUndefined();
+    expect(
+      await startExporter("diagnostics-prometheus", "global", true, "not-diagnostics-prometheus"),
+    ).toBeUndefined();
+  });
 
-    expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
-    expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+  it("delivers host plugin attribution only to the trusted OTel listener lane", async () => {
+    const observed: Array<{ exporter: string; hostPluginId?: unknown }> = [];
+    const registry = createEmptyPluginRegistry();
+    for (const id of ["diagnostics-otel", "diagnostics-prometheus"]) {
+      registry.services.push(
+        ...createRegistry(
+          [
+            {
+              id,
+              start(ctx) {
+                ctx.internalDiagnostics?.onEvent((event, _metadata, privateData) => {
+                  if (event.type === "model.usage") {
+                    observed.push({
+                      exporter: id,
+                      hostPluginId: (privateData as { hostPluginId?: unknown }).hostPluginId,
+                    });
+                  }
+                });
+              },
+            },
+          ],
+          id,
+          "bundled",
+        ).services,
+      );
+    }
+    await start(registry);
+    emitTrustedDiagnosticEvent(
+      markHostPluginUsageDiagnosticEvent({ type: "model.usage", usage: { input: 1 } }, "llm-task"),
+    );
+    expect(observed).toEqual([
+      { exporter: "diagnostics-otel", hostPluginId: "llm-task" },
+      { exporter: "diagnostics-prometheus", hostPluginId: undefined },
+    ]);
+  });
 
-    const prometheusContexts: OpenClawPluginServiceContext[] = [];
-    const prometheusService = createTrackingService("diagnostics-prometheus", {
-      contexts: prometheusContexts,
-    });
-    await startPluginServices({
-      registry: createRegistry([prometheusService], "diagnostics-prometheus", "bundled"),
-      config: createServiceConfig(),
-    });
+  it.each(["initial", "reload"] as const)(
+    "retries a failed %s start in dependency order",
+    async (phase) => {
+      const failAt = phase === "initial" ? 1 : 2;
+      let attempts = 0;
+      let ready = false;
+      const order: string[] = [];
+      const failure = new Error("transient service start failure");
+      const startService = vi.fn(() => {
+        order.push("dependency");
+        if (++attempts === failAt) {
+          throw failure;
+        }
+        ready = true;
+      });
+      const siblingStart = vi.fn(() => {
+        order.push("dependent");
+        if (!ready) {
+          throw new Error("dependency service is not running");
+        }
+      });
+      const registry = createRegistry([
+        {
+          id: "retry-service",
+          start: startService,
+          stop: () => {
+            ready = false;
+          },
+        },
+        { id: "sibling", start: siblingStart, stop() {} },
+      ]);
+      const serviceIds = new Set(["retry-service", "sibling"]);
+      const handle = await start(registry);
+      try {
+        if (phase === "reload") {
+          await expect(handle.reload({}, serviceIds)).resolves.toBeUndefined();
+        }
+        expect(listPluginServiceHealthFailures(registry)).toContainEqual(
+          expect.objectContaining({ serviceId: "retry-service", error: failure.message }),
+        );
+        await handle.reload({}, serviceIds);
+        expect(order.slice(-2)).toEqual(["dependency", "dependent"]);
+        expect(startService).toHaveBeenCalledTimes(failAt + 1);
+        expect(siblingStart).toHaveBeenCalledTimes(phase === "reload" ? 3 : 2);
+        expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+      } finally {
+        await handle.stop();
+      }
+    },
+  );
 
-    expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
-    expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
-
-    const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
-    const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
-      contexts: officialDiagnosticsOtelContexts,
+  it("joins late reload resources before stopping the exporter after a strict timeout", async () => {
+    vi.useFakeTimers();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const event = "service-late-start-reload";
+    const listener = () => {};
+    const listenerCount = process.listenerCount(event);
+    const order: string[] = [];
+    const stop = vi.fn(() => {
+      order.push("producer-stop");
+      process.off(event, listener);
     });
-    await startPluginServices({
-      registry: createRegistry(
-        [officialDiagnosticsOtelService],
+    const exporterStop = vi.fn(() => {
+      order.push("exporter-stop");
+    });
+    let attempts = 0;
+    const registry = createRegistry([
+      {
+        id: "late-resource",
+        async start() {
+          if (++attempts === 2) {
+            entered.resolve();
+            await release.promise;
+          }
+          process.on(event, listener);
+        },
+        stop,
+      },
+    ]);
+    registry.services.unshift(
+      ...createRegistry(
+        [{ id: "diagnostics-otel", start() {}, stop: exporterStop }],
         "diagnostics-otel",
-        "config",
-        true,
+        "bundled",
+      ).services,
+    );
+    const handle = await start(registry);
+    const reloading = handle.reload({}, new Set(["late-resource"]));
+    let stopping: Promise<unknown> | undefined;
+    try {
+      await entered.promise;
+      stopping = handle
+        .stop({ strict: true, deadlineAtMs: Date.now() + 100 })
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await stopping).toBeInstanceOf(AggregateError);
+      expect(stop).toHaveBeenCalledOnce();
+      expect(exporterStop).not.toHaveBeenCalled();
+      release.resolve();
+      await reloading;
+      await handle.stop();
+      expect(process.listenerCount(event)).toBe(listenerCount);
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(exporterStop).toHaveBeenCalledOnce();
+      expect(order.slice(-2)).toEqual(["producer-stop", "exporter-stop"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reloading, stopping]);
+      await handle.stop();
+      process.off(event, listener);
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds strict cleanup and fences timed-out service routes, events, and health", async () => {
+    vi.useFakeTimers();
+    const cleanupDeferred = createDeferredCore();
+    const received = vi.fn();
+    const siblingStop = vi.fn();
+    const broadcastPluginEvent = vi.fn();
+    const lateFailures: unknown[] = [];
+    const nestedRegistry = createEmptyPluginRegistry();
+    const addRoute = (path: string) =>
+      registerPluginHttpRoute({ path, auth: "plugin", handler: vi.fn(), throwOnFailure: true });
+    let context: OpenClawPluginServiceContext | undefined;
+    const registry = createRegistry([
+      { id: "sibling", start: () => {}, stop: siblingStop },
+      {
+        id: "blocked-cleanup",
+        start: (ctx) => {
+          context = ctx;
+          ctx.gatewayEvents?.onSessionsChanged(received);
+          addRoute("/owned-route");
+        },
+        stop: async (ctx) => {
+          await cleanupDeferred.promise;
+          ctx.serviceHealth?.reportFailure(new Error("late stale failure"));
+          for (const run of [
+            () => ctx.gatewayEvents?.emit("late", {}, { scope: "operator.read" }),
+            () => addRoute("/late-anonymous-route"),
+            () => withPluginHttpRouteRegistry(nestedRegistry, () => addRoute("/late-nested-route")),
+            () =>
+              withPluginHttpRouteRegistry(
+                nestedRegistry,
+                () => addRoute("/late-replacement-lease-route"),
+                { isActive: () => true, retain: (cleanup) => cleanup },
+              ),
+          ]) {
+            try {
+              run();
+            } catch (error) {
+              lateFailures.push(error);
+            }
+          }
+        },
+      },
+    ]);
+    let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
+
+    try {
+      const handle = await start(registry, { broadcastPluginEvent });
+      let failure: unknown;
+      stopping = handle
+        .stop({ strict: true, deadlineAtMs: Date.now() + 5_000 })
+        .catch((error: unknown) => {
+          failure = error;
+        });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([
+        expect.objectContaining({
+          message: expect.stringMatching(/plugin=plugin:test, service=blocked-cleanup.*timed out/),
+        }),
+      ]);
+      expect(siblingStop).toHaveBeenCalledOnce();
+      expect(registry.httpRoutes).toEqual([]);
+      expect(() => context?.gatewayEvents?.onSessionsChanged(received)).toThrow("no longer active");
+      const health = listPluginServiceHealthFailures(registry);
+      expect(health).toEqual([
+        expect.objectContaining({
+          pluginId: "plugin:test",
+          serviceId: "blocked-cleanup",
+          error: expect.stringContaining("stop timed out"),
+        }),
+      ]);
+
+      cleanupDeferred.resolve();
+      await handle.stop();
+      queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+      await Promise.resolve();
+
+      expect(lateFailures).toHaveLength(4);
+      expect(received).not.toHaveBeenCalled();
+      expect(broadcastPluginEvent).not.toHaveBeenCalled();
+      expect(listPluginServiceHealthFailures(registry)).toEqual(health);
+      expect(registry.httpRoutes).toEqual([]);
+      expect(nestedRegistry.httpRoutes).toEqual([]);
+    } finally {
+      cleanupDeferred.resolve();
+      await stopping;
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds failed-start cleanup and retains it for final shutdown", async () => {
+    vi.useFakeTimers();
+    const cleanup = createDeferredCore();
+    const stop = vi.fn(() => cleanup.promise);
+    const broadcastPluginEvent = vi.fn();
+    const siblingStart = vi.fn();
+    let context: OpenClawPluginServiceContext | undefined;
+    const registry = createRegistry([
+      {
+        id: "failed-start-hung-stop",
+        start: (ctx) => {
+          context = ctx;
+          throw new Error("startup rejected");
+        },
+        stop,
+      },
+      { id: "sibling", start: siblingStart },
+    ]);
+    let starting: Promise<PluginServicesHandle> | undefined;
+    let stopping: Promise<void> | undefined;
+    let settled = false;
+
+    try {
+      starting = start(registry, { broadcastPluginEvent }).then((handle) => {
+        settled = true;
+        return handle;
+      });
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+
+      expect(settled).toBe(true);
+      const handle = await starting;
+      expect(siblingStart).toHaveBeenCalledOnce();
+      expect(() => context?.gatewayEvents?.emit("late", {}, { scope: "operator.read" })).toThrow(
+        "no longer active",
+      );
+      expect(broadcastPluginEvent).not.toHaveBeenCalled();
+      let cleanupSettled = false;
+      stopping = handle.stop().then(() => {
+        cleanupSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleanupSettled).toBe(false);
+      expect(stop).toHaveBeenCalledOnce();
+      cleanup.resolve();
+      await stopping;
+    } finally {
+      cleanup.resolve();
+      await Promise.allSettled([starting, stopping]);
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not repeat rejected cleanup when startup fails after replacement settles", async () => {
+    vi.useFakeTimers();
+    const startup = createDeferredCore();
+    const cleanupError = new Error("cleanup rejected");
+    const order: string[] = [];
+    const stop = vi.fn(() => {
+      order.push("stop");
+      return Promise.reject(cleanupError);
+    });
+    let handle!: PluginServicesHandle;
+    const starting = startPluginServices({
+      registry: createRegistry([
+        {
+          id: "interrupted-startup",
+          start: () => {
+            order.push("start");
+            return startup.promise;
+          },
+          stop,
+        },
+      ]),
+      config: {},
+      onHandle: (issued) => {
+        handle = issued;
+      },
+    });
+    const stopped = handle
+      .stop({
+        strict: true,
+        deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+      })
+      .catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(await stopped).toMatchObject({
+        errors: [
+          { message: expect.stringContaining("plugin service startup settlement timed out") },
+        ],
+      });
+      order.push("replacement-settled");
+      expect(stop).not.toHaveBeenCalled();
+      startup.reject(new Error("startup failed after replacement"));
+      await starting;
+      expect(order).toEqual(["start", "replacement-settled", "stop"]);
+      await expect(
+        handle.stop({
+          strict: true,
+          deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+        }),
+      ).rejects.toMatchObject({ errors: [{ cause: cleanupError }] });
+      mockedLogger.warn.mockClear();
+      await expect(handle.stop()).resolves.toEqual({ errors: [cleanupError] });
+      expect(mockedLogger.warn).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      startup.reject(new Error("startup test cleanup"));
+      await starting;
+      await stopped;
+      vi.useRealTimers();
+    }
+  });
+
+  it("revokes trusted diagnostics listeners, emitters, bridges, and health on stop", async () => {
+    const listener = vi.fn();
+    const lateListener = vi.fn();
+    const traceContext = {
+      traceId: "1234567890abcdef1234567890abcdef",
+      spanId: "1234567890abcdef",
+    };
+    let diagnostics: TrustedExporterInternalDiagnostics | undefined;
+    const handle = await start(
+      createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start(ctx) {
+              diagnostics = ctx.internalDiagnostics as TrustedExporterInternalDiagnostics;
+              diagnostics.onEvent(listener);
+              diagnostics.registerTracePropagationBridge?.({
+                resolveTraceContext: () => undefined,
+              });
+            },
+          },
+        ],
+        "diagnostics-otel",
+        "bundled",
       ),
-      config: createServiceConfig(),
+    );
+    expect(formatPropagatedDiagnosticTraceparent(traceContext)).toBeUndefined();
+    await handle.stop();
+    expect(() => diagnostics?.emit({ type: "log.record", level: "INFO", message: "late" })).toThrow(
+      "no longer active",
+    );
+    expect(() => diagnostics?.onEvent(lateListener)).toThrow("no longer active");
+    expect(() =>
+      diagnostics?.registerTracePropagationBridge?.({ resolveTraceContext: () => undefined }),
+    ).toThrow("no longer active");
+    diagnostics?.reportExporterHealth?.({
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "export_failed",
     });
-
-    expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
-    expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
-
-    const officialInstallContexts: OpenClawPluginServiceContext[] = [];
-    const officialInstallService = createTrackingService("diagnostics-prometheus", {
-      contexts: officialInstallContexts,
-    });
-    await startPluginServices({
-      registry: createRegistry([officialInstallService], "diagnostics-prometheus", "global", true),
-      config: createServiceConfig(),
-    });
-
-    expect(officialInstallContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
-    expect(officialInstallContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
-
-    const untrustedContexts: OpenClawPluginServiceContext[] = [];
-    const untrustedService = createTrackingService("diagnostics-otel", {
-      contexts: untrustedContexts,
-    });
-    await startPluginServices({
-      registry: createRegistry([untrustedService], "diagnostics-otel", "workspace"),
-      config: createServiceConfig(),
-    });
-
-    expect(untrustedContexts[0]?.internalDiagnostics).toBeUndefined();
-
-    const spoofedContexts: OpenClawPluginServiceContext[] = [];
-    const spoofedService = createTrackingService("diagnostics-prometheus", {
-      contexts: spoofedContexts,
-    });
-    await startPluginServices({
-      registry: createRegistry([spoofedService], "not-diagnostics-prometheus", "global", true),
-      config: createServiceConfig(),
-    });
-
-    expect(spoofedContexts[0]?.internalDiagnostics).toBeUndefined();
+    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "still active" });
+    expect(listener).not.toHaveBeenCalled();
+    expect(lateListener).not.toHaveBeenCalled();
+    expect(formatPropagatedDiagnosticTraceparent(traceContext)).toBe(
+      "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01",
+    );
+    expect(
+      getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events,
+    ).toEqual([]);
   });
 });

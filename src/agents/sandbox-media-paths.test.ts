@@ -1,10 +1,15 @@
 // Verifies sandbox media paths resolve through bridge and workspace-only guards.
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readOutboundMediaFile } from "../media/bounded-read-file.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
 } from "./sandbox-media-paths.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { createSandboxFsBridge, type SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 
 describe("createSandboxBridgeReadFile", () => {
   it("delegates reads through the sandbox bridge with sandbox root cwd", async () => {
@@ -17,31 +22,14 @@ describe("createSandboxBridgeReadFile", () => {
         } as unknown as SandboxFsBridge,
       },
     });
-    await expect(scopedRead("media/inbound/example.png")).resolves.toEqual(Buffer.from("ok"));
+    await expect(
+      readOutboundMediaFile(scopedRead, "media/inbound/example.png", { maxBytes: 1024 }),
+    ).resolves.toEqual(Buffer.from("ok"));
     expect(readFile).toHaveBeenCalledWith({
       filePath: "media/inbound/example.png",
       cwd: "/tmp/sandbox-root",
+      maxBytes: 1024,
     });
-  });
-
-  it("falls back to container paths when the bridge has no host path", async () => {
-    const stat = vi.fn(async () => ({ type: "file", size: 1, mtimeMs: 1 }));
-    const resolved = await resolveSandboxedBridgeMediaPath({
-      sandbox: {
-        root: "/tmp/sandbox-root",
-        bridge: {
-          resolvePath: ({ filePath }: { filePath: string }) => ({
-            relativePath: filePath,
-            containerPath: `/sandbox/${filePath}`,
-          }),
-          stat,
-        } as unknown as SandboxFsBridge,
-      },
-      mediaPath: "image.png",
-    });
-
-    expect(resolved).toEqual({ resolved: "/sandbox/image.png" });
-    expect(stat).not.toHaveBeenCalled();
   });
 
   it("keeps workspace-only container paths under the sandbox workspace mount", async () => {
@@ -153,4 +141,60 @@ describe("createSandboxBridgeReadFile", () => {
     ).rejects.toThrow("Sandbox media reference is not staged: media://inbound/missing.png");
     expect(resolvePath).not.toHaveBeenCalled();
   });
+});
+
+describe("sandbox media container file URLs", () => {
+  let tempRoot = "";
+  let workspace = "";
+  let imagePath = "";
+  let bridge: SandboxFsBridge;
+
+  beforeEach(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-media-container-url-"));
+    workspace = path.join(tempRoot, "workspace");
+    imagePath = path.join(workspace, "image.png");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(imagePath, "image", "utf8");
+    bridge = createSandboxFsBridge({
+      sandbox: {
+        ...createSandboxTestContext({
+          overrides: {
+            workspaceDir: workspace,
+            agentWorkspaceDir: workspace,
+          },
+        }),
+        backend: {
+          runShellCommand: async () => {
+            throw new Error("Path resolution must not execute backend commands");
+          },
+        },
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it.each(["FILE:/workspace/image.png"])("reads a mounted file from %s", async (mediaPath) => {
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: { root: workspace, bridge, workspaceOnly: true },
+      mediaPath,
+    });
+
+    expect(resolved).toEqual({ resolved: imagePath });
+    await expect(fs.readFile(resolved.resolved, "utf8")).resolves.toBe("image");
+  });
+
+  it.each(["FILE:/outside/image.png"])(
+    "rejects an outside mounted file from %s",
+    async (mediaPath) => {
+      await expect(
+        resolveSandboxedBridgeMediaPath({
+          sandbox: { root: workspace, bridge, workspaceOnly: true },
+          mediaPath,
+        }),
+      ).rejects.toThrow(/escapes sandbox root/i);
+    },
+  );
 });

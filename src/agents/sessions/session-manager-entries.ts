@@ -1,340 +1,447 @@
-import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
-import type { ImageContent, Message, TextContent } from "../../llm/types.js";
-import {
-  buildSessionContext as buildCoreSessionContext,
-  type SessionTreeEntry as CoreSessionTreeEntry,
-} from "../runtime/index.js";
-import type { BashExecutionMessage, CustomMessage } from "./messages.js";
-import { messageSerializesOwnedValues } from "./session-manager-file.js";
+import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import type { ImageContent, TextContent } from "../../llm/types.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
+import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
+import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
-import { SessionManagerPersistence } from "./session-manager-persistence.js";
+import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
+import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 import type {
-  AppendPersistenceOptions,
   BranchSummaryEntry,
   CompactionEntry,
   CustomEntry,
   CustomMessageEntry,
   LabelEntry,
-  ModelChangeEntry,
   ResetEntry,
   ResetReason,
   SessionContext,
   SessionEntry,
   SessionInfoEntry,
-  SessionMessageEntry,
-  SessionHeader,
-  SessionTreeNode,
-  ThinkingLevelChangeEntry,
+  SessionLeafControl,
 } from "./session-manager-types.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
-export class SessionManagerEntries extends SessionManagerPersistence {
-  protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
-    if (
-      !isSessionTranscriptSideAppendEntry(entry) &&
-      entry.parentId === this.appendParentId &&
-      this.leafId !== this.appendParentId
-    ) {
-      this.logicalParentsById.set(entry.id, this.leafId);
-    }
-    this.fileEntries.push(entry);
-    this.byId.set(entry.id, entry);
-    this.leafId = entry.id;
-    this.appendParentId = entry.id;
-    this.promptReleasedSideBranchParentId = undefined;
-    this.persist(entry, options);
+type LeafControlSelection = {
+  targetId: string | null;
+  appendParentId: string | null;
+  appendMode?: "side";
+};
+
+export class SessionManagerEntries extends SessionManagerAppend {
+  private createEntry<T extends { type: SessionEntry["type"] }>(data: T, timestamp = Date.now()) {
+    return {
+      ...data,
+      id: generateSessionEntryId(),
+      parentId: this.appendParentId,
+      timestamp: new Date(timestamp).toISOString(),
+    };
   }
 
-  appendMessage(
-    message: Message | CustomMessage | BashExecutionMessage,
-    options?: AppendPersistenceOptions,
-  ): string {
-    const invalidateSerializedPrefixCache =
-      options?.invalidateSerializedPrefixCache === true || messageSerializesOwnedValues(message);
-    const entry: SessionMessageEntry = {
-      type: "message",
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
-      message,
-    };
-    this.appendEntry(entry, { ...options, invalidateSerializedPrefixCache });
+  async appendCompactionAsync(
+    summary: string,
+    firstKeptEntryId: string,
+    tokensBefore: number,
+    details?: unknown,
+    fromHook?: boolean,
+    metadata?: CompactionEntry["__openclaw"],
+    tokensAfter?: number,
+  ): Promise<string> {
+    const entry: CompactionEntry = this.createEntry({
+      type: "compaction",
+      summary,
+      firstKeptEntryId,
+      tokensBefore,
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+      details,
+      fromHook,
+      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
+    });
+    await this.appendEntryAsync(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
     return entry.id;
   }
 
-  appendThinkingLevelChange(thinkingLevel: string): string {
-    const entry: ThinkingLevelChangeEntry = {
-      type: "thinking_level_change",
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
-      thinkingLevel,
-    };
-    this.appendEntry(entry);
-    return entry.id;
-  }
-
-  appendModelChange(provider: string, modelId: string): string {
-    const entry: ModelChangeEntry = {
-      type: "model_change",
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
-      provider,
-      modelId,
-    };
-    this.appendEntry(entry);
-    return entry.id;
-  }
-
+  /** @deprecated Await appendCompactionAsync. This method will be removed in a later stable release after the deprecation period. */
   appendCompaction(
     summary: string,
     firstKeptEntryId: string,
     tokensBefore: number,
     details?: unknown,
     fromHook?: boolean,
+    metadata?: CompactionEntry["__openclaw"],
+    tokensAfter?: number,
   ): string {
-    const entry: CompactionEntry = {
+    prepareSessionManagerSync("appendCompaction", this.persistenceTarget, this);
+    const entry: CompactionEntry = this.createEntry({
       type: "compaction",
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
       summary,
       firstKeptEntryId,
       tokensBefore,
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       details,
       fromHook,
-    };
+      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
+    });
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
     return entry.id;
   }
 
-  appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
-    const entry: ResetEntry = {
+  async appendResetBoundaryAsync(reason: ResetReason, firstKeptEntryId?: string): Promise<string> {
+    const entry: ResetEntry = this.createEntry({
       type: "reset",
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
       reason,
       ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
-    };
+    });
+    await this.appendEntryAsync(entry);
+    return entry.id;
+  }
+
+  /** @deprecated Await appendResetBoundaryAsync. This method will be removed in a later stable release after the deprecation period. */
+  appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
+    prepareSessionManagerSync("appendResetBoundary", this.persistenceTarget, this);
+    const entry: ResetEntry = this.createEntry({
+      type: "reset",
+      reason,
+      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+    });
     this.appendEntry(entry);
     return entry.id;
   }
 
-  appendCustomEntry(customType: string, data?: unknown): string {
-    const entry: CustomEntry = {
+  async appendCustomEntryAsync(customType: string, data?: unknown): Promise<string> {
+    const entry: CustomEntry = this.createEntry({
       type: "custom",
       customType,
       data,
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
-    };
+    });
+    await this.appendEntryAsync(entry, { invalidateSerializedPrefixCache: true });
+    return entry.id;
+  }
+
+  /** @deprecated Await appendCustomEntryAsync. This method will be removed in a later stable release after the deprecation period. */
+  appendCustomEntry(customType: string, data?: unknown): string {
+    prepareSessionManagerSync("appendCustomEntry", this.persistenceTarget, this);
+    const entry: CustomEntry = this.createEntry({
+      type: "custom",
+      customType,
+      data,
+      timestamp: new Date().toISOString(),
+    });
     this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
-  appendSessionInfo(name: string): string {
-    const entry: SessionInfoEntry = {
+  async appendSessionInfoAsync(name: string): Promise<string> {
+    const entry: SessionInfoEntry = this.createEntry({
       type: "session_info",
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
       name: name.replace(/[\r\n]+/g, " ").trim(),
-    };
+    });
+    await this.appendEntryAsync(entry);
+    return entry.id;
+  }
+
+  /** @deprecated Await appendSessionInfoAsync. This method will be removed in a later stable release after the deprecation period. */
+  appendSessionInfo(name: string): string {
+    prepareSessionManagerSync("appendSessionInfo", this.persistenceTarget, this);
+    const entry: SessionInfoEntry = this.createEntry({
+      type: "session_info",
+      name: name.replace(/[\r\n]+/g, " ").trim(),
+    });
     this.appendEntry(entry);
     return entry.id;
   }
 
-  getSessionName(): string | undefined {
-    for (const entry of this.getEntries().toReversed()) {
-      if (entry.type === "session_info") {
-        return entry.name?.trim() || undefined;
-      }
-    }
-    return undefined;
+  async appendCustomMessageEntryAsync(
+    customType: string,
+    content: string | (TextContent | ImageContent)[],
+    display: boolean,
+    details?: unknown,
+    timestamp?: number,
+  ): Promise<string> {
+    // Runtime context replays as user input, including its original timestamp.
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
+    await this.appendEntryAsync(entry, { invalidateSerializedPrefixCache: true });
+    return entry.id;
   }
 
+  /** @deprecated Await appendCustomMessageEntryAsync. This method will be removed in a later stable release after the deprecation period. */
   appendCustomMessageEntry(
     customType: string,
     content: string | (TextContent | ImageContent)[],
     display: boolean,
     details?: unknown,
+    timestamp?: number,
   ): string {
-    const entry: CustomMessageEntry = {
-      type: "custom_message",
-      customType,
-      content,
-      display,
-      details,
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
-    };
+    prepareSessionManagerSync("appendCustomMessageEntry", this.persistenceTarget, this);
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
     this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
-  getLeafId(): string | null {
-    return this.leafId;
-  }
-
-  getLeafEntry(): SessionEntry | undefined {
-    return this.leafId ? this.getEntry(this.leafId) : undefined;
-  }
-
-  getEntry(id: string): SessionEntry | undefined {
-    const entry = this.byId.get(id);
-    return entry ? this.normalizeEntryParent(entry) : undefined;
-  }
-
-  getChildren(parentId: string): SessionEntry[] {
-    const children: SessionEntry[] = [];
-    for (const entry of this.byId.values()) {
-      const normalizedEntry = this.normalizeEntryParent(entry);
-      if (normalizedEntry.parentId === parentId) {
-        children.push(normalizedEntry);
+  async appendLeafControlAsync(params: LeafControlSelection): Promise<SessionLeafControl> {
+    const captured = { ...params };
+    return await withSessionManagerAppend(this, async (admission) => {
+      this.assertTranscriptWriteActive();
+      this.validateLeafControl(captured);
+      if (!admission) {
+        return this.appendLeafControlSync(captured);
       }
-    }
-    return children;
+      const entry = this.createSelectedLeafControl(captured);
+      const target = this.getSessionTarget();
+      const assertNavigation = this.captureTranscriptNavigationAssertion();
+      // This control selects the loaded tree; retrying could hide a newer user turn.
+      const committed = await this.persistWorkerRecord(
+        entry,
+        undefined,
+        admission,
+        undefined,
+        undefined,
+        this.transcriptMutationAt,
+        false,
+        assertNavigation,
+      );
+      try {
+        if (!sameSessionTranscriptTargetBinding(target, this.getSessionTarget())) {
+          throw new SessionTranscriptWriterClaimReboundError();
+        }
+        assertNavigation();
+        if (committed.viewFailure instanceof SessionManagerActorCommittedError) {
+          throw committed.viewFailure;
+        }
+        if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
+          if (committed.viewFailure) {
+            throw committed.viewFailure;
+          }
+          this.transcriptVersion = committed.committedVersion;
+          this.transcriptMutationAt = committed.committedVersion.updatedAt;
+          if (committed.reload) {
+            this.adoptPreparedTranscriptReload(committed.reload);
+          } else {
+            this.adoptLeafSelection(entry, captured);
+          }
+        }
+        return entry;
+      } catch (cause) {
+        const error = new Error(
+          "Session leaf committed, but its view could not be adopted; do not replay the write",
+          { cause },
+        );
+        recordModelFallbackStop(error);
+        this.invalidateTranscriptView(error);
+        throw error;
+      }
+    });
   }
 
-  getLabel(id: string): string | undefined {
-    return this.labelsById.get(id);
+  /** @deprecated Await appendLeafControlAsync. This method will be removed in a later stable release after the deprecation period. */
+  appendLeafControl(params: LeafControlSelection): SessionLeafControl {
+    prepareSessionManagerSync("appendLeafControl", this.persistenceTarget, this);
+    return this.appendLeafControlSync(params);
   }
 
-  appendLabelChange(targetId: string, label: string | undefined): string {
-    if (!this.byId.has(targetId)) {
-      throw new Error(`Entry ${targetId} not found`);
+  private validateLeafControl(params: LeafControlSelection): void {
+    this.assertTranscriptViewAvailable();
+    if (params.targetId !== null && !this.byId.has(params.targetId)) {
+      throw new Error(`Entry ${params.targetId} not found`);
     }
-    const entry: LabelEntry = {
+    if (
+      params.appendParentId !== null &&
+      !this.byId.has(params.appendParentId) &&
+      !this.opaqueParentsById.has(params.appendParentId)
+    ) {
+      throw new Error(`Append parent ${params.appendParentId} not found`);
+    }
+  }
+
+  protected appendLeafControlSync(params: LeafControlSelection): SessionLeafControl {
+    this.validateLeafControl(params);
+    const entry = this.createSelectedLeafControl(params);
+    this.persistRecord(entry);
+    this.adoptLeafSelection(entry, params);
+    return entry;
+  }
+
+  private createSelectedLeafControl(params: LeafControlSelection): SessionLeafControl {
+    const previousLeafId = this.leafId;
+    this.leafId = params.targetId;
+    const entry = this.createLeafControl(
+      this.appendParentId,
+      params.appendParentId,
+      params.appendMode,
+    );
+    this.leafId = previousLeafId;
+    return entry;
+  }
+
+  private adoptLeafSelection(entry: SessionLeafControl, params: LeafControlSelection): void {
+    this.rememberLeafControl(entry);
+    this.leafId = params.targetId;
+    this.appendParentId = params.appendParentId;
+    this.appendMode = params.appendMode;
+    this.pendingDeliberateAppend = false;
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
+      (prefix) => prefix.anchorIds.length > 0,
+    );
+  }
+
+  async appendLabelChangeAsync(targetId: string, label: string | undefined): Promise<string> {
+    const entry: LabelEntry = this.createEntry({
       type: "label",
-      id: generateSessionEntryId(this.byId),
-      parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
       targetId,
       label,
-    };
-    this.appendEntry(entry);
-    if (label) {
-      this.labelsById.set(targetId, label);
-      this.labelTimestampsById.set(targetId, entry.timestamp);
-    } else {
-      this.labelsById.delete(targetId);
-      this.labelTimestampsById.delete(targetId);
-    }
+    });
+    await this.appendEntryAsync(entry);
     return entry.id;
   }
 
-  getBranch(fromId?: string): SessionEntry[] {
-    const path: SessionEntry[] = [];
-    const seen = new Set<string>();
-    let currentId = fromId ?? this.leafId;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (current) {
-        const normalizedCurrent = this.normalizeEntryParent(current);
-        path.push(normalizedCurrent);
-        currentId = normalizedCurrent.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
+  /** @deprecated Await appendLabelChangeAsync. This method will be removed in a later stable release after the deprecation period. */
+  appendLabelChange(targetId: string, label: string | undefined): string {
+    prepareSessionManagerSync("appendLabelChange", this.persistenceTarget, this);
+    this.assertTranscriptViewAvailable();
+    if (!this.byId.has(targetId)) {
+      throw new Error(`Entry ${targetId} not found`);
     }
-    path.reverse();
-    return path;
+    const entry: LabelEntry = this.createEntry({
+      type: "label",
+      targetId,
+      label,
+    });
+    this.appendEntry(entry);
+    return entry.id;
   }
 
   buildSessionContext(): SessionContext {
     return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
   }
 
-  getBoundaryCount(): number {
-    return this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
-      .length;
-  }
-
-  getHeader(): SessionHeader | null {
-    return this.fileEntries.find((entry) => entry.type === "session") ?? null;
-  }
-
-  getEntries(): SessionEntry[] {
-    return this.fileEntries
-      .filter((entry): entry is SessionEntry => entry.type !== "session")
-      .map((entry) => this.normalizeEntryParent(entry));
-  }
-
-  getTree(): SessionTreeNode[] {
-    const entries = this.getEntries();
-    const nodeMap = new Map<string, SessionTreeNode>();
-    const roots: SessionTreeNode[] = [];
-    for (const entry of entries) {
-      nodeMap.set(entry.id, {
-        entry,
-        children: [],
-        label: this.labelsById.get(entry.id),
-        labelTimestamp: this.labelTimestampsById.get(entry.id),
-      });
-    }
-    for (const entry of entries) {
-      const node = nodeMap.get(entry.id)!;
-      const parentId = this.resolveCanonicalParentId(entry.parentId);
-      if (parentId === null || parentId === entry.id) {
-        roots.push(node);
-      } else {
-        const parent = nodeMap.get(parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
+  /** Omitted projection metadata follows its retained branch anchors, outside model history. */
+  getToolResultProjectionEntries() {
+    let entries: (SessionEntry | Record<string, unknown>)[] = this.getBranch();
+    for (const prefix of this.cacheTtlProjectionPrefixes ?? []) {
+      const anchor = prefix.anchorIds.length
+        ? entries.findIndex((entry) => prefix.anchorIds.some((id) => id === entry.id))
+        : entries.length;
+      if (anchor >= 0) {
+        entries = [...entries.slice(0, anchor), ...prefix.entries, ...entries.slice(anchor)];
       }
     }
-    const stack = [...roots];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-      node.children.sort(
-        (left, right) =>
-          new Date(left.entry.timestamp).getTime() - new Date(right.entry.timestamp).getTime(),
-      );
-      stack.push(...node.children);
-    }
-    return roots;
+    return entries;
   }
 
+  async branchAsync(branchFromId: string): Promise<void> {
+    await withSessionManagerWrite(this, async () => {
+      if (!this.byId.has(branchFromId)) {
+        await this.ensureCompletePersistedHistoryAsync();
+      }
+      this.selectBranch(branchFromId);
+    });
+  }
+
+  /** @deprecated Await branchAsync. This method will be removed in a later stable release after the deprecation period. */
   branch(branchFromId: string): void {
+    prepareSessionManagerSync("branch", this.persistenceTarget, this);
+    this.branchSync(branchFromId);
+  }
+
+  protected branchSync(branchFromId: string): void {
+    this.assertTranscriptViewAvailable();
+    if (!this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
+    this.selectBranch(branchFromId);
+  }
+
+  private selectBranch(branchFromId: string): void {
     const branchTargetId = this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
+    this.recordTranscriptNavigationChange();
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
-    this.promptReleasedSideBranchParentId = undefined;
+    this.appendMode = undefined;
+    this.pendingDeliberateAppend = true;
   }
 
   resetLeaf(): void {
+    this.assertTranscriptViewAvailable();
+    this.recordTranscriptNavigationChange();
     this.leafId = null;
     this.appendParentId = null;
-    this.promptReleasedSideBranchParentId = undefined;
+    this.appendMode = undefined;
+    this.pendingDeliberateAppend = true;
   }
 
+  async resetLeafAsync(): Promise<void> {
+    await withSessionManagerWrite(this, () => this.resetLeaf());
+  }
+
+  async branchWithSummaryAsync(
+    branchFromId: string | null,
+    summary: string,
+    details?: unknown,
+    fromHook?: boolean,
+  ): Promise<string> {
+    return await withSessionManagerWrite(this, async () => {
+      if (branchFromId !== null && !this.byId.has(branchFromId)) {
+        await this.ensureCompletePersistedHistoryAsync();
+      }
+      const entry = this.createBranchSummary(branchFromId, summary, details, fromHook);
+      await this.appendEntryAsync(
+        entry,
+        {
+          invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+        },
+        true,
+      );
+      return entry.id;
+    });
+  }
+
+  /** @deprecated Await branchWithSummaryAsync. This method will be removed in a later stable release after the deprecation period. */
   branchWithSummary(
     branchFromId: string | null,
     summary: string,
     details?: unknown,
     fromHook?: boolean,
   ): string {
+    prepareSessionManagerSync("branchWithSummary", this.persistenceTarget, this);
+    if (branchFromId !== null && !this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
+    const entry = this.createBranchSummary(branchFromId, summary, details, fromHook);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
+    return entry.id;
+  }
+
+  private createBranchSummary(
+    branchFromId: string | null,
+    summary: string,
+    details: unknown,
+    fromHook: boolean | undefined,
+  ): BranchSummaryEntry {
     const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    this.leafId = branchTargetId;
-    this.appendParentId = branchTargetId;
-    const entry: BranchSummaryEntry = {
+    return {
       type: "branch_summary",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: branchTargetId,
       timestamp: new Date().toISOString(),
       fromId: branchTargetId ?? "root",
@@ -342,9 +449,5 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       details,
       fromHook,
     };
-    this.appendEntry(entry, {
-      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
-    });
-    return entry.id;
   }
 }

@@ -1,26 +1,22 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
-import type { MeetingBrowserHealth } from "./session-types.js";
+import type { MeetingPluginJoinRequest, MeetingPluginProbeHealth } from "./session-types.js";
 
-type MeetingProbeHealth = MeetingBrowserHealth & {
-  audioOutputActive?: boolean;
-  captioning?: boolean;
-  captionsEnabledAttempted?: boolean;
-  lastCaptionAt?: string;
-  lastCaptionSpeaker?: string;
-  lastCaptionText?: string;
-  lastOutputBytes?: number;
-  lastOutputLoopbackAt?: string;
-  lastOutputLoopbackCorrelation?: number;
-  lastOutputLoopbackPeak?: number;
-  lastOutputLoopbackRms?: number;
-  outputGeneration?: number;
-  outputLoopbackSignalBytes?: number;
-  recentTranscript?: Array<{ at?: string; speaker?: string; text: string }>;
-  transcriptLines?: number;
-  verifiedOutputGeneration?: number;
-};
+export function resolveMeetingProbeTimeoutMs(
+  input: number | undefined,
+  fallback: number,
+  invalidRequest: (message: string) => Error = (message) => new Error(message),
+): number {
+  if (input === undefined) {
+    return Math.min(Math.max(fallback, 1), 120_000);
+  }
+  if (!Number.isFinite(input) || input <= 0) {
+    throw invalidRequest("timeoutMs must be a positive number");
+  }
+  return Math.min(Math.trunc(input), 120_000);
+}
 
-type MeetingProbeSession<Health extends MeetingProbeHealth> = {
+type MeetingProbeSession<Health extends MeetingPluginProbeHealth> = {
   id: string;
   chrome?: {
     launched: boolean;
@@ -29,14 +25,7 @@ type MeetingProbeSession<Health extends MeetingProbeHealth> = {
   };
 };
 
-type MeetingProbeRequest<Transport extends string> = {
-  agentId?: string;
-  message?: string;
-  mode?: string;
-  timeoutMs?: number;
-  transport?: Transport;
-  url: string;
-};
+type MeetingProbeRequest<Transport extends string> = MeetingPluginJoinRequest<Transport, string>;
 
 type MeetingProbeConfig<Mode extends string> = {
   defaultMode: Mode;
@@ -44,11 +33,11 @@ type MeetingProbeConfig<Mode extends string> = {
   chromeNode: { node?: string };
 };
 
-type MeetingProbeContext<
+export type MeetingProbeContext<
   Config extends MeetingProbeConfig<Mode>,
   Mode extends string,
   Transport extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
   Request extends MeetingProbeRequest<Transport>,
 > = {
@@ -67,7 +56,7 @@ type MeetingProbeContext<
 
 type MeetingRuntimeProbeOptions<
   Mode extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
 > = {
   defaultSpeechMessage: string;
@@ -81,7 +70,7 @@ export function createMeetingRuntimeProbes<
   Config extends MeetingProbeConfig<Mode>,
   Mode extends string,
   Transport extends string,
-  Health extends MeetingProbeHealth,
+  Health extends MeetingPluginProbeHealth,
   Session extends MeetingProbeSession<Health>,
   Request extends MeetingProbeRequest<Transport>,
 >(
@@ -102,6 +91,16 @@ export function createMeetingRuntimeProbes<
 ) {
   type Context = MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>;
 
+  const resolveJoin = (context: Context, request: Request, mode: Mode) => ({
+    url: options.normalizeUrl?.(request.url) ?? request.url,
+    transport:
+      request.transport ??
+      options.defaultTransport?.(context.config) ??
+      (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
+    mode,
+    agentId: context.resolveAgentId(request),
+  });
+
   const testSpeech = async (context: Context, request: Request) => {
     const requestMode =
       options.resolveRequestMode?.(request.mode, context.config) ??
@@ -113,15 +112,7 @@ export function createMeetingRuntimeProbes<
     }
     const requestedMode = requestMode ?? context.config.defaultMode;
     const mode = options.talkBackMode(requestedMode) ? requestedMode : ("agent" as Mode);
-    const resolved = {
-      url: options.normalizeUrl?.(request.url) ?? request.url,
-      transport:
-        request.transport ??
-        options.defaultTransport?.(context.config) ??
-        (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
-      mode,
-      agentId: context.resolveAgentId(request),
-    };
+    const resolved = resolveJoin(context, request, mode);
     const beforeSessions = context.list();
     const before = new Set(beforeSessions.map((session) => session.id));
     const existing = beforeSessions.find((session) => context.isReusable(session, resolved));
@@ -149,10 +140,10 @@ export function createMeetingRuntimeProbes<
       context.hasHealthHandle(result.session.id);
     if (shouldWait && !verified()) {
       const deadline =
-        Date.now() +
+        performance.now() +
         (options.resolveSpeechTimeoutMs?.(request, context.config) ??
           options.resolveTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs));
-      while (Date.now() < deadline && !verified()) {
+      while (performance.now() < deadline && !verified()) {
         await sleep(100);
         context.refreshHealth(result.session.id);
         health = result.session.chrome?.health;
@@ -191,15 +182,7 @@ export function createMeetingRuntimeProbes<
         options.listeningModeError ?? "test_listen requires mode: transcribe",
       );
     }
-    const resolved = {
-      url: options.normalizeUrl?.(request.url) ?? request.url,
-      transport:
-        request.transport ??
-        options.defaultTransport?.(context.config) ??
-        (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
-      mode: "transcribe" as Mode,
-      agentId: context.resolveAgentId(request),
-    };
+    const resolved = resolveJoin(context, request, "transcribe" as Mode);
     options.validateListeningTransport?.(resolved.transport);
     const beforeSessions = context.list();
     const before = new Set(beforeSessions.map((session) => session.id));
@@ -220,33 +203,27 @@ export function createMeetingRuntimeProbes<
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =
-        Date.now() +
+        performance.now() +
         options.resolveTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs);
-      while (Date.now() < deadline) {
-        const remainingMs = deadline - Date.now();
+      while (performance.now() < deadline) {
+        const remainingMs = Math.floor(deadline - performance.now());
         if (remainingMs <= 0) {
           break;
         }
-        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-        const deadlineReached = new Promise<boolean>((resolve) => {
-          deadlineTimer = setTimeout(() => resolve(false), remainingMs);
-        });
-        const refreshed = await Promise.race([
-          (
-            options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
-            context.refreshCaptionHealth(result.session, remainingMs)
-          ).then(() => true),
-          deadlineReached,
-        ]).finally(() => {
-          if (deadlineTimer !== undefined) {
-            clearTimeout(deadlineTimer);
-          }
-        });
+        const refreshed = await raceWithTimeout(
+          () =>
+            (
+              options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
+              context.refreshCaptionHealth(result.session, remainingMs)
+            ).then(() => true),
+          remainingMs,
+          () => false,
+        );
         if (!refreshed) {
           break;
         }
         health = result.session.chrome?.health;
-        if (Date.now() >= deadline) {
+        if (performance.now() >= deadline) {
           break;
         }
         if (advanced()) {
@@ -255,7 +232,7 @@ export function createMeetingRuntimeProbes<
         if (listenVerified || health?.manualAction) {
           break;
         }
-        const retryDelayMs = deadline - Date.now();
+        const retryDelayMs = deadline - performance.now();
         if (retryDelayMs <= 0) {
           break;
         }

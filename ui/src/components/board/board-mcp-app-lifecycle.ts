@@ -1,9 +1,12 @@
-import type { BoardWidgetAppViewState, BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { NearViewportObserver } from "../near-viewport-observer.ts";
 
 const REFRESH_LEAD_MS = 5_000;
 type AppViewMode = "cached" | "refresh" | "expired";
 
-function appViewKey(sessionKey: string, widget: BoardViewWidget): string {
+function appViewKey(sessionKey: string, widget: BoardWidget): string {
   return `${sessionKey}\0${widget.name}\0${widget.revision}\0${widget.instanceId ?? ""}\0${widget.grantState}`;
 }
 
@@ -14,69 +17,18 @@ function clearTimer(timer: number | undefined): undefined {
   return undefined;
 }
 
-class NearViewportObserver {
-  private observer?: IntersectionObserver;
-  nearVisible = false;
-  target?: Element;
-
-  constructor(
-    private readonly marginPx: number,
-    private readonly visibilityChanged: () => void,
-  ) {}
-
-  observe(target: Element): void {
-    if (target === this.target) {
-      return;
-    }
-    this.disconnect();
-    this.target = target;
-    this.setNearVisible(this.isNearViewport(target));
-    if (typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    this.observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries.at(-1);
-        if (!entry || entry.target !== this.target) {
-          return;
-        }
-        this.setNearVisible(entry.isIntersecting || this.isNearViewport(entry.target));
-      },
-      { rootMargin: `${this.marginPx}px 0px` },
-    );
-    this.observer.observe(target);
-  }
-
-  disconnect(): void {
-    this.observer?.disconnect();
-    this.observer = undefined;
-    this.target = undefined;
-    this.setNearVisible(false);
-  }
-
-  private setNearVisible(nearVisible: boolean): void {
-    if (nearVisible !== this.nearVisible) {
-      this.nearVisible = nearVisible;
-      this.visibilityChanged();
-    }
-  }
-
-  private isNearViewport(target: Element): boolean {
-    const bounds = target.getBoundingClientRect();
-    return bounds.bottom >= -this.marginPx && bounds.top <= window.innerHeight + this.marginPx;
-  }
-}
-
 type AppViewCallbacks = {
+  appViewGeneration: () => number;
   widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
   refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
 
 type LifecycleHost = {
+  active: () => boolean;
   connected: () => boolean;
   requestUpdate: () => void;
   sessionKey: () => string;
-  widget: () => BoardViewWidget | undefined;
+  widget: () => BoardWidget | undefined;
 };
 
 export class BoardMcpAppLifecycle {
@@ -84,6 +36,7 @@ export class BoardMcpAppLifecycle {
   loading = false;
 
   private callbacks?: AppViewCallbacks;
+  private appViewGeneration = 0;
   private key = "";
   private generation = 0;
   private renewalTimer?: number;
@@ -96,19 +49,25 @@ export class BoardMcpAppLifecycle {
     return this.visibility.nearVisible;
   }
 
-  update(widget: BoardViewWidget | undefined, callbacks: AppViewCallbacks | undefined): void {
+  update(widget: BoardWidget | undefined, callbacks: AppViewCallbacks | undefined): void {
     this.callbacks = callbacks;
     if (!widget || widget.contentKind !== "mcp-app" || !callbacks) {
       this.reset();
       return;
     }
     const key = appViewKey(this.host.sessionKey(), widget);
-    if (key !== this.key) {
-      this.clearTimers();
-      this.generation += 1;
-      this.loading = false;
+    const appViewGeneration = callbacks.appViewGeneration();
+    if (key !== this.key || appViewGeneration !== this.appViewGeneration) {
+      this.reset();
       this.key = key;
-      this.state = undefined;
+      this.appViewGeneration = appViewGeneration;
+    }
+  }
+
+  activityChanged(): void {
+    if (!this.host.active()) {
+      this.visibility.disconnect();
+      this.clearTimers();
     }
   }
 
@@ -123,7 +82,7 @@ export class BoardMcpAppLifecycle {
   sync(): void {
     const widget = this.host.widget();
     const callbacks = this.callbacks;
-    if (!widget || widget.contentKind !== "mcp-app" || !callbacks) {
+    if (!this.host.active() || !widget || widget.contentKind !== "mcp-app" || !callbacks) {
       this.renewalTimer = clearTimer(this.renewalTimer);
       return;
     }
@@ -153,7 +112,7 @@ export class BoardMcpAppLifecycle {
 
   retry(): void {
     const widget = this.host.widget();
-    if (widget && this.callbacks) {
+    if (this.host.active() && widget && this.callbacks) {
       void this.load(widget, this.callbacks, "refresh");
     }
   }
@@ -167,8 +126,8 @@ export class BoardMcpAppLifecycle {
     const wasLoading = this.loading;
     this.state = { status: "stale", error: "MCP App view expired" };
     this.loading = false;
-    this.notify();
-    if (!wasLoading) {
+    this.host.requestUpdate();
+    if (this.host.active() && !wasLoading) {
       void this.load(widget, callbacks, "expired");
     }
   }
@@ -177,6 +136,7 @@ export class BoardMcpAppLifecycle {
     this.clearTimers();
     this.generation += 1;
     this.key = "";
+    this.appViewGeneration = 0;
     this.state = undefined;
     this.loading = false;
   }
@@ -189,7 +149,7 @@ export class BoardMcpAppLifecycle {
   private visibilityChanged(): void {
     queueMicrotask(() => {
       if (this.host.connected()) {
-        this.notify();
+        this.host.requestUpdate();
       }
     });
     if (!this.nearVisible && !this.loading) {
@@ -198,11 +158,11 @@ export class BoardMcpAppLifecycle {
   }
 
   private async load(
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: AppViewCallbacks,
     mode: AppViewMode,
   ): Promise<void> {
-    if (this.loading || !this.nearVisible) {
+    if (!this.host.active() || this.loading || !this.nearVisible) {
       return;
     }
     const key = appViewKey(this.host.sessionKey(), widget);
@@ -226,7 +186,7 @@ export class BoardMcpAppLifecycle {
     if (mode === "expired") {
       this.state = undefined;
     }
-    this.notify();
+    this.host.requestUpdate();
     if (previousLease) {
       this.expiryTimer = window.setTimeout(
         () => {
@@ -234,49 +194,42 @@ export class BoardMcpAppLifecycle {
           if (isCurrent()) {
             this.state = { status: "stale", error: "MCP App lease expired while renewing" };
             this.loading = false;
-            this.notify();
+            this.host.requestUpdate();
           }
         },
         Math.max(0, previousLease.expiresAtMs - Date.now()),
       );
     }
+    let appView: BoardWidgetAppViewState;
     try {
-      const appView = await (mode === "cached"
+      appView = await (mode === "cached"
         ? callbacks.widgetAppView(widget.name, widget.revision)
         : callbacks.refreshWidgetAppView(widget.name, widget.revision));
-      if (!isCurrent()) {
-        return;
-      }
-      if (appView.status === "stale" && previousLease && previousLease.expiresAtMs > Date.now()) {
-        this.loading = false;
-        this.notify();
-        return;
-      }
-      this.clearTimers();
-      this.state = appView;
-      this.loading = false;
-      this.scheduleRenewal(widget, callbacks, appView, mode !== "cached");
-      this.notify();
     } catch (error) {
       if (!isCurrent()) {
         return;
       }
-      if (previousLease && previousLease.expiresAtMs > Date.now()) {
-        this.loading = false;
-        this.notify();
-        return;
-      }
-      this.clearTimers();
-      this.state = {
+      appView = {
         status: "stale",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatUiError(error),
       };
-      this.loading = false;
-      this.notify();
     }
+    if (!isCurrent()) {
+      return;
+    }
+    if (appView.status === "stale" && previousLease && previousLease.expiresAtMs > Date.now()) {
+      this.loading = false;
+      this.host.requestUpdate();
+      return;
+    }
+    this.clearTimers();
+    this.state = appView;
+    this.loading = false;
+    this.scheduleRenewal(widget, callbacks, appView, mode !== "cached");
+    this.host.requestUpdate();
   }
 
-  private scheduleExpiry(widget: BoardViewWidget, appView: BoardWidgetAppViewState): void {
+  private scheduleExpiry(widget: BoardWidget, appView: BoardWidgetAppViewState): void {
     if (appView.status !== "ready") {
       return;
     }
@@ -297,7 +250,7 @@ export class BoardMcpAppLifecycle {
           state.expiresAtMs === appView.expiresAtMs
         ) {
           this.state = { status: "stale", error: "MCP App lease expired" };
-          this.notify();
+          this.host.requestUpdate();
         }
       },
       Math.max(0, appView.expiresAtMs - Date.now()),
@@ -305,13 +258,13 @@ export class BoardMcpAppLifecycle {
   }
 
   private scheduleRenewal(
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: AppViewCallbacks,
     appView: BoardWidgetAppViewState,
     renewed: boolean,
   ): void {
     this.renewalTimer = clearTimer(this.renewalTimer);
-    if (appView.status !== "ready") {
+    if (appView.status !== "ready" || !this.host.active()) {
       return;
     }
     const key = this.key;
@@ -335,6 +288,7 @@ export class BoardMcpAppLifecycle {
       const current = this.host.widget();
       if (
         this.host.connected() &&
+        this.host.active() &&
         this.nearVisible &&
         this.key === key &&
         current?.name === widget.name &&
@@ -343,9 +297,5 @@ export class BoardMcpAppLifecycle {
         void this.load(current, callbacks, "refresh");
       }
     }, delayMs);
-  }
-
-  private notify(): void {
-    this.host.requestUpdate();
   }
 }

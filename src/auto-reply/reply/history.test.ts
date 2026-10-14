@@ -23,35 +23,51 @@ describe("history media recording", () => {
     ]);
   });
 
-  it("preserves native sticker classification for local sticker images", () => {
-    expect(
-      normalizeHistoryMediaEntries({
-        messageId: "msg-sticker",
-        media: [{ path: "/tmp/sticker.png", contentType: "image/png", kind: "sticker" }],
-      }),
-    ).toEqual([
-      {
-        path: "/tmp/sticker.png",
-        contentType: "image/png",
-        kind: "sticker",
-        messageId: "msg-sticker",
-      },
-    ]);
-  });
-
-  it("records text history unchanged when media resolver has no usable media", async () => {
+  it("records an extensionless sticker without transport MIME at the channel history boundary", async () => {
     const historyMap = new Map<string, HistoryEntry[]>();
 
     await recordPendingHistoryEntryWithMedia({
       historyMap,
-      historyKey: "channel-1",
+      historyKey: "telegram-chat",
       limit: 5,
-      entry: { sender: "Alice", body: "hello", messageId: "msg-1" },
-      media: async () => [{ path: "https://example.com/a.png", contentType: "image/png" }],
+      entry: {
+        sender: "Alice",
+        body: "<media:image>",
+        messageId: "telegram-message",
+      },
+      media: async () => [
+        {
+          path: "/tmp/telegram-sticker",
+          kind: "sticker",
+        },
+      ],
     });
 
-    expect(historyMap.get("channel-1")).toEqual([
-      { sender: "Alice", body: "hello", messageId: "msg-1" },
+    expect(historyMap.get("telegram-chat")).toEqual([
+      {
+        sender: "Alice",
+        body: "<media:image>",
+        messageId: "telegram-message",
+        media: [
+          {
+            path: "/tmp/telegram-sticker",
+            contentType: undefined,
+            kind: "sticker",
+            messageId: "telegram-message",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves explicitly identified SVG history media", () => {
+    const media = { path: "/tmp/diagram.svg", contentType: "image/svg+xml" };
+    expect(normalizeHistoryMediaEntries({ media: [media] })).toEqual([
+      {
+        ...media,
+        kind: "image",
+        messageId: undefined,
+      },
     ]);
   });
 

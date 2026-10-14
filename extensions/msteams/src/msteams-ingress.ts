@@ -1,11 +1,15 @@
 // Microsoft Teams plugin owns durable Bot Framework activity admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -15,9 +19,6 @@ const MSTEAMS_INGRESS_VERSION = 1;
 const MSTEAMS_INGRESS_DRAIN_INTERVAL_MS = 500;
 const MSTEAMS_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
 const MSTEAMS_INGRESS_SCAN_LIMIT = 100;
-const MSTEAMS_INGRESS_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
-const MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const MSTEAMS_INGRESS_FAILED_MAX_ENTRIES = 4096;
 
 type MSTeamsIngressActivity = MSTeamsTurnContext["activity"];
 
@@ -42,26 +43,9 @@ type MSTeamsIngressOptions = {
   queue?: ChannelIngressQueue<MSTeamsIngressPayload>;
 };
 
-type MSTeamsIngress = {
-  accept: (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
-class MSTeamsIngressPayloadError extends Error {
-  constructor(
-    readonly reason: "invalid-activity" | "invalid-json" | "unsupported-activity",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MSTeamsIngressPayloadError";
-  }
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const MSTeamsIngressPayloadError = createChannelIngressError<
+  "invalid-activity" | "invalid-json" | "unsupported-activity"
+>("MSTeamsIngressPayloadError", { withReason: true });
 
 function isDispatchableActivity(activity: MSTeamsIngressActivity): boolean {
   return (
@@ -144,11 +128,7 @@ function parseClaimedActivity(
   return parsed;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIngress {
+export function createMSTeamsIngress(options: MSTeamsIngressOptions) {
   const queue =
     options.queue ??
     getMSTeamsRuntime().state.openChannelIngressQueue<MSTeamsIngressPayload>({
@@ -190,10 +170,7 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
     pollIntervalMs: MSTEAMS_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       pruneIntervalMs: 0,
-      completedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-      completedMaxEntries: MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-      failedMaxEntries: MSTEAMS_INGRESS_FAILED_MAX_ENTRIES,
+      failedMaxEntries: 4096,
     },
     appendRetryDelaysMs: [0],
     waitForDeliveryIdleBeforeRepump: false,
@@ -208,19 +185,19 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
         }
         const classification = classifyMSTeamsSendError(error);
         return classification.kind === "auth"
-          ? { reason: "authentication-failed", message: errorText(error) }
+          ? { reason: "authentication-failed", message: formatErrorMessage(error) }
           : null;
       },
       onLog: (message) => options.runtime.error?.(`msteams: ${message}`),
     },
     createStoppedError: () => new Error("Microsoft Teams ingress stopped."),
     onError: (error) =>
-      options.runtime.error?.(`msteams ingress drain failed: ${errorText(error)}`),
+      options.runtime.error?.(`msteams ingress drain failed: ${formatErrorMessage(error)}`),
   });
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: async (activity, liveContext) => {
+    accept: async (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => {
       const facts = inspectMSTeamsIngressActivity(activity);
       if (!facts) {
         return;
@@ -232,12 +209,9 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
       if (liveContext && installedLiveContext) {
         liveContexts.set(facts.eventId, liveContext);
       }
-      // Identity-guarded uninstall: only remove OUR context so a concurrent
-      // redelivery's fresh install is never clobbered. A failed or
-      // tombstoned-duplicate append leaves no claim to consume the entry, and
-      // a later retry must not dispatch this request's stale context.
+      // A rejected append has no delivery that can consume the context.
       const uninstallLiveContext = () => {
-        if (installedLiveContext && liveContexts.get(facts.eventId) === liveContext) {
+        if (installedLiveContext) {
           liveContexts.delete(facts.eventId);
         }
       };
@@ -263,17 +237,18 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
     stop: () => {
       stopTask ??= (async () => {
         await monitor.pause();
-        let graceTimer: ReturnType<typeof setTimeout> | undefined;
-        const graceElapsed = new Promise<void>((resolve) => {
-          graceTimer = setTimeout(resolve, MSTEAMS_REQUEST_TIMEOUT_MS);
-          graceTimer.unref?.();
-        });
         try {
           // Preserve completed side effects when possible, but retain an abort path for
           // deliveries that themselves wait on the lifecycle signal.
-          await Promise.race([monitor.waitForIdle(), graceElapsed]);
+          await raceWithTimeout(
+            () => monitor.waitForIdle(),
+            MSTEAMS_REQUEST_TIMEOUT_MS,
+            () => undefined,
+            {
+              ref: false,
+            },
+          );
         } finally {
-          clearTimeout(graceTimer);
           await monitor.stop();
           liveContexts.clear();
         }

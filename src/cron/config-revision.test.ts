@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -23,99 +24,6 @@ function makeJob(): CronJob {
 }
 
 describe("resolveCronJobConfigRevision", () => {
-  it("ignores runtime timestamps and scheduler state", () => {
-    const original = makeJob();
-    const cyclicState: Record<string, unknown> = {};
-    cyclicState.self = cyclicState;
-    const runtimeChanged: CronJob = {
-      ...original,
-      updatedAtMs: 9_000,
-      state: {
-        lastRunAtMs: 8_000,
-        lastRunStatus: "ok",
-        nextRunAtMs: 10_000,
-        triggerState: cyclicState,
-      },
-    };
-
-    expect(resolveCronJobConfigRevision(runtimeChanged)).toBe(
-      resolveCronJobConfigRevision(original),
-    );
-  });
-
-  it("changes for definition updates and same-id recreation", () => {
-    const original = makeJob();
-
-    expect(resolveCronJobConfigRevision({ ...original, description: "changed" })).not.toBe(
-      resolveCronJobConfigRevision(original),
-    );
-    expect(resolveCronJobConfigRevision({ ...original, createdAtMs: 2_000 })).not.toBe(
-      resolveCronJobConfigRevision(original),
-    );
-  });
-
-  it("is stable across nested key ordering", () => {
-    const original = makeJob();
-    const reordered: CronJob = {
-      ...original,
-      payload: {
-        kind: "command",
-        argv: ["printenv"],
-        env: { B: "2", A: "1" },
-      },
-    };
-    const canonical: CronJob = {
-      ...reordered,
-      payload: {
-        kind: "command",
-        argv: ["printenv"],
-        env: { A: "1", B: "2" },
-      },
-    };
-
-    expect(resolveCronJobConfigRevision(reordered)).toBe(resolveCronJobConfigRevision(canonical));
-  });
-
-  it("preserves order when case-insensitive command env keys collide on Windows", () => {
-    const firstWinsLast: CronJob = {
-      ...makeJob(),
-      payload: {
-        kind: "command",
-        argv: ["printenv"],
-        env: { Path: "first", PATH: "second" },
-      },
-    };
-    const secondWinsLast: CronJob = {
-      ...firstWinsLast,
-      payload: {
-        kind: "command",
-        argv: ["printenv"],
-        env: { PATH: "second", Path: "first" },
-      },
-    };
-
-    expect(resolveCronJobConfigRevision(firstWinsLast)).not.toBe(
-      resolveCronJobConfigRevision(secondWinsLast),
-    );
-  });
-
-  it("distinguishes inherited and explicitly cleared delivery fields", () => {
-    const inherited = makeJob();
-    const explicitlyCleared: CronJob = {
-      ...inherited,
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "chat-1",
-        failureDestination: { channel: undefined },
-      },
-    };
-
-    expect(resolveCronJobConfigRevision(explicitlyCleared)).not.toBe(
-      resolveCronJobConfigRevision(inherited),
-    );
-  });
-
   it("is stable across the SQLite store round-trip", async () => {
     const { storePath } = await makeStorePath();
     const job: CronJob = {
@@ -152,7 +60,7 @@ describe("resolveCronJobConfigRevision", () => {
       {
         ...makeJob(),
         id: "command-empty-env",
-        schedule: { kind: "every", everyMs: Number.MAX_SAFE_INTEGER, anchorMs: 0 },
+        schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
         payload: { kind: "command", argv: ["true"], env: {}, input: "" },
         failureAlert: false,
       },

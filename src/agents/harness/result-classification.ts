@@ -1,12 +1,6 @@
-/**
- * Agent harness result classification helper.
- *
- * Harness lifecycle wraps raw attempt results with harness id metadata and lets
- * harness-specific classifiers attach non-ok result categories.
- */
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
 } from "./types.js";
 
@@ -14,7 +8,7 @@ import type {
 export function applyAgentHarnessResultClassification(
   harness: Pick<AgentHarness, "id" | "classify">,
   result: AgentHarnessAttemptResult,
-  params: AgentHarnessAttemptParams,
+  params: AgentHarnessAttemptParamsV2,
 ): AgentHarnessAttemptResult {
   if (!harness.classify) {
     return { ...result, agentHarnessId: harness.id };
@@ -24,12 +18,11 @@ export function applyAgentHarnessResultClassification(
   const { agentHarnessResultClassification: _previousClassification, ...resultWithoutPrevious } =
     result;
   const classification = harness.classify(resultWithoutPrevious, params);
-  if (!classification || classification === "ok") {
-    return { ...resultWithoutPrevious, agentHarnessId: harness.id };
-  }
   return {
     ...resultWithoutPrevious,
     agentHarnessId: harness.id,
-    agentHarnessResultClassification: classification,
+    ...(classification && classification !== "ok"
+      ? { agentHarnessResultClassification: classification }
+      : {}),
   };
 }

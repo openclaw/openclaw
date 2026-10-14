@@ -1,0 +1,59 @@
+name: Setup Playwright Chromium
+description: Restore the selected target's managed browser and publish only from the main warmer.
+inputs:
+  cache-mode:
+    description: off, restore, or read-write (protected-main warmer only).
+    default: restore
+  compatibility-target:
+    description: Historical target without managed-browser discovery support.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Resolve browser cache identity
+      id: identity
+      shell: bash
+      env:
+        CACHE_MODE: ${{ inputs.cache-mode }}
+      run: |
+        set -euo pipefail
+        case "$CACHE_MODE" in
+          off|restore|read-write) ;;
+          *) echo "::error::Invalid browser cache mode: $CACHE_MODE"; exit 2 ;;
+        esac
+        # Use the installed target package, not the workflow's version or a broad restore prefix.
+        version="$(node --input-type=module -e 'import {createRequire} from "node:module"; import {resolve} from "node:path"; const require = createRequire(resolve("ui/package.json")); console.log(require("playwright/package.json").version)')"
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][a-zA-Z0-9.-]+)?$ ]]
+        echo "key=$RUNNER_OS-$RUNNER_ARCH-playwright-chromium-$version" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Playwright Chromium
+      id: cache
+      if: inputs.cache-mode != 'off'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ steps.identity.outputs.key }}
+
+    - name: Install Playwright Chromium
+      shell: bash
+      env:
+        COMPATIBILITY_TARGET: ${{ inputs.compatibility-target }}
+      run: |
+        set -euo pipefail
+        if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+          # Preserve historical CI's browser-only install without adding an apt refresh.
+          pnpm --dir ui exec playwright install chromium
+        elif [[ -f scripts/ensure-playwright-chromium.mts ]]; then
+          node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium
+        else
+          # Older release targets still own their Playwright revision and Linux dependencies.
+          pnpm --dir ui exec playwright install --with-deps chromium
+        fi
+
+    - name: Save Playwright Chromium
+      if: ${{ success() && inputs.cache-mode == 'read-write' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && github.workflow == 'Vitest Cache Warm' && steps.cache.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ steps.identity.outputs.key }}

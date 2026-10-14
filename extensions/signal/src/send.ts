@@ -1,5 +1,4 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
-// Signal plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -8,21 +7,22 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import {
+  kindFromMime,
+  type OutboundMediaAccess,
+  resolveOutboundAttachmentFromUrl,
+} from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import {
-  appendSignalApprovalReactionHintForOutboundMessage,
-  registerSignalApprovalReactionTargetForOutboundMessage,
-} from "./approval-reactions.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
+import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
@@ -33,10 +33,7 @@ export type SignalSendOpts = {
   account?: string;
   accountId?: string;
   mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
@@ -46,6 +43,8 @@ export type SignalSendOpts = {
   replyToId?: string | null;
   replyToAuthor?: string | null;
   replyToBody?: string | null;
+  /** Revalidate the originating request before every daemon mutation. */
+  assertDirectAdapterHandoff?: () => void;
 };
 
 export type SignalSendResult = {
@@ -66,12 +65,50 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
-async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
-  if (!opts.cfg) {
-    throw new Error(
-      "Signal RPC account resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
+type SignalSendRpcResult = {
+  timestamp?: number;
+  results?: unknown;
+};
+
+function assertSignalRecipientDelivery(
+  result: SignalSendRpcResult | undefined,
+  target: SignalTarget,
+): void {
+  if (!Array.isArray(result?.results)) {
+    return;
   }
+  const failures: string[] = [];
+  let hasSuccessfulRecipient = false;
+  for (const entry of result.results) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const type = normalizeOptionalString(record.type);
+    if ((type && normalizeLowercaseStringOrEmpty(type) !== "success") || record.success === false) {
+      failures.push(
+        type ??
+          normalizeOptionalString(record.error) ??
+          normalizeOptionalString(record.message) ??
+          "recipient delivery failed",
+      );
+      continue;
+    }
+    if (normalizeLowercaseStringOrEmpty(type) === "success" || record.success === true) {
+      hasSuccessfulRecipient = true;
+    }
+  }
+  // Group sends fan out per member; retrying an already delivered partial
+  // success would duplicate the post for every successful recipient.
+  if (failures.length === 0 || (target.type === "group" && hasSuccessfulRecipient)) {
+    return;
+  }
+  throw new Error(
+    `Signal send failed for ${failures.length} recipient${failures.length === 1 ? "" : "s"}: ${[...new Set(failures)].join(", ")}`,
+  );
+}
+
+function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "Signal RPC account resolution");
   return resolveSignalAccount({
     cfg,
@@ -84,14 +121,13 @@ function parseTarget(raw: string): SignalTarget {
   if (!value) {
     throw new Error("Signal recipient is required");
   }
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (normalized.startsWith("group:")) {
-    return { type: "group", groupId: value.slice("group:".length).trim() };
+  if (value.startsWith("group:")) {
+    return { type: "group", groupId: value.slice("group:".length) };
   }
-  if (normalized.startsWith("username:")) {
+  if (value.startsWith("username:")) {
     return {
       type: "username",
-      username: value.slice("username:".length).trim(),
+      username: value.slice("username:".length),
     };
   }
   return { type: "recipient", recipient: value };
@@ -103,35 +139,14 @@ type SignalTargetParams = {
   username?: string[];
 };
 
-type SignalTargetAllowlist = {
-  recipient?: boolean;
-  group?: boolean;
-  username?: boolean;
-};
-
-function buildTargetParams(
-  target: SignalTarget,
-  allow: SignalTargetAllowlist,
-): SignalTargetParams | null {
+function buildTargetParams(target: SignalTarget): SignalTargetParams {
   if (target.type === "recipient") {
-    if (!allow.recipient) {
-      return null;
-    }
     return { recipient: [target.recipient] };
   }
   if (target.type === "group") {
-    if (!allow.group) {
-      return null;
-    }
     return { groupId: target.groupId };
   }
-  if (target.type === "username") {
-    if (!allow.username) {
-      return null;
-    }
-    return { username: [target.username] };
-  }
-  return null;
+  return { username: [target.username] };
 }
 
 function createSignalSendReceipt(params: {
@@ -185,11 +200,7 @@ function parseSignalReplyTimestamp(raw: string | null | undefined): number | und
   if (!value || !/^\d+$/.test(value)) {
     return undefined;
   }
-  const timestamp = Number(value);
-  if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
-    return undefined;
-  }
-  return timestamp;
+  return asPositiveSafeInteger(Number(value));
 }
 
 function resolveSignalQuoteParams(opts: SignalSendOpts):
@@ -213,23 +224,6 @@ function resolveSignalQuoteParams(opts: SignalSendOpts):
   };
 }
 
-function isSignalQuoteMetadataRejection(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = normalizeLowercaseStringOrEmpty(message);
-  if (!normalized.includes("quote")) {
-    return false;
-  }
-  return (
-    normalized.includes("reject") ||
-    normalized.includes("invalid") ||
-    normalized.includes("unrecognized") ||
-    normalized.includes("unsupported") ||
-    normalized.includes("not found") ||
-    normalized.includes("no such") ||
-    normalized.includes("unknown")
-  );
-}
-
 export async function sendMessageSignal(
   to: string,
   text: string,
@@ -244,14 +238,7 @@ export async function sendMessageSignal(
   const target = parseTarget(to);
   const targetAuthor = normalizeOptionalString(account);
   const targetAuthorUuid = normalizeOptionalString(accountInfo.config.accountUuid);
-  const outboundText = appendSignalApprovalReactionHintForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    text: text ?? "",
-    targetAuthor,
-    targetAuthorUuid,
-  });
+  const outboundText = text ?? "";
   let message = outboundText;
   let outboundMedia: MediaPlaceholderTextFact | undefined;
   let textStyles: SignalTextStyleRange[] = [];
@@ -315,15 +302,7 @@ export async function sendMessageSignal(
     params.attachments = attachments;
   }
 
-  const targetParams = buildTargetParams(target, {
-    recipient: true,
-    group: true,
-    username: true,
-  });
-  if (!targetParams) {
-    throw new Error("Signal recipient is required");
-  }
-  Object.assign(params, targetParams);
+  Object.assign(params, buildTargetParams(target));
 
   const quote = resolveSignalQuoteParams(opts);
   const sendOpts = {
@@ -331,27 +310,25 @@ export async function sendMessageSignal(
     timeoutMs: opts.timeoutMs,
     transportKind: opts.transportKind ?? accountInfo.transport.kind,
     maxAttachmentBytes: maxBytes,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
-  let result: { timestamp?: number } | undefined;
-  if (quote) {
-    try {
-      result = await signalRpcRequest<{ timestamp?: number }>(
-        "send",
-        { ...params, ...quote.params },
-        sendOpts,
-      );
-      nativeReplyStatus = "sent";
-    } catch (error) {
-      if (!isSignalQuoteMetadataRejection(error)) {
-        throw error;
-      }
-      result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
-      nativeReplyStatus = "fallback";
+  let result: SignalSendRpcResult | undefined;
+  try {
+    result = await signalRpcRequest<SignalSendRpcResult>(
+      "send",
+      quote ? { ...params, ...quote.params } : params,
+      sendOpts,
+    );
+    nativeReplyStatus = quote ? "sent" : undefined;
+  } catch (error) {
+    if (!quote || !isSignalQuoteMetadataRejection(error)) {
+      throw error;
     }
-  } else {
-    result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
+    result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
+    nativeReplyStatus = "fallback";
   }
+  assertSignalRecipientDelivery(result, target);
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
   const replyAuthor = targetAuthor ?? targetAuthorUuid;
@@ -366,15 +343,6 @@ export async function sendMessageSignal(
       sourceTimestamp: timestamp,
     });
   }
-  registerSignalApprovalReactionTargetForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    messageId,
-    text: outboundText,
-    targetAuthor,
-    targetAuthorUuid,
-  });
   return {
     messageId,
     timestamp,
@@ -392,16 +360,13 @@ export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean },
 ): Promise<boolean> {
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
-  const targetParams = buildTargetParams(parseTarget(to), {
-    recipient: true,
-    group: true,
-  });
-  if (!targetParams) {
+  const target = parseTarget(to);
+  if (target.type === "username") {
     return false;
   }
-  const params: Record<string, unknown> = { ...targetParams };
+  const params: Record<string, unknown> = buildTargetParams(target);
   if (account) {
     params.account = account;
   }
@@ -424,16 +389,14 @@ export async function sendReadReceiptSignal(
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;
   }
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
-  const targetParams = buildTargetParams(parseTarget(to), {
-    recipient: true,
-  });
-  if (!targetParams) {
+  const target = parseTarget(to);
+  if (target.type !== "recipient") {
     return false;
   }
   const params: Record<string, unknown> = {
-    ...targetParams,
+    ...buildTargetParams(target),
     targetTimestamp,
     type: opts.type ?? "read",
   };

@@ -6,14 +6,15 @@ scenario:
     primary:
       - whatsapp.outbound-text-sends
   execution:
-    profiles: { "whatsapp:mock-default": 15 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-reply-context-isolation }
+    config:
+      whatsappScenario: whatsappQaReplyContextIsolationScenario
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppReplyContextIsolationScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }

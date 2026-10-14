@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -102,6 +103,138 @@ class WearSessionScopeTest {
   }
 
   @Test
+  fun delayedSessionActionsRequireTheOriginalPhoneAndSession() {
+    val requested =
+      WearSession(
+        key = "agent:main",
+        title = "Main",
+        updatedAt = null,
+        hasActiveRun = false,
+        phoneNodeId = "phone-a",
+        modelRef = "openai/model-a",
+      )
+
+    assertTrue(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(phoneNodeId = "phone-a", selectedSession = requested),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 3,
+      ),
+    )
+    assertFalse(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(
+          phoneNodeId = "phone-b",
+          selectedSession = requested.copy(phoneNodeId = "phone-b"),
+        ),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 4,
+      ),
+    )
+    assertFalse(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(
+          phoneNodeId = "phone-a",
+          selectedSession = requested.copy(key = "agent:other"),
+        ),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 3,
+      ),
+    )
+    assertFalse(
+      wearSessionActionIsCurrent(
+        requested,
+        WearUiState(phoneNodeId = "phone-a", selectedSession = requested),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 5,
+      ),
+    )
+  }
+
+  @Test
+  fun delayedControlsRequireTheOriginalPhoneRouteGeneration() {
+    val phoneA = WearUiState(phoneNodeId = "phone-a", controlBusy = true)
+
+    assertTrue(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = phoneA,
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 3,
+      ),
+    )
+    assertFalse(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = WearUiState(phoneNodeId = "phone-b", controlBusy = true),
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 4,
+      ),
+    )
+    assertFalse(
+      wearControlRouteIsCurrent(
+        requestedPhoneNodeId = "phone-a",
+        currentState = phoneA,
+        requestedRouteGeneration = 3,
+        currentRouteGeneration = 5,
+      ),
+    )
+  }
+
+  @Test
+  fun staleControlCompletionCannotClearReplacementBusyOwner() {
+    val owners = WearControlBusyOwner()
+    val staleOwner = checkNotNull(owners.claim())
+
+    owners.reset()
+    val replacementOwner = checkNotNull(owners.claim())
+
+    assertFalse(owners.release(staleOwner))
+    assertTrue(owners.release(replacementOwner))
+  }
+
+  @Test
+  fun abandonedControlActionReleasesItsOwnBusyOwner() {
+    val owners = WearControlBusyOwner()
+    val owner = checkNotNull(owners.claim())
+
+    assertTrue(owners.release(owner))
+    assertTrue(owners.claim() != null)
+  }
+
+  @Test
+  fun gatewayControlResponseKeepsBusyUntilItsOwnerFinalizes() {
+    val updated =
+      applyWearGatewayControlStatus(
+        state =
+          WearUiState(
+            phoneNodeId = "phone-a",
+            controlBusy = true,
+            activeAgentId = "agent-a",
+          ),
+        status =
+          WearProxyStatus(
+            connected = true,
+            activeAgentId = "agent-b",
+            activeSessionKey = null,
+            selectedModelRef = null,
+            capabilities = setOf(WearProxyCapability.GatewayControls),
+            eventStreamId = null,
+            eventSequence = null,
+            phoneNodeId = "phone-b",
+          ),
+        enabled = true,
+      )
+
+    assertTrue(updated.controlBusy)
+    assertEquals("phone-b", updated.phoneNodeId)
+    assertEquals("agent-b", updated.activeAgentId)
+  }
+
+  @Test
   fun snapshotResponsesRequireTheSamePhoneAndEventStream() {
     assertEquals(true, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-a", "stream-a"))
     assertEquals(false, wearSnapshotSourcesMatch("phone-a", "stream-a", "phone-b", "stream-a"))
@@ -127,6 +260,7 @@ class WearSessionScopeTest {
         selectedSession = previousSession,
         selectedModelRef = "openai/old",
         models = listOf(WearModel("openai/old", "Old")),
+        modelCatalogRefreshFailed = true,
         messages = listOf(WearChatMessage("m1", "assistant", "old reply", 1)),
         streamText = "old stream",
         activeRunId = "run-old",
@@ -141,6 +275,7 @@ class WearSessionScopeTest {
     assertNull(switched.activeRunId)
     assertEquals(emptyList<WearSession>(), switched.sessions)
     assertEquals(emptyList<WearModel>(), switched.models)
+    assertFalse(switched.modelCatalogRefreshFailed)
     assertEquals(emptyList<WearChatMessage>(), switched.messages)
   }
 
@@ -160,6 +295,7 @@ class WearSessionScopeTest {
         activeAgentId = "main",
         selectedModelRef = "openai/old",
         models = listOf(WearModel("openai/new", "New")),
+        modelCatalogRefreshFailed = true,
         messages = listOf(WearChatMessage("m1", "assistant", "old reply", 1)),
         streamText = "old stream",
         activeRunId = "run-old",
@@ -170,6 +306,7 @@ class WearSessionScopeTest {
     assertEquals(nextSession, switched.selectedSession)
     assertEquals("openai/new", switched.selectedModelRef)
     assertEquals("main", switched.activeAgentId)
+    assertFalse(switched.modelCatalogRefreshFailed)
     assertEquals(emptyList<WearModel>(), switched.models)
     assertEquals(emptyList<WearChatMessage>(), switched.messages)
     assertNull(switched.streamText)
@@ -192,6 +329,9 @@ class WearSessionScopeTest {
         sessions = listOf(selectedSession),
         selectedSession = selectedSession,
         selectedModelRef = "openai/model-59",
+        modelCatalogRefreshFailed = true,
+        modelSearchQuery = "model",
+        modelSearchResults = listOf(WearModel("openai/old-search", "Old search")),
         models =
           listOf(
             WearModel("openai/model-0", "Model 0"),
@@ -202,6 +342,9 @@ class WearSessionScopeTest {
     val switched = state.switchModelContext("openai/model-0")
 
     assertEquals("openai/model-0", switched.selectedModelRef)
+    assertFalse(switched.modelCatalogRefreshFailed)
+    assertNull(switched.modelSearchQuery)
+    assertTrue(switched.modelSearchResults.isEmpty())
     assertEquals("openai/model-0", switched.selectedSession?.modelRef)
     assertEquals("openai/model-0", switched.sessions.single().modelRef)
     assertEquals(emptyList<WearModel>(), switched.models)
@@ -358,6 +501,25 @@ class WearSessionScopeTest {
     assertEquals(current, transition.state)
     assertFalse(transition.reloadHistory)
     assertNull(transition.observedMessage)
+  }
+
+  @Test
+  fun anEmptyAnonymousCanonicalStreamStillNeedsIdentityReconciliation() {
+    val current = activeTerminalState(activeRunId = null).copy(streamText = "")
+    val transition = reduceWearTerminalChatEvent(current, terminalEvent("error", "older-run"))
+    assertEquals(current, transition.state)
+    assertTrue(transition.reloadHistory)
+    assertNull(transition.state.replyTerminal)
+  }
+
+  @Test
+  fun aCompletedOutcomeDoesNotOwnLaterTerminalOnlyRuns() {
+    val completed = reduceWearTerminalChatEvent(activeTerminalState(), terminalEvent("aborted", "active-run")).state
+    // Stale traffic is fenced by the wire sequence/epoch owner, not by a completed run ID.
+    val later = reduceWearTerminalChatEvent(completed, terminalEvent("error", "later-run"))
+    assertEquals(WearReplyOutcome.Error, later.state.replyTerminal?.outcome)
+    assertEquals("later-run", later.state.replyTerminal?.runId)
+    assertTrue(later.reloadHistory)
   }
 
   private fun assertUncertainTerminalPreservesReplyAndReloadsHistory(

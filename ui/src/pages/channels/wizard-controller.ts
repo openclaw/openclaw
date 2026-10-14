@@ -1,10 +1,11 @@
-// Drives a gateway channel-setup wizard session (wizard.start flow "channels")
-// as a step/answer state machine for the Control UI wizard modal.
+import { raceWithTimeout } from "@openclaw/retry";
+import type { WizardStartResult } from "../../../../packages/gateway-protocol/src/index.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { WizardNextResult, WizardStep } from "../../api/types.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 
-type WizardGatewayClient = {
-  request<T = unknown>(method: string, params?: unknown): Promise<T>;
-};
+type WizardGatewayClient = Pick<GatewayBrowserClient, "request">;
 
 // Keep the wire request alive behind a local ceiling: protocol-level timeouts
 // discard late responses, but wizard.start carries the session id needed for cleanup.
@@ -14,7 +15,6 @@ async function requestWithTimeout<T>(
   params: unknown,
   onLateResult?: (result: T) => void,
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const request = client.request<T>(method, params).then((result) => {
     if (timedOut) {
@@ -22,54 +22,13 @@ async function requestWithTimeout<T>(
     }
     return result;
   });
-  try {
-    return await Promise.race([
-      request,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          reject(new Error(`wizard request timed out: ${method}`));
-        }, WIZARD_STEP_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await raceWithTimeout(request, WIZARD_STEP_TIMEOUT_MS, () => {
+    timedOut = true;
+    throw new Error(`wizard request timed out: ${method}`);
+  });
 }
 
-export type ChannelWizardStepOption = {
-  value: unknown;
-  label: string;
-  hint?: string;
-};
-
-export type ChannelWizardStep = {
-  id: string;
-  type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
-  title?: string;
-  message?: string;
-  format?: "plain";
-  options?: ChannelWizardStepOption[];
-  initialValue?: unknown;
-  placeholder?: string;
-  sensitive?: boolean;
-  executor?: "gateway" | "client";
-  externalUrl?: string;
-  deviceCode?: { code: string; expiresInMinutes?: number; message?: string };
-};
-
-type WizardNextResult = {
-  sessionId?: string;
-  done: boolean;
-  step?: ChannelWizardStep;
-  status?: "running" | "done" | "cancelled" | "error";
-  error?: string;
-  // What the gateway flow actually configured (terminal result only).
-  channels?: string[];
-  accounts?: Array<{ channel: string; accountId: string }>;
-};
-
-function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardNextResult): void {
+function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardStartResult): void {
   if (!result.sessionId || result.done) {
     return;
   }
@@ -84,8 +43,7 @@ export type ChannelWizardState =
   | {
       phase: "step";
       channel: string | null;
-      step: ChannelWizardStep;
-      stepIndex: number;
+      step: WizardStep;
       busy: boolean;
       validationError: string | null;
     }
@@ -105,8 +63,12 @@ export class ChannelWizardController {
   private currentState: ChannelWizardState = { phase: "idle" };
   private sessionId: string | null = null;
   private channel: string | null = null;
-  private stepIndex = 0;
   private generation = 0;
+  private abortController: AbortController | null = null;
+  private pendingCancellation: {
+    client: WizardGatewayClient;
+    completion: Promise<unknown>;
+  } | null = null;
 
   constructor(
     private readonly getClient: () => WizardGatewayClient | null,
@@ -128,12 +90,20 @@ export class ChannelWizardController {
       return;
     }
     const generation = ++this.generation;
+    this.abortController?.abort();
+    this.abortController = new AbortController();
     this.sessionId = null;
     this.channel = channel;
-    this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
-      const result = await requestWithTimeout<WizardNextResult>(
+      const cancellation = this.pendingCancellation;
+      if (cancellation?.client === client) {
+        await cancellation.completion;
+        if (this.generation !== generation) {
+          return;
+        }
+      }
+      const result = await requestWithTimeout<WizardStartResult>(
         client,
         "wizard.start",
         {
@@ -154,14 +124,13 @@ export class ChannelWizardController {
       if (this.generation !== generation) {
         return;
       }
-      this.setState({ phase: "error", channel, message: String(err) });
+      this.setState({ phase: "error", channel, message: formatUiError(err) });
     }
   }
 
   async answer(value: unknown): Promise<void> {
-    const client = this.getClient();
     const current = this.currentState;
-    if (!client || !this.sessionId || current.phase !== "step" || current.busy) {
+    if (!this.getClient() || !this.sessionId || current.phase !== "step" || current.busy) {
       return;
     }
     const generation = this.generation;
@@ -169,11 +138,33 @@ export class ChannelWizardController {
       this.channel ??= value;
     }
     this.setState({ ...current, busy: true, validationError: null });
+    await this.advance(generation, { stepId: current.step.id, value });
+  }
+
+  private async advance(
+    generation: number,
+    answer?: { stepId: string; value: unknown },
+  ): Promise<void> {
+    const client = this.getClient();
+    const sessionId = this.sessionId;
+    if (!client || !sessionId || this.generation !== generation) {
+      return;
+    }
+    const signal = this.abortController?.signal;
+    if (!answer && !signal) {
+      return;
+    }
     try {
-      const result = await requestWithTimeout<WizardNextResult>(client, "wizard.next", {
-        sessionId: this.sessionId,
-        answer: { stepId: current.step.id, value },
-      });
+      const params = {
+        sessionId,
+        ...(answer ? { answer } : {}),
+      };
+      const result = answer
+        ? await requestWithTimeout<WizardNextResult>(client, "wizard.next", params)
+        : await client.request<WizardNextResult>("wizard.next", params, {
+            timeoutMs: null,
+            ...(signal ? { signal } : {}),
+          });
       if (this.generation !== generation) {
         return;
       }
@@ -184,6 +175,8 @@ export class ChannelWizardController {
       }
       if (isWizardNotFoundError(err)) {
         this.sessionId = null;
+        this.abortController?.abort();
+        this.abortController = null;
         this.setState({
           phase: "error",
           channel: this.channel,
@@ -191,7 +184,7 @@ export class ChannelWizardController {
         });
         return;
       }
-      this.setState({ phase: "error", channel: this.channel, message: String(err) });
+      this.setState({ phase: "error", channel: this.channel, message: formatUiError(err) });
     }
   }
 
@@ -200,32 +193,45 @@ export class ChannelWizardController {
     const sessionId = this.sessionId;
     this.generation += 1;
     this.sessionId = null;
+    this.abortController?.abort();
+    this.abortController = null;
     this.channel = null;
     this.setState({ phase: "idle" });
     if (client && sessionId) {
-      try {
-        await client.request("wizard.cancel", { sessionId });
-      } catch {
-        // Session may already be finished/purged; closing the modal wins.
+      // Replacement starts await this settlement, so it needs the same ceiling as wizard.start.
+      const completion = Promise.resolve()
+        .then(() => requestWithTimeout(client, "wizard.cancel", { sessionId, closeInput: true }))
+        .catch(() => {
+          // Session may already be finished/purged; closing the modal wins.
+        });
+      this.pendingCancellation = { client, completion };
+      await completion;
+      if (this.pendingCancellation?.completion === completion) {
+        this.pendingCancellation = null;
       }
     }
   }
 
   private applyResult(result: WizardNextResult): void {
     if (!result.done && result.step) {
-      this.stepIndex += 1;
+      const gatewayOwned = result.step.executor === "gateway";
       this.setState({
         phase: "step",
         channel: this.channel,
         step: result.step,
-        stepIndex: this.stepIndex,
-        busy: false,
-        validationError: result.error ?? null,
+        busy: gatewayOwned,
+        validationError: result.error ? formatUiExternalText(result.error) : null,
       });
+      if (gatewayOwned) {
+        // Gateway-owned steps cannot consume an answer; next long-polls for
+        // progress or completion while keeping this generation cancellable.
+        void this.advance(this.generation);
+      }
       return;
     }
+    this.sessionId = null;
+    this.abortController = null;
     if (result.status === "done") {
-      this.sessionId = null;
       // The gateway reports what the flow actually configured; the initially
       // requested channel is only a preselection and may have been skipped.
       const channels = result.channels ?? [];
@@ -238,16 +244,14 @@ export class ChannelWizardController {
       return;
     }
     if (result.status === "cancelled") {
-      this.sessionId = null;
       this.channel = null;
       this.setState({ phase: "idle" });
       return;
     }
-    this.sessionId = null;
     this.setState({
       phase: "error",
       channel: this.channel,
-      message: result.error ?? "Wizard failed.",
+      message: formatUiExternalText(result.error, "Wizard failed."),
     });
   }
 

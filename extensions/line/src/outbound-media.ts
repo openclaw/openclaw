@@ -1,16 +1,8 @@
-// Line plugin module implements outbound media behavior.
 import type { messagingApi } from "@line/bot-sdk";
+import { getFileExtension, mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { LineChannelData, LineOutboundMediaKind } from "./types.js";
-
-type LineOutboundMediaResolved = {
-  mediaUrl: string;
-  mediaKind: LineOutboundMediaKind;
-  previewImageUrl?: string;
-  durationMs?: number;
-  trackingId?: string;
-};
+import { isHttpsUrl } from "./media-url.js";
+import type { LineOutboundMediaKind } from "./types.js";
 
 type ResolveLineOutboundMediaOpts = {
   mediaKind?: LineOutboundMediaKind;
@@ -23,11 +15,9 @@ const LINE_OUTBOUND_MEDIA_SSRF_POLICY: SsrFPolicy = {
   allowPrivateNetwork: false,
 };
 
-export async function validateLineMediaUrl(url: string): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+async function validateLineMediaUrl(url: string): Promise<void> {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     throw new Error("LINE outbound media URL must be a valid URL");
   }
   if (parsed.protocol !== "https:") {
@@ -41,68 +31,47 @@ export async function validateLineMediaUrl(url: string): Promise<void> {
   });
 }
 
-function isHttpsUrl(url: string): boolean {
-  try {
-    return new URL(url).protocol === "https:";
-  } catch {
-    return false;
+const LINE_MEDIA_KIND_BY_MIME: Readonly<Record<string, LineOutboundMediaKind | undefined>> = {
+  "image/jpeg": "image",
+  "image/png": "image",
+  "video/mp4": "video",
+  "audio/mpeg": "audio",
+  "audio/x-m4a": "audio",
+};
+
+// LINE's native message families accept narrower formats than the shared MIME
+// families. A known but unsupported suffix must remain visible as text instead
+// of becoming a native bubble the provider accepts but the client cannot render.
+function detectLineMediaKindFromUrl(
+  url: string,
+): LineOutboundMediaKind | "unsupported" | undefined {
+  const mimeType = mimeTypeFromFilePath(url);
+  if (mimeType === undefined) {
+    return getFileExtension(url) === undefined ? undefined : "unsupported";
   }
+  return LINE_MEDIA_KIND_BY_MIME[mimeType] ?? "unsupported";
 }
 
-function detectLineMediaKindFromUrl(url: string): LineOutboundMediaKind | undefined {
-  try {
-    const pathname = normalizeLowercaseStringOrEmpty(new URL(url).pathname);
-    if (/\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(pathname)) {
-      return "image";
-    }
-    if (/\.(mp4|mov|m4v|webm)$/i.test(pathname)) {
-      return "video";
-    }
-    if (/\.(mp3|m4a|aac|wav|ogg|oga)$/i.test(pathname)) {
-      return "audio";
-    }
-  } catch {
-    return undefined;
+function resolveLineMediaKind(
+  url: string,
+  opts: ResolveLineOutboundMediaOpts,
+): {
+  mediaKind: LineOutboundMediaKind | "unsupported";
+  kindSource: "declared" | "metadata" | "url" | "fallback";
+} {
+  if (opts.mediaKind !== undefined) {
+    return { mediaKind: opts.mediaKind, kindSource: "declared" };
   }
-  return undefined;
-}
-
-export async function resolveLineOutboundMedia(
-  mediaUrl: string,
-  opts: ResolveLineOutboundMediaOpts = {},
-): Promise<LineOutboundMediaResolved> {
-  const trimmedUrl = mediaUrl.trim();
-  if (isHttpsUrl(trimmedUrl)) {
-    await validateLineMediaUrl(trimmedUrl);
-    const previewImageUrl = opts.previewImageUrl?.trim();
-    if (previewImageUrl) {
-      await validateLineMediaUrl(previewImageUrl);
-    }
-    const mediaKind =
-      opts.mediaKind ??
-      (typeof opts.durationMs === "number" ? "audio" : undefined) ??
-      (opts.trackingId?.trim() ? "video" : undefined) ??
-      detectLineMediaKindFromUrl(trimmedUrl) ??
-      "image";
-    return {
-      mediaUrl: trimmedUrl,
-      mediaKind,
-      ...(previewImageUrl ? { previewImageUrl } : {}),
-      ...(typeof opts.durationMs === "number" ? { durationMs: opts.durationMs } : {}),
-      ...(opts.trackingId ? { trackingId: opts.trackingId } : {}),
-    };
+  if (typeof opts.durationMs === "number") {
+    return { mediaKind: "audio", kindSource: "metadata" };
   }
-
-  let parsed: URL | undefined;
-  try {
-    parsed = new URL(trimmedUrl);
-  } catch {
-    // Local paths reach the generic public-HTTPS error below.
+  if (opts.trackingId?.trim()) {
+    return { mediaKind: "video", kindSource: "metadata" };
   }
-  if (parsed) {
-    throw new Error("LINE outbound media URL must use HTTPS");
-  }
-  throw new Error("LINE outbound media currently requires a public HTTPS URL");
+  const detected = detectLineMediaKindFromUrl(url);
+  return detected === undefined
+    ? { mediaKind: "image", kindSource: "fallback" }
+    : { mediaKind: detected, kindSource: "url" };
 }
 
 function isLineUserTarget(target: string): boolean {
@@ -113,58 +82,60 @@ function isLineUserTarget(target: string): boolean {
   return /^U/i.test(normalized);
 }
 
-export function hasLineSpecificMediaOptions(lineData: LineChannelData): boolean {
-  return (
-    lineData.mediaKind !== undefined ||
-    Boolean(lineData.previewImageUrl?.trim()) ||
-    typeof lineData.durationMs === "number" ||
-    Boolean(lineData.trackingId?.trim())
-  );
-}
-
-function buildLineMediaMessageObject(
-  resolved: LineOutboundMediaResolved,
-  opts?: { allowTrackingId?: boolean },
-): messagingApi.Message {
-  switch (resolved.mediaKind) {
-    case "video": {
-      const previewImageUrl = resolved.previewImageUrl?.trim();
-      if (!previewImageUrl) {
-        throw new Error("LINE video messages require previewImageUrl to reference an image URL");
-      }
-      return {
-        type: "video",
-        originalContentUrl: resolved.mediaUrl,
-        previewImageUrl,
-        ...(opts?.allowTrackingId && resolved.trackingId
-          ? { trackingId: resolved.trackingId }
-          : {}),
-      };
-    }
-    case "audio":
-      return {
-        type: "audio",
-        originalContentUrl: resolved.mediaUrl,
-        duration: resolved.durationMs ?? 60000,
-      };
-    default:
-      return {
-        type: "image",
-        originalContentUrl: resolved.mediaUrl,
-        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
-      };
-  }
-}
-
-// Resolve and build through one leaf so reply-token and inline push delivery
-// cannot drift on media kind, preview, duration, or tracking-id policy.
+// An image bubble LINE cannot fill renders as blank space the sender never sees,
+// so media the platform will not carry degrades to the URL it was made of — the
+// same shape createLocationMessage uses for a pin LINE will not draw.
+// Reply-token and push delivery share media validation and provider payload construction.
 export async function buildLineMediaMessage(
   mediaUrl: string,
   opts: ResolveLineOutboundMediaOpts,
   target: string,
 ): Promise<messagingApi.Message> {
-  const resolved = await resolveLineOutboundMedia(mediaUrl, opts);
-  return buildLineMediaMessageObject(resolved, {
-    allowTrackingId: isLineUserTarget(target),
-  });
+  const trimmedUrl = mediaUrl.trim();
+  if (!isHttpsUrl(trimmedUrl)) {
+    throw new Error(
+      URL.canParse(trimmedUrl)
+        ? "LINE outbound media URL must use HTTPS"
+        : "LINE outbound media currently requires a public HTTPS URL",
+    );
+  }
+  await validateLineMediaUrl(trimmedUrl);
+  const previewImageUrl = opts.previewImageUrl?.trim();
+  if (previewImageUrl) {
+    await validateLineMediaUrl(previewImageUrl);
+  }
+  const { mediaKind, kindSource } = resolveLineMediaKind(trimmedUrl, opts);
+  switch (mediaKind) {
+    case "unsupported":
+      return { type: "text", text: trimmedUrl };
+    case "video": {
+      if (previewImageUrl) {
+        return {
+          type: "video",
+          originalContentUrl: trimmedUrl,
+          previewImageUrl,
+          // LINE accepts tracking ids for users although its SDK omits the field.
+          ...(isLineUserTarget(target) && opts.trackingId ? { trackingId: opts.trackingId } : {}),
+        };
+      }
+      // LINE always needs a poster for a video. Explicit kind or video-only
+      // metadata keeps the missing field visible; only URL inference degrades.
+      if (kindSource !== "url") {
+        throw new Error("LINE video messages require previewImageUrl to reference an image URL");
+      }
+      return { type: "text", text: trimmedUrl };
+    }
+    case "audio":
+      return {
+        type: "audio",
+        originalContentUrl: trimmedUrl,
+        duration: typeof opts.durationMs === "number" ? opts.durationMs : 60000,
+      };
+    default:
+      return {
+        type: "image",
+        originalContentUrl: trimmedUrl,
+        previewImageUrl: previewImageUrl || trimmedUrl,
+      };
+  }
 }

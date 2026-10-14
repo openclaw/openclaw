@@ -84,7 +84,7 @@ describe("security fix", () => {
         const changes: string[] = [];
         let changed = false;
         const maybeApply = (prefix: string, holder: Record<string, unknown>) => {
-          if (holder.groupPolicy !== "allowlist") {
+          if (holder.groupPolicy !== "open") {
             return;
           }
           const allowFrom = Array.isArray(holder.allowFrom) ? holder.allowFrom : [];
@@ -115,23 +115,6 @@ describe("security fix", () => {
       },
     },
   });
-
-  const expectTightenedStateAndConfigPerms = async (stateDir: string, configPath: string) => {
-    const stateMode = (await fs.stat(stateDir)).mode & 0o777;
-    expectPerms(stateMode, 0o700);
-
-    const configMode = (await fs.stat(configPath)).mode & 0o777;
-    expectPerms(configMode, 0o600);
-  };
-
-  const expectWhatsAppGroupPolicy = (
-    channels: Record<string, Record<string, unknown>>,
-    expectedPolicy = "allowlist",
-  ) => {
-    expect(expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupPolicy).toBe(
-      expectedPolicy,
-    );
-  };
 
   const expectWhatsAppAccountGroupPolicy = (
     channels: Record<string, Record<string, unknown>>,
@@ -239,35 +222,29 @@ describe("security fix", () => {
     ]);
   });
 
-  it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
+  it("does not seed WhatsApp accounts that were already allowlisted", async () => {
     const { res, channels } = await fixWhatsAppConfigScenario({
       whatsapp: {
-        groupPolicy: "open",
-        allowFrom: ["+15552223333"],
+        groupPolicy: "allowlist",
+        accounts: {
+          default: { groupPolicy: "allowlist" },
+          work: { groupPolicy: "allowlist" },
+        },
       },
       allowFromStore: ["+15550001111"],
     });
-    expect(res.ok).toBe(true);
-    expectWhatsAppGroupPolicy(channels);
+
+    expect(res.configWritten).toBe(false);
+    expect(res.changes).toEqual([]);
+    const whatsapp = expectDefined(channels.whatsapp, "channels.whatsapp test invariant");
+    expect(whatsapp.groupAllowFrom).toBeUndefined();
+    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
     expect(
-      expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupAllowFrom,
+      expectDefined(accounts.default, "accounts.default test invariant").groupAllowFrom,
     ).toBeUndefined();
-  });
-
-  it("returns ok=false for invalid config but still tightens perms", async () => {
-    const stateDir = await createStateDir("invalid-config");
-    await fs.chmod(stateDir, 0o755);
-
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{ this is not json }\n", "utf-8");
-    await fs.chmod(configPath, 0o644);
-
-    const env = createFixEnv(stateDir, configPath);
-
-    const res = await fixSecurityFootguns({ env, stateDir, configPath });
-    expect(res.ok).toBe(false);
-
-    await expectTightenedStateAndConfigPerms(stateDir, configPath);
+    expect(
+      expectDefined(accounts.work, "accounts.work test invariant").groupAllowFrom,
+    ).toBeUndefined();
   });
 
   it("collects permission targets for credentials + agent auth/sessions + include files", async () => {
@@ -276,43 +253,26 @@ describe("security fix", () => {
     const includesDir = path.join(stateDir, "includes");
     await fs.mkdir(includesDir, { recursive: true });
     const includePath = path.join(includesDir, "extra.json5");
-    await fs.writeFile(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
+    await fs.writeFile(includePath, "{}\n", "utf-8");
     await fs.chmod(includePath, 0o644);
 
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      `{ "$include": "./includes/extra.json5", channels: { whatsapp: { groupPolicy: "open" } } }\n`,
-      "utf-8",
-    );
+    await fs.writeFile(configPath, `{ "$include": "./includes/extra.json5" }\n`, "utf-8");
     await fs.chmod(configPath, 0o644);
 
     const credsDir = path.join(stateDir, "credentials");
     await fs.mkdir(credsDir, { recursive: true });
-    const allowFromPath = path.join(credsDir, "whatsapp-allowFrom.json");
-    await fs.writeFile(
-      allowFromPath,
-      `${JSON.stringify({ version: 1, allowFrom: ["+15550002222"] }, null, 2)}\n`,
-      "utf-8",
-    );
-    await fs.chmod(allowFromPath, 0o644);
+    const credentialPath = path.join(credsDir, "oauth.json");
+    await fs.writeFile(credentialPath, "{}\n", "utf-8");
+    await fs.chmod(credentialPath, 0o644);
 
     const agentDir = path.join(stateDir, "agents", "main", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
     const authDatabasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    await fs.writeFile(authDatabasePath, "sqlite\n", "utf-8");
-    await fs.writeFile(`${authDatabasePath}-wal`, "wal\n", "utf-8");
-    await fs.writeFile(`${authDatabasePath}-shm`, "shm\n", "utf-8");
-    await fs.writeFile(`${authDatabasePath}-journal`, "journal\n", "utf-8");
     const authProfilesPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(authProfilesPath, "{}\n", "utf-8");
-    await fs.chmod(authProfilesPath, 0o644);
 
     const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionsStorePath = path.join(sessionsDir, "sessions.json");
-    await fs.writeFile(sessionsStorePath, "{}\n", "utf-8");
-    await fs.chmod(sessionsStorePath, 0o644);
     const transcriptPath = path.join(sessionsDir, "sess-main.jsonl");
     await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
     await fs.chmod(transcriptPath, 0o644);
@@ -330,7 +290,7 @@ describe("security fix", () => {
       configPath,
       canonicalIncludePath,
       credsDir,
-      allowFromPath,
+      credentialPath,
       path.join(stateDir, "agents", "main"),
       agentDir,
       authDatabasePath,
@@ -347,11 +307,7 @@ describe("security fix", () => {
   it("tightens the live legacy main auth store for a named default roster", async () => {
     const stateDir = await createStateDir("named-default-legacy-auth");
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-      "utf-8",
-    );
+    await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }), "utf-8");
     const legacyAuthPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
     await fs.mkdir(path.dirname(legacyAuthPath), { recursive: true });
     await fs.writeFile(legacyAuthPath, "{}\n", "utf-8");

@@ -13,11 +13,13 @@ export type ContextEngineHostSupport = {
   capabilities: readonly ContextEngineHostCapability[];
 };
 
-const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
-  "bootstrap",
-  "after-turn",
-  "maintain",
-] as const satisfies readonly ContextEngineHostCapability[];
+/** Return whether an engine implements the durable method matching its declared contract. */
+export function supportsContextEngineDurableTurnAdvancement(engine: ContextEngine): boolean {
+  return (
+    engine.info.transcriptSemantics?.turnAdvancementIdempotency === "atomic-idempotent-v1" &&
+    typeof engine.commitTurn === "function"
+  );
+}
 
 export const OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST = {
   id: "openclaw-embedded",
@@ -66,7 +68,7 @@ export function buildGenericCliContextEngineHostSupport(params: {
   return {
     id: `cli:${params.backendId}`,
     label: `CLI backend "${params.backendId}"`,
-    capabilities: params.capabilities ?? GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES,
+    capabilities: params.capabilities ?? ["bootstrap", "after-turn", "maintain"],
   };
 }
 

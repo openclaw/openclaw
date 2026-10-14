@@ -4,6 +4,7 @@ import path from "node:path";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import type { HealthCheck, HealthRepairEffect } from "./health-checks.js";
 
@@ -55,14 +56,6 @@ async function canonicalPath(target: string): Promise<string> {
   }
 }
 
-function isSameOrDescendant(parent: string, candidate: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
-}
-
 async function configuredAgentWorkspaceCollisions(
   cfg: OpenClawConfig,
   target: string,
@@ -70,7 +63,7 @@ async function configuredAgentWorkspaceCollisions(
   const configured: Array<{ label: string; workspace: string | undefined }> = [
     { label: "agents.defaults.workspace", workspace: cfg.agents?.defaults?.workspace },
     ...listAgentEntries(cfg).map((agent) => ({
-      label: `agents.list.${agent.id}.workspace`,
+      label: `agents.entries.${agent.id}.workspace`,
       workspace: agent.workspace,
     })),
   ];
@@ -89,8 +82,8 @@ async function configuredAgentWorkspaceCollisions(
   return resolvedEntries
     .filter(
       (entry) =>
-        isSameOrDescendant(resolvedTarget, entry.resolvedWorkspace) ||
-        isSameOrDescendant(entry.resolvedWorkspace, resolvedTarget),
+        isPathInside(resolvedTarget, entry.resolvedWorkspace) ||
+        isPathInside(entry.resolvedWorkspace, resolvedTarget),
     )
     .map((entry) => entry.label);
 }
@@ -125,23 +118,18 @@ export const removedWorkspacesStateCheck: HealthCheck = {
       return [];
     }
     const collisions = await configuredAgentWorkspaceCollisions(ctx.cfg, target);
-    if (collisions.length > 0) {
-      return [
-        {
-          checkId: CHECK_ID,
-          severity: "warning",
-          message: collisionWarning(target, collisions),
-          path: target,
-        },
-      ];
-    }
     return [
       {
         checkId: CHECK_ID,
         severity: "warning",
-        message: `Retired Workspaces plugin state remains at ${target}.`,
+        message:
+          collisions.length > 0
+            ? collisionWarning(target, collisions)
+            : `Retired Workspaces plugin state remains at ${target}.`,
         path: target,
-        fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state.",
+        ...(collisions.length > 0
+          ? {}
+          : { fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state." }),
       },
     ];
   },

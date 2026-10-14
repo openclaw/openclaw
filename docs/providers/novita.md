@@ -7,11 +7,20 @@ title: "NovitaAI"
 ---
 
 NovitaAI is a hosted AI infrastructure provider with an OpenAI-compatible API.
-It ships as a bundled OpenClaw provider (no separate plugin install), so
-credentials go through the normal model auth flow and model refs look like
-`novita/deepseek/deepseek-v4-pro`.
+OpenClaw provides NovitaAI through the official external
+`@openclaw/novita-provider` plugin. Model refs use the
+`novita/deepseek/deepseek-v4-pro` form.
 
 ## Setup
+
+Install the plugin:
+
+```bash
+openclaw plugins install @openclaw/novita-provider
+```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Create an API key at [novita.ai/settings/key-management](https://novita.ai/settings/key-management), then run:
 
@@ -29,13 +38,14 @@ export NOVITA_API_KEY="<your-novita-api-key>" # pragma: allowlist secret
 
 | Setting       | Value                             |
 | ------------- | --------------------------------- |
+| Plugin        | `@openclaw/novita-provider`       |
 | Provider id   | `novita`                          |
 | Aliases       | `novita-ai`, `novitaai`           |
 | Base URL      | `https://api.novita.ai/openai/v1` |
 | Env var       | `NOVITA_API_KEY`                  |
 | Default model | `novita/deepseek/deepseek-v4-pro` |
 
-## Bundled model catalog
+## Model catalog
 
 - `novita/moonshotai/kimi-k3`
 - `novita/moonshotai/kimi-k2.7-code`
@@ -54,6 +64,45 @@ setting a long-lived default:
 
 ```bash
 openclaw models list --provider novita
+```
+
+## Video generation
+
+The same plugin and `NOVITA_API_KEY` support the [video generation tool](/tools/video-generation)
+through Novita's native asynchronous API at `https://api.novita.ai`.
+
+| Model                         | Modes                      | Duration | Resolution  |
+| ----------------------------- | -------------------------- | -------- | ----------- |
+| `wan2.6-t2v` (default)        | Text or one image to video | 5/10/15s | 720P, 1080P |
+| `wan2.6-i2v`                  | One image to video         | 5/10/15s | 720P, 1080P |
+| `minimax-hailuo-2.3-t2v`      | Text or one image to video | 6/10s    | 768P, 1080P |
+| `minimax-hailuo-2.3-i2v`      | One image to video         | 6/10s    | 768P, 1080P |
+| `minimax-hailuo-2.3-fast-i2v` | One image to video         | 6/10s    | 768P, 1080P |
+
+Supplying one image with a `-t2v` model selects the same family's `-i2v` route.
+Both families accept remote image URLs and local image files, sent as data URIs.
+Hailuo supports 1080P only for 6-second videos; use 768P for 10 seconds. Video
+reference inputs are unsupported.
+
+Wan defaults to silent output; set `audio: true` to generate audio. It also accepts
+one remote HTTP(S) audio reference. Text-to-video supports `16:9`, `9:16`, `1:1`,
+`4:3`, and `3:4`; image-to-video inherits the source aspect ratio. Wan options are
+`negative_prompt`, `prompt_extend`, `shot_type` (`single` or `multi`), and `seed`.
+Hailuo options are `enable_prompt_expansion` and `fast_pretreatment` (the latter
+is unavailable on the Fast model).
+
+```json5
+{
+  agents: {
+    defaults: {
+      mediaModels: {
+        video: {
+          primary: "novita/wan2.6-t2v",
+        },
+      },
+    },
+  },
+}
 ```
 
 ## When to choose Novita

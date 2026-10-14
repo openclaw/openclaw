@@ -1,4 +1,3 @@
-// Telegram plugin module implements native command callback data behavior.
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 const TELEGRAM_OPAQUE_CALLBACK_PREFIX = "tgcb1:";
 
@@ -7,11 +6,8 @@ export function buildTelegramNativeCommandCallbackData(commandText: string): str
 }
 
 export function parseTelegramNativeCommandCallbackData(data?: string | null): string | null {
-  if (!data) {
-    return null;
-  }
-  const trimmed = data.trim();
-  if (!trimmed.startsWith(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX)) {
+  const trimmed = data?.trim();
+  if (!trimmed?.startsWith(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX)) {
     return null;
   }
   const commandText = trimmed.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();
@@ -22,24 +18,22 @@ export function buildTelegramOpaqueCallbackData(value: string): string {
   return `${TELEGRAM_OPAQUE_CALLBACK_PREFIX}${checksumTelegramOpaqueCallbackValue(value)}:${value}`;
 }
 
+export function hasTelegramOpaqueCallbackPrefix(data?: string | null): boolean {
+  return data?.startsWith(TELEGRAM_OPAQUE_CALLBACK_PREFIX) === true;
+}
+
 export function parseTelegramOpaqueCallbackData(data?: string | null): string | null {
-  if (!data) {
-    return null;
-  }
-  if (!data.startsWith(TELEGRAM_OPAQUE_CALLBACK_PREFIX)) {
+  if (!data || !hasTelegramOpaqueCallbackPrefix(data)) {
     return null;
   }
   const encoded = data.slice(TELEGRAM_OPAQUE_CALLBACK_PREFIX.length);
   const separatorIndex = encoded.indexOf(":");
-  if (separatorIndex <= 0) {
-    return null;
-  }
-  const checksum = encoded.slice(0, separatorIndex);
   const value = encoded.slice(separatorIndex + 1);
-  if (!value || checksum !== checksumTelegramOpaqueCallbackValue(value)) {
-    return null;
-  }
-  return value;
+  return separatorIndex > 0 &&
+    value &&
+    encoded.slice(0, separatorIndex) === checksumTelegramOpaqueCallbackValue(value)
+    ? value
+    : null;
 }
 
 function checksumTelegramOpaqueCallbackValue(value: string): string {

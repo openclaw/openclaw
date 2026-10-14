@@ -2,41 +2,27 @@ import { describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
 import { reefPlugin } from "./channel.js";
 import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./config-schema.js";
-import { setActiveReef } from "./runtime.js";
+import { createReefRuntimeAuthority } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
-  it("defaults to the canonical Reef relay", () => {
-    expect(ReefChannelConfigSchema.parse({}).relayUrl).toBe("https://reefwire.ai");
-  });
-
-  it("validates owner-controlled relay, guard model, policy, and key reference", () => {
-    const result = ReefChannelConfigSchema.safeParse({
-      relayUrl: "https://relay.owner.example",
-      handle: "owner",
-      email: "owner@example.com",
-      guard: {
-        provider: "anthropic",
-        pinnedModel: "claude-test-2026-07-12",
-        apiKeyEnv: "REEF_GUARD_API_KEY",
-        policyVersion: "owner-policy-v2",
-        timeoutMs: 5_000,
-      },
-      requestPolicy: "friends-of-friends",
-    });
-
-    expect(result.success).toBe(true);
-    if (!result.success) {
-      throw result.error;
+  it("rejects OAuth guard configs that could change provider or credential owner", () => {
+    const base = {
+      authMode: "oauth",
+      authProfileId: "openai:work",
+      pinnedModel: "gpt-5.6-terra",
+      policyVersion: "reef-v1",
+      timeoutMs: 5_000,
+    };
+    for (const guard of [
+      { ...base, provider: "anthropic" },
+      { ...base, provider: "openai", authProfileId: "" },
+      { ...base, provider: "openai", authProfileId: "openai:   " },
+      { ...base, provider: "openai", authProfileId: "openai:team/work" },
+      { ...base, provider: "openai", authProfileId: "anthropic:work" },
+      { ...base, provider: "openai", apiKeyEnv: "OPENAI_API_KEY" },
+    ]) {
+      expect(ReefChannelConfigSchema.safeParse({ guard }).success).toBe(false);
     }
-    expect(result.data).toMatchObject({
-      relayUrl: "https://relay.owner.example",
-      requestPolicy: "friends-of-friends",
-      guard: {
-        pinnedModel: "claude-test-2026-07-12",
-        apiKeyEnv: "REEF_GUARD_API_KEY",
-        policyVersion: "owner-policy-v2",
-      },
-    });
   });
 
   it("accepts legacy trust snapshots but rejects retired policy fields", () => {
@@ -67,29 +53,76 @@ describe("Reef configuration boundary", () => {
     reefChannelEntry.register({ registrationMode: "tool-discovery", registerCommand } as never);
     expect(registerCommand).toHaveBeenCalledOnce();
     const command = registerCommand.mock.calls[0]![0];
-    expect(command).toMatchObject({ name: "reef", requireAuth: true });
+    expect(command).toMatchObject({
+      name: "reef",
+      requireAuth: true,
+      exposeSenderIsOwner: true,
+    });
 
     const flowSend = vi.fn();
-    setActiveReef({
+    const mintCode = vi.fn();
+    const requestFriend = vi.fn();
+    const removeFriend = vi.fn();
+    const setAutonomy = vi.fn();
+    const decide = vi.fn().mockResolvedValue(true);
+    const listFriends = vi.fn().mockResolvedValue([]);
+    createReefRuntimeAuthority().activate({
       flow: { send: flowSend },
       friends: {
-        mintCode: vi.fn(),
-        request: vi.fn(),
-        list: vi.fn(),
-        remove: vi.fn(),
-        setAutonomy: vi.fn(),
+        mintCode,
+        request: requestFriend,
+        list: listFriends,
+        remove: removeFriend,
+        setAutonomy,
       },
-      reviews: { list: vi.fn(), decide: vi.fn() },
+      reviews: { list: vi.fn(), decide },
     } as never);
+    const ownerRequired = {
+      text: "Only an authorized owner can change Reef friends or decide reviews. Ask an owner; friendship changes can also use openclaw reef locally.",
+    };
     await expect(
-      command.handler({ args: "config relayUrl https://attacker.example" }),
+      command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
+    ).resolves.toEqual(ownerRequired);
+    await expect(
+      command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: false }),
+    ).resolves.toEqual(ownerRequired);
+    for (const args of ["friend code", "friend request peer code", "friend remove peer"]) {
+      await expect(command.handler({ args, senderIsOwner: false })).resolves.toEqual(ownerRequired);
+    }
+    expect(mintCode).not.toHaveBeenCalled();
+    expect(requestFriend).not.toHaveBeenCalled();
+    expect(removeFriend).not.toHaveBeenCalled();
+    expect(setAutonomy).not.toHaveBeenCalled();
+    expect(decide).not.toHaveBeenCalled();
+
+    await expect(command.handler({ args: "friend list", senderIsOwner: false })).resolves.toEqual({
+      text: "No Reef friends.",
+    });
+    expect(listFriends).toHaveBeenCalledOnce();
+
+    await expect(
+      command.handler({ args: "friend autonomy peer extended", senderIsOwner: true }),
+    ).resolves.toEqual({ text: "Reef friend @peer autonomy set to extended." });
+    await expect(
+      command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: true }),
+    ).resolves.toEqual({
+      text: "Reef review approved. Retry the identical message to re-run the guard.",
+    });
+    expect(setAutonomy).toHaveBeenCalledWith("peer", "extended", undefined);
+    expect(decide).toHaveBeenCalledWith("a".repeat(64), true, undefined);
+
+    await expect(
+      command.handler({
+        args: "config relayUrl https://attacker.example",
+        senderIsOwner: true,
+      }),
     ).resolves.toEqual({
       text: expect.stringContaining("Usage: /reef friend"),
     });
     expect(flowSend).not.toHaveBeenCalled();
   });
 
-  it("keeps read-only account and security inspection safe before runtime setup", () => {
+  it("keeps read-only account and security inspection safe before runtime setup", async () => {
     const cfg = {
       channels: {
         reef: {
@@ -107,12 +140,14 @@ describe("Reef configuration boundary", () => {
     };
     const account = reefPlugin.config.resolveAccount(cfg, "default");
 
-    expect(reefPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);
-    expect(reefPlugin.config.describeAccount?.(account, cfg)).toMatchObject({
+    expect(await reefPlugin.config.resolveAllowFromAsync?.({ cfg, accountId: "default" })).toEqual(
+      [],
+    );
+    expect(await reefPlugin.config.describeAccountAsync?.(account, cfg)).toMatchObject({
       extra: { friendCount: 0 },
     });
     expect(
-      reefPlugin.security?.resolveDmPolicy?.({ cfg, accountId: "default", account }),
+      await reefPlugin.security?.resolveDmPolicyAsync?.({ cfg, accountId: "default", account }),
     ).toMatchObject({ policy: "pairing", allowFrom: [] });
   });
 });

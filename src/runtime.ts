@@ -1,6 +1,6 @@
-// Re-exports terminal runtime helpers used by CLI command implementations.
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
+import { loggingState } from "./logging/state.js";
 
 export type RuntimeExitOptions = {
   /** Route ANSI terminal-reset bytes away from structured stdout when needed. */
@@ -11,7 +11,8 @@ export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   /**
-   * Exit the process after restoring terminal state.
+   * Unwind the command after restoring terminal state. Its executable owner
+   * records the exit code after awaited cleanup, then lets Node exit naturally.
    * Pass `resetStream` to route the ANSI reset sequence to a specific
    * stream (e.g. stderr) when structured output on stdout must stay clean.
    */
@@ -30,7 +31,7 @@ function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
     return true;
   }
-  const maybeMockedLog = console.log as unknown as { mock?: unknown };
+  const maybeMockedLog = console.log as typeof console.log & { mock?: unknown };
   return typeof maybeMockedLog.mock === "object";
 }
 
@@ -91,20 +92,34 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
     },
     writeStdout,
     writeJson: (value: unknown, space = 2) => {
-      writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+      writeStdout(JSON.stringify(value, undefined, space > 0 ? space : undefined));
     },
   };
+}
+
+/** Keep terminal reset bytes off stdout when the invocation owns machine-readable output. */
+export function restoreRuntimeTerminalState(
+  reason?: string,
+  options: NonNullable<Parameters<typeof restoreTerminalState>[1]> = {},
+): void {
+  const resetStream =
+    options.resetStream ?? (loggingState.forceConsoleToStderr ? process.stderr : undefined);
+  restoreTerminalState(reason, {
+    ...options,
+    ...(resetStream ? { resetStream } : {}),
+  });
 }
 
 export const defaultRuntime: OutputRuntimeEnv = {
   ...createRuntimeIo(),
   exit: (code, opts) => {
-    restoreTerminalState("runtime exit", {
+    restoreRuntimeTerminalState("runtime exit", {
       resumeStdinIfPaused: false,
-      resetStream: opts?.resetStream,
+      ...(opts?.resetStream ? { resetStream: opts.resetStream } : {}),
     });
-    process.exit(code);
-    throw new Error("unreachable"); // satisfies tests when mocked
+    // Native process.exit skips finally cleanup and can deadlock V8 compiler
+    // workers waiting for main-thread GC: https://github.com/nodejs/node/issues/64274.
+    throw new ExitError(code);
   },
 };
 
@@ -137,7 +152,7 @@ export function writeRuntimeJson(
     runtime.writeJson(value, space);
     return;
   }
-  runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+  runtime.log(JSON.stringify(value, undefined, space > 0 ? space : undefined));
 }
 
 export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {

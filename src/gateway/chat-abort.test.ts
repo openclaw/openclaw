@@ -1,37 +1,34 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 // Chat abort tests protect in-flight run tracking, stop-command parsing, provider
 // abort fanout, history snapshots, and cleanup of buffered streaming state.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  isAgentRunDirectAbortReason,
+  isAgentRunRestartAbortReason,
+} from "../agents/run-termination.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  clearAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+  resetAgentRunRegistryForTest,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
-  boundInFlightRunSnapshotForChatHistory,
-  isChatStopCommandText,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
   resolveChatRunExpiresAtMs,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
-  resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "./chat-abort.js";
-import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
-
-type ChatAbortPayload = {
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  seq: number;
-  state: "aborted";
-  stopReason?: string;
-  errorMessage?: string;
-  message?: {
-    role: "assistant";
-    content: Array<{ type: "text"; text: string }>;
-    timestamp: number;
-  };
-};
+import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
+import { createChatRunState } from "./server-chat-state.js";
 
 type CreatedChatAbortOps = ChatAbortOps & {
   broadcast: ReturnType<typeof vi.fn>;
@@ -64,10 +61,11 @@ function createOps(params: {
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
   const chatRunState = createChatRunState();
+  chatRunState.updateBuffer(runId, { delta: buffer ?? "" });
+  chatRunState.takeBufferDelta(runId, buffer ?? "");
   Object.assign(chatRunState.getOrCreate(runId), {
-    ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
     deltaSentAt: Date.now(),
-    deltaLastBroadcastLen: buffer?.length ?? 0,
+    assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
     agentText: {
       assistant: {
         lastSentAt: Date.now(),
@@ -136,60 +134,29 @@ function expectRunAborted(params: {
   expect(params.ops.chatAbortControllers.has(params.runId)).toBe(false);
 }
 
-describe("isChatStopCommandText", () => {
-  it("matches slash and standalone multilingual stop forms", () => {
-    expect(isChatStopCommandText(" /STOP!!! ")).toBe(true);
-    expect(isChatStopCommandText("stop please")).toBe(true);
-    expect(isChatStopCommandText("do not do that")).toBe(true);
-    expect(isChatStopCommandText("停止")).toBe(true);
-    expect(isChatStopCommandText("停下来")).toBe(true);
-    expect(isChatStopCommandText("暂停")).toBe(true);
-    expect(isChatStopCommandText("やめて")).toBe(true);
-    expect(isChatStopCommandText("توقف")).toBe(true);
-    expect(isChatStopCommandText("остановись")).toBe(true);
-    expect(isChatStopCommandText("halt")).toBe(true);
-    expect(isChatStopCommandText("stopp")).toBe(true);
-    expect(isChatStopCommandText("pare")).toBe(true);
-    expect(isChatStopCommandText("/status")).toBe(false);
-    expect(isChatStopCommandText("please do not do that")).toBe(false);
-    expect(isChatStopCommandText("keep going")).toBe(false);
-  });
-});
-
 describe("registerChatAbortController", () => {
-  it("expires registrations immediately when the process clock is invalid", () => {
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId: "run-invalid-clock",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      now: Number.NaN,
-    });
+  it.each([
+    [Number.NaN, undefined, 0],
+    [1_800_000_000_000, Number.POSITIVE_INFINITY, 1_800_000_000_000],
+  ] as const)(
+    "expires registrations for invalid clock %s or expiry %s",
+    (now, expiresAtMs, startedAtMs) => {
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId: "run-invalid-time",
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 60_000,
+        now,
+        expiresAtMs,
+      });
 
-    expect(registration.registered).toBe(true);
-    expect(registration.entry).toMatchObject({
-      startedAtMs: 0,
-      expiresAtMs: 0,
-    });
-    expect(chatAbortControllers.get("run-invalid-clock")?.expiresAtMs).toBe(0);
-  });
-
-  it("expires registrations immediately when explicit expiry is invalid", () => {
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId: "run-invalid-expiry",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      now: 1_800_000_000_000,
-      expiresAtMs: Number.POSITIVE_INFINITY,
-    });
-
-    expect(registration.entry?.expiresAtMs).toBe(0);
-  });
+      expect(registration.registered).toBe(true);
+      expect(registration.entry).toMatchObject({ startedAtMs, expiresAtMs: 0 });
+      expect(chatAbortControllers.get("run-invalid-time")?.expiresAtMs).toBe(0);
+    },
+  );
 
   it("bounds default and agent run expiry calculations to valid Date timestamps", () => {
     expect(resolveChatRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
@@ -197,56 +164,165 @@ describe("registerChatAbortController", () => {
     expect(resolveAgentRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
   });
 
-  it("records hidden/internal visibility for agent registrations", () => {
+  it("re-arms agent expiry from execution admission exactly once", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
       chatAbortControllers,
-      runId: "run-internal-agent",
+      runId: "run-queued-agent",
       sessionId: "sess-1",
       sessionKey: "main",
-      timeoutMs: 60_000,
-      controlUiVisible: false,
+      timeoutMs: 120_000,
       kind: "agent",
+    });
+    const startedAtMs = registration.entry?.startedAtMs;
+
+    vi.advanceTimersByTime(90_000);
+    registration.markExecutionStarted();
+    const executionExpiresAtMs = resolveAgentRunExpiresAtMs({
+      now: Date.now(),
+      timeoutMs: 120_000,
     });
 
-    expect(registration.entry).toMatchObject({
-      controlUiVisible: false,
-      kind: "agent",
-    });
-    expect(chatAbortControllers.get("run-internal-agent")?.controlUiVisible).toBe(false);
+    expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
+
+    vi.advanceTimersByTime(30_000);
+    registration.markExecutionStarted();
+    expect(registration.entry?.expiresAtMs).toBe(executionExpiresAtMs);
   });
 
-  it("retains completed registrations until terminal persistence succeeds", async () => {
+  it.each([
+    "queued",
+    "late",
+    "started",
+    "cleaned",
+    "replaced",
+    "restart",
+    "restart-admission",
+    "terminal",
+    "terminal-admission",
+    "observed",
+    "observed-admission",
+  ] as const)("owns the queued deadline until execution or release: %s", (state) => {
+    vi.useFakeTimers();
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const onRemoved = vi.fn();
+    const onQueueTimeout = vi.fn((entry: ChatAbortControllerEntry) => {
+      const ops = createOps({ runId: "queued", entry });
+      ops.chatAbortControllers = chatAbortControllers;
+      abortChatRunById(ops, {
+        runId: "queued",
+        sessionKey: "main",
+        stopReason: "timeout",
+      });
+    });
     const registration = registerChatAbortController({
       chatAbortControllers,
-      runId: "run-persisting",
+      runId: "queued",
       sessionId: "sess-1",
       sessionKey: "main",
-      timeoutMs: 60_000,
-      onRemoved,
+      timeoutMs: 2_000,
+      kind: "agent",
+      onQueueTimeout,
     });
-    let resolvePersistence: () => void = () => undefined;
-    const persistence = new Promise<void>((resolve) => {
-      resolvePersistence = resolve;
-    });
-    if (!registration.entry) {
-      throw new Error("expected registered entry");
+    vi.advanceTimersByTime(1_999);
+    expect(onQueueTimeout).not.toHaveBeenCalled();
+    if (state === "started") {
+      registration.markExecutionStarted();
+    } else if (state === "cleaned") {
+      registration.cleanup();
+    } else if (state === "replaced") {
+      chatAbortControllers.set("queued", createActiveEntry("main"));
+    } else if (state === "late") {
+      vi.setSystemTime(Date.now() + 1);
+      expect(registration.markExecutionStarted()).toBe(false);
+    } else if (state === "restart" || state === "restart-admission") {
+      expectDefined(registration.entry, "registered run").abortStopReason = "restart";
+    } else if (state === "terminal" || state === "terminal-admission") {
+      expectDefined(registration.entry, "registered run").projectSessionTerminalPending = true;
+    } else if (state === "observed" || state === "observed-admission") {
+      expectDefined(registration.entry, "registered run").projectSessionTerminalObservedAt =
+        Date.now();
     }
-    registration.entry.projectSessionActive = false;
-    registration.entry.projectSessionTerminalPersistence = persistence;
-
+    if (
+      state === "restart-admission" ||
+      state === "terminal-admission" ||
+      state === "observed-admission"
+    ) {
+      expect(registration.markExecutionStarted()).toBe(false);
+    }
+    vi.advanceTimersByTime(1);
+    const expired = state === "queued" || state === "late";
+    expect(onQueueTimeout).toHaveBeenCalledTimes(expired ? 1 : 0);
+    expect(registration.controller.signal.aborted).toBe(expired);
+    if (expired) {
+      expect(registration.controller.signal.reason).toMatchObject({ name: "TimeoutError" });
+    }
+    if (state === "restart" || state === "restart-admission") {
+      expect(registration.entry?.abortStopReason).toBe("restart");
+    }
     registration.cleanup();
-
-    expect(chatAbortControllers.has("run-persisting")).toBe(true);
-    expect(onRemoved).not.toHaveBeenCalled();
-    resolvePersistence();
-    await persistence;
-    await Promise.resolve();
-    expect(chatAbortControllers.has("run-persisting")).toBe(false);
-    expect(onRemoved).toHaveBeenCalledTimes(1);
   });
+
+  it("does not re-arm an agent after its unswept queue deadline", () => {
+    vi.useFakeTimers();
+    for (const [runId, offsetMs] of [
+      ["run-agent-at-queue-deadline", 0],
+      ["run-agent-after-queue-deadline", 1],
+    ] as const) {
+      vi.setSystemTime(1_800_000_000_000);
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId,
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 120_000,
+        kind: "agent",
+      });
+      const queueExpiresAtMs = registration.entry?.expiresAtMs;
+      const startedAtMs = registration.entry?.startedAtMs;
+      expect(queueExpiresAtMs).toBeTypeOf("number");
+
+      vi.setSystemTime((queueExpiresAtMs as number) + offsetMs);
+      registration.markExecutionStarted();
+      registration.markExecutionStarted();
+
+      expect(registration.entry?.startedAtMs).toBe(startedAtMs);
+      expect(registration.entry?.expiresAtMs).toBe(queueExpiresAtMs);
+      expect(registration.controller.signal.aborted).toBe(false);
+    }
+  });
+
+  it.each(["stale", "aborted", "chat-send", "hidden-chat-send"] as const)(
+    "does not re-arm %s registrations",
+    (state) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_800_000_000_000);
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId: "run-expiry",
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 60_000,
+        kind: state === "chat-send" || state === "hidden-chat-send" ? "chat-send" : "agent",
+        projectSessionActive: state !== "hidden-chat-send",
+      });
+      const expiry = registration.entry?.expiresAtMs;
+      if (state === "stale") {
+        chatAbortControllers.delete("run-expiry");
+      } else if (state === "aborted") {
+        registration.controller.abort();
+      }
+      vi.advanceTimersByTime(30_000);
+      expect(registration.markExecutionStarted()).toBe(
+        state === "chat-send" || state === "hidden-chat-send",
+      );
+      expect(registration.entry?.expiresAtMs).toBe(expiry);
+    },
+  );
 
   it("retains registrations when terminal lifecycle was observed before caller cleanup", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
@@ -267,41 +343,9 @@ describe("registerChatAbortController", () => {
     expect(chatAbortControllers.has("run-awaiting-terminal")).toBe(true);
     expect(registration.entry?.registrationCleanupRequested).toBe(true);
   });
-
-  it("force-cleans registrations when dispatch fails before lifecycle starts", () => {
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId: "run-before-dispatch",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-    });
-
-    registration.cleanup({ force: true });
-
-    expect(chatAbortControllers.has("run-before-dispatch")).toBe(false);
-  });
 });
 
 describe("abortChatRunById", () => {
-  it("notifies the run-bound approval owner only after an active run abort wins", () => {
-    const { runId, sessionKey, ops } = createAbortRunFixture({});
-    const onRunAborted = vi.fn();
-    ops.onRunAborted = onRunAborted;
-
-    expect(abortChatRunById(ops, { runId: "other-run", sessionKey })).toEqual({
-      aborted: false,
-    });
-    expect(onRunAborted).not.toHaveBeenCalled();
-
-    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
-      aborted: true,
-    });
-    expect(onRunAborted).toHaveBeenCalledOnce();
-    expect(onRunAborted).toHaveBeenCalledWith(runId);
-  });
-
   it("retains terminal persistence ownership observed during abort", () => {
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
     let terminalEvents = 0;
@@ -335,6 +379,30 @@ describe("abortChatRunById", () => {
     }
   });
 
+  it("preserves the owning session identity when synchronous abort cleanup clears run context", () => {
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+      runId: "run-pre-reset-abort",
+    });
+    registerAgentRunContext(runId, { sessionKey, sessionId: entry.sessionId });
+    entry.controller.signal.addEventListener("abort", () => clearAgentRunContext(runId));
+    const events: Array<{ sessionId?: string }> = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "lifecycle") {
+        events.push({ sessionId: event.sessionId });
+      }
+    });
+
+    try {
+      expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "rpc" })).toEqual({
+        aborted: true,
+      });
+      expect(events).toEqual([{ sessionId: entry.sessionId }]);
+    } finally {
+      unsubscribe();
+      clearAgentRunContext(runId);
+    }
+  });
+
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({
@@ -350,15 +418,15 @@ describe("abortChatRunById", () => {
     expectRunAborted({ result, entry, ops, runId });
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastLen).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.display).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
 
     expect(ops.broadcast).toHaveBeenCalledTimes(1);
-    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    const payload = firstBroadcastPayload(ops) as ChatEvent;
     expect(payload).toEqual({
       runId,
       sessionKey,
@@ -372,19 +440,6 @@ describe("abortChatRunById", () => {
       },
     });
     expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
-  });
-
-  it("omits aborted message when buffered text is empty", () => {
-    const runId = "run-1";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry, buffer: "   " });
-
-    const result = abortChatRunById(ops, { runId, sessionKey });
-
-    expect(result).toEqual({ aborted: true });
-    const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
-    expect(payload.message).toBeUndefined();
   });
 
   it("includes the active run's safe validation diagnostic", () => {
@@ -403,27 +458,6 @@ describe("abortChatRunById", () => {
       state: "aborted",
       errorMessage: "edit tool validation failed: edits: must be an array",
     });
-  });
-
-  it("preserves finalizing runs when the owning reply operation rejects aborts", () => {
-    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
-      buffer: "completed reply",
-      entry: {
-        ...createActiveEntry("main"),
-        isAbortable: () => false,
-      },
-    });
-
-    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
-
-    expect(result).toEqual({ aborted: false });
-    expect(entry.controller.signal.aborted).toBe(false);
-    expect(ops.chatAbortControllers.get(runId)).toBe(entry);
-    expect(ops.chatRunState.runs.get(runId)?.buffer).toBe("completed reply");
-    expect(ops.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
-    expect(ops.removeChatRun).not.toHaveBeenCalled();
-    expect(ops.broadcast).not.toHaveBeenCalled();
-    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("aborts hidden internal runs without broadcasting chat events", () => {
@@ -447,83 +481,113 @@ describe("abortChatRunById", () => {
       name: "fans out default-agent global aborts to scoped and legacy global subscribers",
       runId: "run-main-global",
       createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
+      abort: abortChatRunById,
     },
     {
       name: "resolves unscoped global aborts to the default agent subscribers",
       runId: "run-unscoped-global",
       createEntry: () => createActiveEntry("global"),
+      abort: abortChatRunById,
     },
   ]) {
     it(testCase.name, () => {
       const ops = createOps({ runId: testCase.runId, entry: testCase.createEntry() });
-      ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
+      ops.getRuntimeConfig = () => ({ agents: { entries: { main: {} } } });
 
-      const result = abortChatRunById(ops, { runId: testCase.runId, sessionKey: "global" });
+      const result = testCase.abort(ops, { runId: testCase.runId, sessionKey: "global" });
 
       expect(result).toEqual({ aborted: true });
-      const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+      const payload = firstBroadcastPayload(ops) as ChatEvent;
       expect(payload.agentId).toBe("main");
+      const delivery = { sessionKeys: ["agent:main:global", "global"] };
+      expect(ops.broadcast).toHaveBeenCalledWith("chat", payload, delivery);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
     });
   }
 
-  it("tags maintenance timeouts as timeout abort reasons", () => {
-    const runId = "run-timeout";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry });
+  it.each([
+    { stopReason: undefined, kind: "direct" },
+    { stopReason: "rpc", kind: "direct" },
+    { stopReason: "timeout", kind: "timeout" },
+    { stopReason: "restart", kind: "restart" },
+  ] as const)(
+    "tags $stopReason abort signals with $kind cancellation evidence",
+    ({ stopReason, kind }) => {
+      const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
 
-    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "timeout" });
+      const result = abortChatRunById(ops, { runId, sessionKey, stopReason });
 
-    expect(result).toEqual({ aborted: true });
-    expect(entry.abortStopReason).toBe("timeout");
-    expect(entry.controller.signal.aborted).toBe(true);
-    expect(entry.controller.signal.reason).toBeInstanceOf(Error);
-    expect((entry.controller.signal.reason as Error).name).toBe("TimeoutError");
-  });
+      expect(result).toEqual({ aborted: true });
+      expect(entry.abortStopReason).toBe(stopReason);
+      const signal = entry.controller.signal;
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason).toMatchObject({
+        name: kind === "timeout" ? "TimeoutError" : "AbortError",
+      });
+      expect(isAgentRunDirectAbortReason(signal.reason)).toBe(kind === "direct");
+      expect(isAgentRunRestartAbortReason(signal.reason)).toBe(kind === "restart");
+    },
+  );
 
-  it("tags restart abort signals with a restart-specific reason", () => {
-    const runId = "run-restart";
-    const sessionKey = "main";
-    const entry = createActiveEntry(sessionKey);
-    const ops = createOps({ runId, entry });
+  it.each([
+    ["streamed text", true, true],
+    ["", true, true],
+    ["NO_REPLY", true, false],
+    ["stale text", false, false],
+  ] as const)(
+    "snapshots completed widgets before synchronous abort cleanup (%j, current=%j)",
+    (buffer, current, visible) => {
+      let ownsBuffer = current;
+      const now = new Date("2026-01-02T03:04:05.000Z");
+      const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+        buffer,
+        now,
+      });
+      const widget: ChatCanvasBlock = {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          url: "/__openclaw__/canvas/documents/finished/index.html",
+          viewId: "finished",
+          sandbox: "scripts",
+        },
+        rawText: null,
+      };
+      Object.assign(ops.chatRunState.getOrCreate(runId), {
+        canvasBlocks: [widget],
+        bufferIsCurrent: () => ownsBuffer,
+      });
 
-    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "restart" });
+      entry.controller.signal.addEventListener("abort", () => {
+        ownsBuffer = false;
+        ops.chatRunState.clearRun(runId);
+      });
 
-    expect(result).toEqual({ aborted: true });
-    expect(isAgentRunRestartAbortReason(entry.controller.signal.reason)).toBe(true);
-  });
+      const result = abortChatRunById(ops, { runId, sessionKey });
 
-  it("preserves partial message even when abort listeners clear buffers synchronously", () => {
-    const now = new Date("2026-01-02T03:04:05.000Z");
-    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
-      buffer: "streamed text",
-      now,
-    });
-
-    // Simulate synchronous cleanup triggered by AbortController listeners.
-    entry.controller.signal.addEventListener("abort", () => {
-      delete ops.chatRunState.runs.get(runId)?.buffer;
-    });
-
-    const result = abortChatRunById(ops, { runId, sessionKey });
-
-    expect(result).toEqual({ aborted: true });
-    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
-    expect(payload).toEqual({
-      runId,
-      sessionKey,
-      seq: 1,
-      state: "aborted",
-      stopReason: undefined,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "streamed text" }],
-        timestamp: now.getTime(),
-      },
-    });
-  });
+      expect(result).toEqual({ aborted: true });
+      const payload = firstBroadcastPayload(ops) as ChatEvent;
+      expect(payload).toEqual({
+        runId,
+        sessionKey,
+        seq: 1,
+        state: "aborted",
+        stopReason: undefined,
+        message: visible
+          ? {
+              role: "assistant",
+              content: [...(buffer ? [{ type: "text", text: buffer }] : []), widget],
+              timestamp: now.getTime(),
+            }
+          : undefined,
+      });
+      expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
+      expect(ops.chatRunState.runs.get(runId)?.canvasBlocks).toBeUndefined();
+    },
+  );
 });
 
 describe("abortChatRunsForProvider", () => {
@@ -541,7 +605,7 @@ describe("abortChatRunsForProvider", () => {
       authProviderId: "openrouter",
     });
     const result = abortChatRunsForProvider(ops, {
-      cfg: {},
+      cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
       stopReason: "auth-revoked",
     });
@@ -569,7 +633,7 @@ describe("abortChatRunsForProvider", () => {
     ops.chatAbortControllers.set("run-main", mainEntry);
 
     const result = abortChatRunsForProvider(ops, {
-      cfg: { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } },
+      cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
       agentId: "writer",
       stopReason: "auth-revoked",
@@ -581,339 +645,144 @@ describe("abortChatRunsForProvider", () => {
   });
 });
 
-describe("resolveInFlightRunSnapshot", () => {
-  const inFlightEntry = (
-    sessionKey: string,
-    opts?: {
-      agentId?: string;
-      aborted?: boolean;
-      controlUiVisible?: boolean;
-      projectSessionActive?: boolean;
-      startedAtMs?: number;
-      kind?: ChatAbortControllerEntry["kind"];
-    },
-  ): ChatAbortControllerEntry => {
-    const now = Date.now();
-    const controller = new AbortController();
-    if (opts?.aborted) {
-      controller.abort();
-    }
-    const startedAtMs = opts?.startedAtMs ?? now;
-    return {
-      controller,
-      sessionId: "sess-1",
+describe("chat abort delegated authority", () => {
+  beforeEach(() => {
+    resetAgentRunRegistryForTest();
+  });
+  function createAuthorityAbortFixture(runId: string) {
+    const sessionKey = "agent:main:authority";
+    const operationalRunInstance = createOperationalRunInstanceRef(runId);
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId,
+      sessionId: `session-${runId}`,
       sessionKey,
-      agentId: opts?.agentId,
-      startedAtMs,
-      expiresAtMs: startedAtMs + 10_000,
-      controlUiVisible: opts?.controlUiVisible,
-      projectSessionActive: opts?.projectSessionActive ?? true,
-      kind: opts?.kind,
-    };
-  };
-
-  // Most cases request with requestedKey === canonicalKey; default canonical to
-  // the requested key unless a case exercises the requested/canonical split.
-  const snap = (p: {
-    chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-    chatRunBuffers: Map<string, string>;
-    chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
-    sessionKey: string;
-    canonicalSessionKey?: string;
-    agentId?: string;
-    defaultAgentId?: string;
-  }) => {
+      timeoutMs: 60_000,
+      operationalRunInstance,
+    });
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    registration.bindAgentRunDelegatedAuthority(authority);
     const chatRunState = createChatRunState();
-    for (const [runId, buffer] of p.chatRunBuffers ?? []) {
-      chatRunState.getOrCreate(runId).buffer = buffer;
-    }
-    for (const [runId, plan] of p.chatRunPlanSnapshots ?? []) {
-      chatRunState.getOrCreate(runId).planSnapshot = plan;
-    }
-    return resolveInFlightRunSnapshot({
-      chatAbortControllers: p.chatAbortControllers,
+    const ops: ChatAbortOps = {
+      chatAbortControllers,
       chatRunState,
-      requestedSessionKey: p.sessionKey,
-      canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
-      agentId: p.agentId,
-      defaultAgentId: p.defaultAgentId,
-    });
-  };
-
-  it("returns the live assistant text of a matching active run", () => {
-    const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:tui-x")]]),
-      chatRunBuffers: new Map([["run-1", "partial answer so far"]]),
-      sessionKey: "agent:main:tui-x",
-    });
-    expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
-  });
-
-  it("returns the active run plan snapshot with buffered text", () => {
-    const plan = {
-      explanation: "Current work",
-      steps: [{ step: "Implement replay", status: "in_progress" as const }],
+      removeChatRun: vi.fn(() => undefined),
+      agentRunSeq: new Map(),
+      broadcast: vi.fn(),
+      nodeSendToSession: vi.fn(),
     };
-    expect(
-      snap({
-        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
-        chatRunBuffers: new Map([["run-1", "partial"]]),
-        chatRunPlanSnapshots: new Map([["run-1", plan]]),
-        sessionKey: "agent:main:s",
+    return {
+      authority,
+      operationalRunInstance,
+      chatRunState,
+      ops,
+      registration,
+      runId,
+      sessionKey,
+    };
+  }
+
+  it("binds delegated authority only to the exact operational instance object", () => {
+    const { authority, operationalRunInstance, registration } =
+      createAuthorityAbortFixture("run-exact-authority");
+
+    expect(registration.entry?.agentRunDelegatedAuthority).toBe(authority);
+    expect(registration.entry?.operationalRunInstance).toBe(operationalRunInstance);
+    expect(() =>
+      registration.bindAgentRunDelegatedAuthority({
+        ...authority,
+        operationalRunInstance: Object.freeze({ ...operationalRunInstance }),
       }),
-    ).toEqual({ runId: "run-1", text: "partial", plan });
+    ).toThrow("does not belong to this controller registration");
+
+    registration.cleanup();
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
   });
 
-  it("returns an explicit empty plan snapshot for dismissal", () => {
-    expect(
-      snap({
-        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
-        chatRunBuffers: new Map(),
-        chatRunPlanSnapshots: new Map([["run-1", { steps: [] }]]),
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
-  });
-
-  it("is a no-op when chatAbortControllers is not a Map (unpopulated context)", () => {
-    expect(
-      snap({
-        chatAbortControllers: undefined as never,
-        chatRunBuffers: undefined as never,
-        sessionKey: "agent:main:s",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("matches a run stored under the canonical key when requested with a different key", () => {
-    // Abort entry holds the canonical store key; the client requests history with
-    // a different (requested) key for the same logical session.
-    const result = snap({
-      chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:main")]]),
-      chatRunBuffers: new Map([["run-1", "partial"]]),
-      sessionKey: "main",
-      canonicalSessionKey: "agent:main:main",
+  it("leaves sessionless authority with the outer admission owner", () => {
+    const runId = "run-sessionless-authority";
+    const operationalRunInstance = createOperationalRunInstanceRef(runId);
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId,
+      sessionId: `session-${runId}`,
+      timeoutMs: 60_000,
+      operationalRunInstance,
     });
-    expect(result).toEqual({ runId: "run-1", text: "partial" });
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const unrelatedInstance = createOperationalRunInstanceRef("run-unrelated-authority");
+    const unrelatedAuthority = claimAgentRunDelegatedAuthority(unrelatedInstance);
+
+    expect(registration.registered).toBe(false);
+    expect(chatAbortControllers).toHaveLength(0);
+    expect(() => registration.bindAgentRunDelegatedAuthority(authority)).toThrow(
+      "does not belong to this controller registration",
+    );
+    expect(() => registration.bindAgentRunDelegatedAuthority(unrelatedAuthority)).toThrow(
+      "does not belong to this controller registration",
+    );
+
+    registration.cleanup();
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(unrelatedAuthority)).toBe(true);
+    expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+    expect(releaseAgentRunDelegatedAuthority(unrelatedAuthority)).toBe(true);
   });
 
-  it("ignores aborted, completed (not projected active), and other-session runs", () => {
-    const variants: ChatAbortControllerEntry[] = [
-      inFlightEntry("agent:main:s", { aborted: true }),
-      inFlightEntry("agent:main:s", { projectSessionActive: false }),
-      inFlightEntry("agent:main:s", { controlUiVisible: false }),
-      inFlightEntry("agent:main:other"),
-    ];
-    for (const entry of variants) {
-      expect(
-        snap({
-          chatAbortControllers: new Map([["run", entry]]),
-          chatRunBuffers: new Map([["run", "text"]]),
-          sessionKey: "agent:main:s",
-        }),
-      ).toBeUndefined();
-    }
+  it("revokes exact delegated authority before abort callbacks and controller listeners", () => {
+    const { authority, chatRunState, ops, registration, runId, sessionKey } =
+      createAuthorityAbortFixture("run-authority-abort");
+    const entry = registration.entry!;
+    const onAbortCommitted = vi.fn(() => {
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+      expect(entry.controller.signal.aborted).toBe(false);
+      expect(chatRunState.hasAbortMarker(runId)).toBe(true);
+    });
+    ops.onRunAborted = vi.fn(() => {
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+      expect(entry.controller.signal.aborted).toBe(false);
+    });
+
+    entry.isAbortable = () => false;
+    chatRunState.getOrCreate(runId).buffer = "completed reply";
+    expect(abortChatRunById(ops, { runId, sessionKey, onAbortCommitted })).toEqual({
+      aborted: false,
+    });
+    expect(onAbortCommitted).not.toHaveBeenCalled();
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+    expect(entry.controller.signal.aborted).toBe(false);
+    expect(ops.chatAbortControllers.get(runId)).toBe(entry);
+    expect(chatRunState.runs.get(runId)?.buffer).toBe("completed reply");
+    expect(chatRunState.hasAbortMarker(runId)).toBe(false);
+    expect(ops.removeChatRun).not.toHaveBeenCalled();
+    expect(ops.broadcast).not.toHaveBeenCalled();
+    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
+    entry.isAbortable = undefined;
+
+    expect(
+      abortChatRunById(ops, { runId, sessionKey, stopReason: "user", onAbortCommitted }),
+    ).toEqual({
+      aborted: true,
+    });
+    expect(ops.onRunAborted).toHaveBeenCalledOnce();
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(abortChatRunById(ops, { runId, sessionKey, onAbortCommitted })).toEqual({
+      aborted: false,
+    });
+    expect(onAbortCommitted).toHaveBeenCalledOnce();
   });
 
-  it("ignores hidden agent runs that are not visible chat sends", () => {
-    expect(
-      snap({
-        chatAbortControllers: new Map([
-          ["run-agent", inFlightEntry("agent:main:s", { kind: "agent" })],
-        ]),
-        chatRunBuffers: new Map([["run-agent", "hidden partial"]]),
-        sessionKey: "agent:main:s",
-      }),
-    ).toBeUndefined();
-  });
+  it("does not revoke a same-id successor from a stale abort controller", () => {
+    const { ops, runId, sessionKey } = createAuthorityAbortFixture("run-authority-successor");
+    const successorInstance = createOperationalRunInstanceRef(runId);
+    const successor = claimAgentRunDelegatedAuthority(successorInstance);
 
-  it("treats an entry with undefined projectSessionActive as active (sessions.list contract)", () => {
-    const entry = inFlightEntry("agent:main:s");
-    delete (entry as { projectSessionActive?: boolean }).projectSessionActive;
-    expect(
-      snap({
-        chatAbortControllers: new Map([["run", entry]]),
-        chatRunBuffers: new Map([["run", "live partial"]]),
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run", text: "live partial" });
-  });
-
-  it("returns an active run with empty text (Codex streams no incremental text mid-run)", () => {
-    expect(
-      snap({
-        chatAbortControllers: new Map([["run", inFlightEntry("agent:main:s")]]),
-        chatRunBuffers: new Map(),
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run", text: "" });
-  });
-
-  it("does not surface suppressed control-token lead fragments from the live buffer", () => {
-    expect(
-      snap({
-        chatAbortControllers: new Map([["run", inFlightEntry("agent:main:s")]]),
-        chatRunBuffers: new Map([["run", "NO_"]]),
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run", text: "" });
-  });
-
-  it("scopes the shared global session by agent so one agent's run is not restored into another", () => {
-    const controllers = new Map<string, ChatAbortControllerEntry>([
-      ["run-a", inFlightEntry("global", { agentId: "main" })],
-      ["run-b", inFlightEntry("global", { agentId: "work" })],
-    ]);
-    const buffers = new Map([
-      ["run-a", "main agent global text"],
-      ["run-b", "work agent global text"],
-    ]);
-    expect(
-      snap({
-        chatAbortControllers: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "global",
-        agentId: "work",
-      }),
-    ).toEqual({ runId: "run-b", text: "work agent global text" });
-    expect(
-      snap({
-        chatAbortControllers: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "global",
-        agentId: "main",
-      }),
-    ).toEqual({ runId: "run-a", text: "main agent global text" });
-  });
-
-  it("resolves bare global history snapshots to the default agent", () => {
-    const controllers = new Map<string, ChatAbortControllerEntry>([
-      ["run-main", inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
-      ["run-work", inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
-    ]);
-    const buffers = new Map([
-      ["run-main", "main default text"],
-      ["run-work", "work global text"],
-    ]);
-
-    expect(
-      snap({
-        chatAbortControllers: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "global",
-        defaultAgentId: "main",
-      }),
-    ).toEqual({ runId: "run-main", text: "main default text" });
-  });
-
-  it("prefers the newest startedAtMs when several runs match the same session+agent", () => {
-    // A fast restart/retry/stale-controller race can leave two active entries for
-    // the same key; selection must not depend on Map insertion order. Insert the
-    // older run first so a first-match selector would return the wrong one.
-    const controllers = new Map<string, ChatAbortControllerEntry>([
-      ["run-old", inFlightEntry("agent:main:s", { startedAtMs: 1_000 })],
-      ["run-new", inFlightEntry("agent:main:s", { startedAtMs: 2_000 })],
-    ]);
-    const buffers = new Map([
-      ["run-old", "stale partial"],
-      ["run-new", "current partial"],
-    ]);
-    expect(
-      snap({
-        chatAbortControllers: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run-new", text: "current partial" });
-  });
-
-  it("breaks startedAtMs ties deterministically by runId regardless of insertion order", () => {
-    const buffers = new Map([
-      ["run-a", "a"],
-      ["run-b", "b"],
-    ]);
-    const ascending = new Map<string, ChatAbortControllerEntry>([
-      ["run-a", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-      ["run-b", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-    ]);
-    const descending = new Map<string, ChatAbortControllerEntry>([
-      ["run-b", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-      ["run-a", inFlightEntry("agent:main:s", { startedAtMs: 5_000 })],
-    ]);
-    // Same winner ("run-b" > "run-a") no matter which order the map was built in.
-    expect(
-      snap({
-        chatAbortControllers: ascending,
-        chatRunBuffers: buffers,
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run-b", text: "b" });
-    expect(
-      snap({
-        chatAbortControllers: descending,
-        chatRunBuffers: buffers,
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run-b", text: "b" });
-  });
-
-  it("keeps in-flight text and plan when they fit the chat history budget", () => {
-    const plan = {
-      steps: [{ step: "Keep this", status: "pending" as const }],
-    };
-    expect(
-      boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial", plan },
-        messages: [],
-        maxBytes: 1_000,
-      }),
-    ).toEqual({ runId: "run-1", text: "partial", plan });
-  });
-
-  it("drops oversized in-flight text but keeps the run id for adoption", () => {
-    const plan = {
-      steps: [{ step: "Keep this", status: "pending" as const }],
-    };
-    expect(
-      boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
-        messages: [],
-        maxBytes: 200,
-      }),
-    ).toEqual({ runId: "run-1", text: "", plan });
-  });
-
-  it("drops an oversized plan after dropping text", () => {
-    expect(
-      boundInFlightRunSnapshotForChatHistory({
-        snapshot: {
-          runId: "run-1",
-          text: "",
-          plan: {
-            steps: [{ step: "x".repeat(500), status: "pending" }],
-          },
-        },
-        messages: [{ role: "user", content: "near budget" }],
-        maxBytes: 160,
-      }),
-    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
-  });
-
-  it("keeps small buffered text and clears an oversized plan explicitly", () => {
-    // Absence means legacy-gateway unknown to clients; a budget drop must send
-    // an explicit empty plan so retained stale checklists cannot survive.
-    expect(
-      boundInFlightRunSnapshotForChatHistory({
-        snapshot: {
-          runId: "run-1",
-          text: "short answer",
-          plan: {
-            steps: [{ step: "x".repeat(500), status: "pending" }],
-          },
-        },
-        messages: [],
-        maxBytes: 200,
-      }),
-    ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
+    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "stale" })).toEqual({
+      aborted: true,
+    });
+    expect(validateAgentRunDelegatedAuthority(successor)).toBe(true);
+    expect(releaseAgentRunDelegatedAuthority(successor)).toBe(true);
   });
 });

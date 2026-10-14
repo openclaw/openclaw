@@ -1,18 +1,24 @@
 import { createHash } from "node:crypto";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeProviderId } from "openclaw/plugin-sdk/model-ref-parse";
+
+export function splitDiscordModelRef(modelRef: string): { provider: string; model: string } | null {
+  const trimmed = modelRef.trim();
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) {
+    return null;
+  }
+  const provider = trimmed.slice(0, slashIndex).trim();
+  const model = trimmed.slice(slashIndex + 1).trim();
+  if (!provider || !model) {
+    return null;
+  }
+  return { provider, model };
+}
 
 export function normalizeModelRef(raw?: string): string | null {
-  const value = raw?.trim();
-  if (!value) {
-    return null;
-  }
-  const slashIndex = value.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= value.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(value.slice(0, slashIndex));
-  const model = value.slice(slashIndex + 1).trim();
-  return provider && model ? `${provider}/${model}` : null;
+  const parsed = splitDiscordModelRef(raw ?? "");
+  const provider = parsed ? normalizeProviderId(parsed.provider) : "";
+  return parsed && provider ? `${provider}/${parsed.model}` : null;
 }
 
 export function sanitizeRecentModels(models: unknown, limit: number): string[] {
@@ -43,7 +49,7 @@ export function buildPreferenceModelKey(scopeKey: string, modelRef: string): str
   return `v1:${hashSegment(scopeKey, 32)}:${hashSegment(modelRef, 24)}`;
 }
 
-export function timestampMs(value: unknown): number {
+export function preferenceTimestampMs(value: unknown): number {
   const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : 0;
 }

@@ -1,6 +1,6 @@
 import {
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
 import {
   resolveNativeCommandsEnabled,
@@ -9,56 +9,22 @@ import {
 import { isVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordAccount } from "../accounts.js";
 import { Client } from "../internal/discord.js";
-import { fetchDiscordApplicationId } from "../probe.js";
+import { probeDiscordApplicationId } from "../probe.js";
 import { createDiscordNativeCommand } from "./native-command.js";
-import type { GetPluginCommandSpecs } from "./provider.commands.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 
-type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
-type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
-
-let discordVoiceRuntimePromise: Promise<DiscordVoiceRuntimeModule> | undefined;
-let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeModule> | undefined;
-
-async function loadDiscordVoiceRuntime(): Promise<DiscordVoiceRuntimeModule> {
-  const promise = discordVoiceRuntimePromise ?? import("../voice/manager.runtime.js");
-  discordVoiceRuntimePromise = promise;
-  try {
-    return await promise;
-  } catch (error) {
-    if (discordVoiceRuntimePromise === promise) {
-      discordVoiceRuntimePromise = undefined;
-    }
-    throw error;
-  }
-}
-
-async function loadDiscordProviderSessionRuntime(): Promise<DiscordProviderSessionRuntimeModule> {
-  const promise = discordProviderSessionRuntimePromise ?? import("./provider-session.runtime.js");
-  discordProviderSessionRuntimePromise = promise;
-  try {
-    return await promise;
-  } catch (error) {
-    if (discordProviderSessionRuntimePromise === promise) {
-      discordProviderSessionRuntimePromise = undefined;
-    }
-    throw error;
-  }
-}
-
 export const discordProviderRuntime = {
-  fetchDiscordApplicationId,
+  probeDiscordApplicationId,
   createDiscordNativeCommand,
   runDiscordGatewayLifecycle,
-  loadDiscordVoiceRuntime,
-  loadDiscordProviderSessionRuntime,
+  loadDiscordVoiceRuntime: () => import("../voice/voice-runtime.js"),
+  loadDiscordProviderSessionRuntime: () => import("./provider-session.runtime.js"),
   createClient: (...args: ConstructorParameters<typeof Client>) => new Client(...args),
-  getPluginCommandSpecs: undefined as GetPluginCommandSpecs | undefined,
   resolveDiscordAccount,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   isVerbose,
   shouldLogVerbose,
 };

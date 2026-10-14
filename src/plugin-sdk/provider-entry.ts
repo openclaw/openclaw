@@ -1,5 +1,5 @@
-// Provider entry contracts define provider plugin hooks, model catalogs, and runtime adapters.
 import type { UnifiedModelCatalogEntry } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -9,7 +9,12 @@ import type {
   PluginManifestSetupProvider,
 } from "../plugins/manifest-types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
-import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
+import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
+import {
+  buildManifestModelProviderConfig,
+  buildSingleProviderApiKeyCatalog,
+  readManifestProviderDefaultModelRef,
+} from "../plugins/provider-catalog.js";
 import type {
   ProviderPlugin,
   ProviderCatalogContext,
@@ -24,29 +29,58 @@ import {
   isRecordWithoutThrowing,
   readRecordValue,
 } from "../shared/safe-record.js";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "./lazy-runtime.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
 } from "./plugin-entry.js";
-import {
-  buildOpenAICompatibleProviderCatalog,
-  type OpenAICompatibleModelDiscoveryOptions,
-} from "./provider-catalog-live-runtime.js";
-import {
-  buildManifestModelProviderConfig,
-  buildSingleProviderApiKeyCatalog,
-  readManifestProviderDefaultModelRef,
-} from "./provider-catalog-shared.js";
+import type { OpenAICompatibleModelDiscoveryOptions } from "./provider-catalog-live-runtime.js";
+
+// Registration needs static metadata; live discovery loads only when its catalog hook runs.
+const liveCatalogRuntime = createLazyRuntimeModule(
+  () => import("./provider-catalog-live-runtime.js"),
+);
+const buildOpenAICompatibleProviderCatalog = createLazyRuntimeMethod(
+  liveCatalogRuntime,
+  (runtime) => runtime.buildOpenAICompatibleProviderCatalog,
+);
+const runLiveProviderCatalog = createLazyRuntimeMethod(
+  liveCatalogRuntime,
+  (runtime) => runtime.runLiveProviderCatalog,
+);
+
+// Auth descriptors are safe to construct before the lazy credential runtime is needed.
+export { createProviderApiKeyAuthMethod };
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
+
+type SingleProviderPluginManifestAuthChoice = Pick<
+  PluginManifestProviderAuthChoice,
+  | "provider"
+  | "method"
+  | "choiceId"
+  | "choiceLabel"
+  | "choiceHint"
+  | "groupId"
+  | "groupLabel"
+  | "groupHint"
+  | "optionKey"
+  | "cliFlag"
+  | "assistantPriority"
+  | "onboardingFeatured"
+> & {
+  modelTarget?: string;
+  assistantVisibility?: string;
+  onboardingScopes?: readonly string[];
+};
 
 type SingleProviderPluginManifest = {
   setup?: {
     providers?: readonly Pick<PluginManifestSetupProvider, "id" | "envVars">[];
   };
-  providerAuthChoices?: readonly PluginManifestProviderAuthChoice[];
+  providerAuthChoices?: readonly SingleProviderPluginManifestAuthChoice[];
   modelCatalog?: {
     providers?: Readonly<Record<string, unknown>>;
     discovery?: Readonly<Record<string, unknown>>;
@@ -82,7 +116,7 @@ type ManifestProviderAuthOptions = Omit<
 /**
  * Catalog configuration accepted by the single-provider entry helper.
  */
-export type SingleProviderPluginCatalogOptions =
+type SingleProviderPluginCatalogOptions =
   | {
       /**
        * Builds the live provider catalog through the shared API-key catalog path.
@@ -100,6 +134,7 @@ export type SingleProviderPluginCatalogOptions =
        * Discovers text/chat models from the provider's OpenAI-compatible model-list endpoint.
        */
       liveModelDiscovery?: true | OpenAICompatibleModelDiscoveryOptions;
+      discoveryMode?: "strict";
       run?: never;
       order?: never;
       staticRun?: never;
@@ -121,11 +156,54 @@ export type SingleProviderPluginCatalogOptions =
       buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
       liveModelDiscovery?: never;
+      discoveryMode?: never;
     };
 
 /**
  * Defines one provider plugin plus optional extra registration hooks.
  */
+type SingleProviderPluginDefinition = {
+  /**
+   * Provider id override when the runtime provider id differs from the plugin id.
+   */
+  id?: string;
+  /**
+   * Human-readable provider label.
+   */
+  label: string;
+  /**
+   * Documentation route used by provider setup and diagnostics.
+   */
+  docsPath: string;
+  /**
+   * Alternate provider ids accepted by routing and configuration lookups.
+   */
+  aliases?: string[];
+  /**
+   * Explicit environment variables advertised for credentials.
+   */
+  envVars?: string[];
+  /**
+   * API-key auth methods converted through the shared provider auth helper.
+   */
+  auth?: SingleProviderPluginApiKeyAuthOptions[];
+  /**
+   * Provider-owned behavior layered over manifest-derived API-key auth.
+   */
+  manifestAuth?: ManifestProviderAuthOptions;
+  /**
+   * Non-API-key or provider-owned auth methods appended after generated methods.
+   */
+  extraAuth?: ProviderAuthMethod[];
+  /**
+   * Live/static catalog implementation for this provider.
+   */
+  catalog: SingleProviderPluginCatalogOptions;
+} & Omit<
+  ProviderPlugin,
+  "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog" | "staticCatalog"
+>;
+
 export type SingleProviderPluginOptions = {
   /**
    * Plugin id and default provider id when `provider.id` is omitted.
@@ -158,47 +236,9 @@ export type SingleProviderPluginOptions = {
    * Primary provider registration. Extra provider fields are forwarded after
    * the helper-owned id/auth/catalog fields are normalized.
    */
-  provider?: {
-    /**
-     * Provider id override when the runtime provider id differs from the plugin id.
-     */
-    id?: string;
-    /**
-     * Human-readable provider label.
-     */
-    label: string;
-    /**
-     * Documentation route used by provider setup and diagnostics.
-     */
-    docsPath: string;
-    /**
-     * Alternate provider ids accepted by routing and configuration lookups.
-     */
-    aliases?: string[];
-    /**
-     * Explicit environment variables advertised for credentials.
-     */
-    envVars?: string[];
-    /**
-     * API-key auth methods converted through the shared provider auth helper.
-     */
-    auth?: SingleProviderPluginApiKeyAuthOptions[];
-    /**
-     * Provider-owned behavior layered over manifest-derived API-key auth.
-     */
-    manifestAuth?: ManifestProviderAuthOptions;
-    /**
-     * Non-API-key auth methods appended after generated API-key methods.
-     */
-    extraAuth?: ProviderAuthMethod[];
-    /**
-     * Live/static catalog implementation for this provider.
-     */
-    catalog: SingleProviderPluginCatalogOptions;
-  } & Omit<
-    ProviderPlugin,
-    "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog" | "staticCatalog"
-  >;
+  provider?:
+    | SingleProviderPluginDefinition
+    | ((api: OpenClawPluginApi) => SingleProviderPluginDefinition);
   /**
    * Optional hook for registering companion capabilities with the same plugin entry.
    */
@@ -223,6 +263,16 @@ function resolveManifestProviderAuth(params: {
     throw new Error(`Incomplete manifest API-key auth for provider "${params.providerId}"`);
   }
   const defaultModel = readManifestProviderDefaultModelRef(params.manifest, params.providerId);
+  const assistantVisibility =
+    choice.assistantVisibility === "visible" ||
+    choice.assistantVisibility === "manual-only" ||
+    choice.assistantVisibility === "detected-only"
+      ? choice.assistantVisibility
+      : undefined;
+  const onboardingScopes = choice.onboardingScopes?.filter(
+    (scope): scope is NonNullable<ProviderPluginWizardSetup["onboardingScopes"]>[number] =>
+      scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
+  );
   return [
     {
       methodId: choice.method,
@@ -235,16 +285,29 @@ function resolveManifestProviderAuth(params: {
       envVar,
       promptMessage: `Enter ${choice.choiceLabel}`,
       ...(defaultModel ? { defaultModel } : {}),
-      wizard: {
-        choiceId: choice.choiceId,
-        choiceLabel: choice.choiceLabel,
-        groupId: choice.groupId ?? params.providerId,
-        groupLabel: choice.groupLabel ?? params.providerLabel,
-        ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-        ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-        methodId: choice.method,
-      },
       ...params.overrides,
+      wizard:
+        params.overrides?.wizard === false
+          ? false
+          : {
+              choiceId: choice.choiceId,
+              choiceLabel: choice.choiceLabel,
+              groupId: choice.groupId ?? params.providerId,
+              groupLabel: choice.groupLabel ?? params.providerLabel,
+              ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+              ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+              ...(choice.assistantPriority !== undefined
+                ? { assistantPriority: choice.assistantPriority }
+                : {}),
+              ...(assistantVisibility ? { assistantVisibility } : {}),
+              ...(choice.modelTarget === "utility" ? { modelTarget: "utility" as const } : {}),
+              ...(choice.onboardingFeatured !== undefined
+                ? { onboardingFeatured: choice.onboardingFeatured }
+                : {}),
+              ...(onboardingScopes?.length ? { onboardingScopes } : {}),
+              methodId: choice.method,
+              ...params.overrides?.wizard,
+            },
     },
   ];
 }
@@ -261,8 +324,16 @@ function resolveWizardSetup(params: {
   const methodId = params.auth.methodId.trim();
   return {
     choiceId: wizard.choiceId ?? `${params.providerId}-${methodId}`,
+    ...(wizard.modelTarget ? { modelTarget: wizard.modelTarget } : {}),
     choiceLabel: wizard.choiceLabel ?? params.auth.label,
     ...(wizard.choiceHint ? { choiceHint: wizard.choiceHint } : {}),
+    ...(wizard.assistantPriority !== undefined
+      ? { assistantPriority: wizard.assistantPriority }
+      : {}),
+    ...(wizard.assistantVisibility ? { assistantVisibility: wizard.assistantVisibility } : {}),
+    ...(wizard.onboardingFeatured !== undefined
+      ? { onboardingFeatured: wizard.onboardingFeatured }
+      : {}),
     groupId: wizard.groupId ?? params.providerId,
     groupLabel: wizard.groupLabel ?? params.providerLabel,
     ...((wizard.groupHint ?? params.auth.hint)
@@ -271,17 +342,8 @@ function resolveWizardSetup(params: {
     methodId,
     ...(wizard.onboardingScopes ? { onboardingScopes: wizard.onboardingScopes } : {}),
     ...(wizard.modelAllowlist ? { modelAllowlist: wizard.modelAllowlist } : {}),
+    ...(wizard.modelSelection ? { modelSelection: wizard.modelSelection } : {}),
   };
-}
-
-function copyProviderAuthOptions(value: unknown): SingleProviderPluginApiKeyAuthOptions[] {
-  return copyArrayEntries(value).filter(
-    isRecordWithoutThrowing,
-  ) as SingleProviderPluginApiKeyAuthOptions[];
-}
-
-function copyProviderAuthMethods(value: unknown): ProviderAuthMethod[] {
-  return copyArrayEntries(value).filter(isRecordWithoutThrowing) as ProviderAuthMethod[];
 }
 
 function resolveEnvVars(params: {
@@ -302,11 +364,23 @@ async function runUnifiedTextCatalog(params: {
   source: UnifiedModelCatalogEntry["source"];
 }): Promise<UnifiedModelCatalogEntry[]> {
   const result = await params.catalog.run(params.ctx);
-  return projectProviderCatalogResultToUnifiedTextRows({
+  const rows: UnifiedModelCatalogEntry[] = [];
+  // Consume the copier's validated records without copying the catalog again.
+  for (const [providerId, providerConfig] of copyProviderCatalogResultEntries({
     providerId: params.providerId,
     result,
-    source: params.source,
-  });
+  })) {
+    for (const model of providerConfig.models) {
+      rows.push({
+        kind: "text",
+        provider: providerId,
+        model: model.id,
+        ...(model.name ? { label: model.name } : {}),
+        source: params.source,
+      });
+    }
+  }
+  return rows;
 }
 
 /**
@@ -320,7 +394,9 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
     ...(options.kind ? { kind: options.kind } : {}),
     ...(options.configSchema ? { configSchema: options.configSchema } : {}),
     register(api) {
-      const provider = options.provider;
+      // Factories keep caches and other provider state owned by each plugin registration.
+      const provider =
+        typeof options.provider === "function" ? options.provider(api) : options.provider;
       if (provider) {
         const providerId = provider.id ?? options.id;
         if (
@@ -330,7 +406,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
         ) {
           throw new Error(`Missing modelCatalog.providers.${providerId}`);
         }
-        const providerAuth = copyProviderAuthOptions(
+        const providerAuth = copyArrayEntries(
           provider.auth ??
             resolveManifestProviderAuth({
               manifest: options.manifest,
@@ -338,7 +414,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               providerLabel: provider.label,
               overrides: provider.manifestAuth,
             }),
-        );
+        ).filter(isRecordWithoutThrowing) as SingleProviderPluginApiKeyAuthOptions[];
         const acceptedProviderAuth: SingleProviderPluginApiKeyAuthOptions[] = [];
         const auth = providerAuth.flatMap((entry) => {
           try {
@@ -366,7 +442,16 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           envVars: provider.envVars,
           auth: acceptedProviderAuth,
         });
-        auth.push(...copyProviderAuthMethods(provider.extraAuth));
+        auth.push(
+          ...(copyArrayEntries(provider.extraAuth).filter(
+            isRecordWithoutThrowing,
+          ) as ProviderAuthMethod[]),
+        );
+        const buildManifestProvider = () =>
+          buildManifestModelProviderConfig({
+            providerId,
+            catalog: options.manifest?.modelCatalog?.providers?.[providerId],
+          });
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;
@@ -375,49 +460,52 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             run: catalogRun!,
           };
         } else {
-          const buildProvider =
-            provider.catalog.buildProvider ??
-            (() =>
-              buildManifestModelProviderConfig({
-                providerId,
-                catalog: options.manifest?.modelCatalog?.providers?.[providerId],
-              }));
+          const catalogProviderIds = new Set(
+            [providerId, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].map(
+              normalizeProviderId,
+            ),
+          );
+          const buildProvider = provider.catalog.buildProvider ?? buildManifestProvider;
           catalog = {
             order: "simple",
-            run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> =>
-              provider.catalog.liveModelDiscovery
-                ? buildOpenAICompatibleProviderCatalog({
-                    ctx,
-                    providerId,
-                    buildProvider,
-                    ...(provider.catalog.allowExplicitBaseUrl
-                      ? { allowExplicitBaseUrl: true }
-                      : {}),
-                    ...(provider.catalog.liveModelDiscovery === true
-                      ? {}
-                      : { modelDiscovery: provider.catalog.liveModelDiscovery }),
-                  })
-                : buildSingleProviderApiKeyCatalog({
-                    ctx,
-                    providerId,
-                    buildProvider,
-                    ...(provider.catalog.allowExplicitBaseUrl
-                      ? { allowExplicitBaseUrl: true }
-                      : {}),
-                  }),
+            run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> => {
+              if (
+                ctx.providerIds !== undefined &&
+                !ctx.providerIds.some((id) => catalogProviderIds.has(id))
+              ) {
+                return Promise.resolve(null);
+              }
+              if (provider.catalog.liveModelDiscovery) {
+                return buildOpenAICompatibleProviderCatalog({
+                  ctx,
+                  providerId,
+                  providerAliases: [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])],
+                  buildProvider,
+                  discoveryMode: provider.catalog.discoveryMode,
+                  ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+                  ...(provider.catalog.liveModelDiscovery === true
+                    ? {}
+                    : { modelDiscovery: provider.catalog.liveModelDiscovery }),
+                });
+              }
+              const run = () =>
+                buildSingleProviderApiKeyCatalog({
+                  ctx,
+                  providerId,
+                  buildProvider,
+                  ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+                });
+              return provider.catalog.discoveryMode === "strict"
+                ? runLiveProviderCatalog({ providerId, run })
+                : run();
+            },
           };
         }
         const manifestStaticProvider =
           "run" in provider.catalog
             ? undefined
             : (provider.catalog.buildStaticProvider ??
-              (provider.catalog.buildProvider
-                ? undefined
-                : () =>
-                    buildManifestModelProviderConfig({
-                      providerId,
-                      catalog: options.manifest?.modelCatalog?.providers?.[providerId],
-                    })));
+              (provider.catalog.buildProvider ? undefined : buildManifestProvider));
         const staticCatalog: ProviderPluginCatalog | undefined =
           "run" in provider.catalog
             ? provider.catalog.staticRun

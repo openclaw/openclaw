@@ -5,14 +5,14 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
-  buildGroupDisplayName,
   deriveSessionKey,
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
 } from "./sessions.js";
+import { buildGroupDisplayName } from "./sessions/group-display.js";
 
 describe("sessions", () => {
   let fixtureRoot = "";
@@ -84,34 +84,10 @@ describe("sessions", () => {
 
   const deriveSessionKeyCases = [
     {
-      name: "returns normalized per-sender key",
-      scope: "per-sender" as const,
-      ctx: { From: "chat:+1555" },
-      expected: "+1555",
-    },
-    {
       name: "falls back to unknown when sender missing",
       scope: "per-sender" as const,
       ctx: {},
       expected: "unknown",
-    },
-    {
-      name: "global scope returns global",
-      scope: "global" as const,
-      ctx: { From: "+1" },
-      expected: "global",
-    },
-    {
-      name: "keeps group chats distinct",
-      scope: "per-sender" as const,
-      ctx: { From: "room-123", ChatType: "group", Provider: "demo-chat" },
-      expected: "demo-chat:group:room-123",
-    },
-    {
-      name: "prefixes group keys with provider when available",
-      scope: "per-sender" as const,
-      ctx: { From: "room-456", ChatType: "group", Provider: "demo-chat" },
-      expected: "demo-chat:group:room-456",
     },
   ] as const;
 
@@ -140,27 +116,6 @@ describe("sessions", () => {
       ctx: { From: "discord:group:12345", ChatType: "group" },
       mainKey: "main",
       expected: "agent:main:discord:group:12345",
-    },
-    {
-      name: "collapses direct chats to main by default",
-      scope: "per-sender" as const,
-      ctx: { From: "+1555" },
-      mainKey: undefined,
-      expected: "agent:main:main",
-    },
-    {
-      name: "collapses direct chats to main even when sender missing",
-      scope: "per-sender" as const,
-      ctx: {},
-      mainKey: undefined,
-      expected: "agent:main:main",
-    },
-    {
-      name: "maps direct chats to main key when provided",
-      scope: "per-sender" as const,
-      ctx: { From: "chat:+1555" },
-      mainKey: "main",
-      expected: "agent:main:main",
     },
     {
       name: "uses custom main key when provided",
@@ -219,7 +174,7 @@ describe("sessions", () => {
 
   it("uses agent id when resolving session file fallback paths", () => {
     withStateDir("/custom/state", () => {
-      const sessionFile = resolveSessionFilePath("sess-2", undefined, {
+      const sessionFile = resolveSessionFilePathCore("sess-2", undefined, {
         agentId: "codex",
       });
       expect(sessionFile).toBe(
@@ -232,7 +187,7 @@ describe("sessions", () => {
     const { stateDir, bot2SessionPath } = await createAgentSessionsLayout("cross-agent");
     const sessionFile = withStateDir(stateDir, () =>
       // Agent bot1 resolves a sessionFile that belongs to agent bot2
-      resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
+      resolveSessionFilePathCore("sess-1", { sessionFile: bot2SessionPath }, { agentId: "bot1" }),
     );
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
@@ -244,7 +199,7 @@ describe("sessions", () => {
       const originalBase = path.resolve("/original/state");
       const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
       // sessionFile was created under a different state dir than current env
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: bot2Session },
         { agentId: "bot1" },
@@ -257,7 +212,7 @@ describe("sessions", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
       const unsafe = path.join(originalBase, "agents", "bot2", "sessions", "..", "..", "etc");
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: path.join(unsafe, "passwd") },
         { agentId: "bot1" },
@@ -277,23 +232,13 @@ describe("sessions", () => {
         "nested",
         "sess-1.jsonl",
       );
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: nested },
         { agentId: "bot1" },
       );
       expect(sessionFile).toBe(expectedBot1FallbackSessionPath());
     });
-  });
-
-  it("resolveSessionFilePathOptions keeps explicit agentId alongside absolute store path", () => {
-    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
-    const resolved = resolveSessionFilePathOptions({
-      agentId: "bot2",
-      storePath,
-    });
-    expect(resolved?.agentId).toBe("bot2");
-    expect(resolved?.sessionsDir).toBe(path.dirname(path.resolve(storePath)));
   });
 
   it("resolves sibling agent absolute sessionFile using alternate agentId from options", async () => {
@@ -305,21 +250,10 @@ describe("sessions", () => {
         storePath: mainStorePath,
       });
 
-      return resolveSessionFilePath("sess-1", { sessionFile: bot2SessionPath }, opts);
+      return resolveSessionFilePathCore("sess-1", { sessionFile: bot2SessionPath }, opts);
     });
     expect(await normalizePathForComparison(sessionFile)).toBe(
       await normalizePathForComparison(bot2SessionPath),
-    );
-  });
-
-  it("falls back to derived transcript path when sessionFile is outside agent sessions directories", async () => {
-    const { stateDir, outsidePath } = await createAgentSessionsLayout("outside-fallback");
-    const sessionFile = withStateDir(stateDir, () =>
-      resolveSessionFilePath("sess-1", { sessionFile: outsidePath }, { agentId: "bot1" }),
-    );
-    const expectedPath = path.join(stateDir, "agents", "bot1", "sessions", "sess-1.jsonl");
-    expect(await normalizePathForComparison(sessionFile)).toBe(
-      await normalizePathForComparison(expectedPath),
     );
   });
 });

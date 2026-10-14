@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 type DiscussionBindingGeneration = {
+  accountId?: string;
+  credentialFingerprint?: string;
   destinationIdentity: string;
   generation: string;
   pending?: {
@@ -20,49 +23,109 @@ export type PendingDiscussionOpen = NonNullable<DiscussionBindingGeneration["pen
   generation: string;
 };
 
-const DISCUSSION_GENERATIONS_NAMESPACE = "discussion-binding-generations";
-const MAX_PENDING_DISCUSSION_GENERATIONS = 10_000;
-const storesByRuntime = new WeakMap<
-  PluginRuntime,
-  PluginStateSyncKeyedStore<DiscussionBindingGeneration>
->();
+const GENERATION_STORE_OPTIONS = {
+  namespace: "discussion-binding-generations",
+  maxEntries: 10_000,
+  // Pending records may be the only evidence of remotely committed channels.
+  overflowPolicy: "reject-new",
+} as const;
 
-function getGenerationStore(
+type GenerationStore = {
+  store: PluginStateKeyedStore<DiscussionBindingGeneration, 2>;
+  withLock: ReturnType<typeof createAsyncLock>;
+};
+const storesByRuntime = new WeakMap<PluginRuntime, GenerationStore>();
+
+function withGenerationStore<T>(
   runtime: PluginRuntime,
-): PluginStateSyncKeyedStore<DiscussionBindingGeneration> {
-  const existing = storesByRuntime.get(runtime);
-  if (existing) {
-    return existing;
+  run: (owner: GenerationStore) => Promise<T>,
+): Promise<T> {
+  let owner = storesByRuntime.get(runtime);
+  if (!owner) {
+    const store =
+      runtime.state.openKeyedStoreV2<DiscussionBindingGeneration>(GENERATION_STORE_OPTIONS);
+    owner = {
+      store,
+      withLock: createAsyncLock(),
+    };
+    storesByRuntime.set(runtime, owner);
   }
-  const created = runtime.state.openSyncKeyedStore<DiscussionBindingGeneration>({
-    namespace: DISCUSSION_GENERATIONS_NAMESPACE,
-    maxEntries: MAX_PENDING_DISCUSSION_GENERATIONS,
-    // A pending record may be the only evidence for a remotely committed channel
-    // whose response was lost. Reject new opens instead of evicting that evidence.
-    overflowPolicy: "reject-new",
+  const currentOwner = owner;
+  return currentOwner.withLock(() => run(currentOwner));
+}
+
+function mutateGeneration<T>(
+  runtime: PluginRuntime,
+  sessionKey: string,
+  decide: (current: DiscussionBindingGeneration | undefined) => {
+    value: DiscussionBindingGeneration | undefined;
+    result: T;
+  },
+): Promise<T> {
+  return withGenerationStore(runtime, async ({ store }) => {
+    const { observe, compareAndApply } = store;
+    let observed = await observe(sessionKey);
+    for (;;) {
+      const next = decide(observed.value);
+      const outcome = await compareAndApply(
+        sessionKey,
+        observed.comparison,
+        next.value === observed.value
+          ? { operation: "update", action: "keep" }
+          : next.value
+            ? { operation: "update", action: "set", value: next.value }
+            : { operation: "delete", action: "delete" },
+      );
+      if (outcome.status !== "conflict") {
+        return next.result;
+      }
+      observed = outcome.current;
+    }
   });
-  storesByRuntime.set(runtime, created);
-  return created;
 }
 
 /** Reserves a generation so an interrupted channel create can be adopted on retry. */
 export function reserveDiscussionBindingGeneration(params: {
   runtime: PluginRuntime;
   sessionKey: string;
+  accountId: string;
+  credentialFingerprint: string;
   destinationIdentity: string;
   createGeneration?: () => string;
-}): string {
-  const store = getGenerationStore(params.runtime);
-  const existing = store.lookup(params.sessionKey);
-  if (existing?.destinationIdentity === params.destinationIdentity) {
-    return existing.generation;
-  }
-  const generation = (params.createGeneration ?? randomUUID)();
-  store.register(params.sessionKey, {
-    destinationIdentity: params.destinationIdentity,
-    generation,
+}): Promise<string> {
+  let generation: string | undefined;
+  return mutateGeneration(params.runtime, params.sessionKey, (existing) => {
+    const existingAccountId = existing?.accountId ?? existing?.pending?.accountId;
+    const existingCredentialFingerprint =
+      existing?.credentialFingerprint ?? existing?.pending?.credentialFingerprint;
+    if (
+      existing?.destinationIdentity === params.destinationIdentity &&
+      existingAccountId === params.accountId &&
+      existingCredentialFingerprint === params.credentialFingerprint
+    ) {
+      return {
+        value:
+          existing.accountId && existing.credentialFingerprint
+            ? existing
+            : {
+                ...existing,
+                accountId: params.accountId,
+                credentialFingerprint: params.credentialFingerprint,
+              },
+        result: existing.generation,
+      };
+    }
+    generation ??= (params.createGeneration ?? randomUUID)();
+    return {
+      value: {
+        accountId: params.accountId,
+        credentialFingerprint: params.credentialFingerprint,
+        destinationIdentity: params.destinationIdentity,
+        generation,
+      },
+      result: generation,
+    };
   });
-  return generation;
 }
 
 /** Clears only the completed reservation; future opens must mint a new ownership ref. */
@@ -70,16 +133,14 @@ export function clearDiscussionBindingGeneration(params: {
   runtime: PluginRuntime;
   sessionKey: string;
   expectedGeneration?: string;
-}): void {
-  const store = getGenerationStore(params.runtime);
-  const existing = store.lookup(params.sessionKey);
-  if (!existing) {
-    return;
-  }
-  if (params.expectedGeneration && existing.generation !== params.expectedGeneration) {
-    return;
-  }
-  store.delete(params.sessionKey);
+}): Promise<void> {
+  return mutateGeneration(params.runtime, params.sessionKey, (existing) => ({
+    value:
+      existing && params.expectedGeneration && existing.generation !== params.expectedGeneration
+        ? existing
+        : undefined,
+    result: undefined,
+  }));
 }
 
 /** Quarantines a destination before the first fallible channel create. */
@@ -88,32 +149,63 @@ export function recordPendingDiscussionOpen(params: {
   sessionKey: string;
   generation: string;
   pending: NonNullable<DiscussionBindingGeneration["pending"]>;
-}): void {
-  const store = getGenerationStore(params.runtime);
-  const existing = store.lookup(params.sessionKey);
-  if (!existing || existing.generation !== params.generation) {
-    throw new Error("ClickClack discussion generation changed before channel creation");
-  }
-  store.register(params.sessionKey, { ...existing, pending: params.pending });
+}): Promise<void> {
+  return mutateGeneration(params.runtime, params.sessionKey, (existing) => {
+    if (!existing || existing.generation !== params.generation) {
+      throw new Error("ClickClack discussion generation changed before channel creation");
+    }
+    if (
+      existing.accountId !== params.pending.accountId ||
+      existing.credentialFingerprint !== params.pending.credentialFingerprint
+    ) {
+      throw new Error("ClickClack discussion ownership changed before channel creation");
+    }
+    return { value: { ...existing, pending: params.pending }, result: undefined };
+  });
 }
 
-export function listPendingDiscussionOpens(runtime: PluginRuntime): PendingDiscussionOpen[] {
-  return getGenerationStore(runtime)
-    .entries()
-    .flatMap((entry) =>
+export function listPendingDiscussionOpens(
+  runtime: PluginRuntime,
+): Promise<PendingDiscussionOpen[]> {
+  return withGenerationStore(runtime, async ({ store }) =>
+    (await store.entries()).flatMap((entry) =>
       entry.value.pending
         ? [{ sessionKey: entry.key, generation: entry.value.generation, ...entry.value.pending }]
         : [],
-    );
+    ),
+  );
 }
 
-export function hasPendingDiscussionOpenForDestination(params: {
+/** Stops destination-wide quarantine after the exact remote channel is known. */
+export function clearPendingDiscussionOpen(params: {
+  runtime: PluginRuntime;
+  sessionKey: string;
+  expectedGeneration: string;
+}): Promise<void> {
+  return mutateGeneration(params.runtime, params.sessionKey, (existing) => {
+    if (!existing || existing.generation !== params.expectedGeneration || !existing.pending) {
+      return { value: existing, result: undefined };
+    }
+    return {
+      value: {
+        accountId: existing.accountId ?? existing.pending.accountId,
+        credentialFingerprint:
+          existing.credentialFingerprint ?? existing.pending.credentialFingerprint,
+        destinationIdentity: existing.destinationIdentity,
+        generation: existing.generation,
+      },
+      result: undefined,
+    };
+  });
+}
+
+export async function hasPendingDiscussionOpenForDestination(params: {
   runtime: PluginRuntime;
   serverBaseUrl: string;
   workspaceId: string;
-}): boolean {
+}): Promise<boolean> {
   const serverBaseUrl = params.serverBaseUrl.replace(/\/+$/u, "");
-  return listPendingDiscussionOpens(params.runtime).some(
+  return (await listPendingDiscussionOpens(params.runtime)).some(
     (pending) =>
       pending.serverBaseUrl === serverBaseUrl && pending.workspaceId === params.workspaceId,
   );

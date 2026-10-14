@@ -1,83 +1,79 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { Type } from "typebox";
-import {
-  resolveTeamsMeetingsConfig,
-  resolveTeamsMeetingsGatewayOperationTimeoutMs,
-  type TeamsMeetingsConfig,
-} from "./src/config.js";
-import { handleTeamsMeetingsNodeHostCommand } from "./src/node-host.js";
-import { createTeamsMeetingsNodeInvokePolicy } from "./src/node-invoke-policy.js";
-import { TeamsMeetingsRuntime } from "./src/runtime.js";
-import { TEAMS_MEETINGS_NODE_COMMAND } from "./src/transports/teams-meetings-platform-constants.js";
-import { normalizeTeamsMeetingUrl } from "./src/transports/teams-meetings-urls.js";
-import type { TeamsMeetingsJoinRequest } from "./src/transports/types.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { TEAMS_MEETINGS_CLI_METADATA } from "./cli-metadata.js";
+import { TeamsMeetingsInvalidRequestError } from "./src/errors.js";
+import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./src/transports/teams-meetings-platform-adapter.js";
+import type {
+  TeamsMeetingsManualActionReason,
+  TeamsMeetingsSpeechBlockedReason,
+} from "./src/transports/types.js";
 
-const loadTeamsMeetingsCli = createLazyRuntimeModule(() => import("./src/cli.js"));
-
-const teamsMeetingsConfigSchema = {
-  parse(value: unknown) {
-    return resolveTeamsMeetingsConfig(value);
+export const teamsMeetingsPlugin = MeetingPlatformAdapter.defineBrowserMeetingPlugin<
+  TeamsMeetingsManualActionReason,
+  TeamsMeetingsSpeechBlockedReason
+>({
+  platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+  labels: {
+    meeting: "Microsoft Teams meeting",
+    participant: "Teams guest",
+    brand: "Microsoft Teams",
+    microphone: "Teams",
+    browserPage: "Teams",
+    tab: "Teams meeting",
   },
-  uiHints: {
-    defaultMode: {
-      label: "Default Mode",
-      help: "Agent consults OpenClaw, bidi uses direct realtime voice, and transcribe observes only.",
-    },
-    "chrome.browserProfile": { label: "Chrome Profile", advanced: true },
-    "chrome.guestName": { label: "Guest Name" },
-    "chrome.waitForInCallMs": { label: "Wait For In-Call (ms)", advanced: true },
-    "chrome.audioInputCommand": { label: "Audio Input Command", advanced: true },
-    "chrome.audioOutputCommand": { label: "Audio Output Command", advanced: true },
-    "chromeNode.node": {
-      label: "Chrome Node",
-      help: "Node id/name/IP that owns Chrome, BlackHole, and SoX.",
-      advanced: true,
-    },
-    "realtime.transcriptionProvider": { label: "Realtime Transcription Provider" },
-    "realtime.voiceProvider": { label: "Bidi Voice Provider" },
-    "realtime.model": { label: "Bidi Realtime Model", advanced: true },
-    "realtime.instructions": { label: "Realtime Instructions", advanced: true },
-    "realtime.introMessage": { label: "Realtime Intro Message" },
-    "realtime.agentId": { label: "Realtime Consult Agent", advanced: true },
-    "realtime.toolPolicy": { label: "Realtime Tool Policy", advanced: true },
+  config: {
+    defaultRealtimeInstructions: `You are joining a private Microsoft Teams meeting as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent mode, wait for OpenClaw consult results and speak them exactly. In bidi mode, answer directly and call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} for deeper reasoning, current information, or tools.`,
+    resolveGatewayOperationTimeoutMs: (config) =>
+      Math.max(60_000, addTimerTimeoutGraceMs(config.chrome.joinTimeoutMs, 30_000) ?? 1),
   },
-};
-
-const TeamsMeetingsToolSchema = Type.Object({
-  action: Type.String({ enum: ["join", "leave", "status", "transcript", "speak"] }),
-  url: Type.Optional(Type.String({ description: "Microsoft Teams meeting URL" })),
-  transport: Type.Optional(Type.String({ enum: ["chrome", "chrome-node"] })),
-  mode: Type.Optional(Type.String({ enum: ["agent", "bidi", "transcribe"] })),
-  sessionId: Type.Optional(Type.String({ description: "Teams meeting session ID" })),
-  sinceIndex: Type.Optional(
-    Type.Integer({ minimum: 0, description: "Resume transcript from this index" }),
-  ),
-  message: Type.Optional(Type.String({ description: "Instructions to speak" })),
-});
-
-class TeamsMeetingsInvalidRequestError extends Error {}
-
-export default definePluginEntry(
-  MeetingPlatformAdapter.createPluginEntry<
-    TeamsMeetingsConfig,
-    TeamsMeetingsJoinRequest,
-    TeamsMeetingsRuntime
-  >({
-    id: "teams-meetings",
-    name: "Microsoft Teams meetings",
-    description: "Join Microsoft Teams meetings as a Chrome browser guest",
-    configSchema: teamsMeetingsConfigSchema,
-    disabledMessage: "Microsoft Teams meetings plugin disabled in plugin config",
-    gatewayMethodPrefix: "teamsmeetings",
-    invalidRequest: (message) => new TeamsMeetingsInvalidRequestError(message),
-    isInvalidRequest: (error) => error instanceof TeamsMeetingsInvalidRequestError,
-    normalizeUrl: normalizeTeamsMeetingUrl,
-    resolveGatewayTimeoutMs: resolveTeamsMeetingsGatewayOperationTimeoutMs,
-    normalizeRequesterSessionKey: (value) =>
-      typeof value === "string" && value.trim() ? value.trim() : undefined,
+  InvalidRequestError: TeamsMeetingsInvalidRequestError,
+  toolUrlDescription: "Microsoft Teams meeting URL",
+  transcriptSource: {
+    id: "teams",
+    aliases: ["teams-meetings", "microsoft-teams", "msteams"],
+    providerName: "Microsoft Teams",
+  },
+  microphoneMutedReason: "teams-microphone-muted",
+  setup: {
+    captionsMessage: (mode) =>
+      mode === "transcribe"
+        ? "Teams live-caption capture is enabled and ready"
+        : "Caption scraping is not used by talk-back modes",
+    connectedNodeMessage: (node) => `Connected Teams meeting node ready: ${node}`,
+    guestJoinCheck: (config) => {
+      const ok = Boolean(
+        config.chrome.guestName && config.chrome.autoJoin && config.chrome.reuseExistingTab,
+      );
+      return {
+        ok,
+        message: ok
+          ? "Guest name, auto-join, and tab reuse are configured"
+          : "Set chrome.guestName, chrome.autoJoin, and chrome.reuseExistingTab for unattended guest joins",
+      };
+    },
+    missingNodeIdMessage: "Connected Microsoft Teams meetings node did not include a node id.",
+  },
+  defaultSpeechMessage: "Say exactly: Microsoft Teams speech test complete.",
+  shouldWaitForListening: ({ chrome }) => Boolean(chrome?.launched || chrome?.browserTab?.targetId),
+  sharePrerequisiteDeadline: true,
+  preserveTrackedBrowserOnEngineFailure: false,
+  nodePolicyDeniedCode: "TEAMS_MEETINGS_NODE_POLICY_DENIED",
+  cli: {
+    descriptor: TEAMS_MEETINGS_CLI_METADATA.descriptor,
+    joinDescription: "join a Teams meeting as a guest",
+    resolveTimeoutMs: (operationTimeoutMs, { requestedTimeoutMs }) =>
+      Math.max(
+        operationTimeoutMs,
+        requestedTimeoutMs === undefined
+          ? 0
+          : (addTimerTimeoutGraceMs(requestedTimeoutMs, 30_000) ?? 1),
+      ),
+  },
+  entry: {
+    normalizeRequesterSessionKey: normalizeOptionalString,
     normalizeToolAgentId: (agentId) => (agentId ? normalizeAgentId(agentId) : undefined),
     resolveToolRuntime: async (api, agentId) => {
       const trustedRouting = Boolean(agentId && agentId !== "main");
@@ -89,46 +85,8 @@ export default definePluginEntry(
       }
       return useRuntime ? api.runtime : undefined;
     },
-    unknownActionMessage: "unknown teams_meetings action",
-    toolName: "teams_meetings",
-    toolLabel: "Microsoft Teams meetings",
-    toolDescription:
-      "Join and manage Microsoft Teams meeting browser guests. Guest admission, tenant sign-in, and media permissions may require manual action in the OpenClaw Chrome profile.",
-    toolParameters: TeamsMeetingsToolSchema,
-    transcriptSource: {
-      id: "teams",
-      aliases: ["teams-meetings", "microsoft-teams", "msteams"],
-      name: "Microsoft Teams meetings",
-    },
-    createRuntime: ({ api, config }) =>
-      new TeamsMeetingsRuntime({
-        config,
-        fullConfig: api.config,
-        runtime: api.runtime,
-        logger: api.logger,
-      }),
-    nodeCommand: TEAMS_MEETINGS_NODE_COMMAND,
-    cap: "teams-meetings",
-    nodeHandler: handleTeamsMeetingsNodeHostCommand,
-    createNodePolicy: createTeamsMeetingsNodeInvokePolicy,
     registerNodeWhen: () => true,
-    registerCli: (api, config) => {
-      api.registerCli(
-        async ({ program }) => {
-          const cli = await loadTeamsMeetingsCli();
-          cli.registerTeamsMeetingsCli({ program, config });
-        },
-        {
-          commands: ["teamsmeetings"],
-          descriptors: [
-            {
-              name: "teamsmeetings",
-              description: "Join and manage Microsoft Teams meeting guests",
-              hasSubcommands: true,
-            },
-          ],
-        },
-      );
-    },
-  }),
-);
+  },
+});
+
+export default teamsMeetingsPlugin.plugin;

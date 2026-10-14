@@ -1,7 +1,10 @@
 import {
   readSystemAgentSessionInvalidatedErrorDetails,
+  readSystemAgentInferenceUnavailableErrorDetails,
   type SystemAgentChatParams,
 } from "@openclaw/gateway-protocol";
+import type { SystemAgentPluginReference } from "@openclaw/gateway-protocol/system-agent-context";
+import { inferBasePathFromPathname, routeIdFromPath } from "../../app-route-paths.ts";
 
 export type CustodianSessionVariant = "onboarding" | "new-agent" | "caretaker";
 
@@ -12,14 +15,40 @@ export function sessionVariant(
   return onboarding ? "onboarding" : newAgentIntent ? "new-agent" : "caretaker";
 }
 
-export function welcomeVariant(
+export function custodianChatParams(
   variant: CustodianSessionVariant,
-): Pick<SystemAgentChatParams, "welcomeVariant"> {
-  return variant === "caretaker" ? {} : { welcomeVariant: variant };
+  message?: string,
+  plugin?: SystemAgentPluginReference,
+): Pick<SystemAgentChatParams, "welcomeVariant" | "message" | "context"> {
+  const variantParams = variant === "caretaker" ? {} : { welcomeVariant: variant };
+  if (message === undefined) {
+    return variantParams;
+  }
+  const pathname = window.location.pathname;
+  const page = routeIdFromPath(pathname, inferBasePathFromPathname(pathname));
+  return {
+    ...variantParams,
+    message,
+    ...(page ? { context: { page, ...(plugin ? { plugin } : {}) } } : {}),
+  };
 }
 
-export function isCustodianSessionInvalidatedError(error: unknown): boolean {
+export function hasCustodianUserInput(params: SystemAgentChatParams): boolean {
+  return (
+    params.message !== undefined ||
+    params.wizardAnswer !== undefined ||
+    params.wizardCancel !== undefined
+  );
+}
+
+export function custodianFailure(error: unknown): {
+  inferenceUnavailable: boolean;
+  sessionInvalidated: boolean;
+} {
   const details =
     error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
-  return readSystemAgentSessionInvalidatedErrorDetails(details) !== undefined;
+  return {
+    inferenceUnavailable: readSystemAgentInferenceUnavailableErrorDetails(details) !== undefined,
+    sessionInvalidated: readSystemAgentSessionInvalidatedErrorDetails(details) !== undefined,
+  };
 }

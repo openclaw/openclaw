@@ -1,9 +1,19 @@
 // Reply payload helpers normalize plugin reply targets, text, media, and approval metadata.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  getReplyPayloadMetadata,
+  hasReplyPayloadSpeechContent,
+} from "../auto-reply/reply-payload.js";
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
-import { normalizeOutboundReplyPayload as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
+import { normalizeOutboundReplyPayloadCore as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
+import {
+  countOutboundMedia,
+  hasOutboundMedia,
+  hasOutboundText,
+  resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
+} from "../infra/outbound/reply-payload-parts.js";
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 
@@ -14,15 +24,73 @@ export type { MediaPayload } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 /** Plugin-facing reply payload without core-only trusted local media internals. */
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+
+/** The shared dispatcher will persist confirmed delivery; channel adapters must not mirror it. */
+export function hasReplyPayloadFinalDeliveryCapture(payload: ReplyPayload): boolean {
+  return getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== undefined;
+}
+
+export type AskUserQuestionOptionIndices = ReadonlyMap<string, ReadonlyMap<string, number>>;
+
+/** Read bounded Gateway-owned option ordering for one native ask_user question. */
+export function resolveAskUserQuestionOptionIndices(
+  payload: Pick<ReplyPayload, "channelData">,
+): AskUserQuestionOptionIndices | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+    return undefined;
+  }
+  // SAFETY: channelData.askUser is an internal record after the object and array checks above.
+  const { questionId, optionValues } = askUser as {
+    questionId?: unknown;
+    optionValues?: unknown;
+  };
+  if (
+    typeof questionId !== "string" ||
+    !questionId ||
+    !Array.isArray(optionValues) ||
+    optionValues.length < 2 ||
+    optionValues.length > 4
+  ) {
+    return undefined;
+  }
+
+  const optionIndices = new Map<string, number>();
+  for (const [optionIndex, optionValue] of optionValues.entries()) {
+    if (typeof optionValue !== "string") {
+      return undefined;
+    }
+    const normalizedOptionValue = optionValue.trim().toLowerCase();
+    if (!normalizedOptionValue || optionIndices.has(normalizedOptionValue)) {
+      return undefined;
+    }
+    optionIndices.set(normalizedOptionValue, optionIndex);
+  }
+  return new Map([[questionId, optionIndices]]);
+}
+
+/** Match one presented choice to its Gateway-owned option index. */
+export function resolveAskUserQuestionOptionIndex(params: {
+  questionOptionIndices?: AskUserQuestionOptionIndices;
+  questionId: string;
+  optionValue: string;
+}): number | undefined {
+  return params.questionOptionIndices
+    ?.get(params.questionId)
+    ?.get(params.optionValue.trim().toLowerCase());
+}
 export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
   buildTtsSupplementMediaPayload,
+  copyReplyPayloadMetadata,
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
+  stripReplyPayloadResponsePrefix,
 } from "../auto-reply/reply-payload.js";
 
 /** Normalized outbound reply payload accepted by channel send helpers. */
@@ -68,21 +136,13 @@ export type ReasoningReplyPayload = {
 };
 
 /** Derived sendability facts for text/media outbound payload delivery. */
-export type SendableOutboundReplyParts = {
-  /** Raw text selected for delivery before trimming. */
-  text: string;
-  /** Text after trimming whitespace for sendability checks. */
-  trimmedText: string;
-  /** Normalized non-empty media URLs. */
-  mediaUrls: string[];
-  /** Number of normalized media URLs. */
-  mediaCount: number;
-  /** Whether trimmed text is sendable. */
-  hasText: boolean;
-  /** Whether at least one media URL is sendable. */
-  hasMedia: boolean;
-  /** Whether the payload has any sendable text or media. */
-  hasContent: boolean;
+export type { SendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
+export {
+  countOutboundMedia,
+  hasOutboundMedia,
+  hasOutboundText,
+  resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
 };
 
 type SendPayloadContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
@@ -139,39 +199,9 @@ export function createNormalizedOutboundDeliverer(
   };
 }
 
-/** Prefer multi-attachment payloads, then fall back to the legacy single-media field. */
-export function resolveOutboundMediaUrls(payload: {
-  mediaUrls?: string[];
-  mediaUrl?: string;
-}): string[] {
-  if (payload.mediaUrls?.length) {
-    return payload.mediaUrls;
-  }
-  if (payload.mediaUrl) {
-    return [payload.mediaUrl];
-  }
-  return [];
-}
-
 /** Resolve media URLs from a channel sendPayload context after legacy fallback normalization. */
 export function resolvePayloadMediaUrls(payload: SendPayloadContext["payload"]): string[] {
   return resolveOutboundMediaUrls(payload);
-}
-
-/** Count outbound media items after legacy single-media fallback normalization. */
-export function countOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): number {
-  return resolveOutboundMediaUrls(payload).length;
-}
-
-/** Check whether an outbound payload includes any media after normalization. */
-export function hasOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): boolean {
-  return countOutboundMedia(payload) > 0;
-}
-
-/** Check whether an outbound payload includes text, optionally trimming whitespace first. */
-export function hasOutboundText(payload: { text?: string }, options?: { trim?: boolean }): boolean {
-  const text = options?.trim ? payload.text?.trim() : payload.text;
-  return Boolean(text);
 }
 
 /** Check whether an outbound payload includes any sendable text, media, or rich reply content. */
@@ -186,29 +216,10 @@ export function hasOutboundReplyContent(
   },
   options?: { trimText?: boolean },
 ): boolean {
-  return hasReplyPayloadContent(payload, { trimText: options?.trimText });
-}
-
-/** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */
-export function resolveSendableOutboundReplyParts(
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-  options?: { text?: string },
-): SendableOutboundReplyParts {
-  const text = options?.text ?? payload.text ?? "";
-  const trimmedText = text.trim();
-  const mediaUrls = normalizeStringEntries(resolveOutboundMediaUrls(payload));
-  const mediaCount = mediaUrls.length;
-  const hasText = Boolean(trimmedText);
-  const hasMedia = mediaCount > 0;
-  return {
-    text,
-    trimmedText,
-    mediaUrls,
-    mediaCount,
-    hasText,
-    hasMedia,
-    hasContent: hasText || hasMedia,
-  };
+  return (
+    hasReplyPayloadContent(payload, { trimText: options?.trimText }) ||
+    hasReplyPayloadSpeechContent(payload)
+  );
 }
 
 /** Preserve caller-provided chunking, but fall back to the full text when chunkers return nothing. */
@@ -248,20 +259,14 @@ export async function sendPayloadWithChunkedTextAndMedia<
   if (!text && urls.length === 0) {
     return params.emptyResult;
   }
-  const [firstUrl, ...remainingUrls] = urls;
-  if (firstUrl !== undefined) {
+  if (urls.length > 0) {
     // Caption-limited transports get text only on the first media item; the
     // final result still represents the last platform send.
-    let lastResult = await params.sendMedia({
-      ...params.ctx,
-      text,
-      mediaUrl: firstUrl,
-    });
-    await params.onResult?.(lastResult);
-    for (const mediaUrl of remainingUrls) {
+    let lastResult = params.emptyResult;
+    for (const [index, mediaUrl] of urls.entries()) {
       lastResult = await params.sendMedia({
         ...params.ctx,
-        text: "",
+        text: index === 0 ? text : "",
         mediaUrl,
       });
       await params.onResult?.(lastResult);
@@ -269,18 +274,12 @@ export async function sendPayloadWithChunkedTextAndMedia<
     return lastResult;
   }
   const limit = params.textChunkLimit;
-  const chunks = limit && params.chunker ? params.chunker(text, limit) : [text];
-  const [firstChunk, ...remainingChunks] = chunks;
-  if (firstChunk === undefined) {
-    return params.emptyResult;
-  }
-  let lastResult = await params.sendText({ ...params.ctx, text: firstChunk });
-  await params.onResult?.(lastResult);
-  for (const chunk of remainingChunks) {
-    lastResult = await params.sendText({ ...params.ctx, text: chunk });
-    await params.onResult?.(lastResult);
-  }
-  return lastResult;
+  const chunkedText = limit && params.chunker ? params.chunker(text, limit) : [text];
+  return (await sendPayloadTextChunkSequence({
+    chunks: resolveTextChunksWithFallback(text, chunkedText),
+    send: ({ text: chunk }) => params.sendText({ ...params.ctx, text: chunk }),
+    onResult: (result) => params.onResult?.(result),
+  }))!;
 }
 
 /**
@@ -419,70 +418,61 @@ export async function sendTextMediaPayload(params: {
   // Reply fanout may be single-use for implicit replies, so resolve it exactly
   // once per platform send rather than copying the initial id into every part.
   const nextReplyToId = createReplyToFanout(params.ctx);
+  const sendAndReport = async (
+    send: (
+      onDeliveryResult: NonNullable<SendPayloadContext["onDeliveryResult"]>,
+    ) => Promise<SendPayloadResult>,
+  ) => {
+    let childReported = false;
+    const result = await send(async (deliveryResult) => {
+      childReported = true;
+      await params.ctx.onDeliveryResult?.(deliveryResult);
+    });
+    if (!childReported) {
+      await params.ctx.onDeliveryResult?.(result);
+    }
+    return result;
+  };
   if (urls.length > 0) {
     const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
-    let hasSent = false;
-    const lastResult = await sendPayloadMediaSequence({
+    return (await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
-      send: async ({ text: textLocal, mediaUrl }) => {
-        let childReported = false;
-        const result = await params.adapter.sendMedia!({
-          ...params.ctx,
-          text: textLocal,
-          mediaUrl,
-          ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
-          replyToId: nextReplyToId(),
-          onDeliveryResult: async (deliveryResult) => {
-            childReported = true;
-            await params.ctx.onDeliveryResult?.(deliveryResult);
-          },
-        });
-        if (!childReported) {
-          await params.ctx.onDeliveryResult?.(result);
-        }
-        hasSent = true;
-        return result;
-      },
-    });
-    if (hasSent) {
-      return lastResult!;
-    }
-  }
-  if (!text) {
-    return { channel: params.channel, messageId: "" };
+      send: ({ text: textLocal, mediaUrl }) =>
+        sendAndReport((onDeliveryResult) =>
+          params.adapter.sendMedia!({
+            ...params.ctx,
+            text: textLocal,
+            mediaUrl,
+            ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
+            replyToId: nextReplyToId(),
+            onDeliveryResult,
+          }),
+        ),
+    }))!;
   }
   const limit = params.adapter.textChunkLimit;
-  const chunks =
+  const chunkedText =
     limit && params.adapter.chunker
       ? params.adapter.chunker(text, limit, { formatting: params.ctx.formatting })
       : [text];
-  let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
-  for (const chunk of chunks) {
-    let childReported = false;
-    lastResult = await params.adapter.sendText!({
-      ...params.ctx,
-      text: chunk,
-      replyToId: nextReplyToId(),
-      onDeliveryResult: async (deliveryResult) => {
-        childReported = true;
-        await params.ctx.onDeliveryResult?.(deliveryResult);
-      },
-    });
-    if (!childReported) {
-      await params.ctx.onDeliveryResult?.(lastResult);
-    }
-  }
-  return lastResult!;
+  return (await sendPayloadTextChunkSequence({
+    chunks: resolveTextChunksWithFallback(text, chunkedText),
+    send: ({ text: chunk }) =>
+      sendAndReport((onDeliveryResult) =>
+        params.adapter.sendText!({
+          ...params.ctx,
+          text: chunk,
+          replyToId: nextReplyToId(),
+          onDeliveryResult,
+        }),
+      ),
+  }))!;
 }
 
 /** Detect numeric-looking target ids for channels that distinguish ids from handles. */
 export function isNumericTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^\d{3,}$/.test(trimmed);
+  return /^\d{3,}$/.test(raw.trim());
 }
 
 /** Append attachment links to plain text when the channel cannot send media inline. */
@@ -491,19 +481,8 @@ export function formatTextWithAttachmentLinks(
   mediaUrls: string[],
 ): string {
   const trimmedText = text?.trim() ?? "";
-  if (!trimmedText && mediaUrls.length === 0) {
-    return "";
-  }
-  const mediaBlock = mediaUrls.length
-    ? mediaUrls.map((url) => `Attachment: ${url}`).join("\n")
-    : "";
-  if (!trimmedText) {
-    return mediaBlock;
-  }
-  if (!mediaBlock) {
-    return trimmedText;
-  }
-  return `${trimmedText}\n\n${mediaBlock}`;
+  const mediaBlock = mediaUrls.map((url) => `Attachment: ${url}`).join("\n");
+  return [trimmedText, mediaBlock].filter(Boolean).join("\n\n");
 }
 
 /** Send a caption with only the first media item, mirroring caption-limited channel transports. */
@@ -575,7 +554,10 @@ export async function deliverTextOrMediaReply(params: {
   if (!params.text) {
     return "empty";
   }
-  const chunks = params.chunkText ? params.chunkText(params.text) : [params.text];
+  const chunks = resolveTextChunksWithFallback(
+    params.text.trim() ? params.text : "",
+    params.chunkText ? params.chunkText(params.text) : [params.text],
+  );
   let sentText = false;
   for (const chunk of chunks) {
     if (!chunk) {

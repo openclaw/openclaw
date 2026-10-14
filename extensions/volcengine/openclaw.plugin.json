@@ -1,5 +1,7 @@
 {
   "id": "volcengine",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -46,6 +48,10 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "volcengine": "volcengine",
+      "volcengine-plan": "volcengine-coding-plan"
+    },
     "providers": {
       "volcengine": {
         "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
@@ -278,6 +284,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -294,6 +303,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -310,6 +322,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           }
         ]
@@ -343,7 +358,9 @@
   },
   "contracts": {
     "speechProviders": [
-      "volcengine"
+      "volcengine",
+      "bytedance",
+      "doubao"
     ]
   }
 }
