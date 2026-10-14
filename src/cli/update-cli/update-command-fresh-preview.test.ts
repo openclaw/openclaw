@@ -13,6 +13,7 @@ import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as devUpdateTarget from "../../infra/update-dev-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import * as recoveryBaseline from "../../infra/update-recovery-baseline-capture.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as history from "../../infra/update-run-reader.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -751,6 +752,61 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
 });
 
 registerOriginalCaptureTests({ fixture, dirs });
+
+it("continues a completed update when original-state capture fails", async () => {
+  try {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+    fs.mkdirSync(path.dirname(process.env.OPENCLAW_CONFIG_PATH!), { recursive: true });
+    fs.writeFileSync(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify({ plugins: { enabled: false }, gateway: { mode: "local" } }),
+    );
+    openOpenClawStateDatabase();
+    allowPackageRuntime();
+    fs.writeFileSync(
+      path.join(fixture.root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: VERSION }),
+    );
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: VERSION });
+    vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: VERSION,
+    });
+    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+      ...targetMetadata,
+      version: VERSION,
+      schemaVersions: {
+        state: OPENCLAW_STATE_SCHEMA_VERSION,
+        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+      },
+    });
+    const cause = "SQLite file generation changed while reading: /fixture/state/openclaw.sqlite";
+    vi.spyOn(recoveryBaseline, "captureUpdateRecoveryBaseline").mockRejectedValue(
+      new Error("Original update capture failed; evidence retained at /fixture/capture", {
+        cause: new Error(cause),
+      }),
+    );
+
+    await expect(updateCommand({ yes: true, json: true, restart: false })).resolves.toBeUndefined();
+
+    const [finished] = history.listUpdateRuns();
+    expect(finished).toMatchObject({ status: "skipped", reason: "already-current" });
+    const warning = finished?.steps.find(
+      (step) => step.step === "warning:original-state-capture:1",
+    )?.detail;
+    assert(warning);
+    expect(warning).toMatch(
+      /^Original state capture is unavailable; the update continues without it\. A running Gateway or another active writer changing state during capture is expected to cause this\. Database rollback uses the pre-migration snapshots taken after the Gateway stops\. A completed update does not need to be restarted because of this warning\. Cause: Original update capture failed; evidence retained at /,
+    );
+    expect(warning).toContain(cause);
+    expect(warning).not.toContain("retry");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(`Warning: ${warning}`);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
+});
 
 it("Doctor sees an already-current update's completed history after original-state capture", async () => {
   try {

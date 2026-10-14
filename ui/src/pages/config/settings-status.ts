@@ -1,7 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 
@@ -19,7 +18,6 @@ export function createSettingsStatus<T>(
 ) {
   const gatewayProjection = projectGateway(context.gateway);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
   let disposed = false;
   let request: AbortController | undefined;
   const client = () => {
@@ -37,20 +35,16 @@ export function createSettingsStatus<T>(
   const [result, setResult] = createSignal<{ status: T; isCurrent: () => boolean }>();
   const [revision, setRevision] = createSignal(0);
   const refresh = () => setRevision((value) => value + 1);
-  let previousHello = context.gateway.snapshot.hello;
-  let previousAuth = previousHello?.auth;
+  const connectionKey = () => {
+    const snapshot = context.gateway.snapshot;
+    return [snapshot.client, snapshot.phase, snapshot.hello, snapshot.hello?.auth] as const;
+  };
+  let connection = connectionKey();
   onCleanup(
     gatewayProjection.subscribe(() => {
-      const snapshot = context.gateway.snapshot;
-      const transition = gateway.transition(snapshot);
-      const identityChanged =
-        previousHello !== snapshot.hello || previousAuth !== snapshot.hello?.auth;
-      if (identityChanged) {
-        gateway.invalidate();
-      }
-      previousHello = snapshot.hello;
-      previousAuth = snapshot.hello?.auth;
-      if (transition || identityChanged) {
+      const next = connectionKey();
+      if (connection.some((value, index) => value !== next[index])) {
+        connection = next;
         request?.abort();
         options.onConnectionChange?.();
         refresh();
@@ -59,19 +53,17 @@ export function createSettingsStatus<T>(
   );
   function capture() {
     const owner = context.gateway;
-    const snapshot = owner.snapshot;
     const currentClient = untrack(client);
-    const scope = gateway.capture();
-    const hello = snapshot.hello;
-    const auth = hello?.auth;
-    return () =>
-      currentClient !== null &&
-      scope !== null &&
-      client() === currentClient &&
-      gateway.isCurrent(scope) &&
-      context.gateway === owner &&
-      owner.snapshot.hello === hello &&
-      hello?.auth === auth;
+    const captured = connectionKey();
+    return () => {
+      const current = connectionKey();
+      return (
+        currentClient !== null &&
+        client() === currentClient &&
+        context.gateway === owner &&
+        captured.every((value, index) => value === current[index])
+      );
+    };
   }
   const configHash = () => context.runtimeConfig.state.configSnapshot?.[options.configHash];
   const key = createMemo(
@@ -129,7 +121,6 @@ export function createSettingsStatus<T>(
   onCleanup(() => {
     disposed = true;
     request?.abort();
-    gateway.dispose();
   });
   return { client, state, error, result, refresh, capture, gatewayProjection, configProjection };
 }

@@ -2,7 +2,6 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
-import { compactToolOutputHint } from "../tool-schema-hints.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { createScreenTool } from "./screen-tool.js";
 
@@ -26,7 +25,13 @@ describe("screen tool", () => {
 
     expect(tool.outputSchema).toBe(UiCommandResultSchema);
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe("{ ok: boolean }");
+    expect(
+      Value.Check(tool.outputSchema!, {
+        ok: true,
+        delivery: "dispatched",
+        presentation: { portalId: "app", status: "blocked", reason: "remote-ingress-required" },
+      }),
+    ).toBe(true);
   });
 
   it("uses a flat action enum and requires the UI capability", () => {

@@ -837,7 +837,8 @@ function runtimeOperation(action, root, values) {
     const version = target.kind === "bun" ? result.bun : result.node;
     const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version ?? "");
     if (!match || !/^3\.\d+\.\d+$/.test(result.sqlite ?? "") ||
-        (target.kind === "bun" ? Number(match[1]) < 1 || (Number(match[1]) === 1 && Number(match[2]) < 4) :
+        (target.kind === "bun" ? Number(match[1]) < 1 || (Number(match[1]) === 1 &&
+          (Number(match[2]) < 4 || (Number(match[2]) === 4 && Number(match[3]) < 3))) :
           result.bun !== undefined || Number(match[1]) < 24 || (Number(match[1]) === 24 && Number(match[2]) < 15))) reject("Gateway runtime capability probe failed");
     return "RUNTIME_PROBED";
   }

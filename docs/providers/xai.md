@@ -360,7 +360,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     `image_generate` tool.
 
     - Default image model: `xai/grok-imagine-image`
-    - Additional model: `xai/grok-imagine-image-quality`
+    - Additional models: `xai/grok-imagine-image-2.0`, `xai/grok-imagine-image-quality`
     - Modes: text-to-image and reference-image edit
     - Reference inputs: one `image` or up to three `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,
@@ -374,6 +374,11 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     stored and delivered through the normal channel attachment path. Local
     reference images are converted to data URLs; remote `http(s)` references
     pass through unchanged.
+
+    Select `xai/grok-imagine-image-2.0` explicitly to use Image 2.0; the default
+    remains `xai/grok-imagine-image`. Explicit provider-qualified image model IDs
+    pass through to xAI, including IDs not yet in OpenClaw's catalog. An unknown
+    bare model override fails with an error instead of selecting the default.
 
     To use xAI as the default image provider:
 

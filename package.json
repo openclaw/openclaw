@@ -1693,6 +1693,7 @@
     "android:release:signing:sync:pull": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_sync_pull'",
     "android:release:signing:sync:push": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_sync_push'",
     "android:release:upload": "node scripts/mobile-release.mjs run --platform android",
+    "android:release:validate": "node --import ./scripts/tsx.mjs scripts/android-release-e2e.ts",
     "android:screenshots": "bash scripts/android-screenshots.sh",
     "android:test": "node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts :app:testPlayDebugUnitTest :wear:testDebugUnitTest :wear-shared:testDebugUnitTest",
     "android:test:integration": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",

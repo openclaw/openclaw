@@ -325,21 +325,24 @@ export function retainSessionEntryReadFacts(
       sessionKeys.push(parentKey);
     }
   }
-  for (const key of sessionKeys) {
-    const target = captureTarget(database, key);
-    if (
-      !target ||
-      target.database.physicalIdentity !== result.source.databaseIdentity ||
-      target.database.birthtime !== result.source.databaseBirthtime
-    ) {
-      return;
-    }
-    const previous = readSessionActorEntryFacts(target);
+  if (sessionKeys.length === 0) {
+    return;
+  }
+  const target = captureTarget(database, sessionKeys[0]!);
+  if (
+    !target ||
+    target.database.physicalIdentity !== result.source.databaseIdentity ||
+    target.database.birthtime !== result.source.databaseBirthtime
+  ) {
+    return;
+  }
+  const entries = sessionKeys.map((key) => {
+    const previous = readSessionActorEntryFacts({ ...target, sessionKey: toUSVString(key) });
     const entry = byKey.get(toUSVString(key));
     const fields = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
-    retainSessionActorEntryFacts(
-      target,
-      {
+    return {
+      sessionKey: toUSVString(key),
+      facts: {
         entry: previous?.entry && entry ? { ...previous.entry, ...entry } : entry,
         snapshots:
           previous?.snapshots === "full" || fields === "full"
@@ -350,10 +353,10 @@ export function retainSessionEntryReadFacts(
           ? (result.participantRecords[key] ?? [])
           : previous?.participants,
         projection: previous?.projection,
-      },
-      result.databaseIdentity.incarnation,
-    );
-  }
+      } satisfies Parameters<typeof retainSessionActorEntryFacts>[1][number]["facts"],
+    };
+  });
+  retainSessionActorEntryFacts(target.database, entries, result.databaseIdentity.incarnation);
 }
 
 /**
