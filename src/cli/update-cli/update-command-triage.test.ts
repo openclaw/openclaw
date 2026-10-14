@@ -25,7 +25,10 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
 }));
 
 const triageAfterFailure = vi.hoisted(() => vi.fn());
-vi.mock("../../commands/triage-failure.js", () => ({ triageAfterFailure }));
+vi.mock("../../commands/triage-failure.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/triage-failure.js")>()),
+  triageAfterFailure,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
