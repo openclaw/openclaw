@@ -131,7 +131,7 @@ the native Rayon and Rolldown worker pools to four threads each, preserving expl
 `RAYON_NUM_THREADS` and `ROLLDOWN_WORKER_THREADS` overrides.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
-`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+`ciArtifacts` builds. It serializes the two standard tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
 source and package-manifest membership through a private staged receipt; missing receipts or inputs
 changed during compilation prevent publication. The shared input snapshot policy

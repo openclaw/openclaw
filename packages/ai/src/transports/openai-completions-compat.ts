@@ -32,6 +32,7 @@ type OpenAICompletionsCompatDefaults = {
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
+  requiresTypedUnionBranches: boolean;
   supportsJsonSchemaResponseFormat: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
   requiresNonEmptyUserOrAssistantMessage: boolean;
@@ -54,6 +55,7 @@ export type ResolvedOpenAICompletionsCompat = Omit<
     sessionAffinity: OpenAICompletionsSessionAffinity;
     visibleReasoningDetailTypes: string[];
     requiresNonEmptyUserOrAssistantMessage: boolean;
+    requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
     reasoningEffortForOff: "none" | null;
   };
@@ -220,6 +222,7 @@ function resolveOpenAICompletionsCompatDefaults(
               : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    requiresTypedUnionBranches: isMoonshot,
     supportsJsonSchemaResponseFormat:
       (endpointClass === "openai-public" ||
         (isDefaultRoute && isDefaultRouteProvider(provider, "openai"))) &&
@@ -333,6 +336,7 @@ export function resolveOpenAICompletionsCompat(
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
     zaiToolStream: configured?.zaiToolStream ?? false,
     supportsStrictMode: configured?.supportsStrictMode ?? defaults.supportsStrictMode,
+    requiresTypedUnionBranches: defaults.requiresTypedUnionBranches,
     supportsJsonSchemaResponseFormat:
       configured?.supportsJsonSchemaResponseFormat ?? defaults.supportsJsonSchemaResponseFormat,
     cacheControlFormat: configured?.cacheControlFormat ?? defaults.cacheControlFormat,

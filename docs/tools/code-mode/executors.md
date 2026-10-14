@@ -117,7 +117,8 @@ to engine minimums. That budget includes worker runtime allocations and
 excludes external buffers; it is not a per-context heap measurement or security
 boundary. Node stops an execution with `runtime_unavailable` when sustained
 major garbage collections leave the worker near its heap limit, then retires
-that worker. Output emitted before heap exhaustion or GC retirement remains
+that worker, even when individual collections are cheap. The same guard retires
+pressured suspended or warm workers. Output emitted before heap exhaustion or GC retirement remains
 available within the configured output limit. Synchronous code that prevents GC notifications remains bounded
 by the host execution deadline. Paginate or narrow large tool results and avoid
 retaining large arrays; inspect completed actions before retrying. Captured Node
@@ -126,6 +127,9 @@ without yielding. Fresh cells get fresh globals even when a worker is reused.
 Settled input and guest errors release their cell context and keep healthy workers
 available for reuse. Native failures, interrupted execution, and cancellation
 still retire the worker.
+Node Code Mode leaves garbage collection to V8 instead of requesting inspector
+full collections between cells or while a cell is suspended. Its heap limit,
+execution deadline, GC-pressure detection, and worker retirement still apply.
 Neither executor's setting caps total Gateway RSS. Worker overhead and host-side tool results also
 consume memory. A retained Node context can use more total host memory than a
 size-limited QuickJS snapshot. The shared limit of 64 suspended cells and

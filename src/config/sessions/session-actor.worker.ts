@@ -298,30 +298,12 @@ export function createSessionActorWorker(
   };
   const registerTranscriptRewriteOwner = (database: OpenClawAgentDatabase) =>
     registerSessionActorTranscriptRewriteOwner(database, {
-      read(opened, scope, entryId) {
+      read(opened, scope) {
         // Active actor mutations consume their working facts through the transaction kernels.
         if (readSessionActorTransactionState(opened)) {
           return undefined;
         }
-        const current = retainedState(opened, scope.sessionKey)?.hot;
-        if (
-          current?.entry?.sessionId !== scope.sessionId ||
-          current.transcript.anchorsState !== "resident"
-        ) {
-          return undefined;
-        }
-        const anchor = current.transcript.anchors.find(
-          (candidate) => candidate.entryId === entryId,
-        );
-        return {
-          entry: {
-            sessionId: current.entry.sessionId,
-            lifecycleRevision: current.entry.lifecycleRevision,
-            activeWriterRunId: current.entry.activeWriterRunId,
-          },
-          generation: current.transcript.version.generation ?? undefined,
-          anchor: anchor && { ...anchor },
-        };
+        return retainedState(opened, scope.sessionKey);
       },
       rewrite(opened, rewrite, run) {
         const before = residents.get(rewrite.sessionKey);

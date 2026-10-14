@@ -42,42 +42,26 @@ function changeDeviceLocales(
   capability: NativeDeviceSettingsCapability,
   change: Partial<DeviceLocaleSelection>,
 ) {
-  const pending = pendingDeviceLocales.get(capability);
-  if (pending) {
-    Object.assign(pending, change);
-  } else {
-    const desired = { ...change };
-    pendingDeviceLocales.set(capability, desired);
-    const unsubscribe = capability.subscribe((snapshot) => {
-      // Only a published snapshot can acknowledge an intent. Reading the old
-      // snapshot during another edit must not clear a pending return to that value.
-      const locale = snapshot.voice.locale;
-      if (!locale) {
-        pendingDeviceLocales.delete(capability);
-        unsubscribe();
-        return;
-      }
-      if (desired.primary === locale.primary) {
-        delete desired.primary;
+  const desired = Object.assign(pendingDeviceLocales.get(capability) ?? {}, change);
+  pendingDeviceLocales.set(capability, desired);
+  for (const key of ["additional", "primary"] as const) {
+    const value = change[key];
+    if (value === undefined) {
+      continue;
+    }
+    capability.set(`voice.locale.${key}`, value, () => {
+      // Native settles before publishing its snapshot. Do not retire a newer edit.
+      if (desired[key] === value) {
+        delete desired[key];
       }
       if (
-        desired.additional &&
-        desired.additional.length === locale.additional.length &&
-        desired.additional.every((id, index) => id === locale.additional[index])
+        desired.primary === undefined &&
+        desired.additional === undefined &&
+        pendingDeviceLocales.get(capability) === desired
       ) {
-        delete desired.additional;
-      }
-      if (desired.primary === undefined && desired.additional === undefined) {
         pendingDeviceLocales.delete(capability);
-        unsubscribe();
       }
     });
-  }
-  if (change.additional) {
-    capability.set("voice.locale.additional", change.additional);
-  }
-  if (change.primary !== undefined) {
-    capability.set("voice.locale.primary", change.primary);
   }
 }
 

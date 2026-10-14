@@ -205,7 +205,33 @@ describe("browser sign-in recovery", () => {
       await getRenderedModalDialog(document.body);
       signedIn = true;
       window.dispatchEvent(new Event("focus"));
-      await expect.poll(() => restored.mock.calls.length).toBe(1);
+      try {
+        await expect.poll(() => restored.mock.calls.length).toBe(1);
+      } catch (error) {
+        const modal = document.querySelector("openclaw-modal-dialog");
+        const dialog = modal?.querySelector("dialog");
+        const probes = vi
+          .mocked(fetch)
+          .mock.calls.filter(([, init]) => init?.method === "HEAD")
+          .map(([, init]) => {
+            const reason: unknown = init?.signal?.reason;
+            return {
+              aborted: init?.signal?.aborted,
+              reason: reason instanceof Error ? reason.name : null,
+            };
+          });
+        throw new Error(
+          `Browser auth recovery failed: ${JSON.stringify({
+            credentials,
+            probes,
+            modal: Boolean(modal),
+            open: dialog?.open ?? null,
+            phase: dialog?.getAttribute("data-phase") ?? null,
+            status: modal?.querySelector('[role="status"]')?.textContent ?? null,
+          })}`,
+          { cause: error },
+        );
+      }
       expect(credentials).toEqual([
         "Bearer expired-device-token",
         "Bearer stored-token",

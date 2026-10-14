@@ -22,6 +22,46 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
+  it("counts model catalog callers separately while preserving method-only RPC totals", () => {
+    const metrics = createMetricsHarness();
+    try {
+      const event = {
+        type: "gateway.rpc",
+        method: "models.list",
+        phase: "received",
+        modelsList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          view: "configured",
+          scope: "agent",
+          refresh: false,
+          preparedOnly: true,
+        },
+      } as const;
+      metrics.record(event);
+      metrics.record(event);
+      metrics.record(event, untrusted);
+      metrics.record({ ...event, modelsList: { ...event.modelsList, source: "internal" } });
+      metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
+      const rendered = metrics.render();
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="models.list"} 3\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="health"} 1\n');
+      expect(rendered).toContain(
+        'openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="wire",view="configured"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="internal",view="configured"} 1\n',
+      );
+      expect(
+        rendered
+          .split("\n")
+          .filter((line) => line.startsWith("openclaw_models_list_requests_total{")),
+      ).toHaveLength(2);
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("counts egress outcomes and catalog preparation independently of log records", () => {
     const metrics = createMetricsHarness();
     try {

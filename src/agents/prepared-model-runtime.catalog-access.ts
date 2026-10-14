@@ -583,7 +583,7 @@ export async function createFullModelCatalogAccess(
   );
   const refreshExpiredModelCatalog = () => {
     assertCurrent();
-    recheckNativeLogin();
+    void recheckNativeLogin();
     if (pending || !published.inventory) {
       return;
     }
