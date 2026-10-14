@@ -82,7 +82,7 @@ function useRoster(props: RosterProps) {
       equality: "revision",
     }),
   );
-  const presented = () => props.active !== false;
+  const presented = () => props.active;
   const host = createParkedProjection(() => hostProjection().read(), presented);
   const context = createMemo(() => host().sessionDataContext ?? application);
   const store = createMemo(() => rosterActivityStore(context()));
@@ -113,7 +113,7 @@ function useRoster(props: RosterProps) {
 
 export function SidebarAgentRoster(props: RosterProps) {
   const roster = useRoster(props);
-  const presented = () => props.active !== false;
+  const presented = () => props.active;
   const parkedSections = createParkedProjection(() => props.sections, presented);
   const empty = createParkedProjection(() => props.empty, presented);
   const gatewaySnapshot = createParkedProjection(() => roster.gateway().read(), presented);
