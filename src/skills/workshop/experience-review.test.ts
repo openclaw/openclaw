@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => ({
   listWorkshopChanges: vi.fn(),
   postWorkshopChangeNotice: vi.fn(async () => {}),
 }));
-vi.mock("../../agents/embedded-agent.js", () => ({
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
   runEmbeddedAgent: mocks.runEmbeddedAgent,
 }));
 vi.mock("./review-run.js", async (importOriginal) => ({

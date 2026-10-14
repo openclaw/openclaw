@@ -113,7 +113,7 @@ describe("prompt cache history fingerprints", () => {
     } else {
       block.text = "rewritten";
     }
-    const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only; changed fields: ${kind === "string" ? "content" : "content[0]"}`;
+    const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only; changed fields: ${kind === "string" ? "content" : "content[0].text"}`;
     withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
       expect(() =>
         beginOpenAIObservation({
@@ -137,9 +137,32 @@ describe("prompt cache history fingerprints", () => {
       beginOpenAIObservation({ sessionId, messages: [message] });
       args.options.path = "after";
       expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
-        "message 0 (assistant)",
+        "changed fields: content[0].arguments",
       );
     });
+  });
+
+  it("names changed reasoning signatures without exposing values or extension keys", () => {
+    const sessionId = scopedKey("reasoning-fields");
+    const block = {
+      type: "thinking" as const,
+      thinking: "private reasoning",
+      thinkingSignature: "private original signature",
+      "private-extension-name": "original extension value",
+    };
+    const message = makeAgentAssistantMessage({ content: [block] });
+    beginOpenAIObservation({ sessionId, messages: [message] });
+    block.thinkingSignature = "private rewritten signature";
+    block["private-extension-name"] = "rewritten extension value";
+    const changes = beginOpenAIObservation({ sessionId, messages: [message] }).changes;
+    expect(changes).toEqual([
+      {
+        code: "historyRewrite",
+        detail:
+          "message 0 (assistant) differs from the previous request; history must be append-only; changed fields: content[0].thinkingSignature, content[0].other",
+      },
+    ]);
+    expect(JSON.stringify(changes)).not.toContain("private");
   });
 
   it("detects primitive property additions, changes, and removals", () => {
@@ -211,7 +234,7 @@ describe("prompt cache history fingerprints", () => {
         kind === "remove"
           ? "message removed"
           : kind === "edit"
-            ? "changed fields: content[0]"
+            ? "changed fields: content[0].text"
             : "changed fields: content.type, content, envelope.role, envelope.timestamp, envelope.api, envelope.provider, envelope.model, envelope.usage, …";
       const detail = `message ${index} (assistant) differs from the previous request; history must be append-only; ${fields}`;
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
@@ -296,7 +319,7 @@ describe("prompt cache history fingerprints", () => {
         block.text = "private-second-rewrite";
       }
       expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
-        "changed fields: content[0], content[1], content[2], content[3], content[4], content[5], content[6], content[7], …",
+        "changed fields: content[0].text, content[1].text, content[2].text, content[3].text, content[4].text, content[5].text, content[6].text, content[7].text, …",
       );
     });
   });

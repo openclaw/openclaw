@@ -28,6 +28,10 @@ API calls, not exported OpenClaw functions.
   details in core.
 </Tip>
 
+Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belongs
+to a native harness. Model Setup applies that runtime to the selected agent's
+model entry, not to global model defaults.
+
 ## Import an existing credential during sign-in
 
 An auth method can declare `credentialImport` with a `migrationProviderId`,

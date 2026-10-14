@@ -2873,7 +2873,6 @@
 ["src/agents/provider-auth-aliases.test.ts","../plugins/plugin-metadata-snapshot.js","0372ba17b08ee83a25d613f8bf34fbb8b050e30e5dba7b1a03fd61728665eee7",1]
 ["src/agents/provider-auth-aliases.test.ts","../plugins/plugin-registry.js","95ab233049f5b2361c0a44c33ec8f84125ef023523231500beaa5fd60c3e4003",1]
 ["src/agents/provider-auth-aliases.test.ts","../plugins/provider-runtime.js","04079a77318ca366326f32c76622c3776268d9bb8fe6a86998df903a1fe07189",1]
-["src/agents/provider-local-service.settlement.test.ts","../process/child-process-tree.js","99b42f2a7cac0cf4d654c0a6bf736e9bade6bef9bdeff6b5758dbe41b834125f",1]
 ["src/agents/provider-stream.lifecycle.test.ts","../infra/net/fetch-guard.js","c46328e673b073162012e64f4c0ed2d004e47428382098ea0f2f9ad90818b9d5",1]
 ["src/agents/provider-stream.lifecycle.test.ts","../plugins/provider-runtime.js","2686ed92be611b6a955ae8dbe6b3cd25c17ccd349b62a8f15e1c0d9c366e2bdd",1]
 ["src/agents/provider-transport-fetch.test-harness.ts","../infra/net/fetch-guard.js","c0b8fee276386e27b08797223011a55db284c89eed9b652bcab92f423e853c38",1]
