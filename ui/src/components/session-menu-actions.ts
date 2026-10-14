@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
@@ -13,9 +14,11 @@ import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
 registerSessionOrganizationEnglish();
+registerSessionPlacementEnglish();
 
 export type SessionMenuData = {
   label: string;
+  placementAction?: "dispatch" | "move" | "retry";
   target?: { key: string; agentId?: string };
   sessionId: string | null;
   isChild?: boolean;
@@ -50,6 +53,7 @@ const SIMPLE_SESSION_ACTIONS = [
   "toggle-involving-me",
   "rename",
   "fork",
+  "move-session",
   "new-group",
   "toggle-archived",
   "archive-tree",
@@ -196,6 +200,8 @@ export class SessionMenuActions {
       case "set-color":
       case "assign-owner":
         return batch;
+      case "move-session":
+        return batch || !session.placementAction || session.archived;
       case "fork":
         return batch || state.forkDisabled;
       case "move-to-group":

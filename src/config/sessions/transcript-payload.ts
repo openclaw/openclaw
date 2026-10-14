@@ -163,7 +163,7 @@ function navigationProjection(
 }
 
 type NavigationInput = { eventJson: string; reportJson: string };
-const navigationReader = createSqliteQueryCache((database) =>
+const navigationReader = createSqliteQueryCache((database: DatabaseSync) =>
   prepareSqliteQueryTakeFirstSync<NavigationInput, { navigation_json: string | null }>(
     database,
     (parameter) => {

@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -82,19 +82,19 @@ const launchSchemaEnsurers = new Map(
 );
 
 const ensureNodeWorkerLaunchSchema = (
-  database: DatabaseSync,
+  database: EngineConnection,
   table: Exclude<keyof NodeWorkerLaunchDatabase, "node_worker_turns">,
 ): void => launchSchemaEnsurers.get(table)!(database);
 
-function query(database: DatabaseSync) {
+function query(database: EngineConnection) {
   return getNodeSqliteKysely<NodeWorkerLaunchDatabase>(database);
 }
 
-function hasLaunchTable(database: DatabaseSync, schema: LaunchSchema, table: LaunchTable): boolean {
-  return schema ? schema.tables.has(table) : tableExists(database, table);
+function hasLaunchTable(db: EngineConnection, schema: LaunchSchema, table: LaunchTable): boolean {
+  return schema ? schema.tables.has(table) : tableExists(db, table);
 }
 
-function selectLaunchRows(database: DatabaseSync, schema: LaunchSchema) {
+function selectLaunchRows(database: EngineConnection, schema: LaunchSchema) {
   return query(database)
     .selectFrom("node_worker_launches")
     .selectAll("node_worker_launches")
@@ -142,14 +142,14 @@ function selectLaunchRows(database: DatabaseSync, schema: LaunchSchema) {
     );
 }
 
-function readRow(database: DatabaseSync, launchId: string, schema: LaunchSchema) {
+function readRow(database: EngineConnection, launchId: string, schema: LaunchSchema) {
   return executeSqliteQueryTakeFirstSync(
     database,
     selectLaunchRows(database, schema).where("node_worker_launches.launch_id", "=", launchId),
   );
 }
 
-function readNonterminalCount(database: DatabaseSync): number {
+function readNonterminalCount(database: EngineConnection): number {
   return (
     executeSqliteQueryTakeFirstSync(
       database,
@@ -161,7 +161,7 @@ function readNonterminalCount(database: DatabaseSync): number {
   );
 }
 
-function readNonterminalRows(database: DatabaseSync, schema: LaunchSchema) {
+function readNonterminalRows(database: EngineConnection, schema: LaunchSchema) {
   return executeSqliteQuerySync(
     database,
     selectLaunchRows(database, schema)
@@ -171,7 +171,7 @@ function readNonterminalRows(database: DatabaseSync, schema: LaunchSchema) {
 }
 
 function pruneTerminalRows(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   schema: LaunchSchema;
   cutoffMs: number;
   limit: number;
@@ -215,7 +215,7 @@ function pruneTerminalRows(params: {
 
 /** Read the authoritative physical owner within an already-open journal transaction. */
 export function readNodeWorkerLaunchReceipt(
-  database: DatabaseSync,
+  database: EngineConnection,
   launchId: string,
 ): NodeWorkerLaunchReceipt | undefined {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -245,7 +245,7 @@ function validatePruneLimit(limit: number): void {
 }
 
 function requireMatchingRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: LaunchIdentity,
   schema: LaunchSchema,
 ): NodeWorkerLaunchRow {
@@ -302,7 +302,7 @@ function rowMatchesImmutableIdentity(
 }
 
 function finishOwnedRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   current: NodeWorkerLaunchRow,
   params: Omit<Parameters<NodeWorkerLaunchKernel["finish"]>[0], "launchId" | "planHash" | "nowMs">,
   nowMs: number,
@@ -362,7 +362,7 @@ export class NodeWorkerLaunchKernel {
 
   private write<T>(
     operationLabel: string,
-    operation: (database: DatabaseSync, schema: LaunchSchema, path: string) => T,
+    operation: (database: EngineConnection, schema: LaunchSchema, path: string) => T,
   ): T {
     return runOpenClawStateWriteTransaction(
       ({ db, path }) => {

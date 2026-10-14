@@ -22,15 +22,16 @@ import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
-import { renderToolFixture as render, settleToolBridges } from "./chat-tool-render.test-support.ts";
+import {
+  renderToolFixture as render,
+  settleToolBridges,
+  renderToolCard,
+} from "./chat-tool-render.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
-function textOf(container: ParentNode, selector: string) {
-  return container.querySelector(selector)?.textContent;
-}
+const textOf = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
 
 async function mountCard(
   card: ToolCard,

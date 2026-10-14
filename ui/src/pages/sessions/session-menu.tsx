@@ -13,6 +13,7 @@ import {
   type SessionMenuAction,
   type SessionMenuWork,
 } from "../../components/session-menu.ts";
+import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
@@ -58,6 +59,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
     return {
       session: {
         label: normalizeOptionalString(row.label) ?? row.key,
+        placementAction: sessionPlacementAction(row),
         target: { key: row.key, agentId: row.agentId },
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
         isChild:
@@ -92,6 +94,8 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
       copyMarkdownAllowed: canCopySessionMarkdown(gateway),
       actionDisabledReasons: sessionMenuReasons({
         snapshot: gateway,
+        placementRow: row,
+        requiredProfile: context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
         session: { ...row, pinnable },
         cloudWorkerStopAction,
       }),

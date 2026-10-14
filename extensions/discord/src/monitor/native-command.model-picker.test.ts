@@ -9,7 +9,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -38,7 +38,6 @@ import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thr
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 const hostSdk = vi.hoisted(() => ({
-  runtimeChoicesAvailable: true,
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
@@ -46,18 +45,6 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   ...(await importOriginal<typeof SessionTranscriptRuntime>()),
   recordDeliveredCommandExchange: hostSdk.recordDeliveredCommandExchange,
 }));
-
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => {
-  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>();
-  return {
-    ...sdk,
-    // The shipped minimum host lacks the shared message export.
-    MODEL_PICKER_CHANGED_MESSAGE: undefined,
-    get getModelsRuntimeChoices() {
-      return hostSdk.runtimeChoicesAvailable ? sdk.getModelsRuntimeChoices : undefined;
-    },
-  };
-});
 
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0]["ctx"];
 type PickerButton = ReturnType<typeof createDiscordModelPickerFallbackButton>;
@@ -444,7 +431,6 @@ describe("Discord model picker interactions", () => {
   );
 
   beforeEach(async () => {
-    hostSdk.runtimeChoicesAvailable = true;
     hostSdk.recordDeliveredCommandExchange.mockClear();
     tempDir = tempDirs.make("case-", sessionRoot);
     vi.useRealTimers();
@@ -453,80 +439,8 @@ describe("Discord model picker interactions", () => {
   });
 
   afterEach(async () => {
-    hostSdk.runtimeChoicesAvailable = true;
     vi.useRealTimers();
   });
-
-  it("dispatches declared minimum host recents through the built-in runtime", async () => {
-    hostSdk.runtimeChoicesAvailable = false;
-    const context = createModelPickerContext();
-    const data = createDefaultModelPickerData();
-    delete data.runtimeChoicesByModel;
-    delete data.isCurrent;
-    const { dispatchSpy, submit } = prepareModelPicker(data, context);
-
-    await submit({
-      ...createModelsViewSubmitData(),
-      p: "anthropic",
-      mi: "1",
-      view: "recents",
-      rs: "1",
-    });
-
-    expectDispatchedModelSelection({ dispatchSpy, model: "anthropic/claude-sonnet-4-5" });
-  });
-
-  it.each(["explicit runtime", "native model policy", "native session pin"])(
-    "preserves declared minimum host state with an unsupported %s",
-    async (mode) => {
-      hostSdk.runtimeChoicesAvailable = false;
-      const context = createModelPickerContext();
-      const data = createDefaultModelPickerData();
-      delete data.runtimeChoicesByModel;
-      delete data.isCurrent;
-      mockPickerData(data);
-      mockModelCommandPipeline();
-      if (mode === "native model policy") {
-        context.cfg.agents = {
-          defaults: {
-            models: { "anthropic/claude-sonnet-4-5": { agentRuntime: { id: "claude-cli" } } },
-          },
-        };
-      }
-      const interaction = createInteraction();
-      context.cfg.session = { ...context.cfg.session, dmScope: "main" };
-      const store = {
-        storePath: path.join(tempDir, "sessions.json"),
-        sessionKey: "agent:main:main",
-      };
-      await upsertSessionEntry({
-        ...store,
-        entry: {
-          sessionId: "minimum-host-session",
-          updatedAt: 1,
-          ...(mode === "native session pin" ? { agentRuntimeOverride: "claude-cli" } : {}),
-        },
-      });
-      const before = getSessionEntry({ ...store, readConsistency: "latest" });
-      const dispatchSpy = createDispatchSpy();
-      await runSubmitButton(
-        context,
-        {
-          ...createModelsViewSubmitData(),
-          p: "anthropic",
-          mi: "1",
-          ...(mode === "explicit runtime" ? { r: "claude-cli" } : {}),
-        },
-        dispatchSpy,
-        interaction,
-      );
-      expect(dispatchSpy).not.toHaveBeenCalled();
-      expect(getSessionEntry({ ...store, readConsistency: "latest" })).toEqual(before);
-      expect(JSON.stringify(firstMockArg(interaction.editReply, "model-only notice"))).toContain(
-        "supports model-only selection",
-      );
-    },
-  );
 
   it("ignores interactions from users other than the picker owner", async () => {
     const context = createModelPickerContext();
