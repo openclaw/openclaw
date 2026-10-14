@@ -7,15 +7,15 @@
 # The dependency manifest stages extract only package.json files, so the main
 # build layer is not invalidated by unrelated source changes.
 #
-# Build stages use full bookworm; the runtime image is always bookworm-slim.
+# Build stages use full bookworm; the runtime image uses trixie-slim.
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:64af3819f9275802414d7cdc38c27e9d82bd564dec4d4da87d008255d36c63b4"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6"
+ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="docker.io/library/node:24-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66"
+ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66"
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
 ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895"
@@ -24,7 +24,7 @@ ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5
 # Dependabot refreshes these blessed digests; release builds consume the
 # reviewed base snapshot instead of mutating distro state on every build.
 # To update, run: docker buildx imagetools inspect docker.io/library/node:24-bookworm and
-# docker.io/library/node:24-bookworm-slim (or podman) and replace the digests below with the
+# docker.io/library/node:24-trixie-slim (or podman) and replace the digests below with the
 # current multi-arch manifest list entries.
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
@@ -228,10 +228,10 @@ RUN node scripts/postinstall-bundled-plugins.mjs && \
     node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap
 
 # ── Runtime base image ──────────────────────────────────────────
-FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
-LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
-  org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
+FROM ${OPENCLAW_NODE_TRIXIE_SLIM_IMAGE} AS base-runtime
+ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST
+LABEL org.opencontainers.image.base.name="docker.io/library/node:24-trixie-slim" \
+  org.opencontainers.image.base.digest="${OPENCLAW_NODE_TRIXIE_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-runtime
@@ -251,16 +251,16 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 WORKDIR /app
 
 # Install missing runtime utilities and the OpenMP library required by llama-server.
-# `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
+# `ca-certificates` ships in `trixie` (full) but not in `trixie-slim`,
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
 # The runtime image must include the SSH client because the sandbox backend
-# spawns `ssh` directly, and bookworm-slim does not provide it.
+# spawns `ssh` directly, and trixie-slim does not provide it.
 # Apply current Debian point-release security fixes even when the pinned base
 # digest predates them, without waiting for a base-digest refresh.
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -340,8 +340,8 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 ENV PATH="/home/node/.local/bin:${PATH}"
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     packages="${OPENCLAW_IMAGE_APT_PACKAGES:-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
     if [ -n "$packages" ]; then \
       apt-get update && \
@@ -351,8 +351,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Install additional Python packages needed by your plugins or skills.
 # Example: docker build --build-arg OPENCLAW_IMAGE_PIP_PACKAGES="requests humanize" .
 ARG OPENCLAW_IMAGE_PIP_PACKAGES=""
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_IMAGE_PIP_PACKAGES" ]; then \
       if ! python3 -m pip --version >/dev/null 2>&1; then \
         apt-get update && \
@@ -367,8 +367,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
@@ -384,8 +384,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Required for agents.defaults.sandbox to function in Docker deployments.
 ARG OPENCLAW_INSTALL_DOCKER_CLI=""
 ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -411,7 +411,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker.gpg.asc && \
       rm -f /tmp/docker.gpg.asc && \
       chmod a+r /etc/apt/keyrings/docker.gpg && \
-      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable\n' \
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian trixie stable\n' \
         "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.list && \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -440,7 +440,7 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
+# The official Node.js images include a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
