@@ -321,6 +321,15 @@ describe("child-process spawn diagnostics", () => {
     ["bash", ["-v", "-c", "private command"], "bash", "unscoped.shell-command"],
     ["curl", ["-v", "private-url"], "other", "unscoped.curl"],
     ["node", ["-v"], "node", "unscoped.version"],
+    [
+      "powershell.exe",
+      ["-NoProfile", "-Command", "private command"],
+      "powershell",
+      "unscoped.shell-command",
+    ],
+    ["pwsh", ["-EncodedCommand", "private-payload"], "pwsh", "unscoped.shell-command"],
+    ["pwsh", ["/C", "private command"], "pwsh", "unscoped.shell-command"],
+    ["pwsh", ["-File", "/private/script", "-Command", "private arg"], "pwsh", "unscoped.shell"],
   ])("bounds unscoped %s launch classification", (command, args, family, operation) => {
     const child = new EventEmitter() as ChildProcess;
     recordChildProcessSpawn(command, child, undefined, args);

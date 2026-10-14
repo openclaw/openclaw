@@ -5,6 +5,10 @@ import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
+import {
+  isPowerShellInlineFileCommandFlag,
+  resolvePowerShellInlineCommandMatch,
+} from "../infra/shell-inline-command.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveOomScoreWrappedCommand } from "./linux-oom-score.js";
@@ -75,7 +79,16 @@ function unscopedProcessOperation(family: string, name: string, args: readonly s
   ) {
     return "unscoped.version";
   }
-  if (/^(sh|bash|zsh|cmd|powershell|pwsh)$/.test(family)) {
+  if (family === "powershell" || family === "pwsh") {
+    const argv = [name, ...args];
+    const { command, valueTokenIndex } = resolvePowerShellInlineCommandMatch(argv);
+    return command !== null &&
+      valueTokenIndex !== null &&
+      !isPowerShellInlineFileCommandFlag(argv[valueTokenIndex - 1] ?? "")
+      ? "unscoped.shell-command"
+      : "unscoped.shell";
+  }
+  if (/^(sh|bash|zsh|cmd)$/.test(family)) {
     return args.some((arg) => /^-[a-z]*c$/.test(arg) || /^\/(?:c|k)$/i.test(arg))
       ? "unscoped.shell-command"
       : "unscoped.shell";
