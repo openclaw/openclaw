@@ -1660,7 +1660,7 @@ jobs:
               # Only the unprivileged SUT writes below its private state root.
               /usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID" \
                 --clear-groups --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
-                /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -ceu '
+                /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash --noprofile --norc -ceu '
                   umask 077
                   source_config="$1"
                   projection_dir="$2"
