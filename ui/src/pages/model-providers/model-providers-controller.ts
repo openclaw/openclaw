@@ -239,13 +239,19 @@ export class ModelProvidersController extends ModelPageController {
       this.setMessage("add", null);
     },
     canContinue: () => this.mutationBlockedReason() === null,
-    refresh: () => this.refresh("replacement"),
+    refresh: (providerId) => this.refresh("replacement", providerId),
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
       (gateway) =>
-        modelCatalog.subscribeModelCatalogChanges(gateway, () => void this.refresh("publication")),
+        modelCatalog.subscribeModelCatalogChanges(gateway, () => {
+          // Sign-in publishes several intermediate config changes. Its completion
+          // owns the credential read; catalog snapshots update the shared projection.
+          if (!this.login.busy) {
+            void this.refresh("publication");
+          }
+        }),
     )
     .effect(
       () => this.context?.gateway,
@@ -303,7 +309,7 @@ export class ModelProvidersController extends ModelPageController {
     const loaderChanged = this.loaderPending !== this.previousLoaderPending;
     this.previousRouteData = data;
     this.previousLoaderPending = this.loaderPending;
-    if ((routeChanged || loaderChanged) && data) {
+    if (routeChanged && data) {
       if (data.connect && !previous?.connect) {
         this.pendingConnection = true;
       }
@@ -326,6 +332,9 @@ export class ModelProvidersController extends ModelPageController {
         this.refreshPolicy.resetPayload();
       }
       this.ensureInitialData();
+    }
+    if (loaderChanged && !this.loaderPending) {
+      this.supplemental.resume();
     }
   }
 
@@ -438,7 +447,7 @@ export class ModelProvidersController extends ModelPageController {
     this.ensureInitialData();
   }
 
-  private refresh(reason: ModelProviderRefreshReason): Promise<void> {
+  private refresh(reason: ModelProviderRefreshReason, providerId?: string): Promise<void> {
     if (!this.state.selectedAgentId) {
       return Promise.resolve();
     }
@@ -447,7 +456,12 @@ export class ModelProvidersController extends ModelPageController {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    return this.core.refresh(client, this.state.selectedAgentId, reason);
+    return this.core.refresh(
+      client,
+      this.state.selectedAgentId,
+      reason,
+      providerId && this.state.data ? { providerId, data: this.state.data } : undefined,
+    );
   }
 
   private setBusy = (key: string, value: boolean) =>

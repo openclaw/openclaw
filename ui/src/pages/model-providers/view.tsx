@@ -446,24 +446,31 @@ function AddProvider(props: ModelProvidersViewProps) {
 
 function ModelReadiness(props: ModelProvidersViewProps) {
   const signedIn = () => props.cards.some(hasVerifiedProvider);
+  const ready = () => props.configuredModels.some((model) => model.available !== false);
   return (
-    <div class="model-providers__setup" data-model-readiness="model-required">
+    <div class="model-providers__setup" data-model-readiness={ready() ? "ready" : "model-required"}>
       <SettingsSection title={t("modelProviders.readiness.title")}>
         <SettingsRow
-          title={t("modelProviders.readiness.heading")}
+          title={t(
+            ready() ? "modelProviders.readiness.readyHeading" : "modelProviders.readiness.heading",
+          )}
           description={
-            signedIn()
-              ? t("modelProviders.readiness.signedInNoModels")
-              : t("modelProviders.readiness.notConfigured")
+            ready()
+              ? t("modelProviders.readiness.readyDescription")
+              : signedIn()
+                ? t("modelProviders.readiness.signedInNoModels")
+                : t("modelProviders.readiness.notConfigured")
           }
           control={
             <>
               <SettingsStatus
-                kind={"warn"}
+                kind={ready() ? "ok" : "warn"}
                 label={
-                  signedIn()
-                    ? t("modelProviders.readiness.noModels")
-                    : t("modelProviders.readiness.modelRequired")
+                  ready()
+                    ? t("modelProviders.status.ready")
+                    : signedIn()
+                      ? t("modelProviders.readiness.noModels")
+                      : t("modelProviders.readiness.modelRequired")
                 }
               />
               <button
@@ -510,13 +517,11 @@ export function ModelProviders(props: ModelProvidersViewProps) {
 }
 
 function ConnectedModelProviders(props: ModelProvidersViewProps) {
-  const needsModelSetup = () =>
-    !props.loading && !props.configuredModels.some((model) => model.available !== false);
   return (
     <>
       <SettingsPage>
         <>
-          {needsModelSetup() ? <ModelReadiness {...props} /> : undefined}
+          <ModelReadiness {...props} />
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}

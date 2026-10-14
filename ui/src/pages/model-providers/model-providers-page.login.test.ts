@@ -457,6 +457,48 @@ describe("Models provider login", () => {
     },
   );
 
+  it("refreshes the connected provider without reloading usage or replacing other rows", async () => {
+    const { context, request, answer } = loginHarness();
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method, ...args) => {
+      const result = await originalRequest(method, ...args);
+      if (method !== "models.authStatus") {
+        return result;
+      }
+      return {
+        ...result,
+        providers: [
+          ...result.providers,
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [{ profileId: "openai:existing", type: "token", status: "ok" }],
+          },
+        ],
+      };
+    });
+    const page = appendPage(context);
+    await openLogin(page);
+    await submitCredential(page);
+    const existingRow = page.querySelector('[data-provider-id="openai"]');
+    expect(existingRow).not.toBeNull();
+    const methods = ["usage.status", "sessions.usage", "models.list"];
+    const before = methods.map(
+      (method) => request.mock.calls.filter(([name]) => name === method).length,
+    );
+
+    answer.resolve({ done: true, status: "done" });
+    await waitForSolid(() =>
+      expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
+    );
+    expect(
+      methods.map((method) => request.mock.calls.filter(([name]) => name === method).length),
+    ).toEqual(before);
+    expect(page.querySelector('[data-provider-id="openai"]')).toBe(existingRow);
+    expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
+  });
+
   it("keeps the selected credential save and provider refresh when dismissal is refused", async () => {
     const { context, request, runtimeConfig, answer, cancel } = loginHarness();
     const page = appendPage(context);

@@ -736,6 +736,8 @@ const enSettings = {
     readiness: {
       title: "AI setup",
       heading: "Connect a verified AI model",
+      readyHeading: "AI models available",
+      readyDescription: "Choose a default model below, or connect another provider.",
       signedInNoModels:
         "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
       notConfigured: "Choose a provider and verify the model OpenClaw will use.",

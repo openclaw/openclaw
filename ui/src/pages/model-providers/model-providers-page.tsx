@@ -1,5 +1,14 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
@@ -22,6 +31,18 @@ export function ModelProvidersContent(props: {
     revision();
     return controller.viewProps();
   });
+  let initialLoadComplete = false;
+  const showContent = createMemo(() => {
+    const snapshot = current();
+    if (
+      snapshot.props.connected &&
+      !snapshot.props.loading &&
+      controller.installedAgents.initialized
+    ) {
+      initialLoadComplete = true;
+    }
+    return initialLoadComplete || !snapshot.props.connected;
+  });
   const Recovery = () => (
     <ModelProviderAccountRecovery controller={controller.login} revision={revision} />
   );
@@ -35,12 +56,21 @@ export function ModelProvidersContent(props: {
   return (
     <ModelProvidersPageShell
       body={
-        <ModelProviders
-          {...current().props}
-          accountRecovery={<Recovery />}
-          installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
-          providerScope={<ModelProviderScope {...current().scope} />}
-        />
+        <Show
+          when={showContent()}
+          fallback={
+            <div class="model-providers__loading">
+              <SettingsLoadingSkeleton rows={1} />
+            </div>
+          }
+        >
+          <ModelProviders
+            {...current().props}
+            accountRecovery={<Recovery />}
+            installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
+            providerScope={<ModelProviderScope {...current().scope} />}
+          />
+        </Show>
       }
       loginMessage={current().loginMessage}
       login={

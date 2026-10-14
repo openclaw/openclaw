@@ -29,7 +29,7 @@ type LoginControllerOptions = {
   };
   canStart: () => boolean;
   canContinue: () => boolean;
-  refresh: () => Promise<unknown>;
+  refresh: (providerId?: string) => Promise<unknown>;
   onDiscover?: () => void;
   onApiKey?: (provider: string) => void;
   getManualProviders?: () => SystemAgentSetupDetectResult["manualProviders"];
@@ -59,6 +59,7 @@ export class ModelProviderLoginController {
   private refreshWarning: string | null = null;
   private message: ModelProviderRowMessage | undefined;
   private mode: "auth" | "activate" | "access" = "auth";
+  private providerId: string | undefined;
   private readonly runner: ModelSetupWizardRunner;
   private readonly wizard: WizardLoginController;
 
@@ -285,6 +286,7 @@ export class ModelProviderLoginController {
     this.refreshWarning = null;
     this.message = undefined;
     this.mode = "auth";
+    this.providerId = undefined;
     // Cleanup addresses the original connection and wizard only. Late replies
     // cannot publish credentials or errors into another agent's view.
     this.wizard.reset();
@@ -405,6 +407,7 @@ export class ModelProviderLoginController {
           this.options.onManualProvider?.(selected.id);
           return;
         }
+        this.providerId = provider ? canonicalModelAuthProviderId(provider.id) : undefined;
         this.picker = null;
         const selectingModel = picker.allowSetup && selected.requiresSetup;
         this.mode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
@@ -480,7 +483,7 @@ export class ModelProviderLoginController {
           .join("\n") || undefined,
     };
     this.host.requestUpdate();
-    await this.options.refresh();
+    await this.options.refresh(this.providerId);
   }
 
   private async run(
