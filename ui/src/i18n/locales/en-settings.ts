@@ -1,3 +1,5 @@
+import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
+import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -1681,10 +1683,10 @@ const enSettings = {
       description:
         "These plugins layer on top of the engine instead of competing for the slot, so any combination can run at once.",
       activeMemory: {
-        title: "Active memory",
+        title: activeMemoryPresentation.memoryAddon.label,
       },
       memoryWiki: {
-        title: "Memory wiki",
+        title: memoryWikiPresentation.memoryAddon.label,
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Could not update {plugin}",
