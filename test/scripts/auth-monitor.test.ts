@@ -337,4 +337,81 @@ describe("auth monitoring scripts", () => {
       expect(output).toMatch(/[Aa]uth status (?:is )?unavailable/);
     },
   );
+
+  it("persists user-local CLI and Node paths for the installed scheduled monitor", () => {
+    const home = tempDirs.make("openclaw-auth-scheduler-");
+    const scriptsDir = join(home, "scripts");
+    const cliDir = join(home, ".npm-global", "bin");
+    const nodeDir = join(home, "node", "bin");
+    const binDir = join(home, "bin");
+    const cliLog = join(home, "cli.log");
+    for (const dir of [join(scriptsDir, "systemd"), cliDir, nodeDir, binDir]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    for (const script of ["setup-auth-system.sh", "auth-monitor.sh", "claude-auth-status.sh"]) {
+      writeFileSync(join(scriptsDir, script), readScript(`scripts/${script}`), { mode: 0o755 });
+    }
+    for (const unit of ["openclaw-auth-monitor.service", "openclaw-auth-monitor.timer"]) {
+      writeFileSync(join(scriptsDir, "systemd", unit), readScript(`scripts/systemd/${unit}`));
+    }
+    writeFileSync(join(binDir, "systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(
+      join(nodeDir, "node"),
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
+      {
+        mode: 0o755,
+      },
+    );
+    const preparedStatus = {
+      auth: {
+        runtimeAuthRoutes: [
+          {
+            status: "usable",
+            nativeAuth: { runtimeId: "claude-cli", mode: "oauth", readiness: "configured" },
+          },
+        ],
+        oauth: { profiles: [] },
+        providers: [],
+      },
+    };
+    writeFileSync(
+      join(cliDir, "openclaw"),
+      [
+        "#!/usr/bin/env node",
+        `require("node:fs").appendFileSync(${JSON.stringify(cliLog)}, process.env.PATH + "\\n");`,
+        `console.log(JSON.stringify(${JSON.stringify(preparedStatus)}));`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const installPath = `${cliDir}:${nodeDir}:${binDir}:${process.env.PATH ?? ""}`;
+    const installed = spawnSync("bash", [join(scriptsDir, "setup-auth-system.sh")], {
+      input: "n\n\n\n",
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, PATH: installPath },
+    });
+    expect(installed.status).toBe(0);
+    const service = readFileSync(
+      join(home, ".config", "systemd", "user", "openclaw-auth-monitor.service"),
+      "utf8",
+    );
+    const [, scheduledPath = ""] = service.match(/^Environment="PATH=(.*)"$/m) ?? [];
+    expect(scheduledPath).toBe(`${cliDir}:${nodeDir}:${installPath}`.replaceAll("%", "%%"));
+    expect(service).not.toContain("@OPENCLAW_AUTH_MONITOR");
+    writeFileSync(cliLog, "");
+
+    const scheduled = spawnSync("/bin/bash", [join(scriptsDir, "auth-monitor.sh")], {
+      encoding: "utf8",
+      env: {
+        HOME: home,
+        PATH: scheduledPath.replaceAll("%%", "%"),
+        NOTIFY_NTFY: "",
+        NOTIFY_PHONE: "",
+      },
+    });
+
+    expect(scheduled.status).toBe(0);
+    expect(readFileSync(cliLog, "utf8")).toContain(`${cliDir}:${nodeDir}:`);
+    expect(scheduled.stdout).toContain("Auth OK");
+  });
 });
