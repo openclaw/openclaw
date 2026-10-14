@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   profiles: {} as Record<string, AuthProfileCredential>,
 }));
 
+// mock-isolation: profile selection uses fixture credentials without opening runtime auth stores.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: mocks.profiles }),
 }));
