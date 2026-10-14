@@ -75,7 +75,6 @@ describe("native session pages", () => {
         agents.dispose();
         channels.dispose();
         runtimeConfig.dispose();
-        context.settingsAgentSelection.dispose();
         gateway.stop();
         content.remove();
       }
