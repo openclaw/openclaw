@@ -623,6 +623,31 @@ describe("GatewayBrowserClient", () => {
     );
   });
 
+  it.each([
+    { timeoutMs: undefined, expectedTimeoutMs: 10_000 },
+    { timeoutMs: 30_000, expectedTimeoutMs: 10_000 },
+    { timeoutMs: 1_500, expectedTimeoutMs: 1_500 },
+  ])(
+    "bounds the first Talk catalog response wait: %j",
+    async ({ timeoutMs, expectedTimeoutMs }) => {
+      useNodeFakeTimers();
+      const client = createClient({ token: "shared-auth-token" });
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id);
+      const settled = vi.fn();
+      const result = client.request("talk.catalog", {}, { timeoutMs }).catch((error: unknown) => {
+        settled();
+        return error;
+      });
+      await vi.advanceTimersByTimeAsync(expectedTimeoutMs - 1);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toMatchObject({ code: "CLIENT_TIMEOUT" });
+      expect(settled).toHaveBeenCalledOnce();
+      expect(ws.sent).toHaveLength(2);
+    },
+  );
+
   it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
     "bounds Talk catalog warming retries through %s",
     async (outcome) => {

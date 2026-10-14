@@ -629,21 +629,18 @@ export class GatewayBrowserClient {
     params: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    const deadline =
-      Date.now() +
-      Math.min(resolveSafeTimeoutDelayMs(options?.timeoutMs ?? 10_000, { minMs: 0 }), 10_000);
+    const timeoutMs = Math.min(
+      resolveSafeTimeoutDelayMs(options?.timeoutMs ?? 10_000, { minMs: 0 }),
+      10_000,
+    );
+    const deadline = Date.now() + timeoutMs;
     const signal = options?.signal
       ? AbortSignal.any([options.signal, this.catalogRetryAbort.signal])
       : this.catalogRetryAbort.signal;
-    let requestOptions = options;
+    let requestOpts = { ...options, signal, timeoutMs };
     for (;;) {
       try {
-        return await this.chatEvents.request<T>(
-          this.client,
-          "talk.catalog",
-          params,
-          requestOptions,
-        );
+        return await this.chatEvents.request<T>(this.client, "talk.catalog", params, requestOpts);
       } catch (error) {
         if (
           !isGatewayProtocolResponseError(error) ||
@@ -663,7 +660,7 @@ export class GatewayBrowserClient {
         if (remaining <= 0) {
           throw error;
         }
-        requestOptions = { ...options, signal, timeoutMs: remaining };
+        requestOpts = { ...options, signal, timeoutMs: remaining };
       }
     }
   }

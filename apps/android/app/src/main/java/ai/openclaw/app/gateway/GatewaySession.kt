@@ -922,8 +922,8 @@ class GatewaySession(
     val params = parseRequestParams(paramsJson)
     val enqueue = guardRequestEnqueue(conn, withEnqueue)
     if (method != "talk.catalog") return conn.request(method, params, timeoutMs, enqueue)
-    val deadline = SystemClock.elapsedRealtime() + minOf(timeoutMs, 10_000)
-    var remainingMs = timeoutMs
+    var remainingMs = minOf(timeoutMs, 10_000)
+    val deadline = SystemClock.elapsedRealtime() + remainingMs
     while (true) {
       val result = conn.request(method, params, remainingMs, enqueue)
       val error = result.error
