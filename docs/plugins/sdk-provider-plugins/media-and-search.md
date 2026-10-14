@@ -61,6 +61,17 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    Clients returned by `resolveRemoteEmbeddingClient` resolve OAuth authorization
+    through the auth-profile owner before each HTTP request. API keys and explicit
+    authorization headers remain static. Pass the client's optional
+    `resolveRequestHeaders` callback through batch helpers too: it receives
+    `{ forceRefresh, signal }` and returns request headers. `withRemoteHttpResponse`
+    applies those headers before guarded dispatch and supplies the actual headers
+    as the second `onResponse` argument for error redaction. If that handler throws
+    a provider HTTP error for `401 token_expired`, the helper releases the response,
+    resolves headers once with `forceRefresh: true`, and retries only that request.
+    Uploads must use a replayable body such as the batch helper's `FormData`.
+
     Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
     `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
     provider network policy. Pass the embedding provider ID, API, effective base URL,

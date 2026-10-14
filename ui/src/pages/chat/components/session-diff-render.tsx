@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For } from "solid-js";
+import type { SessionSplitDiffRow } from "../../../lib/chat/session-diff-split.ts";
 import type { DiffFilePaths, DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { HighlightedDiff } from "./chat-diff-render.solid.tsx";
@@ -30,9 +31,10 @@ export function SessionSplitDiff(props: {
   lines: readonly DiffLine[];
   renderSkip: (line: DiffLine) => JSX.Element;
   file: DiffFilePaths;
+  rows: readonly SessionSplitDiffRow[];
 }) {
   return (
-    <HighlightedDiff lines={props.lines} file={props.file}>
+    <HighlightedDiff lines={props.lines} file={props.file} rows={props.rows}>
       {(renderLine, rows) => (
         <div
           class="session-diff-split code-highlight"

@@ -289,8 +289,17 @@ cancellation. Setup, artifact build and desktop proof consumed 6m31s before the
 browser suite. Capacity changes require complete-job qualification against the
 current preparation and inventory; the hosted routes and all test deadlines stay unchanged.
 
-The real-Gateway job has a 40-minute budget when its existing routing selects
-`ubuntu-24.04`, and 20 minutes on Blacksmith. In [run 34707873095, attempt 2](https://github.com/openclaw/openclaw/actions/runs/34707873095/attempts/2),
+Current-target Blacksmith real-Gateway shard 1 has a 24-minute job budget;
+other Blacksmith rows retain 20 minutes, and hosted fallbacks retain 40.
+In [run 38590548763](https://github.com/openclaw/openclaw/actions/runs/38590548763/job/115948443520),
+shard 1 exceeded the 20-minute job limit after 16 of its 17 files completed.
+Setup, build, and desktop transport proof consumed 6m44s before Vitest; the last
+passing file completed six seconds before cancellation. The remaining API-key
+file had no completed result, so this does not establish an individual test hang.
+The scoped allowance retains every test and subprocess deadline and needs a
+natural complete-job run to establish sufficiency.
+
+The hosted budget covers setup as well as tests. In [run 34707873095, attempt 2](https://github.com/openclaw/openclaw/actions/runs/34707873095/attempts/2),
 7m42s elapsed before the browser suite began; the 20-minute job limit then
 canceled a progressing suite before its widget cases. The hosted budget covers
 the complete setup, private artifact build, and test workload. Individual test

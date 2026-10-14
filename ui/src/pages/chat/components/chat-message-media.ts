@@ -32,8 +32,12 @@ export type ArtifactDownloadResolver = (
 
 export type ImageRenderOptions = {
   galleryImages?: readonly ImageBlock[];
-  galleryVideos?: (item: AttachmentItem) => { index: number; items: readonly AttachmentItem[] };
+  galleryVideos?: (item: AttachmentItem) => {
+    index: number;
+    items: readonly (AttachmentItem & { messageId?: string })[];
+  };
   sessionKey?: string;
+  messageId?: string;
   agentId?: string;
   policyKey?: string;
   canonicalMessageKey?: string;

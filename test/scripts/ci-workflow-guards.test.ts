@@ -2602,6 +2602,31 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     },
   );
 
+  it.each([
+    ["current shard 1", {}, 24],
+    ["current shard 2", { matrix: { shard: 2 } }, 20],
+    ["frozen shard 1", { frozenTarget: true }, 20],
+    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 20],
+    ["hosted override", { runnerBackend: "github" }, 40],
+    ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
+    ["manual fallback", { eventName: "workflow_dispatch" }, 40],
+    ["PR retry", { eventName: "pull_request", runAttempt: 2 }, 40],
+    ["noncanonical fallback", { repository: "example/openclaw" }, 40],
+  ] as const)("bounds real-Gateway job time for %s", (_label, overrides, minutes) => {
+    const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+    expect(
+      evaluateWorkflowExpression(job["timeout-minutes"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        frozenTarget: false,
+        matrix: { shard: 1 },
+        ...overrides,
+      }),
+    ).toBe(minutes);
+  });
+
   it("gives breaker-routed hosted jobs their hosted timeout budgets", () => {
     const workflow = readCiWorkflow();
     const context = {
