@@ -38,7 +38,6 @@ import {
   type SessionActorTranscriptReplica,
 } from "./session-actor-transcript-replica.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
-import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
@@ -133,7 +132,6 @@ export function ensureReplicaSubscription(): void {
         cell.snapshot,
         change,
       );
-      const previousPredicateColumns = cell.predicateColumns;
       const previous = cell.snapshot ?? cell.entry;
       const previousProjection = cell.snapshot
         ? { hasBoard: cell.snapshot.hasBoard }
@@ -177,7 +175,6 @@ export function ensureReplicaSubscription(): void {
         // Transcript/metadata markers do not revoke an installed entry receipt.
         // Its original scoped token still rejects any unaccounted storage write.
         cell.entry = unchangedEntry;
-        cell.predicateColumns = previousPredicateColumns;
         cell.bytes = JSON.stringify(unchangedEntry).length * 2;
         pool.snapshots += 1;
         pool.bytes += cell.bytes;
@@ -227,7 +224,6 @@ export function ensureReplicaSubscription(): void {
             members: sharingUnchanged ? previous?.members : undefined,
             participants: sharingUnchanged ? previous?.participants : undefined,
           });
-          cell.predicateColumns = deriveSessionPredicateColumns(JSON.stringify(prepared.fullEntry));
           cell.bytes = JSON.stringify(cell.entry).length * 2;
           pool.snapshots += 1;
           pool.bytes += cell.bytes;
@@ -260,7 +256,6 @@ function discard(cell: ReplicaCell): void {
   cell.transcript = undefined;
   cell.snapshot = undefined;
   cell.entry = undefined;
-  cell.predicateColumns = undefined;
   cell.bytes = 0;
 }
 
@@ -275,9 +270,6 @@ function retainSnapshot(
   const previousTranscript = cell.transcript;
   discard(cell);
   cell.snapshot = state;
-  cell.predicateColumns = state.entry
-    ? deriveSessionPredicateColumns(JSON.stringify(state.entry))
-    : undefined;
   cell.generation = generation;
   cell.bytes = JSON.stringify(state).length * 2;
   pool.snapshots += 1;
@@ -416,7 +408,6 @@ export function readSessionActorEntryFacts(
       : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
-    predicateColumns: cell.predicateColumns,
     incarnation,
   });
 }
@@ -516,10 +507,7 @@ export function readSessionActorRowFacts(params: {
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */
 export function retainSessionActorEntryFacts(
   target: FileTarget,
-  facts: Omit<
-    SessionActorEntryFacts,
-    "target" | "writeToken" | "dependencySessionIds" | "predicateColumns"
-  >,
+  facts: Omit<SessionActorEntryFacts, "target" | "writeToken" | "dependencySessionIds">,
   incarnation: string,
 ): void {
   ensureReplicaSubscription();
@@ -550,9 +538,6 @@ export function retainSessionActorEntryFacts(
       writeToken,
     }),
   );
-  cell.predicateColumns = facts.entry
-    ? deriveSessionPredicateColumns(JSON.stringify(facts.entry))
-    : undefined;
   cell.generation = incarnation;
   cell.bytes = JSON.stringify(cell.entry).length * 2;
   pool.snapshots += 1;

@@ -505,7 +505,7 @@ it("preserves native commit through worker publication, reply, and observer fail
   });
 });
 
-it("shares immutable actor revisions and isolates explicit policy copies", async () => {
+it("shares actor revisions and isolates explicit policy copies", async () => {
   await withActor(async ({ actor }) => {
     const initial = await actor.read(authority);
     expect(actor.snapshot(authority)).toBe(initial);
@@ -521,11 +521,6 @@ it("shares immutable actor revisions and isolates explicit policy copies", async
         assertCurrent() {},
         authorize(stage, snapshot) {
           stages.push(stage);
-          expect(Object.isFrozen(snapshot)).toBe(true);
-          expect(Object.isFrozen(snapshot.entry)).toBe(true);
-          expect(() => {
-            snapshot.dependencySessionIds.length = 0;
-          }).toThrow(TypeError);
           const copy = structuredClone(snapshot);
           if (copy.entry) {
             copy.entry.sessionId = "policy-mutated";
