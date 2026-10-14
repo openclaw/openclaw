@@ -43,9 +43,15 @@ suite.define(() => {
           );
           await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`);
           await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
-          const pluginLink = page.getByRole("link", { name: "UI fixture", exact: true });
+          const sidebar = page.locator("openclaw-app-sidebar");
+          const pagesButton = sidebar
+            .locator(".sidebar-rail")
+            .getByRole("button", { name: "Pages", exact: true });
+          await pagesButton.click();
+          const pages = sidebar.locator(".sidebar-pages");
+          const pluginLink = pages.getByRole("link", { name: "UI fixture", exact: true });
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
-          const builtInLink = page.getByRole("link", { name: "Plugins", exact: true });
+          const builtInLink = pages.getByRole("link", { name: "Plugins", exact: true });
           await expect
             .poll(async () => {
               const width = await pluginLink.evaluate((link) => link.getBoundingClientRect().width);
@@ -58,7 +64,7 @@ suite.define(() => {
           expect(
             await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
           ).toBe(0);
-          await page.getByRole("link", { name: "Plugins", exact: true }).click();
+          await builtInLink.click();
           await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBeNull();
           await pluginLink.click();
@@ -74,8 +80,9 @@ suite.define(() => {
             `${suite.server.baseUrl}plugin?p.filter=review&id=proof&plugin=ui-fixture`,
           );
           await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
+          await pagesButton.click();
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
-          await page.getByRole("link", { name: "Plugins", exact: true }).click();
+          await builtInLink.click();
           await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBeNull();
           expect(
@@ -97,7 +104,8 @@ suite.define(() => {
           await page.getByRole("button", { name: "Reload plugin UI", exact: true }).click();
           await gateway.waitForRequest("plugins.controlUi.reload");
           await page.getByRole("button", { name: "Back to app", exact: true }).click();
-          await page.getByRole("link", { name: "UI fixture", exact: true }).click();
+          await pagesButton.click();
+          await pluginLink.click();
           await page.getByRole("heading", { name: "Fixture revision two" }).waitFor();
           expect(pageErrors).toEqual([]);
         },

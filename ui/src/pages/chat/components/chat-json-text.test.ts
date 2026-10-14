@@ -6,11 +6,11 @@ import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code
 import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
 import "./chat-tool-output.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolFixture, renderToolCard } from "./chat-tool-render.test-support.ts";
 
 // Keep these as literal source text: parsing expected values would repeat the
 // rounding and duplicate-key loss that the display must not introduce.
@@ -39,9 +39,9 @@ afterEach(() => {
 });
 
 describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role) => {
-  function renderMessage(text: string, isStreaming = false) {
+  async function renderMessage(text: string, isStreaming = false) {
     const container = createContainer();
-    render(
+    await renderToolFixture(
       renderGroupedMessage(
         prepareChatMessageRender({
           role,
@@ -76,14 +76,14 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
       fenced: true,
       tree: true,
     },
-  ])("preserves $name in literal code and copy", (scenario) => {
+  ])("preserves $name in literal code and copy", async (scenario) => {
     const { text, fenced, tree } = scenario;
     if (scenario.size !== undefined) {
       expect(text).toHaveLength(scenario.size);
     }
     const source = fenced ? "```json\n" + text + "\n```" : text;
     const displayed = fenced ? (role === "toolResult" ? source : text + "\n") : text;
-    const container = renderMessage(source);
+    const container = await renderMessage(source);
     expect(container.querySelectorAll("pre code")).toHaveLength(1);
     expect(container.querySelector(fenced ? "pre code" : ".chat-text pre code")?.textContent).toBe(
       displayed,
@@ -125,8 +125,8 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
   it.each([
     { text: '{"count": }', streaming: false },
     ...(role === "assistant" ? [{ text: "[9007199254740993,1e400,-0]", streaming: true }] : []),
-  ])("keeps non-tree output literal: $text (streaming=$streaming)", ({ text, streaming }) => {
-    const container = renderMessage(text, streaming);
+  ])("keeps non-tree output literal: $text (streaming=$streaming)", async ({ text, streaming }) => {
+    const container = await renderMessage(text, streaming);
     expect(container.querySelector(".code-block-json-tree, .code-block-json-mode")).toBeNull();
     expect(container.textContent).toContain(text);
   });
@@ -136,7 +136,7 @@ describe("tool JSON details", () => {
   async function openToolDetails(text: string) {
     const container = createContainer();
     const openSidebar = vi.fn<(content: SidebarContent) => void>();
-    render(
+    await renderToolFixture(
       renderToolCard(
         { id: "json-tool", name: "lookup", outputText: text, completed: true },
         {

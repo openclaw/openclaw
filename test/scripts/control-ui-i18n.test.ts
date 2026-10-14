@@ -25,7 +25,10 @@ import {
   parseTranslationBatchReply,
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
-import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
+import {
+  loadControlUiSourceCatalog,
+  readControlUiSourceCatalog,
+} from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
@@ -337,6 +340,15 @@ describe("translation provider privacy and fallback", () => {
 });
 
 describe("control-ui config hint source catalog", () => {
+  it("includes plugin-owned Memory label sources in the raw catalog hash input", async () => {
+    const source = await readControlUiSourceCatalog();
+    for (const plugin of ["active-memory", "memory-wiki"]) {
+      expect(source).toContain(
+        readFileSync(`extensions/${plugin}/control-ui.presentation.json`, "utf8"),
+      );
+    }
+  });
+
   it("includes core config labels and help under collision-safe keys", () => {
     const source = flattenTranslations(loadControlUiSourceCatalog());
 
@@ -439,6 +451,40 @@ describe("control-ui-i18n generated ownership", () => {
     expect(shouldStrictControlUiI18n(["ui/src/i18n/.i18n/de.tm.jsonl"])).toBe(true);
     expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
     expect(shouldStrictControlUiI18n(null)).toBe(true);
+  });
+
+  it("admits plugin bundle repairs only from the trusted locale publisher", () => {
+    const memory = "ui/src/i18n/.i18n/fr.tm.jsonl";
+    const bundle = "extensions/example/src/i18n/locales/translated.json";
+    const manifest = "extensions/example/openclaw.plugin.json";
+    const branch = "automation/control-ui-locale-refresh";
+    const trusted = resolveAllowedGeneratedMixBranch(
+      { GITHUB_ACTIONS: "true", OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "true" },
+      branch,
+    );
+    const fork = resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, branch);
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([memory, bundle, manifest], trusted),
+    ).not.toThrow();
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([memory, bundle, manifest], fork),
+    ).toThrow("must be isolated");
+    expect(() => assertControlUiGeneratedArtifactsIsolated([memory, manifest], "feature")).toThrow(
+      "must be isolated",
+    );
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        [memory, "extensions/example/src/i18n/locales/en.ts"],
+        trusted,
+      ),
+    ).toThrow("must be isolated");
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        bundle,
+        "extensions/example/src/i18n/locales/en.ts",
+      ]),
+    ).not.toThrow();
+    expect(shouldStrictControlUiI18n(["extensions/example/src/i18n/.i18n/fr.tm.jsonl"])).toBe(true);
   });
 
   it("allows only a complete canonical translation-memory ownership migration", () => {

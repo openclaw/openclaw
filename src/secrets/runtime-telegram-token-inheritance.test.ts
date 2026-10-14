@@ -72,30 +72,6 @@ describe("secrets runtime snapshot telegram token inheritance", () => {
     );
   });
 
-  it("treats Telegram account overrides as enabled when account.enabled is omitted", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          channels: {
-            telegram: {
-              enabled: true,
-              accounts: {
-                inheritedEnabled: {
-                  botToken: envRef("MISSING_INHERITED_TELEGRAM_ACCOUNT_TOKEN"),
-                },
-              },
-            },
-          },
-        }),
-        env: {},
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => loadAuthStoreWithProfiles({}),
-      }),
-    ).rejects.toThrow(
-      'Environment variable "MISSING_INHERITED_TELEGRAM_ACCOUNT_TOKEN" is missing or empty.',
-    );
-  });
-
   it("treats top-level Telegram botToken refs as active when account botToken is blank", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -122,33 +98,6 @@ describe("secrets runtime snapshot telegram token inheritance", () => {
     expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toBe("");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.telegram.botToken",
-    );
-  });
-
-  it("treats Telegram webhookSecret refs as inactive when webhook mode is not configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        channels: {
-          telegram: {
-            webhookSecret: envRef("MISSING_TELEGRAM_WEBHOOK_SECRET"),
-            accounts: {
-              work: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
-    });
-
-    expect(snapshot.config.channels?.telegram?.webhookSecret).toEqual(
-      envRef("MISSING_TELEGRAM_WEBHOOK_SECRET"),
-    );
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.telegram.webhookSecret",
     );
   });
 

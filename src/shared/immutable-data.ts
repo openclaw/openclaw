@@ -14,17 +14,17 @@ function isPlainDataObject(value: object): boolean {
   );
 }
 
-/** Immutable graphs keep their classification for exactly as long as their objects live. */
-export function isDeeplyFrozenPlainData(value: unknown): boolean {
+function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true): boolean {
   if (!value || typeof value !== "object") {
     return typeof value !== "function";
   }
   if (deeplyFrozenPlainData.has(value)) {
     return true;
   }
-  if (!isPlainDataObject(value) || !Object.isFrozen(value)) {
+  if (!freeze && requireFrozen && (isProxy(value) || !Object.isFrozen(value))) {
     return false;
   }
+  let plain = true;
   const inspected = new Set<object>();
   const pending = [value];
   while (pending.length) {
@@ -32,61 +32,59 @@ export function isDeeplyFrozenPlainData(value: unknown): boolean {
     if (inspected.has(candidate)) {
       continue;
     }
-    if (!isPlainDataObject(candidate) || !Object.isFrozen(candidate)) {
+    if (!isPlainDataObject(candidate)) {
+      if (!freeze) {
+        return false;
+      }
+      plain = false;
+      continue;
+    }
+    if (!freeze && requireFrozen && !Object.isFrozen(candidate)) {
       return false;
     }
     inspected.add(candidate);
-    const childStart = pending.length;
     // Direct members disprove the container before queued child graphs are inspected.
     for (const key of Reflect.ownKeys(candidate)) {
       const descriptor = Object.getOwnPropertyDescriptor(candidate, key)!;
-      if (!("value" in descriptor) || typeof descriptor.value === "function") {
-        return false;
+      const member: unknown = descriptor.value;
+      if (!("value" in descriptor) || typeof member === "function") {
+        if (!freeze) {
+          return false;
+        }
+        plain = false;
+        continue;
       }
-      if (
-        descriptor.value &&
-        typeof descriptor.value === "object" &&
-        !deeplyFrozenPlainData.has(descriptor.value)
-      ) {
-        pending.push(descriptor.value);
+      if (member && typeof member === "object" && !deeplyFrozenPlainData.has(member)) {
+        pending.push(member);
       }
     }
-    // Keep depth-first child order without retaining a separate list per container.
-    for (let left = childStart, right = pending.length - 1; left < right; left++, right--) {
-      const child = pending[left]!;
-      pending[left] = pending[right]!;
-      pending[right] = child;
+    if (freeze) {
+      Object.freeze(candidate);
     }
   }
   // A cycle is proven only when every reachable member passes, not on a back edge.
-  for (const candidate of inspected) {
-    deeplyFrozenPlainData.add(candidate);
+  if (plain && freeze) {
+    deeplyFrozenPlainData.add(value);
+  } else if (plain && requireFrozen) {
+    for (const candidate of inspected) {
+      deeplyFrozenPlainData.add(candidate);
+    }
   }
-  return true;
+  return plain;
+}
+
+/** Inspect mutable plain graphs without caching them or reading accessors. */
+export function isPlainData(value: unknown): boolean {
+  return inspectPlainData(value, false, false);
+}
+
+/** Immutable graphs keep their classification for exactly as long as their objects live. */
+export function isDeeplyFrozenPlainData(value: unknown): boolean {
+  return inspectPlainData(value, false);
 }
 
 /** Freeze an owner's cloned JSON snapshot without executing opaque members. */
 export function freezeJsonSnapshot<T>(value: T): T {
-  const seen = new Set<object>();
-  const visit = (candidate: unknown) => {
-    if (
-      !candidate ||
-      typeof candidate !== "object" ||
-      seen.has(candidate) ||
-      deeplyFrozenPlainData.has(candidate) ||
-      !isPlainDataObject(candidate)
-    ) {
-      return;
-    }
-    seen.add(candidate);
-    for (const key of Reflect.ownKeys(candidate)) {
-      const descriptor = Object.getOwnPropertyDescriptor(candidate, key)!;
-      if ("value" in descriptor) {
-        visit(descriptor.value);
-      }
-    }
-    Object.freeze(candidate);
-  };
-  visit(value);
+  inspectPlainData(value, true);
   return value;
 }

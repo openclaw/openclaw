@@ -1,4 +1,3 @@
-import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -26,8 +25,6 @@ type SessionScopedOperationsHost = {
   notifyCreated: (key: string) => void;
   reportError: (error: unknown) => void;
 };
-
-const retiredFailedSubscriptionRecoveries = new WeakSet<AggregateError>();
 
 function buildTranscriptMutationParams(sessionKey: string, agentId?: string | null) {
   const { key, ...owner } = buildSessionRequestParams(sessionKey, agentId);
@@ -150,22 +147,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
         agentId,
         ...(includeApprovals ? { includeApprovals: true } : {}),
         ...(mode ? { mode } : {}),
-      })
-      .catch((error: unknown) => {
-        if (
-          error instanceof AggregateError &&
-          error.errors[0] instanceof GatewayProtocolRequestTimeoutError &&
-          error.errors[0].requestSent &&
-          !disposed &&
-          host.connection.isCurrent(scope) &&
-          !retiredFailedSubscriptionRecoveries.has(error)
-        ) {
-          // Failed compensation cannot prove privileged observers were removed;
-          // closing their owning socket invokes authoritative Gateway cleanup.
-          retiredFailedSubscriptionRecoveries.add(error);
-          scope.client.forceReconnect("session subscription recovery failed");
-        }
-        throw error;
       });
     ownedSubscriptions.add(subscription);
     if (disposed || !host.connection.isCurrent(scope)) {

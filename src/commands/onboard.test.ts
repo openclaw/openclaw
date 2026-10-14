@@ -261,7 +261,15 @@ describe("setupWizardCommand", () => {
       expect(runtime.error).toHaveBeenCalledWith(message);
       expect(vi.mocked(runtime.log).mock.calls).toEqual(
         "json" in options
-          ? [[JSON.stringify({ ok: false, phase: "options", message }, null, 2)]]
+          ? [
+              [
+                JSON.stringify(
+                  { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+                  null,
+                  2,
+                ),
+              ],
+            ]
           : [],
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -464,7 +472,11 @@ describe("setupWizardCommand", () => {
       expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
       if (json) {
         expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+          JSON.stringify(
+            { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+            null,
+            2,
+          ),
         );
       } else {
         expect(runtime.log).not.toHaveBeenCalled();
@@ -935,7 +947,11 @@ describe("setupWizardCommand", () => {
           'Auth choice "claude-cli" is deprecated.\nUse "--auth-choice demo-provider-api-key".';
         expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
         expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+          JSON.stringify(
+            { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+            null,
+            2,
+          ),
         );
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
         expect(mocks.withSetupMigrationTargetLock).not.toHaveBeenCalled();

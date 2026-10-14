@@ -1,5 +1,6 @@
 // Scheduled show_widget registration and allowlist coverage.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEmbeddedAttemptToolConstructionPlan } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -7,6 +8,8 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 function expectWidget(tools: ReturnType<typeof createOpenClawTools>) {
   const tool = tools.find((candidate) => candidate.name === "show_widget");

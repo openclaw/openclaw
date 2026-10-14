@@ -21,9 +21,6 @@ async function waitForTransportClose(
     : new Promise<void>((resolve) => {
         onClose = resolve;
         ws.once("close", onClose);
-        if (ws.isClosed) {
-          onClose();
-        }
       });
   try {
     await withCloseTimeout(Promise.all([Promise.resolve(operation), closed]), operationName);
@@ -42,11 +39,7 @@ export async function closeWhatsAppSocketAndWait(
   const errors: unknown[] = [];
   try {
     const endResult: unknown = sock.end(new Error(reason));
-    if (sock.ws.isClosed) {
-      await waitForTransportClose(sock.ws, endResult, "socket end");
-      return;
-    }
-    if (sock.ws.isClosing) {
+    if (sock.ws.isClosed || sock.ws.isClosing) {
       await waitForTransportClose(sock.ws, endResult, "socket end");
     } else {
       await withCloseTimeout(Promise.resolve(endResult), "socket end");

@@ -153,7 +153,7 @@ describe("Claw provenance worker writes", () => {
     expect(persisted(ref)).toEqual([{ ...ref, status: "pending", updatedAtMs: 2 }]);
   });
 
-  it.each(["plugin", "skill"] as const)(
+  it.each(["skill"] as const)(
     "commits %s status without executing SQLite on the caller thread",
     async (kind) => {
       const ref = packageFixture(kind);

@@ -5,7 +5,7 @@ sidebarTitle: "Tool Plugins"
 read_when:
   - You want to build a simple OpenClaw plugin that only adds agent tools
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
-  - You need to scaffold, generate, validate, test, or publish a tool-only plugin
+  - You need to create, generate, validate, test, or publish a tool-only plugin
   - You need the plugin tool context's memory audience and currency guards
 ---
 
@@ -40,7 +40,7 @@ npm run plugin:validate
 npm test
 ```
 
-`plugins init` scaffolds:
+`plugins init` creates these starter files:
 
 | File                   | Purpose                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Plugin stock-quotes is valid.
 | -------------------- | ------------------ | -------------------------------------- |
 | `--directory <path>` | `<id>`             | Output directory                       |
 | `--name <name>`      | Title-cased `<id>` | Display name                           |
-| `--type <type>`      | `tool`             | Scaffold type: `tool` or `provider`    |
+| `--type <type>`      | `tool`             | Plugin type: `tool` or `provider`      |
 | `--force`            | off                | Overwrite an existing output directory |
 
 ## Write a tool
@@ -74,6 +74,12 @@ Plugin stock-quotes is valid.
 `defineToolPlugin` takes plugin identity, an optional config schema, and a
 static list of tools. Parameter and config types are inferred from the
 TypeBox schemas.
+
+Each tool can declare `workspaceAccess`: `false` for a workspace-independent tool,
+`"execute"` for a pure factory whose tool reads or writes working files, or `true`
+when its factory also reads the workspace. An omitted factory declaration waits
+for complete workspace preparation; an omitted static declaration waits only
+at execution. Explicit declarations preserve early first replies during checkout.
 
 ```typescript
 import { Type } from "typebox";
@@ -118,6 +124,12 @@ export default defineToolPlugin({
 
 Tool names are the stable API. Pick names that are unique, lowercase, and
 specific enough to avoid collisions with core tools or other plugins.
+
+OpenClaw bounds tool input schemas to 128 nested schema levels, including
+expanded local references. Deeper subschemas become permissive `{}` schemas
+so the tool remains callable. A one-time warning names the affected tool;
+validation beyond the cutoff is unavailable. Keep schemas shallow enough to
+describe useful arguments to the model. This applies to MCP tools too.
 
 ## Optional and factory tools
 
@@ -554,7 +566,7 @@ which editors surface as migration warnings. To enforce them in CI, enable a
 type-aware rule such as
 [`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
 Oxlint is not type-aware, so it cannot enforce these annotations. The generated
-`plugins init` scaffold therefore does not add a deprecation lint config.
+`plugins init` starter files therefore do not add a deprecation lint config.
 
 `plugins validate` checks that:
 

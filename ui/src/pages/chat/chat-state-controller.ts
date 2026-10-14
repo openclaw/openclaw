@@ -20,7 +20,7 @@ import {
   clearSessionWorkspacePreviews,
   clearWorkspaceTimer,
 } from "./components/chat-session-workspace-state.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
   captureChatComposerOwner,
   isChatComposerOwnerCurrent,
@@ -28,7 +28,11 @@ import {
 } from "./composer-persistence-state.ts";
 import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
-import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
+import {
+  type AfterCommitEffect,
+  notifyRenderLifecycleForTest,
+  type RenderLifecycle,
+} from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = Set<() => void>;
@@ -39,6 +43,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
     state.chatMessages,
     state.chatToolMessages,
     state.chatStreamSegments,
+    state.chatReasoning,
     state.guardianNotices,
     state.realtimeTalkConversationState.entries,
   ];
@@ -58,6 +63,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
   private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
+  private backgroundRenderFrame: number | undefined;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -351,7 +357,20 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return this.renderLifecycleConnected && this.renderLifecycleScope === scope;
   }
 
-  private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
+  requestBackgroundUpdate(): void {
+    if (this.renderLifecycleScope) {
+      this.requestUpdateForScope(this.renderLifecycleScope, true);
+    }
+  }
+
+  private cancelBackgroundRender(): void {
+    if (this.backgroundRenderFrame !== undefined) {
+      cancelAnimationFrame(this.backgroundRenderFrame);
+      this.backgroundRenderFrame = undefined;
+    }
+  }
+
+  private requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
     if (!this.isRenderLifecycleScopeActive(scope)) {
       return false;
     }
@@ -361,11 +380,30 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
     this.onStateChange?.();
-    this.host.requestUpdate();
+    notifyRenderLifecycleForTest(this.host, "invalidate");
+    // Only background producers opt in. Draft persistence and scroll ownership
+    // are captured above, and transcript changes still commit before paint.
+    if (
+      background &&
+      !this.scrollAfterUpdate &&
+      globalThis.document?.visibilityState !== "hidden" &&
+      typeof globalThis.requestAnimationFrame === "function"
+    ) {
+      this.backgroundRenderFrame ??= requestAnimationFrame(() => {
+        this.backgroundRenderFrame = undefined;
+        if (this.isRenderLifecycleScopeActive(scope)) {
+          this.host.requestUpdate();
+        }
+      });
+    } else {
+      this.cancelBackgroundRender();
+      this.host.requestUpdate();
+    }
     return true;
   }
 
   private cancelRenderLifecycleScope(): void {
+    this.cancelBackgroundRender();
     const scope = this.renderLifecycleScope;
     if (!scope) {
       return;
@@ -480,6 +518,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostUpdated() {
+    if (this.renderLifecycleScope && this.isRenderLifecycleScopeActive(this.renderLifecycleScope)) {
+      notifyRenderLifecycleForTest(this.host, "commit");
+    }
     const state = this.stateValue;
     if (!this.scrollAfterUpdate) {
       return;
@@ -493,6 +534,11 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     scheduleCommittedChatScroll(state, force, state.chatHasAutoScrolled, { contentChanged });
+  }
+
+  hostUpdate() {
+    // An immediate input/property update also renders the latest background facts.
+    this.cancelBackgroundRender();
   }
 
   private stopChatEffects() {

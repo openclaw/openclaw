@@ -8,7 +8,10 @@ import type {
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import type { ReplyDeliveryObserver } from "../../../agents/reply-completion.js";
+import type {
+  ReplyDeliveryFactsObserver,
+  ReplyDeliveryObserver,
+} from "../../../agents/reply-completion.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { ChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../../config/sessions.js";
@@ -95,10 +98,12 @@ export class FollowupRunDeferredError extends Error {
 // Leaf contracts only: get-reply.types.ts imports this module.
 type FollowupRunObservers = Pick<
   GetReplyOptions,
-  "onAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
+  "onAgentRunStart" | "onPreparedAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
 > & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
   onDeliberateSilentTerminalReply?: () => void;
 };
 
@@ -161,6 +166,8 @@ export type FollowupRun = {
     predecessor: Promise<boolean>;
     settle: (accepted: boolean) => void;
   };
+  /** Internal Goal nudge; admission must still observe this exact active Goal. */
+  goalContinuation?: import("../goal-continuation.js").GoalContinuation;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** This continuation owes last-resort feedback if it also stalls, including claimed input. */
@@ -223,6 +230,7 @@ export type FollowupRun = {
     | "authProfileId"
     | "authProfileIdSource"
     | "thinkLevel"
+    | "thinkingExplicit"
     | "fastMode"
     | "fastModeAutoOnSeconds"
     | "verboseLevel"
@@ -295,6 +303,19 @@ export type FollowupRun = {
     skipProviderRuntimeHints?: boolean;
   };
 };
+
+export function bindReplyOperationQueueDisposition(
+  run: Pick<FollowupRun, "onQueueDisposition">,
+  state: ReplyOperationRunState | undefined,
+): void {
+  const observe = run.onQueueDisposition;
+  run.onQueueDisposition = (disposition) => {
+    observe?.(disposition);
+    if (state && (disposition !== "queue-cap-old" || state.admission?.status !== "accepted")) {
+      state.admission = { status: "skipped", reason: "queue-cap" };
+    }
+  };
+}
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,

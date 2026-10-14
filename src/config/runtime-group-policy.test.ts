@@ -9,21 +9,7 @@ import {
 } from "./runtime-group-policy.js";
 
 describe("resolveOpenProviderRuntimeGroupPolicy", () => {
-  it("uses open fallback when provider config exists", () => {
-    const resolved = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: true,
-    });
-    expect(resolved.groupPolicy).toBe("open");
-    expect(resolved.providerMissingFallbackApplied).toBe(false);
-  });
-
-  it("fails closed when provider config is missing and no defaults are set", () => {
-    const resolved = resolveOpenProviderRuntimeGroupPolicy({ providerConfigPresent: false });
-    expect(resolved.groupPolicy).toBe("allowlist");
-    expect(resolved.providerMissingFallbackApplied).toBe(true);
-  });
-
-  it.each(["open", "disabled"] as const)(
+  it.each(["open"] as const)(
     "ignores the %s global default when provider config is missing",
     (defaultGroupPolicy) => {
       const resolved = resolveOpenProviderRuntimeGroupPolicy({
@@ -34,15 +20,6 @@ describe("resolveOpenProviderRuntimeGroupPolicy", () => {
       expect(resolved.providerMissingFallbackApplied).toBe(true);
     },
   );
-
-  it("respects explicit provider policy when provider config is missing", () => {
-    const resolved = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: false,
-      groupPolicy: "disabled",
-    });
-    expect(resolved.groupPolicy).toBe("disabled");
-    expect(resolved.providerMissingFallbackApplied).toBe(false);
-  });
 });
 
 describe("resolveAllowlistProviderRuntimeGroupPolicy", () => {

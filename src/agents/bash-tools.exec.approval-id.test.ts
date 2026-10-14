@@ -98,10 +98,11 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
   },
 }));
 
+// mock-isolation: Approval-id routing uses synthetic clients without consulting live channel approvals.
 vi.mock("../infra/exec-approval-surface.js", () => ({
   describeNativeExecApprovalClientSetup: () => null,
   listNativeExecApprovalClientLabels: () => [],
-  resolveExecApprovalInitiatingSurfaceState: (params: {
+  resolveExecApprovalInitiatingSurfaceStateAsync: async (params: {
     channel?: string | null;
     accountId?: string | null;
   }) => {
@@ -388,7 +389,7 @@ describe("exec approvals", () => {
     expect(node.runs).toHaveLength(1);
     expect(node.runs[0]?.cwd).toBe("/Users/vv");
     expect(getResultText(result)).toContain(
-      "Warning: continuation options are unavailable; running synchronously.",
+      "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session.",
     );
     expect(getResultText(result)).toContain("ok");
     expect(result.details.status).toBe("completed");
@@ -396,6 +397,25 @@ describe("exec approvals", () => {
     expect(calls).toContain("node.invoke");
     expect(calls).not.toContain("exec.approval.request");
   });
+
+  it.each([{ background: true }, { yieldMs: 0 }, { background: false }])(
+    "explains remote node continuation limits for %j",
+    async (continuation) => {
+      const node = nodeFixture("node-ok");
+      mockGateway({ "node.invoke": node.handle });
+      const tool = createExecTool({ host: "node", security: "full", ask: "off" });
+      const result = await tool.execute("node-continuation", {
+        command: "echo node-ok",
+        ...continuation,
+      });
+      expect(result.details.status).toBe("completed");
+      expect(result.details).not.toHaveProperty("sessionId");
+      expect(getResultText(result)).toContain("node-ok");
+      expect(getResultText(result).includes("without a process session")).toBe(
+        continuation.background === true || "yieldMs" in continuation,
+      );
+    },
+  );
 
   it.each(["gateway", "node"] as const)(
     "keeps ask=always prompts for %s runs with durable trust",

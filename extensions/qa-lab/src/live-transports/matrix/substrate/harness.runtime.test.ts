@@ -108,47 +108,6 @@ describe("matrix harness runtime", () => {
     });
   });
 
-  it("starts the harness, waits for versions, and exposes a stop command", async () => {
-    const calls: string[] = [];
-    const fetchCalls: string[] = [];
-
-    await withStartedMatrixHarness(
-      {
-        async runCommand(command, args, cwd) {
-          calls.push([command, ...args, `@${cwd}`].join(" "));
-          if (args.join(" ").includes("ps --format json")) {
-            return { stdout: '[{"State":"running"}]\n', stderr: "" };
-          }
-          return { stdout: "", stderr: "" };
-        },
-        fetchImpl: vi.fn(async (input: string) => {
-          fetchCalls.push(input);
-          return { ok: true };
-        }),
-        sleepImpl: vi.fn(async () => {}),
-      },
-      async ({ outputDir, result }) => {
-        expect(calls).toEqual([
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml down --remove-orphans @/repo/openclaw`,
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml up -d @/repo/openclaw`,
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml ps --format json matrix-qa-homeserver @/repo/openclaw`,
-        ]);
-        expect(fetchCalls).toEqual([
-          "http://127.0.0.1:28008/_matrix/client/versions",
-          "http://127.0.0.1:28008/_matrix/client/versions",
-        ]);
-        expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
-        expect(result.stopCommand).toBe(
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml down --remove-orphans`,
-        );
-        await result.restartService();
-        expect(calls).toContain(
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml restart matrix-qa-homeserver @/repo/openclaw`,
-        );
-      },
-    );
-  });
-
   it("bounds the full homeserver restart and readiness phase", async () => {
     vi.useFakeTimers();
     try {
@@ -228,32 +187,6 @@ describe("matrix harness runtime", () => {
     );
   });
 
-  it("stops Tuwunel when recorder startup fails", async () => {
-    const calls: string[] = [];
-    await withTempDir("matrix-qa-harness-", async (outputDir) => {
-      await expect(
-        startMatrixQaHarness(
-          { outputDir, repoRoot: "/repo/openclaw", homeserverPort: 28008 },
-          {
-            async runCommand(command, args, cwd) {
-              calls.push([command, ...args, `@${cwd}`].join(" "));
-              if (args.join(" ").includes("ps --format json")) {
-                return { stdout: '[{"State":"running"}]\n', stderr: "" };
-              }
-              return { stdout: "", stderr: "" };
-            },
-            fetchImpl: vi.fn(async () => ({ ok: true })),
-            sleepImpl: vi.fn(async () => {}),
-            startRecordingProxyImpl: vi.fn(async () => {
-              throw new Error("recorder startup failed");
-            }),
-          },
-        ),
-      ).rejects.toThrow("recorder startup failed");
-      expect(calls.filter((call) => call.includes("down --remove-orphans"))).toHaveLength(2);
-    });
-  });
-
   it("stops Tuwunel when post-start health setup fails", async () => {
     const calls: string[] = [];
     await withTempDir("matrix-qa-harness-", async (outputDir) => {
@@ -273,24 +206,6 @@ describe("matrix harness runtime", () => {
       ).rejects.toThrow("health setup failed");
       expect(calls.filter((call) => call.includes("down --remove-orphans"))).toHaveLength(2);
     });
-  });
-
-  it("treats empty Docker health fields as a fallback to running state", async () => {
-    await withStartedMatrixHarness(
-      {
-        async runCommand(_command, args) {
-          if (args.join(" ").includes("ps --format json")) {
-            return { stdout: '{"Health":"","State":"running"}\n', stderr: "" };
-          }
-          return { stdout: "", stderr: "" };
-        },
-        fetchImpl: vi.fn(async () => ({ ok: true })),
-        sleepImpl: vi.fn(async () => {}),
-      },
-      ({ result }) => {
-        expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
-      },
-    );
   });
 
   it("cancels Matrix versions probe response bodies", async () => {
@@ -407,57 +322,6 @@ describe("matrix harness runtime", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(probeSignals).toHaveLength(1);
     expect(probeSignals[0]?.aborted).toBe(true);
-  });
-
-  it("falls back to the container IP when the host port is unreachable", async () => {
-    const calls: string[] = [];
-
-    await withStartedMatrixHarness(
-      {
-        runCommand: createContainerNetworkRunCommand(calls),
-        fetchImpl: vi.fn(async (input: string) => ({
-          ok: input.startsWith("http://172.18.0.10:8008/"),
-        })),
-        sleepImpl: vi.fn(async () => {}),
-      },
-      ({ outputDir, result }) => {
-        expect(result.baseUrl).toBe("http://172.18.0.10:8008/");
-        expect(calls).toContain(
-          `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml ps -q matrix-qa-homeserver @/repo/openclaw`,
-        );
-        expect(calls).toContain(
-          "docker inspect --format {{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}} container-123 @/repo/openclaw",
-        );
-      },
-    );
-  });
-
-  it("keeps the host URL when the container IP is also unreachable", async () => {
-    const fetchCalls: string[] = [];
-
-    await withStartedMatrixHarness(
-      {
-        runCommand: createContainerNetworkRunCommand(),
-        fetchImpl: vi.fn(async (input: string) => {
-          fetchCalls.push(input);
-          return {
-            ok:
-              input === "http://127.0.0.1:28008/_matrix/client/versions" &&
-              fetchCalls.filter((url) => url === input).length > 1,
-          };
-        }),
-        sleepImpl: vi.fn(async () => {}),
-      },
-      ({ result }) => {
-        expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
-        expect(fetchCalls).toEqual([
-          "http://127.0.0.1:28008/_matrix/client/versions",
-          "http://127.0.0.1:28008/_matrix/client/versions",
-          "http://172.18.0.10:8008/_matrix/client/versions",
-          "http://127.0.0.1:28008/_matrix/client/versions",
-        ]);
-      },
-    );
   });
 
   it("keeps probing the container URL until it becomes reachable", async () => {

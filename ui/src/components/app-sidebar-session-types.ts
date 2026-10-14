@@ -110,6 +110,8 @@ export type SidebarRecentSession = {
   renameValue: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
+  /** Admitted display slot used only while restoring a sidebar snapshot. */
+  snapshotSubtitle?: { subtitle?: string; narration?: string; toolName?: string };
   workContext?: SessionWorkContext;
   active: boolean;
   visuallyActive: boolean;
@@ -127,6 +129,8 @@ export type SidebarRecentSession = {
   archived?: boolean;
   visibility?: SessionVisibility;
   sharingRole?: GatewaySessionRow["sharingRole"];
+  communication?: GatewaySessionRow["communication"];
+  effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
@@ -273,21 +277,6 @@ export type SidebarSessionOwnerFilter = {
 };
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
-export function resolveSidebarSessionsScrollState(
-  element: HTMLElement,
-): SidebarSessionsScrollState {
-  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
-  if (maxScrollTop <= 1) {
-    return "none";
-  }
-  if (element.scrollTop <= 1) {
-    return "top";
-  }
-  if (element.scrollTop >= maxScrollTop - 1) {
-    return "bottom";
-  }
-  return "middle";
-}
 export type SidebarSectionDropTarget = {
   sectionId: string;
   position: "before" | "after";
@@ -324,6 +313,7 @@ export type SidebarSessionPatch = Pick<
   | "icon"
   | "color"
   | "category"
+  | "communication"
 >;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
@@ -393,14 +383,17 @@ export function loadStoredSidebarSessionOwnerFilter(
     const stored = getSafeLocalStorage()?.getItem(
       sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
     );
+    if (stored === null || stored === undefined) {
+      return { ownerId: selfUserId, involvingMe: false };
+    }
     const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
     return {
       ownerId: stored === "involving-me" ? null : ownerId || null,
       involvingMe: stored === "involving-me",
     };
   } catch {
-    // Privacy mode or a disabled store should not break sidebar rendering.
-    return { ownerId: null, involvingMe: false };
+    // A disabled store still uses the signed-in owner default.
+    return { ownerId: selfUserId, involvingMe: false };
   }
 }
 
@@ -484,12 +477,8 @@ export function storeSidebarSessionOwnerFilter(
       ? "involving-me"
       : filter.ownerId
         ? `owner:${filter.ownerId}`
-        : null;
-    if (value === null) {
-      storage?.removeItem(key);
-    } else {
-      storage?.setItem(key, value);
-    }
+        : "all";
+    storage?.setItem(key, value);
   } catch {
     // Keep the in-memory filter when persistence is unavailable.
   }

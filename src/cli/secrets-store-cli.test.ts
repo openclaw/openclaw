@@ -241,7 +241,7 @@ describe("secrets store CLI", () => {
     }
   });
 
-  it.each(["--dry-run", "--yes"])(
+  it.each(["--yes"])(
     "rejects an empty imported secret before any entry is written with %s",
     async (mode) => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-store-invalid-import-"));

@@ -51,16 +51,10 @@ export class SkillBinsCache implements SkillBinsProvider {
 
   async current(): Promise<SkillBinTrustEntry[]> {
     if (Date.now() - this.lastRefresh > this.ttlMs) {
-      const refresh = this.refreshInFlight ?? this.refresh();
-      this.refreshInFlight = refresh;
-      try {
-        await refresh;
-      } finally {
-        // An older waiter must not clear a newer retry's in-flight promise.
-        if (this.refreshInFlight === refresh) {
-          this.refreshInFlight = undefined;
-        }
-      }
+      this.refreshInFlight ??= this.refresh().finally(() => {
+        this.refreshInFlight = undefined;
+      });
+      await this.refreshInFlight;
     }
     return this.bins;
   }
@@ -72,9 +66,7 @@ export class SkillBinsCache implements SkillBinsProvider {
       this.bins = resolveSkillBinTrustEntries(bins, this.pathEnv);
       this.lastRefresh = Date.now();
     } catch {
-      if (!this.lastRefresh) {
-        this.bins = [];
-      }
+      // Keep the previous inventory until the next refresh, including an empty first load.
     }
   }
 }

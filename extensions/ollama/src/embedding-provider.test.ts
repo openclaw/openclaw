@@ -401,6 +401,26 @@ describe("ollama embedding provider", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "missing model",
+      status: 404,
+      detail: 'model "all-minilm" not found, try pulling it first',
+      recovery: " Run `ollama pull all-minilm` on the configured Ollama host.",
+    },
+    { name: "missing endpoint", status: 404, detail: "404 page not found", recovery: "" },
+    { name: "server error", status: 500, detail: "model metadata not found", recovery: "" },
+  ])("reports actionable embed errors for $name", async ({ status, detail, recovery }) => {
+    const body = JSON.stringify({ error: detail });
+    const fetchMock = mockEmbeddingResponse(new Response(body, { status }));
+    const { provider } = await createEmbeddingProvider({ model: "all-minilm" });
+
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toMatchObject({
+      message: `Ollama embed HTTP ${status}: ${body}${recovery}`,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("reports malformed embed JSON with a provider-owned error", async () => {
     mockEmbeddingResponse(
       new Response("{not json", {

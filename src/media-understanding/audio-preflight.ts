@@ -71,7 +71,7 @@ export async function transcribeFirstAudio(params: {
         providerRegistry,
         config: cfg.tools?.media?.audio,
         activeModel,
-        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.signal ? { execution: { signal: params.signal } } : {}),
       });
       params.signal?.throwIfAborted();
       transcript = result.outputs

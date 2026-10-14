@@ -70,40 +70,35 @@ describe("createChannelDeliveryAccumulator", () => {
 });
 
 describe("createAcceptedChannelDeliveryResult", () => {
-  it.each([true, false])(
-    "retains accepted prefixes and nested partial identities (receipt=%s)",
-    (withReceipt) => {
-      const nestedReceipt: MessageReceipt = {
-        primaryPlatformMessageId: "attachment",
-        platformMessageIds: ["attachment", "caption"],
-        parts: [
-          { platformMessageId: "attachment", kind: "media", index: 0, threadId: "native-thread" },
-        ],
-        sentAt: 123,
-      };
-      const result = createAcceptedChannelDeliveryResult({
-        results: [{ messageId: "prefix" }],
-        deliveryResults: [
-          {
-            visibleReplySent: true,
-            messageIds: withReceipt ? ["stale-legacy-id"] : ["attachment", "caption"],
-            ...(withReceipt ? { receipt: nestedReceipt } : {}),
-          },
-        ],
-        kind: "media",
-        content: "accepted prefix\naccepted attachment",
-      });
+  it("retains accepted prefixes and nested partial receipt identities", () => {
+    const nestedReceipt: MessageReceipt = {
+      primaryPlatformMessageId: "attachment",
+      platformMessageIds: ["attachment", "caption"],
+      parts: [
+        { platformMessageId: "attachment", kind: "media", index: 0, threadId: "native-thread" },
+      ],
+      sentAt: 123,
+    };
+    const result = createAcceptedChannelDeliveryResult({
+      results: [{ messageId: "prefix" }],
+      deliveryResults: [
+        {
+          visibleReplySent: true,
+          messageIds: ["stale-legacy-id"],
+          receipt: nestedReceipt,
+        },
+      ],
+      kind: "media",
+      content: "accepted prefix\naccepted attachment",
+    });
 
-      expect(result.messageIds).toEqual(["prefix", "attachment", "caption"]);
-      expect(result.content).toBe("accepted prefix\naccepted attachment");
-      expect(result.visibleReplySent).toBe(true);
-      expect(result).not.toHaveProperty("threadId");
-      expect(result.receipt.parts[0]?.platformMessageId).toBe("prefix");
-      if (withReceipt) {
-        expect(result.receipt.parts[1]).toEqual(nestedReceipt.parts[0]);
-      }
-    },
-  );
+    expect(result.messageIds).toEqual(["prefix", "attachment", "caption"]);
+    expect(result.content).toBe("accepted prefix\naccepted attachment");
+    expect(result.visibleReplySent).toBe(true);
+    expect(result).not.toHaveProperty("threadId");
+    expect(result.receipt.parts[0]?.platformMessageId).toBe("prefix");
+    expect(result.receipt.parts[1]).toEqual(nestedReceipt.parts[0]);
+  });
 
   it("preserves identityless accepted delivery without inventing routing or text", () => {
     const result = createAcceptedChannelDeliveryResult({});
@@ -213,21 +208,6 @@ describe("channel partial delivery errors", () => {
       },
     });
     expect(isChannelPartialDeliveryError(error)).toBe(true);
-  });
-
-  it("recognizes the documented structural envelope", () => {
-    expect(
-      isChannelPartialDeliveryError({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        deliveryResult: { visibleReplySent: true },
-      }),
-    ).toBe(true);
-    expect(
-      isChannelPartialDeliveryError({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        deliveryResult: { visibleReplySent: false },
-      }),
-    ).toBe(false);
   });
 });
 

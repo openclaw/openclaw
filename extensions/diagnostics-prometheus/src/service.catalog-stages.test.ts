@@ -83,7 +83,7 @@ describe("catalog list stage metrics", () => {
   });
 });
 
-it("exports chat.send request and startup histograms with bounded, trusted labels", () => {
+it("exports chat.send startup and deferred histograms with bounded, trusted labels", () => {
   const metrics = createMetricsHarness();
   const event = {
     ...baseEvent(),
@@ -101,6 +101,12 @@ it("exports chat.send request and startup histograms with bounded, trusted label
       { ...event, name: "chat.send.replyInitialization", details: { stage: "startup" } },
       trusted,
     );
+    for (const stage of ["steer", "queued"]) {
+      metrics.record(
+        { ...event, name: "chat.send.dispatch", durationMs: 120_001, details: { stage } },
+        trusted,
+      );
+    }
     const rendered = metrics.render();
     expect(rendered).toContain(
       'openclaw_chat_send_phase_seconds_count{phase="snapshot",stage="request"} 2\n',
@@ -114,6 +120,11 @@ it("exports chat.send request and startup histograms with bounded, trusted label
     expect(rendered).toContain(
       'openclaw_chat_send_phase_seconds_count{phase="replyInitialization",stage="startup"} 1\n',
     );
+    for (const stage of ["steer", "queued"]) {
+      expect(rendered).toContain(
+        `openclaw_chat_send_phase_seconds_sum{phase="dispatch",stage="${stage}"} 120.001\n`,
+      );
+    }
     expect(rendered).not.toContain("synthetic-private-content");
     expect(rendered).not.toContain("privateText");
 

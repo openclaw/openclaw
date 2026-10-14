@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
@@ -29,6 +33,14 @@ import { tableHasColumn, tableExists } from "./openclaw-state-db-schema-helpers.
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-input-schema-");
 
 describe("pending input additive schema", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   it("leaves old stores table-free on reads and preserves accepted input through older-reader use and reopen", async () => {
     const options = {
       agentId: "main",
@@ -145,10 +157,9 @@ describe("pending input additive schema", () => {
       const metadata = old.prepare("SELECT * FROM schema_meta").all();
       const original = old.prepare("SELECT message_json FROM session_pending_inputs").get();
       old.close();
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "interrupted", message: receipt!.message }],
-      });
+      await expect(listSessionPendingInputs(scope)).rejects.toThrow(
+        "requires writable startup admission before session reads",
+      );
       if (path === "open") {
         openOpenClawAgentDatabase(options);
         await closeOpenClawAgentDatabasesAsync();
@@ -162,6 +173,10 @@ describe("pending input additive schema", () => {
         }
         current.close();
       }
+      expect(await listSessionPendingInputs(scope)).toMatchObject({
+        total: 1,
+        items: [{ state: "interrupted", message: receipt!.message }],
+      });
       const reopened = new DatabaseSync(filename, { readOnly: true });
       try {
         expect(reopened.prepare("PRAGMA user_version").get()).toEqual(version);

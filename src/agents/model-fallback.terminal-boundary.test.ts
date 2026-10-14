@@ -1,5 +1,6 @@
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
   AgentRunTerminalOutcomeError,
   findAgentRunTerminalOutcome,
@@ -121,6 +122,7 @@ it.each([
     },
   },
   { name: "recorded supersession", make: createAgentRunSupersededAbortError },
+  { name: "node loss with unknown tool effects", make: () => new WorkerNodeLostError() },
 ])("does not replay $name", async ({ make }) => {
   const error = make();
   expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });

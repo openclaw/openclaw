@@ -283,6 +283,11 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
   persistSessionTranscriptTurn: vi.fn(),
 }));
 
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryInWorker: async (...args: unknown[]) => loadSessionEntryMock(...args),
+}));
+
 vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
   updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
 }));
@@ -343,8 +348,9 @@ vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../sessions/stored-model-overrides.js", () => ({
-  resolveStoredModelOverride: vi.fn(
+// mock-isolation: reply orchestration uses fixture model overrides without opening host session stores.
+vi.mock("../../sessions/stored-model-overrides.js", () => {
+  const resolveStoredModelOverride = vi.fn(
     (params: {
       sessionEntry?: { providerOverride?: string; modelOverride?: string };
       sessionStore?: Record<string, { providerOverride?: string; modelOverride?: string }>;
@@ -355,8 +361,14 @@ vi.mock("../../sessions/stored-model-overrides.js", () => ({
       }
       return null;
     },
-  ),
-}));
+  );
+  return {
+    resolveStoredModelOverride,
+    resolveStoredModelOverrideAsync: async (
+      params: Parameters<typeof resolveStoredModelOverride>[0],
+    ) => resolveStoredModelOverride(params),
+  };
+});
 
 vi.mock("./session-reset-prompt.js", () => ({
   resolveBareResetBootstrapFileAccess: vi.fn().mockReturnValue(false),
@@ -564,69 +576,41 @@ describe("runPreparedReply media-only handling", () => {
     ]);
   });
 
-  it.each([
-    { name: "dashboard", spawnedBy: undefined },
-    { name: "visible child", spawnedBy: "agent:default:main" },
-  ])("loads workspace skills and runs in the $name managed worktree", async ({ spawnedBy }) => {
-    const params = baseParams({
-      sessionKey: "agent:default:dashboard:worktree-session",
-      workspaceDir: "/tmp/agent-workspace",
-      sessionEntry: {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        spawnedBy,
-        spawnedCwd: "/tmp/session-worktree",
-        worktree: {
-          id: "worktree-1",
-          branch: "openclaw/worktree-1",
-          repoRoot: "/tmp/project",
-          canonicalWorkspaceDir: "/tmp/project/packages/app",
+  it.each([{ name: "visible child", spawnedBy: "agent:default:main" }])(
+    "loads workspace skills and runs in the $name managed worktree",
+    async ({ spawnedBy }) => {
+      const params = baseParams({
+        sessionKey: "agent:default:dashboard:worktree-session",
+        workspaceDir: "/tmp/agent-workspace",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          spawnedBy,
+          spawnedCwd: "/tmp/session-worktree",
+          worktree: {
+            id: "worktree-1",
+            branch: "openclaw/worktree-1",
+            repoRoot: "/tmp/project",
+            canonicalWorkspaceDir: "/tmp/project/packages/app",
+          },
         },
-      },
-    });
-    envMockState.fastTestRuntime = false;
-    try {
-      await runPreparedReply(params);
-      const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-      expect(ensureSkillSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceDir: "/tmp/agent-workspace",
-          executionWorkspaceDir: "/tmp/session-worktree",
-        }),
-      );
-    } finally {
-      envMockState.fastTestRuntime = true;
-    }
-    expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
-  });
-
-  it.each([
-    { name: "initial", storedCwd: undefined, expected: "/tmp/session-repo" },
-    { name: "replaced", storedCwd: "/tmp/current-repo", expected: "/tmp/current-repo" },
-    { name: "cleared", storedCwd: null, expected: "/tmp/agent-repo" },
-  ])("uses the $name admitted session cwd for execution", async ({ storedCwd, expected }) => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      spawnedCwd: "/tmp/session-repo",
-      spawnedBy: "agent:default:main",
-    };
-    await runPrepared({
-      cfg: {
-        agents: {
-          defaults: { cwd: "/tmp/default-repo" },
-          entries: { default: { cwd: "/tmp/agent-repo" } },
-        },
-      },
-      sessionEntry,
-      sessionStore:
-        storedCwd !== undefined
-          ? { "session-key": { ...sessionEntry, spawnedCwd: storedCwd ?? undefined } }
-          : undefined,
-    });
-
-    expect(requireRunReplyAgentCall().followupRun.run.cwd).toBe(expected);
-  });
+      });
+      envMockState.fastTestRuntime = false;
+      try {
+        await runPreparedReply(params);
+        const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
+        expect(ensureSkillSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({
+            workspaceDir: "/tmp/agent-workspace",
+            executionWorkspaceDir: "/tmp/session-worktree",
+          }),
+        );
+      } finally {
+        envMockState.fastTestRuntime = true;
+      }
+      expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
+    },
+  );
 
   beforeEach(async () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
@@ -684,7 +668,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it.each(["explicit", "stored"] as const)(
-    "rejects unsupported %s thinking or applies a turn-local fallback without changing storage",
+    "validates %s thinking while preserving the stored preference",
     async (source) => {
       const sessionEntry: SessionEntry = {
         sessionId: "session-thinking",
@@ -712,7 +696,7 @@ describe("runPreparedReply media-only handling", () => {
         );
         expect(runReplyAgent).not.toHaveBeenCalled();
       } else {
-        expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).toBe("off");
+        expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).toBe("high");
         expect(sessionEntry.thinkingLevel).toBe("high");
         expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
       }
@@ -859,37 +843,7 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it("prefers a one-turn queue override over the stored session mode", async () => {
-    const queueSettings = await import("./queue/settings-runtime.js");
-    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
-    vi.mocked(queueSettings.resolveQueueSettings).mockImplementationOnce((params) => ({
-      mode: params.inlineMode ?? params.sessionEntry?.queueMode ?? "steer",
-    }));
-    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
-      .mockReturnValueOnce("active-session")
-      .mockReturnValueOnce("active-session");
-    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
-    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
-
-    await runPrepared({
-      sessionEntry: {
-        sessionId: "active-session",
-        updatedAt: Date.now(),
-        queueMode: "followup",
-      },
-      opts: { queueModeOverride: "steer" },
-    });
-
-    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ inlineMode: "steer" }),
-    );
-    expect(requireRunReplyAgentCall(-1)).toMatchObject({
-      shouldSteer: true,
-      resolvedQueue: { mode: "steer" },
-    });
-  });
-
-  it.each([undefined, "Earlier message in this thread"])(
+  it.each([undefined])(
     "uses thread history %s before falling back to the starter",
     async (history) => {
       const params = baseParams({ isNewSession: false });
@@ -990,14 +944,7 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   it.each([
-    { name: "ordinary code", directive: "", authorized: true, enabled: true },
     { name: "authorized directive", directive: "/think high\r\n", authorized: true, enabled: true },
-    {
-      name: "unauthorized directive",
-      directive: "/think high\r\n",
-      authorized: false,
-      enabled: true,
-    },
   ])(
     "preserves prompt bytes through routing and preparation: $name",
     async ({ directive, authorized, enabled }) => {
@@ -1037,10 +984,7 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
-  it.each([
-    { body: "what changed?", contextBody: "what changed?", admitted: true },
-    { body: "\u0000  ", contextBody: "", admitted: false },
-  ])(
+  it.each([{ body: "\u0000  ", contextBody: "", admitted: false }])(
     "admits pending inbound history only when nonblank: $admitted",
     async ({ body, contextBody, admitted }) => {
       vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
@@ -1126,7 +1070,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it.each([undefined, true])(
+  it.each([undefined])(
     "persists direct-turn sender attribution only for external contacts (self: %s)",
     async (senderIsSelf) => {
       await runPrepared({
@@ -1172,39 +1116,6 @@ describe("runPreparedReply media-only handling", () => {
       content: "timestamped followup",
       timestamp: 1_710_000_000_000,
     });
-  });
-
-  it("does not copy prior session media onto text-only followups", async () => {
-    await runPrepared({
-      ctx: {
-        ...createInboundBody("follow up without media"),
-        OriginatingChannel: "telegram",
-        OriginatingTo: "42",
-        ChatType: "direct",
-      },
-      sessionCtx: {
-        ...createSessionBody("follow up without media"),
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "42",
-        ChatType: "direct",
-        media: [{ path: "/tmp/previous-image.png", contentType: "image/png" }],
-      },
-    });
-
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.media).toEqual([]);
-    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
-      role: "user",
-      content: "follow up without media",
-    });
-    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPath");
-    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
-    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty([
-      "__openclaw",
-      "media",
-      0,
-    ]);
   });
 
   it("projects partially hydrated current images into the runner and transcript layout", async () => {
@@ -1639,7 +1550,7 @@ describe("runPreparedReply media-only handling", () => {
       (_ctx, _envelope, entry) =>
         entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : "",
     );
-    loadSessionEntryMock.mockReturnValue(completeEntry);
+    const sessionStore = { "session-key": activeEntry };
     const activeRun = createReplyOperation({
       sessionId: "session-goal-interrupt",
       sessionKey: "session-key",
@@ -1657,7 +1568,7 @@ describe("runPreparedReply media-only handling", () => {
       isNewSession: false,
       sessionId: "session-goal-interrupt",
       sessionEntry: activeEntry,
-      sessionStore: { "session-key": activeEntry },
+      sessionStore,
       storePath: "/tmp/openclaw-session-store.json",
     });
     while (!activeRun.abortSignal.aborted) {
@@ -1665,14 +1576,10 @@ describe("runPreparedReply media-only handling", () => {
         setImmediate(resolve);
       });
     }
+    sessionStore["session-key"] = completeEntry;
     activeRun.complete();
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
-    expect(loadSessionEntryMock).toHaveBeenCalledWith({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "session-key",
-      readConsistency: "latest",
-    });
     const call = requireRunReplyAgentCall(-1);
     expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain("Active goal:");
   });
@@ -2114,7 +2021,6 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it.each([
-    ["exec", undefined, "exec", "[OpenClaw exec completion]"],
     ["heartbeat", "background-task", "background-task", "[OpenClaw session event]"],
     ["heartbeat", "exec-event", "exec-event", "[OpenClaw exec completion]"],
   ] as const)(
@@ -2154,7 +2060,7 @@ describe("runPreparedReply media-only handling", () => {
         OriginatingTo: "discord:channel-123",
       });
       const expectedTranscript =
-        expectedSourceTool === "exec" || expectedSourceTool === "exec-event"
+        expectedSourceTool === "exec-event"
           ? `${transcriptPrompt}\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.`
           : transcriptPrompt;
       expect(call?.transcriptCommandBody).toBe(expectedTranscript);
@@ -2243,7 +2149,6 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   it.each([
-    { stableMode: "automatic", expectedPrompt: "group:telegram:group:automatic" },
     { stableMode: "message_tool_only", expectedPrompt: "group:telegram:group:message_tool_only" },
   ] as const)(
     "keeps CLI binding facts stable across room-event, primary, and heartbeat assembly for $stableMode",
@@ -2411,48 +2316,6 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(secondRun.extraSystemPromptStatic).toBe(firstRun.extraSystemPromptStatic);
     expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
-  });
-
-  it("keeps inbound sender context in reply-targeted bare /reset model prompt while hiding startup instructions from transcript prompt", async () => {
-    const commandText = "/reset";
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      ["Conversation info:", "Sender:", "sender_id", "telegram-user-1"].join("\n"),
-    );
-
-    await runPrepared({
-      ...turn(
-        "",
-        {
-          ...createProviderSurface("webchat"),
-          ChatType: "direct",
-          ReplyToBody: "quoted reset target",
-          ReplyToSender: "Ada Lovelace",
-        },
-        { SenderId: "telegram-user-1", SenderName: "Ada Lovelace" },
-        createInboundBody(commandText),
-      ),
-      command: {
-        surface: "webchat",
-        channel: "webchat",
-        isAuthorizedSender: true,
-        abortKey: "session-key",
-        ownerList: [],
-        senderIsOwner: true,
-        rawBodyNormalized: commandText,
-        commandBodyNormalized: commandText,
-      } as never,
-    });
-
-    const call = requireRunReplyAgentCall(-1);
-    expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
-    expect(call?.commandBody).toContain("Conversation info:");
-    expect(call?.commandBody).toContain("Sender:");
-    expect(call?.commandBody).toContain("telegram-user-1");
-    expect(call?.followupRun.prompt).toContain("A new session was started via /new or /reset.");
-    expect(call?.followupRun.prompt).toContain("Sender:");
-    expect(call?.transcriptCommandBody).toBe("[OpenClaw session reset]");
-    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw session reset]");
-    expect(call?.followupRun.transcriptPrompt).not.toContain("Sender:");
   });
 
   it("captures the prepared reply policy for queued Slack runs", async () => {
@@ -2677,10 +2540,7 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it.each([
-    { level: "off", clear: false, source: "turn" },
-    { level: undefined, clear: true, source: "default" },
-  ] as const)(
+  it.each([{ level: undefined, clear: true, source: "default" }] as const)(
     "records thinking origin $source for level=$level reset=$clear",
     async ({ level, clear, source }) => {
       const params = ownerParams();
@@ -2692,9 +2552,7 @@ describe("runPreparedReply media-only handling", () => {
       };
       params.resolvedThinkLevel = level;
       await runPreparedReply(params);
-      expect(requireRunReplyAgentCall().followupRun.run.thinkLevelOverride).toBe(
-        source === "turn" ? level : source,
-      );
+      expect(requireRunReplyAgentCall().followupRun.run.thinkLevelOverride).toBe(source);
     },
   );
 

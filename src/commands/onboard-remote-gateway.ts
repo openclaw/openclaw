@@ -293,10 +293,10 @@ export async function runRemoteGatewayInferenceOnboarding(
     if (activation.gatewayRestartRequired && !restartBootId) {
       throw new Error(GATEWAY_RESTART_IDENTITY_ERROR);
     }
-    const restartDeadline = Date.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
+    const restartDeadline = performance.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
     let retryDelayMs = 250;
     for (;;) {
-      const remainingBeforeAttemptMs = restartDeadline - Date.now();
+      const remainingBeforeAttemptMs = restartDeadline - performance.now();
       if (restartBootId && remainingBeforeAttemptMs <= 0) {
         throw new Error(
           "Inference settings were saved, but the Gateway did not finish restarting and verifying inference. Check the remote Gateway, then run onboarding again.",
@@ -351,7 +351,7 @@ export async function runRemoteGatewayInferenceOnboarding(
           requestedDelay = error.retryAfterMs ?? retryDelayMs;
         }
       }
-      await delay(Math.min(requestedDelay, Math.max(0, restartDeadline - Date.now())));
+      await delay(Math.min(requestedDelay, Math.max(0, restartDeadline - performance.now())));
       retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
     }
   };

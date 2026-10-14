@@ -130,6 +130,8 @@ export function registerSessionsSendRequesterRetirementTests({
         await registerSubagentRun({
           runId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: childSessionId },
           requesterSessionKey,
           requesterDisplayKey: requesterSessionKey,
           requesterAgentId: "main",

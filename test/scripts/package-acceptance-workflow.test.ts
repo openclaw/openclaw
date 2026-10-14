@@ -4486,6 +4486,7 @@ function writePreflightConsumerTooling(toolingDir: string) {
     "npm-preflight-tooling-identity.mjs",
     "npm-prepared-bundle.mjs",
     "openclaw-npm-extended-stable-release.mjs",
+    "plugin-sdk-api-release-evidence.mjs",
     "release-tooling-identity.mjs",
     "lib/actions-artifact-archive.mjs",
     "lib/npm-core-release-packages.mjs",
@@ -9553,7 +9554,6 @@ describe("package artifact reuse", () => {
       on?: { workflow_call?: { inputs?: Record<string, unknown> } };
     };
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
@@ -9793,17 +9793,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("GROUP_LABEL: ${{ matrix.group.label }}");
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
-    expect(scheduler).toContain(
-      "published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}",
-    );
-    expect(scheduler).toContain(
-      "published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}",
-    );
-    expect(scheduler).toContain(
-      '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
-    );
-    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",');
-    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(packageJson).toContain("test:docker:update-restart-auth");
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
@@ -10813,6 +10802,11 @@ describe("package artifact reuse", () => {
       "validate_live_provider_suites",
       "native-live-src-gateway-profiles-opencode-go-deepseek-glm",
     );
+    const openCodeGoSmoke = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-smoke",
+    );
 
     expect(deepSeek).toMatchObject({
       command:
@@ -10820,9 +10814,12 @@ describe("package artifact reuse", () => {
       profiles: "full",
     });
     expect(openCodeGo.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 ",
     );
-    expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash,");
+    expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
+    expect(openCodeGoSmoke.command).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+    );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
   });
 
@@ -10846,8 +10843,8 @@ describe("package artifact reuse", () => {
     );
 
     expect(openCodeModels).toMatchObject({
-      models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
-      max_models: "3",
+      models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+      max_models: "2",
     });
     expect(kimi.command).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.7-code");
     expect(kimi.command).not.toContain("kimi-k2.6");

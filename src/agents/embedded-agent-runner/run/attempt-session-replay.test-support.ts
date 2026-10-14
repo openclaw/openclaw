@@ -31,7 +31,7 @@ import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -110,6 +110,7 @@ export async function withInterruptedTurn(
   }) => Promise<void>,
   options: {
     interruptedTurn?: boolean;
+    partialText?: string;
     toolProgress?: boolean;
     settledPrefix?: boolean;
     oversizedMetadata?: boolean;
@@ -201,9 +202,15 @@ export async function withInterruptedTurn(
       await appendCompletedToolWork(original, runId);
     }
     if (options.interruptedTurn !== false) {
-      await original.appendMessageAsync(
-        createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
-      );
+      await original.appendMessageAsync({
+        ...createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
+        ...(options.partialText
+          ? {
+              content: [{ type: "text" as const, text: options.partialText }],
+              errorCode: "OPENCLAW_RESTART_ABORT",
+            }
+          : {}),
+      });
       await appendInterruptedTurnMessage([], async (event) => {
         if (event.type !== "message_end") {
           return;
@@ -368,7 +375,8 @@ export async function withReplaySession(
       sessionManager: prepared.sessionManager,
       setActiveSessionSystemPrompt: () => {},
     });
-    const promptState = getEmbeddedSessionPromptState(target.sessionId);
+    using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
+    const promptState = promptStateLease.state;
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         attempt,

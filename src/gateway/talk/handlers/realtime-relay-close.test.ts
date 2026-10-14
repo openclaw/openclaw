@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
@@ -112,6 +113,7 @@ describe("realtime relay finalization", () => {
       finalization = completion;
       const storePath = state.statePath("finalize-sessions.sqlite");
       const cfg: OpenClawConfig = { session: { store: storePath } };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:main", storePath },
         { sessionId: "relay-finalize", updatedAt: Date.now() },
@@ -158,7 +160,7 @@ describe("realtime relay finalization", () => {
         connId: "conn-finalize",
         cfg,
         controlSource: "transcript",
-        sessionTarget: prepareTalkSessionTarget(cfg, "agent:main:main"),
+        sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
         provider: {
           id: "relay-test",
           label: "Relay Test",

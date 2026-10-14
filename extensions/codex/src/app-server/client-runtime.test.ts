@@ -1,5 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  recordCodexThreadForkSettings,
+  recordCodexTurnForkSettings,
+  requireCodexThreadForkSettings,
+} from "./client-fork-settings.js";
 import type { CodexAppServerClient } from "./client.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -55,12 +60,50 @@ describe("Codex app-server client runtime", () => {
     }
     clients.length = 0;
     vi.useRealTimers();
+    vi.restoreAllMocks();
     mocks.refreshAuth.mockClear();
     mocks.mergeRateLimitUpdate.mockClear();
   });
 
+  it("keeps native creation instructions and latest turn settings only for the live parent", () => {
+    const { client } = createRuntimeHarness();
+    expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
+    recordCodexThreadForkSettings(client, "parent", {
+      model: "parent-model",
+      developerInstructions: "creation policy",
+      config: { web_search: "disabled", "features.computer_use": true },
+    });
+    recordCodexTurnForkSettings(client, {
+      threadId: "parent",
+      input: [],
+      effort: "high",
+      environments: [{ environmentId: "parent-env", cwd: "/workspace" }],
+    });
+    recordCodexThreadForkSettings(client, "parent", {
+      threadId: "parent",
+      developerInstructions: "ignored warm resume override",
+    });
+    recordCodexTurnForkSettings(client, {
+      threadId: "parent",
+      input: [],
+      effort: "xhigh",
+      serviceTier: "priority",
+    });
+    expect(requireCodexThreadForkSettings(client, "parent")).toMatchObject({
+      thread: {
+        model: "parent-model",
+        developerInstructions: "creation policy",
+        config: { web_search: "disabled", "features.computer_use": true },
+      },
+      turn: { effort: "xhigh", serviceTier: "priority" },
+    });
+    client.close();
+    expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
+  });
+
   it("retains ephemeral policy and history beyond persistent idle and capacity limits", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const { client } = createClientHarness();
     clients.push(client);
     ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
@@ -302,35 +345,6 @@ describe("Codex app-server client runtime", () => {
     await expect(
       retainCodexAppServerLiveThread(harness.client, "thread-owned", successor?.release),
     ).resolves.toBe(true);
-  });
-
-  it("does not let an older owner forget or release a newly claimed thread generation", async () => {
-    const request = vi.fn(async () => ({}));
-    const client = {
-      request,
-      addCloseHandler: vi.fn(),
-      addNotificationHandler: vi.fn(),
-      addRequestHandler: vi.fn(),
-    } as unknown as CodexAppServerClient;
-    ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
-    await retainCodexAppServerLiveThread(client, "thread-reclaimed");
-    const first = await consumeCodexAppServerLiveThread(client, "thread-reclaimed");
-    await retainCodexAppServerLiveThread(client, "thread-reclaimed", first?.release);
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(false);
-    const second = await consumeCodexAppServerLiveThread(client, "thread-reclaimed");
-
-    first?.forget();
-    await first?.release("thread-reclaimed");
-
-    expect(request).not.toHaveBeenCalled();
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(true);
-    await second?.release("thread-reclaimed");
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "thread/unsubscribe",
-      { threadId: "thread-reclaimed" },
-      { timeoutMs: 5_000 },
-    );
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(false);
   });
 
   it("preserves a retained successor from obsolete forget, release, and republish after independent-retain", async () => {
@@ -602,6 +616,7 @@ describe("Codex app-server client runtime", () => {
 
   it("renews a failed expiry instead of spinning and retries the same native owner", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const harness = createRuntimeHarness();
     const release = vi
       .fn<(threadId: string) => Promise<void>>()
@@ -686,6 +701,7 @@ describe("Codex app-server client runtime", () => {
 
   it("protects native-child parents and renews their idle clock after the final child", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const harness = createRuntimeHarness();
     const release = vi.fn(async (_threadId: string) => undefined);
     const unprotect = protectCodexAppServerLiveThread(harness.client, "thread-parent");

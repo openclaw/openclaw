@@ -65,6 +65,7 @@ export async function runWithScopedSessionAccess<T>(params: {
       },
     );
   const admission = await beginSessionWorkAdmission({
+    agentId,
     scope: storePath,
     identities: [params.targetSessionKey, expectedSessionId],
     assertAllowed: assertExpectedIncarnation,

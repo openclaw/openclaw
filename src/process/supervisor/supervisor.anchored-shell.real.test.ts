@@ -69,46 +69,22 @@ async function createDescendantScope(
     "utf8",
   );
   if (process.platform === "win32") {
-    const koffiPath = createRequire(import.meta.url).resolve("koffi");
+    const testSupportPath = createRequire(import.meta.url).resolve(
+      "@openclaw/proc-safe/test-support",
+    );
     await writeFile(
       rootPath,
       `
-        const koffi = require(${JSON.stringify(koffiPath)});
-        const kernel32 = koffi.load("kernel32.dll");
-        const handle = koffi.pointer("ANCHORED_SHELL_FIXTURE_HANDLE", koffi.opaque());
-        const bytes = koffi.pointer("uint8_t");
-        const createProcess = kernel32.func("__stdcall", "CreateProcessW", "int32_t", [
-          "str16", koffi.pointer("uint16_t"), "void *", "void *", "int32_t", "uint32_t",
-          "void *", "str16", bytes, bytes,
-        ]);
-        const closeHandle = kernel32.func("__stdcall", "CloseHandle", "int32_t", [handle]);
-        const getLastError = kernel32.func("__stdcall", "GetLastError", "uint32_t", []);
-        // Production only supports x64/arm64, where these Win32 structures are 104/24 bytes.
-        const startupInfo = Buffer.alloc(104);
-        const processInfo = Buffer.alloc(24);
-        startupInfo.writeUInt32LE(startupInfo.length, 0);
-        const commandLine = Buffer.from(
-          [
-            process.execPath,
+        const { spawnRawWithoutConsole } = require(${JSON.stringify(testSupportPath)});
+        // Native creation avoids libuv's private Job and inherits no pipe handles.
+        spawnRawWithoutConsole({
+          executable: process.execPath,
+          args: [
             ${JSON.stringify(descendantPath)},
             ${JSON.stringify(releasePath)},
             ${JSON.stringify(descendantPidPath)},
-          ].map((value) => '"' + value + '"').join(" ") + String.fromCharCode(0),
-          "utf16le",
-        );
-
-        // Native creation avoids libuv's private Job; no inherited handles guarantees pipe EOF.
-        if (!createProcess(
-          process.execPath, commandLine, null, null, 0, 0x08000000, null, null,
-          startupInfo, processInfo,
-        )) {
-          throw new Error("fixture CreateProcessW failed (Win32 error " + getLastError() + ")");
-        }
-        for (const offset of [8, 0]) {
-          if (!closeHandle(processInfo.readBigUInt64LE(offset))) {
-            throw new Error("fixture CloseHandle failed (Win32 error " + getLastError() + ")");
-          }
-        }
+          ],
+        });
         ${fragmentedOutputFixture()}
       `,
       "utf8",
@@ -236,14 +212,14 @@ describe("supervisor anchored shell real process ownership", () => {
     "keeps anchored Windows commands console-free",
     async () => {
       const cwd = tempDirs.make("openclaw-anchored-shell-console-");
-      const koffiPath = createRequire(import.meta.url).resolve("koffi");
+      const testSupportPath = createRequire(import.meta.url).resolve(
+        "@openclaw/proc-safe/test-support",
+      );
       await writeFile(
         path.join(cwd, "console.cjs"),
         `
-        const koffi = require(${JSON.stringify(koffiPath)});
-        const kernel32 = koffi.load("kernel32.dll");
-        const getConsoleWindow = kernel32.func("__stdcall", "GetConsoleWindow", "void *", []);
-        process.stdout.write(JSON.stringify({ hasConsole: Boolean(getConsoleWindow()) }));
+        const { hasConsoleWindow } = require(${JSON.stringify(testSupportPath)});
+        process.stdout.write(JSON.stringify({ hasConsole: hasConsoleWindow() }));
         process.stderr.write("owned-console-stderr");
         process.exitCode = 23;
       `,

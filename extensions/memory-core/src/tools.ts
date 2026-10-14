@@ -10,8 +10,6 @@ import {
   readPositiveIntegerParam,
   readStringParam,
   resolveMemoryDreamingPluginConfig,
-  resolveRuntimeConfigCacheKey,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -72,10 +70,7 @@ type PrimaryMemorySearchValue = {
 
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
-const memorySearchToolCooldowns = new Map<
-  string,
-  MemoryCorpusFailure & { until: number; configKey: string }
->();
+const memorySearchToolCooldowns = new Map<string, MemoryCorpusFailure & { until: number }>();
 
 /**
  * Validate the model-authored corpus argument against the tool's closed enum.
@@ -97,16 +92,13 @@ function readCorpusParam<T extends string>(
   throw new Error(`corpus must be one of: ${allowed.join(", ")}`);
 }
 
-function readMemorySearchToolCooldown(
-  key: string,
-  cfg: OpenClawConfig,
-): MemoryCorpusFailure | undefined {
+function readMemorySearchToolCooldown(key: string): MemoryCorpusFailure | undefined {
   const entry = memorySearchToolCooldowns.get(key);
   if (!entry) {
     return undefined;
   }
-  // Failed searches pause retries only for the configuration that produced them.
-  if (entry.until <= Date.now() || entry.configKey !== resolveRuntimeConfigCacheKey(cfg)) {
+  // A configuration change may retain the previous failure for this one-minute pause.
+  if (entry.until <= Date.now()) {
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
@@ -117,14 +109,9 @@ function readMemorySearchToolCooldown(
   };
 }
 
-function recordMemorySearchToolCooldown(
-  key: string,
-  cfg: OpenClawConfig,
-  failure: MemoryCorpusFailure,
-): void {
+function recordMemorySearchToolCooldown(key: string, failure: MemoryCorpusFailure): void {
   memorySearchToolCooldowns.set(key, {
     until: Date.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
-    configKey: resolveRuntimeConfigCacheKey(cfg),
     ...failure,
   });
 }
@@ -260,7 +247,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           );
         }
         const cooldown =
-          requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(agentId, cfg);
+          requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(agentId);
         const toolStartedAt = Date.now();
         const searchesMemory = requestedCorpus !== "wiki";
         const searchesWiki = requestedCorpus === "wiki" || requestedCorpus === "all";
@@ -316,12 +303,6 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               return await executeMemorySearchToolQuery({
                 onRebuildNotice: (read) => rebuildNotices.push(read),
                 initialManager: { manager: memory.manager, managerMs: memory.debug?.managerMs },
-                refreshManager: async () => {
-                  const refreshed = await acquireMemoryManager();
-                  return "error" in refreshed
-                    ? null
-                    : { manager: refreshed.manager, managerMs: refreshed.debug?.managerMs };
-                },
                 query: {
                   text: query,
                   resultLimit: maxResults ?? settings.query.maxResults,
@@ -358,7 +339,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                     ...(attempted.code ? { code: attempted.code } : {}),
                   }
                 : { error: "memory search unavailable", deadline: false };
-            recordMemorySearchToolCooldown(agentId, cfg, failure);
+            recordMemorySearchToolCooldown(agentId, failure);
             return {
               corpus: "memory",
               outcome: "unavailable",
@@ -539,7 +520,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           }
           const failed = unavailableMemoryCorpus("memory", null, error);
           if (requestedCorpus !== "wiki") {
-            recordMemorySearchToolCooldown(agentId, cfg, failed);
+            recordMemorySearchToolCooldown(agentId, failed);
           }
           return jsonResult(
             buildMemorySearchUnavailableResult(failed.error, {

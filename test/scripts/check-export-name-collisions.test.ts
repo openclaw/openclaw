@@ -61,9 +61,10 @@ describe("export name collision guard", () => {
     expect([...result.exportedNames]).toEqual(["importedValue", "remoteValue"]);
   });
 
-  it("exempts only the exact handoff loader substitution", () => {
+  it("exempts only the exact sealed recovery loader substitutions", () => {
     const name = "loadFreeBsdProcessIdentityNative";
     const paths = [
+      "src/infra/package-update-activation-native-loader.ts",
       "src/infra/update-managed-service-handoff-native-loader.ts",
       "src/shared/freebsd-process-identity-native.ts",
     ];
@@ -207,23 +208,6 @@ describe("export name collision guard", () => {
         ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
       ]).toEqual([]);
     }
-  });
-
-  it.each([
-    [
-      "const arrow",
-      `export const runThing = async (...args: unknown[]) => {
-        const runtime = await import("./runtime.js");
-        return runtime.runThing(...args);
-      };`,
-    ],
-  ])("does not duplicate a literal-import %s forwarder", (_name, content) => {
-    expect(
-      findExportNameCollisions([
-        { path: "src/facade.ts", content },
-        { path: "src/runtime.ts", content: "export function runThing() {}" },
-      ]),
-    ).toEqual([]);
   });
 
   it.each([

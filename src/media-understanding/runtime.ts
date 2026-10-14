@@ -5,12 +5,15 @@ import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import {
   normalizeImageDescriptionInput,
   optimizeImageDescriptionInput,
 } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
+import { assertMediaExecutionCurrent, type MediaExecutionContext } from "./provider-execution.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -119,8 +122,19 @@ export async function runMediaUnderstandingFile(
 async function runFile(
   params: RunMediaUnderstandingFileParams,
   request: MediaRequestOverrides,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  params.signal?.throwIfAborted();
+  const mediaExecution = execution
+    ? {
+        ...execution,
+        signal: params.signal
+          ? AbortSignal.any([execution.signal, params.signal])
+          : execution.signal,
+      }
+    : params.signal
+      ? { signal: params.signal }
+      : undefined;
+  assertMediaExecutionCurrent(mediaExecution);
   const { cfg } = params;
   const requestTimeoutSeconds =
     typeof params.timeoutMs === "number" &&
@@ -178,7 +192,7 @@ async function runFile(
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    ...(params.signal ? { signal: params.signal } : {}),
+    ...(mediaExecution ? { signal: mediaExecution.signal } : {}),
   });
 
   try {
@@ -195,9 +209,9 @@ async function runFile(
       config,
       activeModel: params.activeModel,
       request,
-      ...(params.signal ? { signal: params.signal } : {}),
+      execution: mediaExecution,
     });
-    params.signal?.throwIfAborted();
+    assertMediaExecutionCurrent(mediaExecution);
     if (result.outputs.length === 0 && result.decision.outcome === "failed") {
       throw new Error(
         normalizeDecisionReason(findDecisionReason(result.decision, "failed")) ??
@@ -216,11 +230,11 @@ async function runFile(
       decision: result.decision,
     };
   } catch (error) {
-    params.signal?.throwIfAborted();
+    assertMediaExecutionCurrent(mediaExecution);
     throw error;
   } finally {
     await cache.cleanup();
-    params.signal?.throwIfAborted();
+    assertMediaExecutionCurrent(mediaExecution);
   }
 }
 
@@ -395,12 +409,21 @@ export async function resolveAudioInputBudget(params: {
 
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
+  execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return runFile(
-    { ...params, capability: "audio" },
-    {
-      prompt: params.prompt?.trim() || params.prompt || undefined,
-      language: params.language || undefined,
-    },
-  );
+  const run = () =>
+    runFile(
+      { ...params, capability: "audio" },
+      {
+        prompt: params.prompt?.trim() || params.prompt || undefined,
+        language: params.language || undefined,
+      },
+      execution,
+    );
+  return execution
+    ? withGuardedFetchRequestAuthority(
+        () => assertMediaExecutionCurrent(execution),
+        () => withCommandProcessScope(run, execution.signal),
+      )
+    : run();
 }

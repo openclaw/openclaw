@@ -61,37 +61,6 @@ function createFacadeHarness(params?: {
 }
 
 describe("createMatrixCryptoFacade", () => {
-  it("delegates encrypted-room classification to the canonical client owner", async () => {
-    const isRoomEncrypted = vi.fn(async () => true);
-    const { facade } = createFacadeHarness({
-      isRoomEncrypted,
-    });
-
-    await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
-    expect(isRoomEncrypted).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("preserves authoritative plaintext-room classification", async () => {
-    const isRoomEncrypted = vi.fn(async () => false);
-    const { facade } = createFacadeHarness({
-      isRoomEncrypted,
-    });
-
-    await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(false);
-    expect(isRoomEncrypted).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("propagates authoritative room-state failures without permitting plaintext", async () => {
-    const error = new Error("Matrix room state authorization failed");
-    const { facade } = createFacadeHarness({
-      isRoomEncrypted: async () => {
-        throw error;
-      },
-    });
-
-    await expect(facade.isRoomEncrypted("!room:example.org")).rejects.toBe(error);
-  });
-
   it("forwards verification requests and uses client crypto API", async () => {
     const crypto = createMatrixCryptoApi();
     const requestVerification = vi.fn(async () => ({

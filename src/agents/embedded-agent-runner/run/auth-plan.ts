@@ -7,8 +7,8 @@ import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../model-auth.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -90,7 +90,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   };
   let noExternalAuthStore: AuthProfileStore | undefined;
   if (!initialPluginHarnessOwnsTransport && !externalCliAuthScope.providerIds) {
-    noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(
+    noExternalAuthStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(
       params.agentDir,
       authStoreOptions,
     );
@@ -106,9 +106,15 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       ? undefined
       : externalCliAuthScope.providerIds;
   const attemptAuthProfileStore = externalCliProviderIds
-    ? ensureAuthProfileStore(params.agentDir, { ...authStoreOptions, externalCliProviderIds })
+    ? await ensureAuthProfileStoreAsync(params.agentDir, {
+        ...authStoreOptions,
+        externalCliProviderIds,
+      })
     : (noExternalAuthStore ??
-      ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, authStoreOptions));
+      (await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+        params.agentDir,
+        authStoreOptions,
+      )));
   params.markStage?.("store");
 
   const requestedProfileId = runParams.authProfileId?.trim() || undefined;

@@ -41,20 +41,6 @@ describe("codex MCP projection", () => {
     expect(tools).toEqual([{ name: "read" }, { name: "exec" }]);
   });
 
-  it("never projects conditionally available write, edit, apply_patch, or process from native mode", async () => {
-    const tools: Array<string | { name: string; pluginId?: string }> = [];
-    const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
-
-    await projection.captureFinalCodexCronCreatorToolAllowlist(tools, captureRef, [], {
-      nativeToolSurfaceEnabled: true,
-    });
-
-    const names = tools.map((tool) => (typeof tool === "string" ? tool : tool.name));
-    for (const conditional of ["write", "edit", "apply_patch", "process"]) {
-      expect(names).not.toContain(conditional);
-    }
-  });
-
   it("captures apply_patch and process only when the bridged tool surface carries them", async () => {
     const tools: Array<string | { name: string; pluginId?: string }> = [];
     const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};

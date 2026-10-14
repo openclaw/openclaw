@@ -63,7 +63,7 @@ export function renderContextWindowControl(
     control = renderSettingsSegmented({
       mode: "buttons",
       variant: "compact",
-      className: "chat-controls__context-window-options",
+      class: "chat-controls__context-window-options",
       value: selectedOption.id,
       ariaLabel,
       disabled: contextWindow.disabled,

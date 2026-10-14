@@ -17,7 +17,7 @@ import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 

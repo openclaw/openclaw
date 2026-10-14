@@ -8,10 +8,14 @@ import type {
   LegacyStateMigrationStepReceipt,
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
+import type { PluginCache } from "../../../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
+  /** The full Doctor flow admits retired sources before entering maintenance. */
+  retiredStateAdmitted?: boolean;
+  stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   migrateState?: boolean;
   /** Select Doctor normalization without enabling repair-only migrations. */
@@ -29,6 +33,8 @@ export type DoctorConfigPreflightOptions = {
 };
 
 export type DoctorConfigPreflightResult = {
+  /** Caller owns retirement after consuming the final metadata snapshot. */
+  pluginCache?: PluginCache;
   snapshot: ConfigFileSnapshot;
   baseConfig: OpenClawConfig;
   /** Original resolved roster retained until its config and data migrations finish. */

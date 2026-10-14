@@ -1,9 +1,7 @@
 /** Persists complete music buffers and their metadata before task completion. */
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
-import { extractOriginalFilename } from "../../media/store.js";
 import type { GenerateMusicParams } from "../../music-generation/runtime-types.js";
 import { generateMusic } from "../../music-generation/runtime.js";
 import type {
@@ -11,7 +9,6 @@ import type {
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
 import {
-  formatGeneratedAttachmentLines,
   sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
@@ -20,8 +17,10 @@ import type { MediaGenerationTaskHandle } from "./media-generate-background-shar
 import { musicGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
   buildMediaGenerateToolExecutionResult,
-  describeMediaGenerationResult,
+  buildMediaGenerationDurationDetails,
+  buildSavedMediaAttachment,
   type MediaGenerateToolExecutionResult,
+  type AcquireGeneratedMediaSandbox,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
@@ -73,6 +72,7 @@ export function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined)
 export async function executeMusicGenerationJob(params: {
   request: Omit<GenerateMusicParams, "authStore"> & { timeoutMs: number };
   filename?: string;
+  sandbox?: AcquireGeneratedMediaSandbox;
   loadedReferenceImages: LoadedMediaToolReference<MusicGenerationSourceImage>[];
   taskHandle: MediaGenerationTaskHandle | null;
   timeoutNormalization?: MusicGenerationTimeoutNormalization;
@@ -99,19 +99,12 @@ export async function executeMusicGenerationJob(params: {
   });
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
-  const requestedDurationSeconds =
-    result.normalization?.durationSeconds?.requested ??
-    asFiniteNumber(result.metadata?.requestedDurationSeconds) ??
-    request.durationSeconds;
-  const runtimeNormalizedDurationSeconds =
-    result.normalization?.durationSeconds?.applied ??
-    asFiniteNumber(result.metadata?.normalizedDurationSeconds);
-  const appliedDurationSeconds =
-    runtimeNormalizedDurationSeconds ??
-    (!ignoredOverrideKeys.has("durationSeconds") && typeof request.durationSeconds === "number"
-      ? request.durationSeconds
-      : undefined);
-  const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
+  const duration = buildMediaGenerationDurationDetails(
+    "music",
+    result,
+    request.durationSeconds,
+    ignoredOverrideKeys,
+  );
   const savedTrackMetadata = await probeMediaFilesWithinBudget(
     savedTracks.map((track) => ({ filePath: track.path, kind: "audio" })),
     {
@@ -121,29 +114,17 @@ export async function executeMusicGenerationJob(params: {
     },
   );
   const attachments: AgentGeneratedAttachment[] = savedTracks.map((track, index) => ({
-    type: "audio",
-    path: track.path,
-    mimeType: track.contentType,
-    name: extractOriginalFilename(track.path),
-    sizeBytes: track.size,
-    ...(typeof appliedDurationSeconds === "number"
-      ? { durationMs: appliedDurationSeconds * 1000 }
-      : {}),
+    ...buildSavedMediaAttachment("audio", track),
+    ...(typeof duration.applied === "number" ? { durationMs: duration.applied * 1000 } : {}),
     ...savedTrackMetadata[index],
   }));
-  const lines = [
-    `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
-    ...(warning ? [`Warning: ${warning}`] : []),
+  const messages = [
     ...(params.timeoutNormalization
       ? [
           `Timeout normalized: requested ${params.timeoutNormalization.requested}ms; used ${params.timeoutNormalization.applied}ms.`,
         ]
       : []),
-    typeof requestedDurationSeconds === "number" &&
-    typeof appliedDurationSeconds === "number" &&
-    requestedDurationSeconds !== appliedDurationSeconds
-      ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${appliedDurationSeconds}s.`
-      : null,
+    duration.message,
     ...(result.lyrics?.length
       ? [
           "Lyrics returned.",
@@ -160,15 +141,16 @@ export async function executeMusicGenerationJob(params: {
           ),
         ]
       : []),
-    ...formatGeneratedAttachmentLines(attachments),
-  ].filter((entry): entry is string => Boolean(entry));
+  ];
   return buildMediaGenerateToolExecutionResult({
+    kind: "music",
     result,
     attachments,
     mediaUrls: savedTracks.map((media) => media.path),
-    lines,
+    sandbox: params.sandbox,
+    maxBytes: resolveGeneratedMediaMaxBytes(request.cfg, "audio"),
+    messages,
     taskHandle: params.taskHandle,
-    warning,
     details: {
       ...(!ignoredOverrideKeys.has("lyrics") && request.lyrics
         ? { requestedLyrics: request.lyrics }
@@ -176,14 +158,7 @@ export async function executeMusicGenerationJob(params: {
       ...(!ignoredOverrideKeys.has("instrumental") && typeof request.instrumental === "boolean"
         ? { instrumental: request.instrumental }
         : {}),
-      ...(typeof appliedDurationSeconds === "number"
-        ? { durationSeconds: appliedDurationSeconds }
-        : {}),
-      ...(typeof requestedDurationSeconds === "number" &&
-      typeof appliedDurationSeconds === "number" &&
-      requestedDurationSeconds !== appliedDurationSeconds
-        ? { requestedDurationSeconds }
-        : {}),
+      ...duration.details,
       ...(!ignoredOverrideKeys.has("format") && request.format ? { format: request.format } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       timeoutMs: request.timeoutMs,

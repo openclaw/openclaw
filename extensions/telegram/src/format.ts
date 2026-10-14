@@ -27,6 +27,7 @@ import {
   prepareTelegramHtmlTextSplitter,
   type TelegramHtmlTextSplitter,
 } from "./format-html.js";
+import { parseHtmlAttrs } from "./rich-blocks-html.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 export { escapeTelegramHtml } from "./format-html.js";
@@ -303,14 +304,133 @@ function renderSupportedTelegramHtml(html: string): string {
   return protectTelegramAssistantTranscriptRoleHeaders(promoted);
 }
 
+/** Project authored rich tags, leaving entity-escaped examples and code literal. */
+function downgradeRichBlockTags(text: string, markdown: boolean): string {
+  if (!text.includes("<")) {
+    return text;
+  }
+  const codeRegions = markdown ? findCodeRegions(text) : [];
+  const lists: Array<{ name: string; next: number }> = [];
+  const items: number[] = [];
+  const parts: string[] = [];
+  let codeDepth = 0;
+  let cursor = 0;
+  let lineStart = true;
+  let trailingBoundary = -1;
+  const append = (value: string) => {
+    parts.push(value);
+    if (value) {
+      if (trailingBoundary >= 0 && value.startsWith("\n")) {
+        parts[trailingBoundary] = "";
+      }
+      trailingBoundary = -1;
+      lineStart = value.endsWith("\n");
+    }
+  };
+  const boundary = () => {
+    if (!lineStart) {
+      append("\n");
+      trailingBoundary = parts.length - 1;
+    }
+  };
+  for (const tag of tokenizeHtmlTags(text)) {
+    const raw = tag.raw;
+    append(text.slice(cursor, tag.start));
+    cursor = tag.end;
+    let escapeStart = tag.start;
+    if (markdown) {
+      while (escapeStart > 0 && text[escapeStart - 1] === "\\") {
+        escapeStart -= 1;
+      }
+    }
+    if (isInsideCode(tag.start, codeRegions) || (tag.start - escapeStart) % 2 === 1) {
+      append(raw);
+      continue;
+    }
+    if (tag.name === "code" || tag.name === "pre") {
+      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+      append(raw);
+      continue;
+    }
+    if (codeDepth > 0) {
+      append(raw);
+      continue;
+    }
+    switch (tag.name) {
+      case "ul":
+      case "ol":
+        boundary();
+        if (tag.closing) {
+          lists.pop();
+        } else {
+          const listStart =
+            tag.name === "ol" ? Number(parseHtmlAttrs(tag.raw).get("start") ?? 1) : 1;
+          lists.push({
+            name: tag.name,
+            next: Number.isInteger(listStart) && listStart > 0 ? listStart : 1,
+          });
+        }
+        break;
+      case "li":
+        if (tag.closing) {
+          items.pop();
+        } else {
+          boundary();
+          const list = lists.at(-1);
+          const indent = "  ".repeat(Math.max(0, lists.length - 1));
+          append(markdown ? indent.replaceAll(" ", "&#32;") : indent);
+          items.push(parts.length);
+          const marker = list?.name === "ol" ? `${list.next++}. ` : "• ";
+          // Entity-encode generated prefixes so Markdown cannot renumber or de-indent them.
+          append(markdown ? marker.replace(/^\d/, (digit) => `&#${digit.charCodeAt(0)};`) : marker);
+        }
+        break;
+      case "input": {
+        const attrs = parseHtmlAttrs(tag.raw);
+        if (!tag.closing && attrs.get("type")?.toLowerCase() === "checkbox") {
+          const marker = attrs.has("checked") ? "[x] " : "[ ] ";
+          const item = items.at(-1);
+          if (item !== undefined) {
+            parts[item] = marker;
+          } else {
+            append(marker);
+          }
+        } else {
+          append(raw);
+        }
+        break;
+      }
+      case "aside":
+        append(tag.closing ? "</blockquote>" : "<blockquote>");
+        break;
+      case "hr":
+        break;
+      default:
+        append(raw);
+    }
+  }
+  append(text.slice(cursor));
+  if (trailingBoundary >= 0) {
+    parts[trailingBoundary] = "";
+  }
+  return parts.join("");
+}
+
 export function renderTelegramHtmlText(
   text: string,
-  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
+  options: {
+    textMode?: "markdown" | "html";
+    tableMode?: MarkdownTableMode;
+    downgradeRichPromptTags?: boolean;
+  } = {},
 ): string {
-  if (options.textMode === "html") {
-    return escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
-  }
-  return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+  const source =
+    options.downgradeRichPromptTags === true
+      ? downgradeRichBlockTags(text, options.textMode !== "html")
+      : text;
+  return options.textMode === "html"
+    ? escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(source))
+    : markdownToTelegramHtml(source, { tableMode: options.tableMode });
 }
 
 function normalizeTelegramLegacyHtmlTables(html: string): string {

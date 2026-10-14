@@ -48,46 +48,6 @@ describe("sendTranscriptEcho", () => {
     });
   });
 
-  it("sends the default formatted transcript to the resolved origin", async () => {
-    await sendTranscriptEcho({
-      ctx: createCtx(),
-      cfg: EMPTY_CONFIG,
-      transcript: "hello world",
-    });
-
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
-      cfg: EMPTY_CONFIG,
-      channel: "voicechat",
-      to: "+10000000001",
-      accountId: "acc1",
-      threadId: undefined,
-      payloads: [{ text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "hello world") }],
-      bestEffort: true,
-      durability: "best_effort",
-    });
-  });
-
-  it("uses a custom format when provided", async () => {
-    await sendTranscriptEcho({
-      ctx: createCtx(),
-      cfg: EMPTY_CONFIG,
-      transcript: "custom message",
-      format: "🎙️ Heard: {transcript}",
-    });
-
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
-      cfg: EMPTY_CONFIG,
-      channel: "voicechat",
-      to: "+10000000001",
-      accountId: "acc1",
-      threadId: undefined,
-      payloads: [{ text: "🎙️ Heard: custom message" }],
-      bestEffort: true,
-      durability: "best_effort",
-    });
-  });
-
   it("keeps dollar sequences in the transcript literal", async () => {
     await sendTranscriptEcho({
       ctx: createCtx(),

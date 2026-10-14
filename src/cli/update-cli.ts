@@ -239,6 +239,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       false,
     )
     .option(
+      "--inspect-release-retention",
+      "Record inspect-only release retention after installing a compatible bridge",
+      false,
+    )
+    .option(
       "--previous-updater-stopped",
       "Confirm the previous updater has settled and stopped scheduling",
       false,
@@ -274,6 +279,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           runtime: requiredUpdateLeafString(opts, "runtime"),
           previousUpdaterStopped: true,
           enableActivation: opts.enableActivation === true,
+          inspectReleaseRetention: opts.inspectReleaseRetention === true,
           json: Boolean(opts.json) || inheritedUpdateJson(command),
         });
       }),
@@ -317,6 +323,24 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
       await updateAdmitCommand(opts.context);
     });
+
+  for (const action of ["migrate", "restore", "finish"] as const) {
+    setCommandJsonMode(update.command(action, { hidden: true }), "output", () => true)
+      .description(`Internal externally supervised update ${action}`)
+      .requiredOption("--backup-root <path>", "Absolute recovery artifact prefix")
+      .action(
+        createUpdateLeafAction(async (opts) => {
+          const { updateMigrateCommand, updateRestoreCommand, updateFinishCommand } =
+            await import("./update-cli/update-command-migrate.js");
+          const execute = {
+            migrate: updateMigrateCommand,
+            restore: updateRestoreCommand,
+            finish: updateFinishCommand,
+          }[action];
+          await execute(requiredUpdateLeafString(opts, "backupRoot"));
+        }),
+      );
+  }
 
   update
     .command("cleanup")
@@ -379,7 +403,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--timeout <seconds>", "Set a per-step deadline in seconds")
+    .option("--timeout <seconds>", "Set an overall update budget in seconds")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,

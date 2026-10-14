@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import {
   createContext,
@@ -9,7 +10,7 @@ import {
   mountPalette,
   registerCommandPaletteTestHooks,
 } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 describe("CommandPalette plugin icons", () => {
   registerCommandPaletteTestHooks();
@@ -52,6 +53,7 @@ describe("CommandPalette plugin icons", () => {
     );
     expect(icon?.classList.contains("skeleton")).toBe(true);
     icon?.querySelector("img")?.dispatchEvent(new Event("load"));
+    flush();
     expect(icon?.classList.contains("skeleton")).toBe(false);
     expect(fetchIcon).toHaveBeenCalledWith(
       expect.stringContaining("/__openclaw__/plugin-icon/workboard"),

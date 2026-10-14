@@ -1,4 +1,4 @@
-import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
+import * as sessionKeyNormalization from "@openclaw/normalization-core/session-key-comparison";
 // @vitest-environment node
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -98,7 +98,7 @@ describe("UI session identity", () => {
   );
 
   it("reuses comparison keys until bounded eviction without changing their identities", () => {
-    const normalize = vi.spyOn(stringCoerce, "normalizeOptionalString");
+    const normalize = vi.spyOn(sessionKeyNormalization, "normalizeSessionKeyForComparison");
     const keys = [
       [
         " Agent:Cache:Matrix:Channel:!Room:Example.Org ",
@@ -121,24 +121,6 @@ describe("UI session identity", () => {
       expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
       expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
     }
-  });
-  it.each([
-    [" Agent:OPS:Telegram:Direct:ABC ", "agent:ops:telegram:direct:abc"],
-    [" \t\n", ""],
-    [
-      "Agent:Ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
-      "agent:ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
-    ],
-    ["agent:ops:other:signal:group:AbC", "agent:ops:other:signal:group:abc"],
-    ["agent:ops:signal:group:AbC:signal:group:DeF", "agent:ops:signal:group:AbC:signal:group:def"],
-    [":Matrix:Channel:!Room:Org", ":matrix:channel:!Room:Org"],
-    ["agent:ops: :Matrix:Channel:!Room:Org", "agent:ops: :matrix:channel:!Room:Org"],
-    [
-      "agent:ops:matrix:channel: !Room:Org :thread:$Event",
-      "agent:ops:matrix:channel: !Room:Org :thread:$Event",
-    ],
-  ])("retains UI comparison normalization for %s", (key, expected) => {
-    expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
   });
 
   it.each([

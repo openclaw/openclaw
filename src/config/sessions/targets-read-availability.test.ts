@@ -1,44 +1,41 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry } from "./session-accessor.js";
-import * as sessionEntryInventory from "./session-accessor.sqlite-entry-inventory.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
-} from "./targets-read-availability.js";
+} from "./targets-read-availability.worker.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("session store availability", () => {
-  it("bounds per-agent availability reads and preserves session-table failures", async () => {
+  it("uses admitted per-agent availability without probing session rows", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      setRuntimeConfigSnapshot({});
       await replaceSessionEntry(
         { agentId: "main", env, sessionKey: "agent:main:existing" },
         { sessionId: "existing", updatedAt: 1 },
       );
+      const resolve = () =>
+        resolveExistingAgentSessionStoreTargetsReadOnlyResult({}, "main", { env });
+      expect(resolve()).toMatchObject({ available: true, targets: [{ agentId: "main" }] });
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const readKeys = vi.spyOn(sessionEntryInventory, "iterateSessionEntryKeys");
       try {
-        expect(
-          resolveExistingAgentSessionStoreTargetsReadOnlyResult({}, "main", { env }),
-        ).toMatchObject({ available: true, targets: [{ agentId: "main" }] });
-        const inventoryReads = prepare.mock.calls.filter(
-          ([query]) =>
-            /from\s+"?session_nodes\b/i.test(query) &&
-            !/\bwhere\b|\bexists\s*\(|\blimit\b/i.test(query),
+        await replaceSessionEntry(
+          { agentId: "main", env, sessionKey: "agent:main:new" },
+          { sessionId: "new", updatedAt: 2 },
         );
-        expect(inventoryReads).toEqual([]);
-        readKeys.mockImplementation(() => {
-          throw new Error("synthetic session-table read failure");
-        });
-        expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult({}, "main", { env })).toEqual({
-          available: false,
-          reason: "read-failed",
-        });
+        prepare.mockClear();
+        expect(resolve()).toMatchObject({ available: true, targets: [{ agentId: "main" }] });
+        expect(
+          prepare.mock.calls.filter(([query]) => /from\s+"?session_nodes\b/i.test(query)),
+        ).toEqual([]);
       } finally {
-        readKeys.mockRestore();
         prepare.mockRestore();
       }
     });
@@ -56,6 +53,7 @@ describe("session store availability", () => {
           entries: { main: {}, ops: {} },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "main", env, storePath, sessionKey: "agent:main:main" },
         { sessionId: "main-session", updatedAt: 1 },
@@ -79,6 +77,7 @@ describe("session store availability", () => {
   it("does not let a missing configured store poison readable discovered siblings", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      setRuntimeConfigSnapshot({});
       // Sessions live in the discovered default per-agent store...
       await replaceSessionEntry(
         { agentId: "main", env, sessionKey: "agent:main:main" },
@@ -90,6 +89,7 @@ describe("session store availability", () => {
         session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
       };
 
+      setRuntimeConfigSnapshot(cfg);
       const result = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env });
 
       // The missing configured candidate must be skipped, not returned as
@@ -109,6 +109,7 @@ describe("session store availability", () => {
         session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
       };
 
+      setRuntimeConfigSnapshot(cfg);
       expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env })).toEqual({
         available: false,
         reason: "database-missing",
@@ -127,6 +128,7 @@ describe("session store availability", () => {
           entries: { ops: {}, research: {} },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(
         { agentId: "ops", env, storePath, sessionKey: "agent:ops:main" },
         { sessionId: "ops-session", updatedAt: 1 },

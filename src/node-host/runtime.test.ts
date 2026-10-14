@@ -257,6 +257,10 @@ describe("node-host invocation cancellation", () => {
             expect(closed).toBe(false);
           }
         }
+        // Disconnect notification is not the accepted invocation's settlement.
+        expect(closed).toBe(false);
+        held.release();
+        await invoking;
         await retiring;
         await closing;
         expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(transition === "close" ? 1 : 2);

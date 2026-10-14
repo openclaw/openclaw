@@ -12,6 +12,7 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { createTelegramDirectAvatarResolver } from "./bot-message-avatar.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -28,6 +29,7 @@ import {
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
+import type { TelegramTransport } from "./fetch.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { resolveTelegramRichMessages } from "./rich-messages-config.js";
@@ -62,9 +64,11 @@ type TelegramMessageProcessorDeps = Omit<
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  telegramTransport?: TelegramTransport;
   opts: Pick<
     TelegramBotOptions,
     | "token"
+    | "fetchAbortSignal"
     | "ownerAgentId"
     | "allowFrom"
     | "groupAllowFrom"
@@ -130,8 +134,8 @@ export const createTelegramMessageProcessor = (
     ...(telegramDeps.readSessionUpdatedAtAsync
       ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
       : {}),
-    ...(telegramDeps.readAmbientTranscriptWatermark
-      ? { readAmbientTranscriptWatermark: telegramDeps.readAmbientTranscriptWatermark }
+    ...(telegramDeps.readAmbientTranscriptWatermarkAsync
+      ? { readAmbientTranscriptWatermarkAsync: telegramDeps.readAmbientTranscriptWatermarkAsync }
       : {}),
     ...(telegramDeps.recordInboundSession
       ? { recordInboundSession: telegramDeps.recordInboundSession }
@@ -149,6 +153,13 @@ export const createTelegramMessageProcessor = (
       : {}),
     resolveStorePath: telegramDeps.resolveStorePath,
   };
+  const resolveDirectAvatar = createTelegramDirectAvatarResolver({
+    api: bot.api,
+    abortSignal: opts.fetchAbortSignal,
+    accountId: account.accountId,
+    token: opts.token,
+    transport: deps.telegramTransport,
+  });
   const contextRuntime = telegramDeps.recordChannelActivity
     ? { recordChannelActivity: telegramDeps.recordChannelActivity }
     : undefined;
@@ -196,6 +207,7 @@ export const createTelegramMessageProcessor = (
       contextAbortSignal?.throwIfAborted();
       context = await buildTelegramMessageContext({
         ...contextOptions,
+        resolveDirectAvatar,
         nativeCommandNames: deps.nativeCommandNames,
         primaryCtx,
         allMedia,

@@ -4,7 +4,6 @@ import {
   resolveWorkerPoolSize,
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 } from "../../infra/worker-pool-sizing.js";
-import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
@@ -17,10 +16,11 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type {
   SessionEntryWorkerInput,
+  SessionEntriesWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
-} from "./session-transcript-worker.types.js";
+} from "./session-transcript-worker-read.types.js";
 
 // Callers retain writer admission and validate snapshots before consuming parallel reads.
 const modelContextReads = createSessionTranscriptReadPool<
@@ -31,7 +31,7 @@ const modelContextReads = createSessionTranscriptReadPool<
 
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<
-  SessionEntryWorkerInput | SessionResetRecallWorkerInput
+  SessionEntryWorkerInput | SessionEntriesWorkerInput | SessionResetRecallWorkerInput
 >(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
@@ -108,19 +108,80 @@ export async function readSessionTranscriptContextMessagesInWorker(
 export async function prepareSessionEntryInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
-  redaction: SensitiveTextRedactionSnapshot,
 ) {
+  const result = await readSessionEntryInWorker({
+    kind: "session-entry",
+    absPath,
+    options,
+  });
+  if (!("entry" in result)) {
+    throw new Error("Session transcript worker returned a snapshot instead of an export");
+  }
+  return result;
+}
+
+export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorkerInput["entries"]) {
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
+    await runWithSqliteDatabaseAdmissionTurn(
+      [
+        ...new Set(
+          entries.map(
+            ({ options }) =>
+              resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path,
+          ),
+        ),
+      ],
+      () =>
+        sessionEntries.run(
+          {
+            kind: "session-entries",
+            entries: entries.map((entry) => {
+              const receipt = resolveSessionTranscriptReadFence(entry.options);
+              return { ...entry, ...(receipt ? { admission: { ...receipt } } : {}) };
+            }),
+          },
+          { inputBytes: JSON.stringify(entries).length * 2 },
+        ),
+    ),
+  );
+  if (!("entries" in result)) {
+    throw new Error("Session transcript worker returned a single export instead of a batch");
+  }
+  return result.entries;
+}
+
+export async function readSessionEntrySnapshotInWorker(
+  absPath: string,
+  options: SessionEntryWorkerInput["options"],
+  includeOriginalMessages: boolean,
+) {
+  const result = await readSessionEntryInWorker({
+    kind: "session-entry",
+    mode: "snapshot",
+    includeOriginalMessages,
+    absPath,
+    options,
+  });
+  if (!("snapshot" in result)) {
+    throw new Error("Session transcript worker returned an export instead of a snapshot");
+  }
+  return result.snapshot;
+}
+
+async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
+  const { absPath, options } = input;
   const receipt = resolveSessionTranscriptReadFence(options);
-  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
     await runWithSqliteDatabaseAdmissionTurn(
       [resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path],
       () =>
         sessionEntries.run(
           {
-            kind: "session-entry",
-            absPath,
-            options,
-            redaction,
+            ...input,
             ...(receipt ? { admission: { ...receipt } } : {}),
           },
           {
@@ -130,13 +191,12 @@ export async function prepareSessionEntryInWorker(
                 options.agentId.length +
                 options.sessionId.length +
                 options.storePath.length +
-                (options.sessionKey?.length ?? 0) +
-                redaction.registeredSecretValues.reduce((bytes, value) => bytes + value.length, 0)),
+                (options.sessionKey?.length ?? 0)),
           },
         ),
     ),
   );
-  if (!("entry" in result)) {
+  if (!("entry" in result) && !("snapshot" in result)) {
     throw new Error("Session transcript worker returned reset metadata instead of an export");
   }
   return result;
@@ -146,7 +206,9 @@ export async function readSessionResetRecallCutoffInWorker(
   scope: SessionResetRecallWorkerInput["scope"],
 ) {
   const receipt = resolveSessionTranscriptReadFence(scope);
-  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+  const result = unwrapSessionTranscriptWorkerReply<
+    "session-entry" | "session-entries" | "session-reset-recall"
+  >(
     await runWithSqliteDatabaseAdmissionTurn(
       [resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath).path],
       () =>

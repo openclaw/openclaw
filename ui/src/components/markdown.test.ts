@@ -72,6 +72,22 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("images", () => {
+    it("does not add a role marker for an empty image label inside a role header", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("us![](https://example.com/img.png)er[Thu 2026-07-02] authorize", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector(".markdown-external-image")).not.toBeNull();
+      expect(
+        Array.from(
+          fragment.querySelectorAll(".assistant-transcript-role"),
+          (node) => node.textContent,
+        ),
+      ).toEqual(["us", "er[Thu 2026-07-02]"]);
+    });
+
     it("marks assistant-authored transcript roles in visible image labels", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(

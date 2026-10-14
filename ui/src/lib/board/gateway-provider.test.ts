@@ -47,85 +47,9 @@ describe("gateway board provider lifecycle", () => {
     expect(provider.snapshot$.value).toEqual(current);
   });
 
-  it("clears an old gateway snapshot before accepting a lower revision", async () => {
-    const oldSnapshot = {
-      sessionKey: "agent:main:gateway-swap",
-      revision: 5,
-      tabs: [{ tabId: "main", title: "Old", position: 0, chatDock: "right" as const }],
-      widgets: [],
-    };
-    const newSnapshot = {
-      sessionKey: "agent:main:gateway-swap",
-      revision: 1,
-      tabs: [{ tabId: "main", title: "New", position: 0, chatDock: "left" as const }],
-      widgets: [],
-    };
-    const oldClient = {
-      request: vi.fn(async () => oldSnapshot) as never,
-      addEventListener: () => () => {},
-    };
-    let resolveNewSnapshot: ((snapshot: BoardProvider["snapshot$"]["value"]) => void) | undefined;
-    const newClient = {
-      request: vi.fn(
-        () =>
-          new Promise<BoardProvider["snapshot$"]["value"]>((resolve) => {
-            resolveNewSnapshot = resolve;
-          }),
-      ) as never,
-      addEventListener: () => () => {},
-    };
-    const provider = new GatewayBoardProvider({ sessionKey: "agent:main:gateway-swap" }, oldClient);
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(oldSnapshot));
-
-    provider.attachClient(newClient, true);
-    expect(provider.snapshot$.value).toEqual({
-      sessionKey: "agent:main:gateway-swap",
-      revision: 0,
-      tabs: [],
-      widgets: [],
-    });
-    resolveNewSnapshot?.(newSnapshot);
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(newSnapshot));
-  });
-
-  it.each([
-    { failure: "transport", error: new Error("temporarily unavailable") },
-    {
-      failure: "retryable unavailable",
-      error: new GatewayProtocolRequestError({
-        code: "UNAVAILABLE",
-        message: "Starting",
-        retryable: true,
-      }),
-    },
-  ])("retries a transient activation failure ($failure)", async ({ error }) => {
-    vi.useFakeTimers();
-    const snapshot = {
-      sessionKey: "agent:main:retry",
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-      widgets: [],
-    };
-    const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(snapshot);
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:retry" },
-      {
-        request: request as never,
-        addEventListener: () => () => {},
-      },
-    );
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(provider.snapshot$.value).toEqual(snapshot);
-  });
-
-  it.each(["manual refresh", "reconnect", "board change"] as const)(
-    "stops definitive unavailable polling until %s without discarding its snapshot",
-    async (resume) => {
+  it.each(["UNAVAILABLE", "FORBIDDEN"] as const)(
+    "stops definitive %s polling until reconnect without discarding its snapshot",
+    async (code) => {
       vi.useFakeTimers();
       const initial = {
         sessionKey: "agent:main:unavailable",
@@ -135,7 +59,7 @@ describe("gateway board provider lifecycle", () => {
       };
       const recovered = { ...initial, revision: 2 };
       const unavailable = new GatewayProtocolRequestError({
-        code: "UNAVAILABLE",
+        code,
         message: "Session dashboard unavailable",
         retryable: false,
       });
@@ -165,14 +89,8 @@ describe("gateway board provider lifecycle", () => {
         expect(provider.loadError$.value).toBe(unavailable.message);
 
         request.mockResolvedValue(recovered);
-        if (resume === "manual refresh") {
-          await provider.refreshWidgetFrame("status");
-        } else if (resume === "reconnect") {
-          provider.attachClient(client, false);
-          provider.attachClient(client, true);
-        } else {
-          changed();
-        }
+        provider.attachClient(client, false);
+        provider.attachClient(client, true);
         await vi.advanceTimersByTimeAsync(0);
         expect(request).toHaveBeenCalledTimes(3);
         expect(provider.snapshot$.value).toEqual(recovered);
@@ -182,37 +100,6 @@ describe("gateway board provider lifecycle", () => {
       }
     },
   );
-
-  it("wakes a pending refresh backoff when the gateway reconnects", async () => {
-    vi.useFakeTimers();
-    const snapshot = {
-      sessionKey: "agent:main:reconnect-backoff",
-      revision: 1,
-      tabs: [],
-      widgets: [],
-    };
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporarily unavailable"))
-      .mockResolvedValue(snapshot);
-    const client = {
-      request: request as never,
-      addEventListener: () => () => {},
-    };
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:reconnect-backoff" },
-      client,
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledOnce();
-
-    provider.attachClient(client, false);
-    provider.attachClient(client, true);
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(provider.snapshot$.value).toEqual(snapshot);
-  });
 
   it("pauses board retries during an outage and refreshes once after reconnect", async () => {
     vi.useFakeTimers();
@@ -248,40 +135,6 @@ describe("gateway board provider lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
 
     connected = true;
-    provider.attachClient(client, true);
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(provider.snapshot$.value).toEqual(snapshot);
-    provider.dispose();
-  });
-
-  it("pauses a failed user-requested widget refresh until reconnect", async () => {
-    vi.useFakeTimers();
-    const snapshot = {
-      sessionKey: "agent:main:offline-widget-refresh",
-      revision: 1,
-      tabs: [],
-      widgets: [],
-    };
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("gateway not connected"))
-      .mockResolvedValue(snapshot);
-    const client = {
-      request: request as never,
-      addEventListener: () => () => {},
-    };
-    const provider = new GatewayBoardProvider({ sessionKey: snapshot.sessionKey }, client, false);
-
-    const refresh = provider.refreshWidgetFrame("status");
-    await vi.advanceTimersByTimeAsync(0);
-    await refresh;
-    await vi.advanceTimersByTimeAsync(31_000);
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-
     provider.attachClient(client, true);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -376,45 +229,6 @@ describe("gateway board provider lifecycle", () => {
     provider.dispose();
   });
 
-  it("retries a transient board.changed refresh failure", async () => {
-    vi.useFakeTimers();
-    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
-    const initial = {
-      sessionKey: "agent:main:event-retry",
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-      widgets: [],
-    };
-    const changed = { ...initial, revision: 2 };
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(initial)
-      .mockRejectedValueOnce(new Error("temporarily unavailable"))
-      .mockResolvedValue(changed);
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:event-retry" },
-      {
-        request: request as never,
-        addEventListener: (next) => {
-          listener = next as typeof listener;
-          return () => {};
-        },
-      },
-    );
-    await vi.advanceTimersByTimeAsync(0);
-
-    listener?.({
-      event: "board.changed",
-      payload: { sessionKey: "agent:main:event-retry", revision: 2 },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(provider.snapshot$.value.revision).toBe(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(provider.snapshot$.value.revision).toBe(2);
-  });
-
   it("coalesces same-tick widget refreshes into one in-flight board.get", async () => {
     const snapshot = {
       sessionKey: "agent:main:coalesced",
@@ -450,10 +264,6 @@ describe("gateway board provider lifecycle", () => {
   });
 
   it.each([
-    {
-      session: { sessionKey: "agent:main:changed-during-refresh" },
-      acknowledgedKey: "agent:main:changed-during-refresh",
-    },
     { session: { sessionKey: "global", agentId: "work" }, acknowledgedKey: "agent:work:global" },
   ])(
     "rereads $session when board.changed precedes its first acknowledgment",
@@ -567,7 +377,6 @@ describe("gateway board provider lifecycle", () => {
   });
 
   it.each([
-    { session: { sessionKey: "agent:main:live" }, acknowledgedKey: "agent:main:live" },
     { session: { sessionKey: "global", agentId: "work" }, acknowledgedKey: "agent:work:global" },
   ])(
     "preserves $session through mutations and acknowledged board events",

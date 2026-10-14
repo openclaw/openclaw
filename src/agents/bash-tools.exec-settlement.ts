@@ -59,7 +59,6 @@ export async function settleExecProcessExit({
       // Notifications need start-time routing, but completed logs must not
       // retain it, including when a task callback or notification throws.
       delete session.sessionKey;
-      delete session.agentId;
       delete session.eventRouting;
       delete session.notifyDeliveryContext;
       delete session.notifySessionTarget;

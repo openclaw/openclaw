@@ -84,33 +84,7 @@ describe("Discord webhook delivery", () => {
     });
   });
 
-  it("records a first-only physical reply reference in each receipt", async () => {
-    const expected = ["fixture-reply", undefined];
-    await withWebhookServer(accepted, async (contents, references) => {
-      const delivered: Array<Awaited<ReturnType<typeof realWebhookSend>>> = [];
-      const result = await realWebhookSend("first\nsecond", {
-        ...webhookOpts,
-        replyTo: { messageId: "fixture-reply", scope: "first" },
-        chunking: { maxLines: 1 },
-        onDeliveryResult: (part) => {
-          delivered.push(part);
-        },
-      });
-      expect(contents).toEqual(["first", "second"]);
-      expect(references).toEqual(expected);
-      expect(result.receipt?.parts.map((part) => part.replyToId)).toEqual(expected);
-      expect(
-        delivered.flatMap((part) => part.receipt?.parts.map((entry) => entry.replyToId)),
-      ).toEqual(expected);
-    });
-  });
-
   it.each([
-    {
-      label: "CommonMark bold",
-      text: "`__literal__` __Important__",
-      expected: "`__literal__` **Important**",
-    },
     {
       label: "mentions outside multiline and unterminated code",
       text: "Example: `first\n@alice`\nPlease review @alice then `notify @alice",

@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION } from "./provenance-agent-origin.js";
 import {
-  initializeCachedClawInstallSchemaVersions,
   prepareClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
   registerClawInstallSchemaVersionSnapshotListener,
@@ -122,10 +121,6 @@ function replaceClawToolPolicyCandidates(
 
 function prepareClawToolPolicyConsent(config: OpenClawConfig): void {
   replaceClawToolPolicyCandidates(collectClawToolPolicyCandidates(config));
-  initializeCachedClawInstallSchemaVersions({
-    ...preparedStateOptions,
-    artifactPreservingReadOnly: false,
-  });
   applyPreparedClawToolPolicyConsent();
 }
 

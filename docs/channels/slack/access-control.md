@@ -20,7 +20,7 @@ never establish identity, and sender IDs derived from app-controlled message
 metadata remain asserted.
 
 For ordinary messages and app mentions from a verified Slack sender linked to an
-active user profile, OpenClaw includes that profile's canonical ID and current
+active user profile, OpenClaw includes that profile's primary ID and current
 display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
 "Assign this session to me"; the agent uses that profile ID with the `sessions`
 tool's `assign_owner` action for sessions visible to that administrator, including
@@ -97,7 +97,7 @@ restart the Slack monitor. The Gateway remains running.
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the canonical DM allowlist.
+    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
@@ -148,6 +148,8 @@ restart the Slack monitor. The Gateway remains running.
     - channel allowlist entries and DM allowlist entries are resolved at startup and when a new policy snapshot is first used, when token access allows
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
+
+    Per-channel `tools`/`toolsBySender`/`requireMention` follow the same rule: resolved names bind to channel IDs, so a renamed channel never inherits another channel's name entry unless direct name matching is explicitly enabled.
 
     <Warning>
     Name-based keys (`#channel-name` or `channel-name`) depend on successful Slack lookup to resolve a stable channel ID. Under `groupPolicy: "allowlist"`, unresolved names are denied unless `dangerouslyAllowNameMatching` explicitly enables direct name matching.

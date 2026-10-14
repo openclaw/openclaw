@@ -204,7 +204,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 ### Not receiving messages
 
 - Verify the private key is valid.
-- Ensure relay URLs are reachable and use `wss://` (or `ws://` for local).
+- Check that relay URLs are reachable and use `wss://` (or `ws://` for local).
 - Confirm `enabled` is not `false`.
 - Check gateway logs for relay connection errors.
 

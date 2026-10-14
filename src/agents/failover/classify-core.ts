@@ -1,6 +1,8 @@
 /** Classifies prepared error facts without resolving provider runtime. */
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
-import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
+import {
+  inspectTlsCertificateError,
+  matchesContextOverflowMessage,
+} from "@openclaw/ai/internal/shared";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -154,9 +156,7 @@ function classifyFailoverClassificationFromMessage(
   }
   const generalReason = GENERAL_MESSAGE_CLASSIFIERS.find(([matches]) => matches(raw))?.[1];
   if (generalReason) {
-    return generalReason === "context_overflow"
-      ? { kind: "context_overflow" }
-      : toReasonClassification(generalReason);
+    return toPluginClassification(generalReason);
   }
   // Inspect raw and SDK-preserved types before the generic HTTP fallback, but
   // after more-specific text so invalid-request wrappers cannot hide an outage.
@@ -196,13 +196,11 @@ function mergeMessageAndDetailClassification(
   if (messageClassification.kind === "context_overflow") {
     return messageClassification;
   }
-  if (detailClassification.kind === "context_overflow") {
-    return detailClassification;
-  }
-  if (detailClassification.reason === "billing" && messageClassification.reason === "rate_limit") {
-    return detailClassification;
-  }
-  return messageClassification.reason === "format" ? detailClassification : messageClassification;
+  return detailClassification.kind === "context_overflow" ||
+    (detailClassification.reason === "billing" && messageClassification.reason === "rate_limit") ||
+    messageClassification.reason === "format"
+    ? detailClassification
+    : messageClassification;
 }
 
 function hasIndependentTransientMessage(

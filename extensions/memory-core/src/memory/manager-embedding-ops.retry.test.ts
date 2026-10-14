@@ -19,7 +19,6 @@ type EmbeddingQueryRetryHarness = {
   ) => Promise<number[]>;
   markLocalEmbeddingProviderDegraded: (error: unknown) => void;
   resolveEmbeddingTimeout: () => number;
-  withProviderUse: <T>(provider: EmbeddingProvider, run: () => Promise<T>) => Promise<T>;
 };
 
 function createEmbeddingQueryRetryHarness(
@@ -39,7 +38,6 @@ function createEmbeddingQueryRetryHarness(
     provider,
     resolveEmbeddingTimeout: () => timeoutMs,
     markLocalEmbeddingProviderDegraded: vi.fn(),
-    withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) => await run(),
   }) as EmbeddingQueryRetryHarness;
 }
 
@@ -312,9 +310,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
         items.map((_, index) => [index]),
       );
-      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([
-        33, 17, 9, 8, 16, 8, 8,
-      ]);
+      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([33, 10, 10, 10, 3]);
       expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
       expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
     },

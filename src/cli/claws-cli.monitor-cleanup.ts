@@ -4,12 +4,14 @@ import {
   clawMonitorDrainSchema,
   type ClawMonitorCleanupGateway,
 } from "../claws/monitor-cleanup-contract.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
-const binding = () =>
-  resolveClawMonitorCleanupBinding(resolveCronJobsStorePathFromConfig(getRuntimeConfig()));
+const binding = async () =>
+  resolveClawMonitorCleanupBinding(
+    resolveCronJobsStorePathFromConfig(await captureRuntimeConfigAsyncReader()()),
+  );
 
 export const clawMonitorCleanupGateway: ClawMonitorCleanupGateway = {
   inspect: async (agentId) =>
@@ -17,7 +19,7 @@ export const clawMonitorCleanupGateway: ClawMonitorCleanupGateway = {
       await callGatewayFromCli(
         "claws.monitors",
         { timeout: "5000" },
-        { phase: "inspect", agentId, binding: binding() },
+        { phase: "inspect", agentId, binding: await binding() },
       ),
     ).monitors,
   quiesce: async (agentId, operationId, monitors) => {
@@ -25,7 +27,7 @@ export const clawMonitorCleanupGateway: ClawMonitorCleanupGateway = {
       await callGatewayFromCli(
         "claws.monitors",
         {},
-        { phase: "quiesce", agentId, operationId, monitors, binding: binding() },
+        { phase: "quiesce", agentId, operationId, monitors, binding: await binding() },
       ),
     );
   },
@@ -34,7 +36,7 @@ export const clawMonitorCleanupGateway: ClawMonitorCleanupGateway = {
       await callGatewayFromCli(
         "claws.monitors",
         {},
-        { phase: "drain", agentId, operationId, binding: binding() },
+        { phase: "drain", agentId, operationId, binding: await binding() },
       ),
     );
   },

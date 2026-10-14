@@ -1,4 +1,5 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
@@ -9,6 +10,7 @@ import { createPluginCapabilityCatalogContext } from "./capability-catalog-conte
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import {
   loadOpenClawPluginsCore,
+  loadOpenClawPluginsSteps,
   type InternalPluginLoadOverrides,
   type NativePluginLoadBindings,
 } from "./loader-runtime-core.js";
@@ -71,7 +73,9 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
     return (modelAuth ??= Object.freeze(
       createRuntimeModelAuth({
         ensureAuthProfileStore: authStore.ensureAuthProfileStore,
+        ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
         isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+        isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
       }),
     ));
   },
@@ -101,6 +105,19 @@ export function resolvePluginCapabilityCatalogContext() {
 }
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsCore(options, loaderBindings);
+}
+
+/** Keep network callbacks responsive without publishing a partially registered generation. */
+export async function loadOpenClawPluginsAsync(
+  options: PluginLoadOptions = {},
+): Promise<PluginRegistry> {
+  const steps = loadOpenClawPluginsSteps(options, loaderBindings);
+  let step = steps.next();
+  while (!step.done) {
+    await nextTurn();
+    step = steps.next();
+  }
+  return step.value;
 }
 
 /** Publishes synchronously, then joins every accepted health write before returning to its host. */

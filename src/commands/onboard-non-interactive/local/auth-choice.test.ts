@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
+import { ExitError } from "../../../runtime.js";
 import * as apiProviderAuthChoices from "../../auth-choice.apply.api-providers.js";
 import { commitNonInteractiveOnboardConfig } from "../config-write.js";
 import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
@@ -103,7 +104,11 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
     expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+      JSON.stringify(
+        { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+        null,
+        2,
+      ),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -309,6 +314,37 @@ describe("applyNonInteractiveAuthChoice", () => {
       expect(errorText).not.toContain(resolved.key);
     },
   );
+
+  it("does not reformat an already-reported custom auth rejection", async () => {
+    resolveNonInteractiveApiKey.mockResolvedValueOnce({ key: "fixture-key", source: "flag" });
+    const exit = new ExitError(1);
+    runtime.exit.mockImplementation(() => {
+      throw exit;
+    });
+    await expect(
+      applyChoice({
+        opts: {
+          customBaseUrl: "https://models.custom.local/v1",
+          customModelId: "local-large",
+          secretInputMode: "ref",
+          json: true,
+        },
+      }),
+    ).rejects.toBe(exit);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(runtime.error).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload).toMatchObject({
+      ok: false,
+      phase: "options",
+      message: expect.stringContaining(
+        "--secret-input-mode ref requires an explicit environment variable",
+      ),
+    });
+    expect(payload.message).not.toContain("Invalid custom provider config");
+    expect(writeWizardConfigFile).not.toHaveBeenCalled();
+  });
 
   it("preserves existing custom SecretRefs when reusing an auth profile", async () => {
     const ref = { source: "exec", provider: "vault", id: "custom-provider" } as const;

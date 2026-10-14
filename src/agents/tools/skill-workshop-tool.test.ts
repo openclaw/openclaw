@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import {
   createWorkshopSkill,
@@ -15,6 +19,7 @@ let state: OpenClawTestState;
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only" });
+  setRuntimeConfigSnapshot({});
   await createWorkshopSkill(
     { config: {}, agentId: "main", actor: "agent" },
     {
@@ -26,6 +31,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await state.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 function text(result: { content: Array<{ type: string; text?: string }> }) {

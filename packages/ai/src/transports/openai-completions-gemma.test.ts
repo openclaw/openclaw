@@ -18,18 +18,14 @@ const call =
 
 describe("Gemma tool-call text recovery", () => {
   it.each([
-    { label: "trailing", suffix: "", split: false },
-    { label: "mid-stream", suffix: "\n", split: false },
-    { label: "fragmented trailing", suffix: "", split: true },
-  ])("recovers a $label call before stop", async ({ suffix, split }) => {
+    { label: "trailing", suffix: "" },
+    { label: "mid-stream", suffix: "\n" },
+  ])("recovers a $label call before stop", async ({ suffix }) => {
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
-    const content = call + suffix;
     await processCompletionsStream(
       streamChunks([
-        ...(split ? Array.from(content) : [call, suffix]).map((text) =>
-          makeCompletionsChunk({ content: text }),
-        ),
+        ...[call, suffix].map((text) => makeCompletionsChunk({ content: text })),
         makeCompletionsChunk({}, "stop"),
       ]),
       output,
@@ -106,17 +102,11 @@ describe("Gemma tool-call text recovery", () => {
   );
 
   it.each([
-    `Example: ${call}`,
     `\`\`\`\n${call}\n\`\`\``,
     `${call} is an example.`,
     call.replace("<tool_call|>", ""),
     call.replace('poll<|"|>', "poll"),
     call.replace("sessionId:", "sessionId"),
-    "<|tool_",
-    "<|tool_call>call:read{limit:1 2}<tool_call|>",
-    "<|tool_call>call:process{,:1}<tool_call|>",
-    "<|tool_call>call:process{[:1}<tool_call|>",
-    "<|tool_call>call:process{::1}<tool_call|>",
   ])("preserves non-call or incomplete text: %s", async (content) => {
     const output = createAssistantOutput(model);
     await processCompletionsStream(

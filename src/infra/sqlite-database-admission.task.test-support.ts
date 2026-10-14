@@ -5,7 +5,6 @@ import {
   createSqliteWorkerBackend,
   type AdmissionOperations,
 } from "./sqlite-database-admission.worker.test-support.js";
-import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 export type AdmissionTaskInput = {
@@ -14,7 +13,7 @@ export type AdmissionTaskInput = {
   nested?: boolean;
   broker?: boolean;
   creationPath?: string;
-  holdMutation?: SharedArrayBuffer;
+  measureHostAbsence?: boolean;
 };
 export type AdmissionTaskResult = AdmissionOperations["admitted"]["output"];
 
@@ -38,6 +37,7 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
           path: input.path,
           broker: input.broker === true,
           creationPath: typeof input.creationPath === "string" ? input.creationPath : undefined,
+          measureHostAbsence: input.measureHostAbsence === true,
         },
         {},
       );
@@ -57,28 +57,10 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
         },
       });
       assert.ok(store);
-      if (input.holdMutation instanceof SharedArrayBuffer) {
-        assert.ok(channel);
-        const wait = input.holdMutation;
-        await broker.runOperation(
-          store,
-          (scope) =>
-            scope.execute({
-              type: "mutateHeld",
-              input: { rollback: false, exit: false, wait: true },
-            }),
-          undefined,
-          undefined,
-          () => ({
-            nativeLocations: [databasePath],
-            admission: createSqliteWorkerOperationAdmission((_request, grant) => {
-              assert.ok(grant());
-              channel.notify("descendant-held");
-            }, wait),
-          }),
-        );
-      }
-      return await store.execute({ type: "admitted", input: undefined });
+      return await store.execute({
+        type: "admitted",
+        input: input.measureHostAbsence === true ? { measureHostAbsence: true } : undefined,
+      });
     } finally {
       await broker.close();
     }
@@ -90,7 +72,10 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
   }
   const backend = createSqliteWorkerBackend(undefined, { databasePath: input.path });
   try {
-    return backend.execute({ type: "admitted", input: undefined });
+    return backend.execute({
+      type: "admitted",
+      input: input.measureHostAbsence === true ? { measureHostAbsence: true } : undefined,
+    });
   } finally {
     backend.close();
   }

@@ -54,6 +54,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
 
 @RunWith(RobolectricTestRunner::class)
@@ -2641,13 +2642,15 @@ class WearChatEventFlowTest {
     }
     flow.settleApp()
     flow.captureApp(if (dictate) "dictate-error" else "type-reply")
-    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     if (failure) {
       flow.scrollAppTo(0)
       assertTrue(flow.hasAppText("Error"))
     } else {
       assertTrue("The ordinary reply must be visible", flow.hasAppText("Hello from Chat"))
     }
+    // Following the reply can scroll the page heading out of the round viewport.
+    flow.scrollAppTo(0)
+    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     assertTrue(
       flow.state.realtimeTalk.conversation
         .isEmpty(),
@@ -2765,7 +2768,17 @@ class WearChatEventFlowTest {
       idle()
     }
 
-    fun idle() = shadowOf(Looper.getMainLooper()).idle()
+    fun idle() {
+      // UI actions enqueue speech; speech callbacks publish state back to Compose.
+      // Drain both directions before asserting the resulting UI or playback state.
+      repeat(2) {
+        shadowOf(Looper.getMainLooper()).idle()
+        ShadowLooper
+          .getAllLoopers()
+          .filter { it != Looper.getMainLooper() && it.thread.isAlive }
+          .forEach { shadowOf(it).idle() }
+      }
+    }
 
     fun observeReplyCompletion() {
       val sessionKey = checkNotNull(state.selectedSession).key

@@ -21,10 +21,10 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CallGatewayOptions } from "../call.js";
 import { createChannelManager } from "../server-channels.js";
-import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
   channelAccounts,
+  createDegradedEventLoopHealth,
   createChannelPlugin,
   createChannelDeadlineFixture,
   createRecordedHealthFixture,
@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
   buildChannelAccountSnapshotFromAccount: vi.fn(),
-  getChannelActivity: vi.fn(),
+  getChannelActivity: vi.fn(() => ({ inboundAt: null, outboundAt: null })),
   callGateway: vi.fn(),
   note: vi.fn(),
 }));
@@ -53,6 +53,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../call.js")>()),
   callGateway: mocks.callGateway,
+}));
+
+// mock-isolation: Channel delivery starts after readiness, without inspecting host services.
+vi.mock("../../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
@@ -73,8 +78,10 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
+// mock-isolation: Status RPC fixtures supply their channel inventory without persisted account discovery.
 vi.mock("../../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: async (...args: unknown[]) =>
+    mocks.listReadOnlyChannelPluginsForConfig(...args),
 }));
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
@@ -112,10 +119,6 @@ describe("channelsHandlers channels.status", () => {
     mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       configured: true,
-    });
-    mocks.getChannelActivity.mockReturnValue({
-      inboundAt: null,
-      outboundAt: null,
     });
     mocks.listChannelPlugins.mockReturnValue([createChannelPlugin()]);
     mocks.getRuntimeSnapshot.mockImplementation(() => ({
@@ -780,40 +783,6 @@ describe("channelsHandlers channels.status", () => {
     }
   });
 
-  it("filters channel status to a requested channel", async () => {
-    const whatsappProbe = vi.fn(async () => ({ ok: true }));
-    const imessageProbe = vi.fn(async () => ({ ok: true }));
-    mocks.listChannelPlugins.mockReturnValue([
-      createChannelPlugin({ id: "whatsapp", probeAccount: whatsappProbe }),
-      createChannelPlugin({ id: "imessage", probeAccount: imessageProbe }),
-    ]);
-
-    const payload = await runChannelsStatus({
-      channel: "imessage",
-      probe: true,
-      timeoutMs: 1000,
-    });
-
-    expect(whatsappProbe).not.toHaveBeenCalled();
-    expect(imessageProbe).toHaveBeenCalledOnce();
-    expect(payload.channelOrder).toEqual(["imessage"]);
-    expect(payload.channels).toEqual({
-      imessage: { configured: true },
-    });
-    expect(payload.channelAccounts).toEqual({
-      imessage: [
-        {
-          accountId: "default",
-          configured: true,
-          lastProbeAt: expect.any(Number),
-          lastInboundAt: null,
-          lastOutboundAt: null,
-          healthState: "not-running",
-        },
-      ],
-    });
-  });
-
   it("preserves channel account rows when a live probe throws", async () => {
     const probeAccount = vi.fn(async () => {
       throw new Error("probe failed");
@@ -1050,16 +1019,7 @@ describe("channelsHandlers channels.status", () => {
           },
         },
       });
-      const eventLoop: GatewayEventLoopHealth = {
-        degraded: true,
-        degradedSinceMs: 61_000,
-        reasons: ["event_loop_delay"],
-        intervalMs: 62_000,
-        delayP99Ms: 62_000,
-        delayMaxMs: 62_000,
-        utilization: 1,
-        cpuCoreRatio: 1,
-      };
+      const eventLoop = createDegradedEventLoopHealth();
       const options = createOptions({});
       options.context.getEventLoopHealth = () => eventLoop;
       const payload = await runChannelsStatus({ probe: false }, { context: options.context });

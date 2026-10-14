@@ -5,6 +5,7 @@ import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
+import type { InstallOwner } from "./install-owner.js";
 import {
   packageActivationRuntimeIdentity,
   resolveImmutableRecoveryCommand,
@@ -104,6 +105,12 @@ export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateI
       preparedAtMs: prepared.preparedAtMs,
     };
   }
+  if (descriptor.releaseRetention) {
+    result.releaseRetention = {
+      ...descriptor.releaseRetention,
+      generations: record.releases ?? [],
+    };
+  }
   return result;
 }
 
@@ -132,13 +139,29 @@ async function installationRoot(input: string): Promise<string | null> {
 /** Shape is only a hint. Unadopted releases must never fall through to mutable Git. */
 export async function inspectImmutableInstall(
   root: string,
-): Promise<UpdateImmutableInstall | null> {
+  options: { allowExternalOwner?: boolean } = {},
+): Promise<(UpdateImmutableInstall & { installOwner?: InstallOwner }) | null> {
   const installation = await installationRoot(root);
   if (!installation) {
     return null;
   }
   const record = await readImmutableInstallRecord(installation);
   if (!record) {
+    if (options.allowExternalOwner) {
+      const layout = readImmutableLayout(installation);
+      return {
+        root: installation,
+        currentSha: layout.current.sha,
+        currentPath: layout.current.path,
+        installOwner: {
+          schemaVersion: 1,
+          owner: "immutable-deployer",
+          displayName: "immutable release deployment owner",
+          updateHint:
+            "Update through the deployment owner. Native updates require explicit adoption after its previous updater has stopped.",
+        },
+      };
+    }
     throw new Error(
       "Immutable release layout is not adopted. Use openclaw update adopt-immutable after its previous updater has stopped.",
     );
@@ -178,18 +201,37 @@ export async function adoptImmutableInstall(params: {
   root: string;
   service: ImmutableInstallDescriptor["service"];
   runtime: string;
+  build?: ImmutableInstallDescriptor["build"];
   previousUpdaterStopped: true;
   enableActivation?: boolean;
+  inspectReleaseRetention?: boolean;
 }): Promise<UpdateImmutableInstall> {
   requireUpdater();
-  const { installImmutableLauncher, verifyImmutableGeneration } =
-    await import("./update-immutable-generation.js");
+  const {
+    installImmutableLauncher,
+    verifyImmutableGeneration,
+    assertImmutableGenerationControlVersion,
+  } = await import("./update-immutable-generation.js");
   const { verifyImmutableService } = await import("./update-immutable-service.js");
   const { ImmutableInstallDescriptorSchema } = await import("./update-immutable-install-schema.js");
   if (!params.previousUpdaterStopped) {
     throw new Error("The previous updater must be stopped before adoption.");
   }
   const root = await fs.realpath(params.root);
+  if (params.inspectReleaseRetention) {
+    if (!params.enableActivation) {
+      throw new Error("Release retention inspection requires --enable-activation.");
+    }
+    // Check the installed bridge before executor admission can create metadata.
+    const layout = readImmutableLayout(root);
+    await assertImmutableGenerationControlVersion(layout.current.path, 3);
+    const existing = await readImmutableInstallRecord(root);
+    if (existing?.activation?.operation || existing?.descriptor.version === 1) {
+      throw new Error(
+        "Complete version-2 bridge activation and recovery before adopting retention inspection.",
+      );
+    }
+  }
   return withImmutableUpdateOwner(root, async (assertOwner) => {
     const layout = readImmutableLayout(root);
     const runtime = await fs.realpath(params.runtime);
@@ -210,8 +252,18 @@ export async function adoptImmutableInstall(params: {
     }
     const generation = await verifyImmutableGeneration(layout.current.path, layout.current.sha);
     const descriptor: ImmutableInstallDescriptor = {
-      version: params.enableActivation ? 2 : 1,
+      version: params.inspectReleaseRetention ? 3 : params.enableActivation ? 2 : 1,
       ...(params.enableActivation ? { activationEnabled: true as const } : {}),
+      ...(params.inspectReleaseRetention
+        ? {
+            releaseRetention: {
+              version: 1 as const,
+              mode: "inspect" as const,
+              keepVerifiedGenerations: 3 as const,
+              pins: [],
+            },
+          }
+        : {}),
       kind: "immutable",
       root,
       ...layout,
@@ -219,6 +271,7 @@ export async function adoptImmutableInstall(params: {
       service: params.service,
       runtime: { path: runtime, identity: packageActivationRuntimeIdentity(runtime) },
       source: SOURCE,
+      ...(params.build ? { build: params.build } : {}),
     };
     ImmutableInstallDescriptorSchema.parse(descriptor);
     const assertCurrent = () => {
@@ -231,6 +284,14 @@ export async function adoptImmutableInstall(params: {
       assertImmutableInstallRecordCurrent,
     } = await import("./package-update-activation-immutable.js");
     const existing = await readImmutableInstallRecord(root);
+    if (existing?.descriptor.releaseRetention) {
+      descriptor.version = existing.descriptor.version;
+      descriptor.activationEnabled = existing.descriptor.activationEnabled;
+      descriptor.releaseRetention = existing.descriptor.releaseRetention;
+    }
+    if (descriptor.version === 3) {
+      await assertImmutableGenerationControlVersion(layout.current.path, 3);
+    }
     assertCurrent();
     if (existing) {
       if (existing.activation?.operation) {
@@ -241,18 +302,23 @@ export async function adoptImmutableInstall(params: {
         version: _version,
         activationEnabled: _enabled,
         current: previous,
+        releaseRetention: _retention,
         ...original
       } = existing.descriptor;
       const {
         version: _nextVersion,
         activationEnabled: _nextEnabled,
         current: selected,
+        releaseRetention: _nextRetention,
         ...requested
       } = descriptor;
-      const upgrade = params.enableActivation && existing.descriptor.version === 1;
+      const retentionUpgrade =
+        params.inspectReleaseRetention && !existing.descriptor.releaseRetention;
+      const upgrade =
+        (params.enableActivation && existing.descriptor.version === 1) || retentionUpgrade;
       if (
         !isDeepStrictEqual(original, requested) ||
-        (!upgrade && !isDeepStrictEqual(previous, selected))
+        ((!upgrade || retentionUpgrade) && !isDeepStrictEqual(previous, selected))
       ) {
         throw new Error("Existing immutable adoption differs; preserve its original owner.");
       }
@@ -301,7 +367,10 @@ export async function adoptImmutableInstall(params: {
             await installImmutableLauncher({
               root,
               runtimePath: runtime,
-              upgradeFromV1: { assertCurrent: assertServing },
+              upgrade: {
+                version: existing.descriptor.version === 1 ? 1 : 2,
+                assertCurrent: assertServing,
+              },
             });
             assertServing();
             const prepared = existing.prepared;
@@ -349,7 +418,7 @@ export type ImmutableUpdateResult = {
   coverage?: ImmutableUpdateCoverage;
 };
 
-/** Prepare only. Pointer publication, Doctor, drain, and service activation belong to slice 2. */
+/** Build and record a sealed generation without stopping or selecting it. */
 export async function prepareImmutableUpdate(params: {
   root: string;
   sha?: string;
@@ -376,15 +445,42 @@ export async function prepareImmutableUpdate(params: {
       throw new Error("--sha requires a full lowercase 40-hex commit SHA.");
     }
     const { buildUpdateCommandRunner, runStep } = await import("./update-runner-command.js");
-    const { resolveImmutableGenerationEnv, sealImmutableGeneration, verifyImmutableGeneration } =
-      await import("./update-immutable-generation.js");
+    const {
+      copyImmutableGeneration,
+      resolveImmutableGenerationEnv,
+      sealImmutableGeneration,
+      verifyImmutableGeneration,
+      assertImmutableGenerationControlVersion,
+    } = await import("./update-immutable-generation.js");
     const runner = await buildUpdateCommandRunner();
-    const defaultCommandEnv = resolveImmutableGenerationEnv(runner.defaultCommandEnv);
+    const defaultCommandEnv = resolveImmutableGenerationEnv({
+      PATH: "/usr/bin:/bin",
+      LANG: "C.UTF-8",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_NO_REPLACE_OBJECTS: "1",
+    });
     const runCommand: CommandRunner = (argv, options) =>
-      runner.runCommand(argv, {
-        ...options,
-        env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
-      });
+      runner.runCommand(
+        argv[0] === "git"
+          ? [
+              "git",
+              "--no-lazy-fetch",
+              "-c",
+              "core.fsmonitor=false",
+              "-c",
+              "core.hooksPath=/dev/null",
+              "-c",
+              "submodule.recurse=false",
+              ...argv.slice(1),
+            ]
+          : argv,
+        {
+          ...options,
+          baseEnv: {},
+          env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
+        },
+      );
     const timeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
     const step: StepFactory = (name, argv, cwd, env) => ({
       name,
@@ -425,9 +521,8 @@ export async function prepareImmutableUpdate(params: {
       };
     }
     requireUpdater();
-    const { collectGitRuntimeErrors } = await import("./update-git-runtime.js");
     const { verifyImmutableService } = await import("./update-immutable-service.js");
-    const { runGitCandidatePreflight } = await import("./update-runner-git-preflight.js");
+    const { runImmutableBuild } = await import("./update-immutable-build.js");
     const { readGitTargetSchemaVersions } = await import("./update-runner-git-target.js");
     const selectedSha = targetSha;
     return await withImmutableUpdateOwner(installation.root, async (assertOwner) => {
@@ -465,6 +560,7 @@ export async function prepareImmutableUpdate(params: {
       if (current.buildDigest !== descriptor.current.buildDigest) {
         throw new Error("Current sealed generation has changed since adoption.");
       }
+      await assertImmutableGenerationControlVersion(descriptor.current.path, descriptor.version);
       assertCurrent();
       if (selectedSha === descriptor.current.sha) {
         return result("already-current");
@@ -477,6 +573,7 @@ export async function prepareImmutableUpdate(params: {
           );
         }
         const existing = await verifyImmutableGeneration(destination, selectedSha, runCommand);
+        await assertImmutableGenerationControlVersion(destination, descriptor.version);
         if (
           existing.identity !== record.prepared.identity ||
           existing.buildDigest !== record.prepared.buildDigest
@@ -492,114 +589,53 @@ export async function prepareImmutableUpdate(params: {
       const stage = await fs.mkdtemp(path.join(descriptor.root, ".openclaw-immutable-"));
       let cleanupUncertain = false;
       try {
-        const source = path.join(stage, "source");
-        await command(
-          "immutable-clone",
-          ["git", "clone", "--no-checkout", "--single-branch", "--branch", "main", SOURCE, source],
-          stage,
-        );
-        await command(
-          "immutable-official-ancestry",
-          [
-            "git",
-            "-C",
-            source,
-            "merge-base",
-            "--is-ancestor",
-            selectedSha,
-            "refs/remotes/origin/main",
-          ],
-          source,
-        );
+        // The builder can populate its child, never pre-create the privileged copy target.
+        await fs.chmod(stage, 0o755);
+        const buildStage = path.join(stage, "build");
+        await fs.mkdir(buildStage, { mode: 0o700 });
+        await runImmutableBuild({
+          descriptor,
+          stage: buildStage,
+          sha: selectedSha,
+          timeoutMs,
+          workTimeoutMs: params.timeoutMs,
+          assertCurrent,
+          steps,
+        });
+        assertCurrent();
+        await fs.chmod(stage, 0o700);
+        // Copy only after the build cgroup is extinct. Root owns the materialized release,
+        // including files that pnpm linked to its unprivileged package store.
+        const candidate = path.join(stage, "sealed");
+        await copyImmutableGeneration(path.join(buildStage, "generation"), candidate);
+        await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
         const metadata = await readGitTargetSchemaVersions({
           runCommand,
-          root: source,
+          root: candidate,
           revision: selectedSha,
           timeoutMs,
         });
         if (metadata.status !== "ok" || !metadata.schemaVersions) {
           throw new Error("Candidate schema metadata is unreadable.");
         }
-        let prepared: ImmutableInstallRecord["prepared"] = null;
-        const preflight = await runGitCandidatePreflight({
-          gitRoot: source,
-          artifactRoot: stage,
-          targetRevision: selectedSha,
-          refreshedRemotes: ["origin"],
-          beforeRuntimeVerified: false,
-          frozenLockfile: true,
-          needsCheckoutMain: false,
-          runCommand,
-          timeoutMs,
-          defaultCommandEnv: {
-            ...defaultCommandEnv,
-            PATH: `${path.dirname(descriptor.runtime.path)}${path.delimiter}${defaultCommandEnv?.PATH ?? process.env.PATH ?? ""}`,
-          },
-          steps,
-          step,
-          workStep: step,
-          workTimeoutMs: params.timeoutMs,
-          beforeCandidate: async (sha) => {
-            assertCurrent();
-            if (sha !== selectedSha) {
-              throw new Error("Immutable preparation cannot fall back to another commit.");
-            }
-          },
-          validateCandidate: async (root) => {
-            const errors = await collectGitRuntimeErrors({ root, sha: selectedSha });
-            if (errors.length) {
-              throw new Error(errors.join("; "));
-            }
-          },
-          prepareCandidate: async (built) => {
-            const candidate = path.join(stage, "generation");
-            await command(
-              "immutable-independent-git",
-              ["git", "clone", "--no-hardlinks", "--no-checkout", source, candidate],
-              stage,
-            );
-            await command(
-              "immutable-exact-checkout",
-              ["git", "-C", candidate, "checkout", "--detach", selectedSha],
-              candidate,
-            );
-            // Materialize pnpm hardlinks before sealing, preserving its shared store.
-            await fs.cp(built, candidate, {
-              recursive: true,
-              verbatimSymlinks: true,
-              filter: (file) => file !== path.join(built, ".git"),
-            });
-            await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
-            await sealImmutableGeneration(candidate);
-            const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
-            await verifyService();
-            assertCurrent();
-            // Native publishers hold this lock; preexisting generations are never rebuilt.
-            if (fsSync.existsSync(destination)) {
-              throw new Error("Generation publication conflict; existing generation preserved.");
-            }
-            await fs.rename(candidate, destination);
-            requireDirectorySync(
-              await syncDirectory(path.dirname(destination)),
-              "Immutable releases",
-            );
-            assertCurrent();
-            prepared = {
-              sha: selectedSha,
-              path: destination,
-              ...verified,
-              preparedAtMs: Date.now(),
-              schemaVersions: metadata.schemaVersions,
-            };
-          },
-        });
-        if (preflight.status !== "ok" || !prepared) {
-          throw new Error(
-            preflight.status === "ok"
-              ? "Candidate preparation did not produce a generation."
-              : preflight.reason,
-          );
+        assertCurrent();
+        await assertImmutableGenerationControlVersion(candidate, descriptor.version);
+        await sealImmutableGeneration(candidate);
+        const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
+        await verifyService();
+        assertCurrent();
+        if (fsSync.existsSync(destination)) {
+          throw new Error("Generation publication conflict; existing generation preserved.");
         }
+        await fs.rename(candidate, destination);
+        requireDirectorySync(await syncDirectory(path.dirname(destination)), "Immutable releases");
+        const prepared = {
+          sha: selectedSha,
+          path: destination,
+          ...verified,
+          preparedAtMs: Date.now(),
+          schemaVersions: metadata.schemaVersions,
+        };
         assertCurrent();
         const { recordImmutablePreparedGeneration } =
           await import("./package-update-activation-immutable.js");

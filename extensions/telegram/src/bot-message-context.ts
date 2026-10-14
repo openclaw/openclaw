@@ -98,6 +98,7 @@ export type TelegramMessageContext = {
 export const buildTelegramMessageContext = async ({
   nativeCommandNames,
   primaryCtx,
+  resolveDirectAvatar,
   allMedia,
   replyMedia = [],
   replyChain = [],
@@ -316,7 +317,7 @@ export const buildTelegramMessageContext = async ({
       mainSessionKey: route.mainSessionKey,
     }),
   };
-  const activationOverride = resolveGroupActivation({
+  const activationOverride = await resolveGroupActivation({
     sessionKey,
     agentId: route.agentId,
     cfg,
@@ -422,6 +423,7 @@ export const buildTelegramMessageContext = async ({
 
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     ...inboundContext,
+    conversationAvatar: resolveDirectAvatar?.(primaryCtx, cfg),
     replyMedia,
     replyChain,
     promptContext,

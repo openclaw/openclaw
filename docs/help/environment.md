@@ -73,8 +73,18 @@ Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, an
 
 Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 `NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
-directory otherwise. Child processes reuse the same build namespace. Source
-checkouts keep their existing cache-disable policy.
+directory otherwise. Gateway workers and child processes reuse the same build
+namespace, including when running a built source checkout. The Gateway main
+thread stays uncached: Node's synchronous cache flush can stall its event loop
+at startup or shutdown. Workers retain their existing flush boundaries on their
+own threads. An inherited active cache requires a startup respawn; on platforms
+with `execve`, the serving process keeps its PID. Node permission mode retains
+an already-active caller cache because it can forbid process replacement.
+
+Short-lived CLI commands keep their existing policy: caching is opt-in through
+`NODE_COMPILE_CACHE`, and source CLI entrypoints remain uncached. Explicit release
+prewarming still populates the cache. `NODE_DISABLE_COMPILE_CACHE` disables caching
+for both the Gateway and its workers.
 
 Release builds use a stable 16-character hash of the build ID. On Windows,
 OpenClaw skips cache paths longer than 200 characters with a warning and disables
@@ -174,6 +184,18 @@ examined entries per scan, including excluded entries. Larger trees also fall
 back to refresh-on-search after observation retries are exhausted.
 Skills refreshes during agent preparation after capacity exhaustion, and the
 development supervisor stops its child if observation fails.
+
+## ClawHub install telemetry
+
+Authenticated skill or plugin installs from ClawHub send a best-effort install report.
+See [ClawHub telemetry](/clawhub/telemetry) for what is sent, when it is sent, and
+what is never included.
+
+| Variable                    | Purpose                                                             |
+| --------------------------- | ------------------------------------------------------------------- |
+| `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
+
+`CLAWDHUB_DISABLE_TELEMETRY` is accepted when `CLAWHUB_DISABLE_TELEMETRY` is unset or blank.
 
 ## Provider credentials and workspace `.env`
 

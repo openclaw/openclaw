@@ -1,7 +1,9 @@
 import { html, nothing, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const containers: HTMLElement[] = [];
 afterEach(() => {
@@ -66,35 +68,21 @@ function fixture(mode: "inline" | "standalone") {
   return { rows, container, draw, toggledKeys };
 }
 
-async function settleTabs(container: HTMLElement) {
-  await Promise.all(
-    ["wa-tab-group", "wa-tab", "wa-tab-panel"].map((tag) => customElements.whenDefined(tag)),
-  );
-  await Promise.all(
-    Array.from(
-      container.querySelectorAll<HTMLElement & { updateComplete: Promise<unknown> }>(
-        "wa-tab-group, wa-tab, wa-tab-panel",
-      ),
-      (element) => element.updateComplete,
-    ),
-  );
-}
-
 describe
   .skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))
   .each(["inline", "standalone"] as const)("%s tool message disclosures", (mode) => {
   it("preserves message-scoped IDs and independent Raw tabs for reused call IDs", async () => {
     const { rows, container, draw, toggledKeys } = fixture(mode);
     draw();
-    await settleTabs(container);
+    await settleToolBridges(container);
     const bubbles = Array.from(container.querySelectorAll<HTMLElement>(".chat-bubble"));
     expect(bubbles.map((bubble) => bubble.dataset.messageId)).toEqual(rows.map((row) => row.key));
     expect(container.querySelectorAll(".chat-tools-inline")).toHaveLength(
       mode === "inline" ? 2 : 0,
     );
-    expect(container.querySelectorAll("wa-tab-group")).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-tool-card__modes")).toHaveLength(2);
     const ids = Array.from(
-      container.querySelectorAll("wa-tab, wa-tab-panel"),
+      container.querySelectorAll('[role="tab"], [role="tabpanel"]'),
       (element) => element.id,
     );
     expect(ids).toEqual(
@@ -106,11 +94,11 @@ describe
     );
     expect(new Set(ids).size).toBe(8);
 
-    await vi.waitFor(() => {
+    await waitForSolid(() => {
       for (const bubble of bubbles) {
         for (const name of ["diff", "raw"]) {
-          const tab = bubble.querySelector(`wa-tab[panel="${name}"]`)!;
-          const panel = bubble.querySelector(`wa-tab-panel[name="${name}"]`)!;
+          const tab = bubble.querySelector(`[role="tab"][data-tab-value="${name}"]`)!;
+          const panel = bubble.querySelector(`[role="tabpanel"][aria-labelledby$="-${name}-tab"]`)!;
           expect(tab.getAttribute("aria-controls")).toBe(panel.id);
           expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
         }
@@ -122,29 +110,37 @@ describe
     const disclosureKey =
       mode === "inline" ? `${rows[0]!.key}:toolcard:0` : `toolmsg:${rows[0]!.key}`;
     bubbles[0]!.querySelector<HTMLButtonElement>(toggleSelector)!.click();
+    await settleToolBridges(container);
     expect(toggledKeys).toEqual([disclosureKey]);
-    expect(bubbles[0]!.querySelector("wa-tab-group")).toBeNull();
-    expect(bubbles[1]!.querySelector("wa-tab-group")).not.toBeNull();
+    expect(bubbles[0]!.querySelector(".chat-tool-card__modes")).toBeNull();
+    expect(bubbles[1]!.querySelector(".chat-tool-card__modes")).not.toBeNull();
     bubbles[0]!.querySelector<HTMLButtonElement>(toggleSelector)!.click();
+    await settleToolBridges(container);
     expect(toggledKeys).toEqual([disclosureKey, disclosureKey]);
-    await settleTabs(container);
-
-    bubbles[0]!.querySelector<HTMLElement>('wa-tab[panel="raw"]')!.click();
-    await settleTabs(container);
-    expect(bubbles[0]!.querySelector('wa-tab-panel[name="raw"]')!.hasAttribute("active")).toBe(
-      true,
-    );
-    expect(bubbles[0]!.querySelector('wa-tab-panel[name="diff"]')!.hasAttribute("active")).toBe(
-      false,
-    );
-    expect(bubbles[1]!.querySelector('wa-tab-panel[name="diff"]')!.hasAttribute("active")).toBe(
-      true,
-    );
-    expect(bubbles[1]!.querySelector('wa-tab-panel[name="raw"]')!.hasAttribute("active")).toBe(
-      false,
-    );
+    bubbles[0]!.querySelector<HTMLButtonElement>('[role="tab"][data-tab-value="raw"]')!.click();
+    await waitForSolid(() => {
+      expect(
+        bubbles[0]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-raw-tab"]')!
+          .hidden,
+      ).toBe(false);
+      expect(
+        bubbles[0]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-diff-tab"]')!
+          .hidden,
+      ).toBe(true);
+      expect(
+        bubbles[1]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-diff-tab"]')!
+          .hidden,
+      ).toBe(false);
+      expect(
+        bubbles[1]!.querySelector<HTMLElement>('[role="tabpanel"][aria-labelledby$="-raw-tab"]')!
+          .hidden,
+      ).toBe(true);
+    });
     expect(
-      bubbles.map((bubble) => bubble.querySelector('wa-tab-panel[name="raw"] code')!.textContent),
+      bubbles.map(
+        (bubble) =>
+          bubble.querySelector('[role="tabpanel"][aria-labelledby$="-raw-tab"] code')!.textContent,
+      ),
     ).toEqual(rows.map((row) => row.output));
   });
 });

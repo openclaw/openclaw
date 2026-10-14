@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -25,6 +26,7 @@ describe("chat history stored ownership", () => {
           agents: { ownership: "explicit", entries: { research: {} } },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const scope = {
           agentId: "research",
           sessionKey: `agent:research:${storedKey.trim()}`,
@@ -96,6 +98,7 @@ describe("chat history stored ownership", () => {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       for (const sentinel of ["global", "unknown"]) {
         await upsertSessionEntryCore(
           { agentId: "ops", sessionKey: sentinel },

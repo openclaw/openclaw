@@ -44,6 +44,12 @@ the Code Mode tool bridge retain OpenClaw's normal policy, approvals, hooks,
 and session ownership under either executor. These checks mediate tool calls;
 they cannot contain hostile code that escapes a Node VM context.
 
+Session sandboxing does not move Code Mode cells into the sandbox. Under the
+Node executor, a cell from a sandboxed session, including one created by a
+[role that requires sandboxing](/gateway/operator-scopes#named-operator-roles),
+still runs in the Gateway process. Use QuickJS on Gateways where untrusted
+people can start sessions on the built-in runtime.
+
 ## Set the executor
 
 In the web interface, open **Settings → Agents & Tools → Labs** and use
@@ -109,8 +115,15 @@ heap. Saved JSON results retain their shared memory/snapshot data allowance.
 best-effort V8 worker heap budget across the old and young generations, subject
 to engine minimums. That budget includes worker runtime allocations and
 excludes external buffers; it is not a per-context heap measurement or security
-boundary. Neither executor's
-setting caps total Gateway RSS. Worker overhead and host-side tool results also
+boundary. Node stops an execution with `runtime_unavailable` when sustained
+major garbage collections leave the worker near its heap limit, then retires
+that worker. Output emitted before heap exhaustion or GC retirement remains
+available within the configured output limit. Synchronous code that prevents GC notifications remains bounded
+by the host execution deadline. Paginate or narrow large tool results and avoid
+retaining large arrays; inspect completed actions before retrying. Captured Node
+output retains only a bounded prefix, including when a cell emits many entries
+without yielding. Fresh cells get fresh globals even when a worker is reused.
+Neither executor's setting caps total Gateway RSS. Worker overhead and host-side tool results also
 consume memory. A retained Node context can use more total host memory than a
 size-limited QuickJS snapshot. The shared limit of 64 suspended cells and
 reserved resume slots still applies; there is no separate global memory quota. See

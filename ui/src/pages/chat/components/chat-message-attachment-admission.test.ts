@@ -2,7 +2,8 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderMessageAttachment } from "./chat-message-attachments.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import {
   releaseChatMediaResourceSubscriber,
   type AttachmentItem,
@@ -66,13 +67,12 @@ function mount(
   let current = item;
   const update = () =>
     render(
-      renderMessageAttachment(
-        current,
-        { ...options, onRequestUpdate: update },
+      solidContent(MessageAttachment, {
+        item: current,
+        options: { ...options, onRequestUpdate: update },
         onOpenSidebar,
-        undefined,
         presentation,
-      ),
+      }),
       container,
     );
   subscribers.add(update);
@@ -172,6 +172,7 @@ describe("nonimage attachment source admission", () => {
 
     const current = observations.at(-1);
     render(null, view.container);
+    await settle();
     current?.show();
     await settle();
     expect(fetchMock).not.toHaveBeenCalled();

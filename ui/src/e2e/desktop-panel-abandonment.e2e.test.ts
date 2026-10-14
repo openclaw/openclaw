@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -57,20 +57,13 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}activity`);
       await waitForControlUiGatewayReady(page);
-      const requester = await page.evaluateHandle(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: ApplicationContext };
-        };
-        return app.runtime.context.gateway.snapshot.client;
-      });
+      const application = await getControlUiContextHandle(page);
+      const requester = await application.evaluateHandle(
+        (context) => context.gateway.snapshot.client,
+      );
       const sameRequester = () =>
-        page.evaluate((original) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          return (
-            app.runtime.context.gateway.snapshot.client === original && original?.connected === true
-          );
+        application.evaluate((context, original) => {
+          return context.gateway.snapshot.client === original && original?.connected === true;
         }, requester);
       // Only the RFB peer is scripted; the mounted viewer uses the real noVNC implementation.
       const rfb = await installScriptedRfbServer(page);
@@ -141,6 +134,7 @@ suite.define(() => {
         { wsPath: discardedPath },
       ]);
       await requester.dispose();
+      await application.dispose();
     });
   });
 });

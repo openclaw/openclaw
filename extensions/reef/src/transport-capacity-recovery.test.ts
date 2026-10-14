@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -20,7 +21,6 @@ import {
   reefKeys,
   resetFlowStoresForTests,
   transport,
-  trust,
 } from "./flow.test-helpers.js";
 import {
   REEF_DELIVERED_MAX_ENTRIES,
@@ -30,6 +30,7 @@ import {
 } from "./state.js";
 import { ReefInboxConnection, type ReefTransportClient } from "./transport.js";
 import { createClient, parseRequestUrl } from "./transport.test-helpers.js";
+import { openReefTrustStore } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
 
 // New runtime and store handles over the same persisted database, as on restart.
@@ -45,6 +46,15 @@ function reopenRuntime(stateDir: string) {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
+  runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    createPluginStateKeyedStoreV2ForTests<T>(
+      "reef",
+      {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      },
+      { assertCurrent() {} },
+    );
   return runtime;
 }
 
@@ -70,6 +80,10 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     }),
   );
   const stores = flowStores(deliveredMaxEntries);
+  const trusted = openReefTrustStore(stores.runtime, config());
+  for (const { peer, identity } of identities) {
+    await trusted.set(peer, peerTrust(identity));
+  }
   const raw = stores.runtime.state.openSyncKeyedStore<{ id: string }>({
     namespace: REEF_DELIVERED_NAMESPACE,
     maxEntries: deliveredMaxEntries,
@@ -84,13 +98,11 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     const page = entries.filter((entry) => entry.seq > after);
     return Response.json({ entries: page, cursor: page.at(-1)?.seq ?? after });
   });
-  function connect(runtime = stores.runtime) {
-    const { replay, reviews, delivered } = openStores(runtime, keys, { deliveredMaxEntries });
+  async function connect(runtime = stores.runtime) {
+    const { replay, reviews, delivered } = await openStores(runtime, keys, { deliveredMaxEntries });
     const flow = new ReefMessageFlow({
       config: config(),
-      trust: trust(
-        Object.fromEntries(identities.map(({ peer, identity }) => [peer, peerTrust(identity)])),
-      ).store,
+      trust: openReefTrustStore(runtime, config()),
       keys,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),
@@ -126,7 +138,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     );
     await stores.delivered.confirm("occupied-1");
     await stores.delivered.confirm("occupied-2");
-    const inbox = connect();
+    const inbox = await connect();
 
     // Both entries reach ingress, but capacity blocks confirmation and cursor progress.
     await inbox.drain();
@@ -155,14 +167,14 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
       1,
     );
     await stores.delivered.confirm("occupied");
-    await connect().drain();
+    await (await connect()).drain();
     expect(onIngress).toHaveBeenCalledTimes(1);
     expect(relay.acknowledge).not.toHaveBeenCalled();
     expect(persisted).toEqual([]);
 
     // The persisted replay survives a restart; absent confirmation allows one redispatch.
     raw.delete("occupied");
-    await connect(reopenRuntime(stores.stateDir)).drain();
+    await (await connect(reopenRuntime(stores.stateDir))).drain();
     expect(onIngress).toHaveBeenCalledTimes(2);
     await expect(stores.delivered.status(entries[0]!.id)).resolves.toBe("delivered");
     expect(relay.acknowledge).toHaveBeenCalledTimes(1);
@@ -173,7 +185,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
     const { stores, raw, relay, onIngress, persisted, entries, connect } = await fixture();
     const id = entries[0]!.id;
     raw.registerIfAbsent(id, { id });
-    await connect().drain();
+    await (await connect()).drain();
     expect(onIngress).not.toHaveBeenCalled();
     expect(relay.acknowledge).toHaveBeenCalledTimes(1);
     await expect(stores.delivered.status(id)).resolves.toBe("delivered");

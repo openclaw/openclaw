@@ -39,6 +39,7 @@ describe("Control UI service worker HTTP recovery", () => {
         "fonts/custom.woff2",
         "assets/app-AbCd1234.js?token=synthetic",
         "fonts/custom.woff2?v=other-build&token=synthetic",
+        "fonts/custom.woff2?v=previous-build",
       ].map((route) => ({ route })),
       {
         route: "assets/app-AbCd1234.js",
@@ -376,23 +377,23 @@ describe("Control UI offline app shell", () => {
     }
     expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
     expect([...worker.cache.keys()]).toEqual([
-      base + "__offline_assets__",
       ...offlineBootFixture.assets.map((asset) => base + asset.path),
       base + "__offline_shell__",
     ]);
   });
 
-  it("does not substitute an old shell but still serves its exact hashed assets", async () => {
+  it("does not substitute a prior build's shell or hashed assets", async () => {
     const worker = createFetchServiceWorker(undefined, { online: false });
     worker.priorCache.set(worker.scope + "__offline_shell__", new Response("old shell"));
     worker.priorCache.set(worker.scope + "assets/old-AbCd1234.js", new Response("old asset"));
+    worker.fetch.mockRejectedValue(new TypeError("Offline"));
     expect((await worker.dispatch({ url: worker.scope + "chat", mode: "navigate" }))?.type).toBe(
       "error",
     );
-    expect(
-      await (await worker.dispatch({ url: worker.scope + "assets/old-AbCd1234.js" }))?.text(),
-    ).toBe("old asset");
-    expect(worker.fetch).not.toHaveBeenCalled();
+    expect((await worker.dispatch({ url: worker.scope + "assets/old-AbCd1234.js" }))?.type).toBe(
+      "error",
+    );
+    expect(worker.fetch).toHaveBeenCalledOnce();
   });
 
   it.each<ResponseInit>([
@@ -430,29 +431,6 @@ describe("Control UI offline app shell", () => {
       cacheName: "openclaw-control-dev-fixture",
     });
     expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
-  });
-
-  it("admits an old public asset only from its retained build inventory", async () => {
-    const worker = createFetchServiceWorker();
-    const priorUrl = worker.scope + "fonts/old-only.woff2?v=previous-build";
-    worker.priorCache.set(
-      worker.scope + "__offline_assets__",
-      Response.json({
-        version: "previous-build",
-        assets: ["fonts/old-only.woff2"],
-      }),
-    );
-    worker.priorCache.set(priorUrl, new Response("previous font"));
-    worker.fetch.mockRejectedValue(new TypeError("Offline"));
-    expect(await (await worker.dispatch({ url: priorUrl }))?.text()).toBe("previous font");
-    expect(worker.fetch).not.toHaveBeenCalled();
-    expect(
-      (await worker.dispatch({ url: priorUrl.replace("previous-build", "unknown-build") }))?.type,
-    ).toBe("error");
-    expect(
-      (await worker.dispatch({ url: priorUrl.replace("old-only", "unknown-asset") }))?.type,
-    ).toBe("error");
-    expect(worker.cachePut).not.toHaveBeenCalled();
   });
 
   it.each(["cacheMatch", "cachePut"] as const)(

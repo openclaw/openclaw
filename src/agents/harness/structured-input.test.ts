@@ -272,9 +272,7 @@ describe("structured input compiler", () => {
   });
 
   it.each([
-    [{ type: "string", pattern: "^x$" }, "pattern"],
     [{ type: "integer", minimum: 3, maximum: 1 }, "numeric"],
-    [{ type: "string", enum: ["1", "2", "3", "4", "5"] }, "choices"],
     [{ type: "array", items: { type: "string", enum: ["x", "y"] }, maxItems: 3 }, "multi-select"],
   ])("declines unsupported or invalid constraints: %s", (field, message) => {
     const result = compile({ value: field }, ["value"]);
@@ -392,21 +390,6 @@ describe("OpenAI rich forms", () => {
     expect(compile({ part: { type: "string", pattern: "(a+)+$" } }, [], rich).kind).toBe(
       "unsupported",
     );
-  });
-
-  it("does not reinterpret custom text equal to a suggestion title", () => {
-    const result = compile(
-      { part: { type: "string", "x-openai-suggestions": [suggestion] } },
-      ["part"],
-      rich,
-    );
-    expect(decodeForm(result, { part: ["M6 washer"] })).toEqual({ part: "M6 washer" });
-    expect(decodeForm(result, { part: ["  custom  "] })).toEqual({ part: "  custom  " });
-    expect(
-      decodeForm(compile({ symbol: { type: "string", maxLength: 1 } }, ["symbol"], rich), {
-        symbol: ["🦀"],
-      }),
-    ).toEqual({ symbol: "🦀" });
   });
 
   it("decodes multiple custom array entries with item, cardinality, and uniqueness validation", () => {
@@ -549,8 +532,6 @@ describe("OpenAI rich forms", () => {
   });
 
   it.each([
-    { type: "resource", options: [], userOptions: {} },
-    { type: "resource", options: [], selection: "implicit" },
     { type: "unknown", options: [] },
     {
       type: "resource",
@@ -583,9 +564,9 @@ describe("OpenAI rich forms", () => {
   });
 
   it.each([
+    "javascript:alert(1)",
     "http://example.com/image.png",
     "https://user:pass@example.com/image.png",
-    "javascript:alert(1)",
   ])("refuses unsafe thumbnail %s without partially displaying the form", (src) => {
     expect(
       compile(

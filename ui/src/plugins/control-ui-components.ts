@@ -108,8 +108,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { AgentAvatar } = await import("../components/agent-avatar.ts");
-          return new AgentAvatar();
+          await import("../components/agent-avatar.ts");
+          return document.createElement("openclaw-agent-avatar");
         },
         (element, next, current) => {
           const context = current();
@@ -131,8 +131,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { AppearancePicker } = await import("../components/appearance-picker.ts");
-          return new AppearancePicker();
+          await import("../components/appearance-picker.tsx");
+          return document.createElement("openclaw-appearance-picker");
         },
         (element, next, current) => {
           element.props = {
@@ -149,8 +149,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { AppearanceGlyph } = await import("../components/appearance-picker.ts");
-          return new AppearanceGlyph();
+          await import("../components/appearance-picker.tsx");
+          return document.createElement("openclaw-appearance-glyph");
         },
         (element, next) => {
           element.props = next;
@@ -160,8 +160,9 @@ export function createControlUiComponents(options: {
           );
         },
       ),
-    mountDialog: (container, props) =>
-      mount(
+    mountDialog: (container, props) => {
+      let content: HTMLElement | undefined;
+      return mount(
         container,
         props,
         async () => {
@@ -176,8 +177,14 @@ export function createControlUiComponents(options: {
           if (next.returnFocusTarget !== undefined) {
             element.setReturnFocusTarget(next.returnFocusTarget);
           }
-          if (element.firstChild !== next.content) {
-            element.replaceChildren(next.content);
+          if (content !== next.content) {
+            // The dialog owns its shell; the plugin owns only this content node.
+            if (content) {
+              content.replaceWith(next.content);
+            } else {
+              element.append(next.content);
+            }
+            content = next.content;
           }
         },
         (element, getProps) => {
@@ -189,7 +196,8 @@ export function createControlUiComponents(options: {
           element.addEventListener("modal-cancel", cancel);
           return () => element.removeEventListener("modal-cancel", cancel);
         },
-      ),
+      );
+    },
     mountAgentPicker: (container, props) =>
       mount(
         container,
@@ -222,8 +230,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { SelectPicker } = await import("../components/select-picker.ts");
-          return new SelectPicker();
+          await import("../components/select-picker.ts");
+          return document.createElement("openclaw-select-picker");
         },
         (element, next, current) => {
           element.className = "settings-select picker-select";
@@ -245,7 +253,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("./control-ui-session-summary.ts");
+          await import("./control-ui-session-summary.tsx");
           return document.createElement("openclaw-plugin-session-summary");
         },
         (element, next, current) => {
@@ -254,7 +262,6 @@ export function createControlUiComponents(options: {
           element.agents = current().agents.state.agentsList?.agents ?? [];
           element.agentIdentity = current().agentIdentity;
           element.presented = next.presented;
-          element.requestUpdate();
         },
       ),
     mountDashboard: (container, props) =>
@@ -262,7 +269,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("./control-ui-dashboard.ts");
+          await import("./control-ui-dashboard.tsx");
           return document.createElement("openclaw-plugin-session-dashboard");
         },
         (element, next, current) => {

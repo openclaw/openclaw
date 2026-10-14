@@ -25,6 +25,10 @@ to regenerate wrappers written by an older plugin version.
 - MCP bridge helpers for OpenClaw tools and plugin tools.
 - Static runtime assets used by the ACP process bridge.
 
+If the Gateway restarts before a one-shot session receives its first prompt, ACPX
+reuses the initialized conversation when the agent supports loading or resuming
+sessions. Completed one-shot runs still start a fresh conversation.
+
 ## Native agents in the model picker
 
 Install GitHub Copilot CLI, Kilo Code, OpenCode, Pi ACP, or Qwen Code and complete its login on the Gateway host,

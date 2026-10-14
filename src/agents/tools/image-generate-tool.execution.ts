@@ -8,16 +8,14 @@ import type {
 } from "../../image-generation/types.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
-import { extractOriginalFilename } from "../../media/store.js";
-import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
-import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBuffers } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
   buildMediaGenerateToolExecutionResult,
-  describeMediaGenerationResult,
+  buildSavedMediaAttachment,
   buildMediaGenerationGeometryDetails,
+  type AcquireGeneratedMediaSandbox,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
@@ -31,6 +29,7 @@ const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 export async function executeImageGenerationJob(params: {
   request: Omit<GenerateImageParams, "authStore">;
   filename?: string;
+  sandbox?: AcquireGeneratedMediaSandbox;
   loadedReferenceImages: LoadedMediaToolReference<ImageGenerationSourceImage>[];
   taskHandle: MediaGenerationTaskHandle | null;
   providers: ImageGenerationProvider[];
@@ -48,7 +47,6 @@ export async function executeImageGenerationJob(params: {
     handle: params.taskHandle,
     progressSummary: "Saving generated image",
   });
-  const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
   const geometryDetails = buildMediaGenerationGeometryDetails("image", result, {
     size: request.size,
     aspectRatio: request.aspectRatio,
@@ -64,25 +62,15 @@ export async function executeImageGenerationJob(params: {
   const revisedPrompts = result.images
     .map((image) => image.revisedPrompt?.trim())
     .filter((entry): entry is string => Boolean(entry));
-  const attachments = savedImages.map((image) => ({
-    type: "image" as const,
-    path: image.path,
-    mimeType: image.contentType,
-    name: extractOriginalFilename(image.path),
-    sizeBytes: image.size,
-  }));
-  const lines = [
-    `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
-    ...(warning ? [`Warning: ${warning}`] : []),
-    ...formatGeneratedAttachmentLines(attachments),
-  ];
-  const execution = buildMediaGenerateToolExecutionResult({
+  const attachments = savedImages.map((image) => buildSavedMediaAttachment("image", image));
+  const execution = await buildMediaGenerateToolExecutionResult({
+    kind: "image",
     result,
     attachments,
     mediaUrls: savedImages.map((media) => media.path),
-    lines,
+    sandbox: params.sandbox,
+    maxBytes: resolveGeneratedMediaMaxBytes(request.cfg, "image"),
     taskHandle: params.taskHandle,
-    warning,
     details: {
       ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
       ...geometryDetails,
@@ -118,17 +106,4 @@ export async function inferImageGenerationResolution(
     return "2K";
   }
   return DEFAULT_RESOLUTION;
-}
-
-export function normalizeImageGenerationResolution(
-  raw: string | undefined,
-): ImageGenerationResolution | undefined {
-  const normalized = raw?.trim().toUpperCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "1K" || normalized === "2K" || normalized === "4K") {
-    return normalized;
-  }
-  throw new ToolInputError("resolution must be one of 1K, 2K, or 4K");
 }

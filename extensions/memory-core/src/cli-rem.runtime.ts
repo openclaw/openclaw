@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   shortenHomePath,
@@ -32,7 +33,7 @@ export async function runMemorySessionBackfill(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const workspaceDir = manager.status().workspaceDir?.trim();
+      const workspaceDir = (await readMemorySearchManagerStatus(manager)).workspaceDir?.trim();
       if (!workspaceDir) {
         throw new Error("Memory session-backfill requires a resolvable workspace directory.");
       }
@@ -62,48 +63,55 @@ export async function runMemorySessionBackfill(
         archiveFiles: opts.archiveFiles,
         timezone: remConfig.timezone,
       });
-      if (opts.json) {
-        defaultRuntime.writeJson(result);
-        return;
-      }
-      if (result.rollback) {
-        defaultRuntime.log(
-          [
-            `${heading("Session Backfill")} ${muted("(rollback)")}`,
-            muted(`workspace=${shortenHomePath(workspaceDir)}`),
-            muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
-            muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
-          ].join("\n"),
-        );
-        return;
-      }
-      const lines = [
-        `${heading("Session Backfill")} ${muted(`(${agentId})`)}`,
-        muted(`workspace=${shortenHomePath(workspaceDir)}`),
-        muted(
-          `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
-        ),
-      ];
-      for (const batch of result.batches ?? []) {
-        lines.push(
-          muted(
-            `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
-          ),
-        );
-      }
-      for (const day of result.days) {
-        lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
-        lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
-      }
-      if (result.days.length === 0) {
-        lines.push("", "No new hash-untracked trusted session candidates.");
-      }
-      if (!result.applied && !result.rem) {
-        lines.push("", muted("Dry run; use --apply to stage candidates."));
-      }
-      defaultRuntime.log(lines.join("\n"));
+      printSessionBackfillResult(result, opts);
     },
   });
+}
+
+export function printSessionBackfillResult(
+  result: import("./session-backfill-contract.js").SessionBackfillResult,
+  opts: Pick<MemorySessionBackfillOptions, "json">,
+) {
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  if (result.rollback) {
+    defaultRuntime.log(
+      [
+        `${heading("Session Backfill")} ${muted("(rollback)")}`,
+        muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+        muted(`removedDiaryEntries=${result.rollback.removedDiaryEntries}`),
+        muted(`removedStagedEntries=${result.rollback.removedStagedEntries}`),
+      ].join("\n"),
+    );
+    return;
+  }
+  const lines = [
+    `${heading("Session Backfill")} ${muted(`(${result.agentId})`)}`,
+    muted(`workspace=${shortenHomePath(result.workspaceDir)}`),
+    muted(
+      `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
+    ),
+  ];
+  for (const batch of result.batches ?? []) {
+    lines.push(
+      muted(
+        `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
+      ),
+    );
+  }
+  for (const day of result.days) {
+    lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
+    lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
+  }
+  if (result.days.length === 0) {
+    lines.push("", "No new hash-untracked trusted session candidates.");
+  }
+  if (!result.applied && !result.rem) {
+    lines.push("", muted("Dry run; use --apply to stage candidates."));
+  }
+  defaultRuntime.log(lines.join("\n"));
 }
 
 export async function runMemoryRemHarness(
@@ -116,7 +124,9 @@ export async function runMemoryRemHarness(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const managerWorkspaceDir = manager.status().workspaceDir?.trim();
+      const managerWorkspaceDir = (
+        await readMemorySearchManagerStatus(manager)
+      ).workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
       const nowMs = Date.now();
@@ -256,7 +266,7 @@ export async function runMemoryRemBackfill(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const workspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({

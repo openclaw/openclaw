@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Result } from "@openclaw/normalization-core/result";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../../infra/sqlite-number.js";
 import {
   assertTransactionUsable,
@@ -33,7 +33,7 @@ export function bindSqliteWorkerBackend(
   _input: undefined,
   context: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit"): void;
   },
 ): SqliteWorkerBackend<AcpParentStreamWorkerOperations> {

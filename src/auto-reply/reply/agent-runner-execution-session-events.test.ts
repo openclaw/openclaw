@@ -5,13 +5,14 @@ import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
+  getRawExecuteAgentTurnForTest,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 
 useBundledProviderPolicyArtifactsForTest(["anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
-const { executeAgentTurn } = await import("./agent-runner-execution.js");
+const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
 function createEventExecution(): SessionEventExecution {
   return { onStarted: vi.fn(), onTerminal: vi.fn() };

@@ -53,7 +53,6 @@ describe("sessions-list-tool", () => {
         store,
         key,
         entry,
-        skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       }),
     );

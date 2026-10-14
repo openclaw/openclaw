@@ -17,9 +17,14 @@ import type { MediaUnderstandingProvider } from "./types.js";
 type Transcribe = NonNullable<MediaUnderstandingProvider["transcribeAudioWithContext"]>;
 
 describe("media understanding cancellation", () => {
-  it.each(["success", "failure"] as const)(
-    "rejects a late provider %s without admitting another candidate or attachment",
-    async (outcome) => {
+  it.each([
+    { outcome: "success", stop: "cancellation" },
+    { outcome: "failure", stop: "cancellation" },
+    { outcome: "success", stop: "authority loss" },
+    { outcome: "failure", stop: "authority loss" },
+  ] as const)(
+    "rejects a late provider $outcome after $stop without admitting another candidate or attachment",
+    async ({ outcome, stop }) => {
       await withAudioFixture("openclaw-media-cancellation", async ({ ctx, media, cache }) => {
         const attachment = media[0];
         if (!attachment) {
@@ -28,6 +33,7 @@ describe("media understanding cancellation", () => {
         media.push({ ...attachment, index: 1 });
         const controller = new AbortController();
         const reason = new Error("reply stopped");
+        let current = true;
         const started = createDeferred<Parameters<Transcribe>[0]>();
         const released = createDeferred();
         const first = vi.fn<Transcribe>(async (request) => {
@@ -64,7 +70,14 @@ describe("media understanding cancellation", () => {
               { id: "fallback", capabilities: ["audio"], transcribeAudioWithContext: fallback },
             ],
           ]),
-          signal: controller.signal,
+          execution: {
+            signal: controller.signal,
+            assertCurrent: () => {
+              if (!current) {
+                throw reason;
+              }
+            },
+          },
         };
         const operation = runCapability(request);
         try {
@@ -73,7 +86,11 @@ describe("media understanding cancellation", () => {
             operation,
             "provider did not start",
           );
-          controller.abort(reason);
+          if (stop === "cancellation") {
+            controller.abort(reason);
+          } else {
+            current = false;
+          }
           released.resolve();
           await expect(operation).rejects.toBe(reason);
           expect(providerRequest.signal).toBe(controller.signal);
@@ -105,7 +122,7 @@ describe("media understanding cancellation", () => {
             { id: "fixture", capabilities: ["audio"], transcribeAudioWithContext: transcribe },
           ],
         ]),
-        signal: controller.signal,
+        execution: { signal: controller.signal },
       };
       await expect(runCapability(request)).rejects.toBe(reason);
       expect(transcribe).not.toHaveBeenCalled();
@@ -139,7 +156,7 @@ describe("media understanding cancellation", () => {
           providerRegistry: new Map([
             ["fixture", { id: "fixture", capabilities: ["audio"], transcribeAudio: transcribe }],
           ]),
-          signal: controller.signal,
+          execution: { signal: controller.signal },
         }),
       ).rejects.toBe(reason);
       expect(transcribe).toHaveBeenCalledOnce();
@@ -167,7 +184,7 @@ describe("media understanding cancellation", () => {
           ctx,
           attachment,
           cache,
-          signal: controller.signal,
+          execution: { signal: controller.signal },
         });
         try {
           await withinTest(
@@ -220,7 +237,7 @@ describe("media understanding cancellation", () => {
             { id: "fallback", capabilities: ["audio"], transcribeAudioWithContext: fallback },
           ],
         ]),
-        signal: new AbortController().signal,
+        execution: { signal: new AbortController().signal },
       });
       expect(result.outputs).toMatchObject([{ text: "fallback transcript" }]);
       expect(first).toHaveBeenCalledOnce();

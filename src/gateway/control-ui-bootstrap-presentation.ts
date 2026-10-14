@@ -9,6 +9,7 @@ export function resolveControlUiBootstrapPresentation(config: OpenClawConfig | u
     automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
     seamColor: config?.ui?.seamColor,
     environment: config?.gateway?.controlUi?.environment,
+    chatBubblesEnabled: config?.gateway?.controlUi?.experimental?.chatBubbles === true,
     communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
     newSessionModelDefaults: config?.gateway?.controlUi?.newSessionModelDefaults ?? "last-used",
     uploadsEnabled: config?.gateway?.uploads?.enabled !== false,

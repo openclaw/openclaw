@@ -1,8 +1,11 @@
-import { html } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { i18n } from "../i18n/index.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { showConfirmDialog } from "../components/confirm-dialog.ts";
 import "../styles.css";
+import { i18n } from "../i18n/index.ts";
+import { waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showToast, type ToastOptions } from "./toast.ts";
+import "./toast-host.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -22,7 +25,7 @@ async function showArchiveToast(options: Partial<ToastOptions> = {}) {
     durationMs: 60_000,
     ...options,
   });
-  await host.updateComplete;
+  await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
   return host;
 }
 
@@ -33,6 +36,50 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
 
   afterEach(() => {
     document.body.replaceChildren();
+  });
+
+  it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
+    const shell = document.createElement("div");
+    shell.className = "shell";
+    const host = document.createElement("openclaw-toast-host");
+    shell.append(host);
+    document.body.append(shell);
+    const controller = new AbortController();
+    const confirmation = showConfirmDialog({
+      message: "Keep synthetic changes?",
+      signal: controller.signal,
+    });
+    try {
+      const { modal, dialog } = await waitForRenderedModalDialog(document.body);
+      const action = vi.fn();
+      showToast({
+        message: "Synthetic change saved",
+        actionLabel: "Undo",
+        onAction: action,
+        durationMs: 60_000,
+      });
+      await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
+      expect(host.parentElement).toBe(modal.getOverlayContainer());
+      const undo = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+      undo.focus();
+      expect(document.activeElement).toBe(undo);
+      expect(dialog.open).toBe(true);
+      // Hit testing proves the notice is above the modal rather than behind its backdrop.
+      const bounds = undo.getBoundingClientRect();
+      expect(
+        document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2),
+      ).toBe(undo);
+      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+      await confirmation;
+      await host.updateComplete;
+      expect(host.parentElement).toBe(shell);
+      expect(host.textContent).toContain("Synthetic change saved");
+      host.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+      expect(action).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+      await confirmation;
+    }
   });
 
   it("keeps mobile actions trailing while the desktop toast stays compact", async () => {
@@ -142,10 +189,17 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         anchor.style.cssText =
           `position: fixed; top: 100px; left: 0; width: ` + width + "px; height: 100px";
         document.body.append(anchor);
+        const messageContent = document.createElement("span");
+        const settingsLink = document.createElement("a");
+        settingsLink.href = "#settings";
+        settingsLink.textContent = "Gateway settings";
+        messageContent.append(
+          "Your changes could not be saved because the connection was interrupted. Keep this tab open, check ",
+          settingsLink,
+          ", and try again when the connection is restored.",
+        );
         const host = await showArchiveToast({
-          message: html`Your changes could not be saved because the connection was interrupted. Keep
-            this tab open, check <a href="#settings">Gateway settings</a>, and try again when the
-            connection is restored.`,
+          message: messageContent,
           actionLabel: "Discard unsaved changes and reload",
           ...(placement === "anchored" ? { anchor } : { placement }),
         });

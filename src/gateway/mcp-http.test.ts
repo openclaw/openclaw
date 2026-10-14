@@ -120,13 +120,13 @@ vi.mock("../config/sessions.js", async (importOriginal) => ({
   resolveMainSessionKey: () => "agent:main:main",
 }));
 
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>();
   return {
     ...actual,
-    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
-      entry: sessionEntries.get(params.sessionKey),
-    }),
+    readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
+      sessionEntries.get(params.sessionKey),
   };
 });
 
@@ -1782,6 +1782,29 @@ describe("mcp loopback server", () => {
         outcome: "completed",
       }),
     );
+  });
+
+  it("bounds capture draining by elapsed time after a wall-clock rollback", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const captureKey = "clock-rollback";
+    beginMcpLoopbackToolCallCapture({ captureKey, onToolCallResult: vi.fn() });
+    markMcpLoopbackToolCallStarted({ captureKey, toolName: "message", args: {} });
+    const settled = vi.fn();
+    const idle = waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+      timeoutMs: 120,
+      admissionGraceMs: 0,
+    }).then(settled);
+    try {
+      vi.setSystemTime(Date.now() - 60_000);
+      await vi.advanceTimersByTimeAsync(119);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledWith(false);
+    } finally {
+      clearMcpLoopbackToolCallCapture(captureKey);
+      await idle;
+      vi.useRealTimers();
+    }
   });
 
   it("waits through a quiet admission grace before clearing a failed-turn capture", async () => {

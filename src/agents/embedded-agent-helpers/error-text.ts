@@ -8,6 +8,7 @@ import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnost
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatProviderRefusalText,
@@ -43,7 +44,10 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
-import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
+import {
+  formatSandboxToolPolicyBlockedMessage,
+  type resolveSandboxRuntimeStatus,
+} from "../sandbox/runtime-status.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
@@ -90,6 +94,7 @@ type AssistantErrorTextOptions = {
   model?: string;
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
+  sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
 function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
@@ -134,16 +139,21 @@ export function formatAssistantErrorText(
     status: formatStatus,
     providerRuntimeFailureKind,
   } = classifiedFacts;
+  if (formatStatus === 403 && (msg.errorType ?? parseApiErrorInfo(raw)?.type) === "FreeTierError") {
+    return "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
+  }
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
-  if (unknownTool?.[1]) {
+  // Error formatting uses prepared policy only; missing facts preserve the provider error.
+  if (unknownTool?.[1] && opts?.sandboxRuntime) {
     const audit = !sandboxToolPolicyAuditMessages.has(msg);
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       agentId: opts?.agentId,
       toolName: unknownTool[1],
+      preparedRuntimeStatus: opts.sandboxRuntime,
       audit,
     });
     if (rewritten) {
@@ -180,10 +190,7 @@ export function formatAssistantErrorText(
     return formatCopy;
   }
   if (failoverReason === "context_overflow") {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-    );
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (isReasoningConstraintErrorMessage(raw)) {
     return (

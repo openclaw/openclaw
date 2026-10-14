@@ -138,7 +138,11 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
     expect((await search.execute("search", { query: "pinned" })).details).toMatchObject({
       skills: [{ name: "pinned" }],
     });
-    expect(getTextContent(await read.execute("read", { name: "pinned" }))).toBe(libraryBody);
+    expect(getTextContent(await read.execute("read", { name: "pinned" }))).toBe(
+      `Skill location: ${path.join(library, "skills/pinned/SKILL.md")}\n` +
+        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
+        libraryBody,
+    );
     const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
     expect(await readCodeModeSkill(skill)).toBe(header + "current host body");
     await fs.writeFile(path.join(host, relative), header + "edited host body");

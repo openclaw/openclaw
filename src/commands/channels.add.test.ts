@@ -264,7 +264,7 @@ function setMinimalChannelsAddRegistryForTests(): void {
 }
 
 function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugin"): void {
-  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
     createTestRegistry([{ pluginId, plugin: createExternalChatSetupPlugin(), source: "test" }]),
   );
 }
@@ -394,7 +394,7 @@ describe("channelsAddCommand", () => {
       status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReset();
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
       createTestRegistry(),
     );
     channelWizardMocks.setupChannels
@@ -960,7 +960,7 @@ describe("channelsAddCommand", () => {
       });
       return { cfg, installed: true, status: "installed", pluginId: "signal" };
     });
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementationOnce(() => {
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementationOnce(async () => {
       expect(hasPluginLifecycleLease()).toBe(false);
       getPluginCache().instances.add(setupInstance);
       expect(setupPlugin.config.resolveAccount(config, "work-phone")).toEqual({
@@ -1045,7 +1045,7 @@ describe("channelsAddCommand", () => {
 
     expect(writtenChannel("qqbot")).toMatchObject({
       appId: "app-id",
-      clientSecret: "secret",
+      clientSecret: { source: "store", provider: "default", id: expect.any(String) },
       dmPolicy: "open",
       allowFrom: ["openclaw:approval-disabled"],
     });
@@ -1089,7 +1089,7 @@ describe("channelsAddCommand", () => {
 
     expect(getBundledChannelSetupPlugin).toHaveBeenCalledWith("telegram");
     expect(writtenChannel("telegram").enabled).toBe(true);
-    expect(writtenChannel("telegram").botToken).toBe("123456:token");
+    expect(writtenChannel("telegram").botToken).toMatchObject({ source: "store" });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });

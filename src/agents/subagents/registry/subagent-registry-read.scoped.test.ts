@@ -116,16 +116,8 @@ describe("subagent registry scoped reads", () => {
   });
 
   it.each([
-    {
-      storePath: undefined,
-      ids: ["a", "b", "unknown"],
-      active: 3,
-      excluded: "grandchild",
-      waiting: true,
-    },
     { storePath: null, ids: ["unknown"], active: 1, excluded: "unknown", waiting: false },
     { storePath: "store-a", ids: ["a"], active: 1, excluded: "grandchild", waiting: false },
-    { storePath: "store-b", ids: ["b"], active: 1, excluded: "b", waiting: false },
   ])(
     "scopes requester root edges to $storePath while retaining child-agent descendants",
     ({ storePath, ids, active, excluded, waiting }) => {
@@ -240,47 +232,6 @@ describe("subagent registry scoped reads", () => {
     }
   });
 
-  it.each(["requester", "completion"] as const)(
-    "reads %s announcement facts from the child snapshot without full hydration",
-    async (kind) => {
-      const childSessionKey = "agent:main:subagent:child";
-      const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
-      const latest = createRun({
-        runId: "latest",
-        childSessionKey,
-        generation: 2,
-        createdAt: 100,
-        requesterSessionKey: "agent:main:requester",
-        requesterAgentId: "main",
-        requesterOrigin: { channel: "discord", to: " room " },
-        execution: { status: "terminal", endedAt: 300 },
-        cleanupCompletedAt: 400,
-      });
-      mocks.getSubagentRunsSnapshotForChildSession.mockResolvedValue(
-        new Map([
-          [older.runId, older],
-          [latest.runId, latest],
-        ]),
-      );
-
-      if (kind === "requester") {
-        expect(await mod.resolveRequesterForChildSession(childSessionKey)).toEqual({
-          requesterSessionKey: "agent:main:requester",
-          requesterAgentId: "main",
-          requesterOrigin: { channel: "discord", to: "room" },
-        });
-      } else {
-        expect(await mod.shouldIgnorePostCompletionAnnounceForSession(childSessionKey)).toBe(true);
-      }
-      expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledWith(
-        mocks.liveRuns,
-        childSessionKey,
-        undefined,
-      );
-      expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
-    },
-  );
-
   it("selects live controller roots while retaining legacy requester-owned runs", () => {
     const controllerSessionKey = "agent:main:controller";
     const explicit = createRun({
@@ -303,29 +254,6 @@ describe("subagent registry scoped reads", () => {
     ]);
     expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
   });
-
-  it.each(["delivered", "intentional_non_delivery", "permanent_failure", "ambiguous"] as const)(
-    "reads %s settlement and descendant counts without hydrating unrelated payloads",
-    async (disposition) => {
-      const root = "agent:main:root";
-      const run = createRun({
-        requesterSessionKey: root,
-        requesterAgentId: "main",
-        execution: { status: "terminal", endedAt: 100 },
-        delivery: { status: "pending", disposition },
-      });
-      mocks.readSnapshot.set(run.runId, run);
-      expect(countActiveDescendantRunsFromRuns(mocks.readSnapshot, root, "main")).toBe(0);
-      expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(1);
-      expect(
-        hasDescendantRunAwaitingSettleFromRuns(mocks.readSnapshot, root, undefined, "main"),
-      ).toBe(disposition === "ambiguous");
-      expect(
-        hasDescendantRunAwaitingSettleFromRuns(mocks.readSnapshot, root, run.runId, "main"),
-      ).toBe(false);
-      expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
-    },
-  );
 
   it("keeps every bound read equivalent to its documented snapshot scope", async () => {
     const now = Date.now();

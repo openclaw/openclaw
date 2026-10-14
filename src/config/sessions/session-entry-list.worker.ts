@@ -1,7 +1,10 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
+} from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -11,7 +14,10 @@ import {
   listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
 } from "./session-accessor.sqlite-entry-list.read.js";
-import { readSessionEntryCacheValidityToken } from "./session-accessor.sqlite-entry-revision.js";
+import {
+  cacheValidityTokensEqual,
+  readSessionEntryCacheValidityToken,
+} from "./session-accessor.sqlite-entry-revision.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { readWithCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
@@ -31,6 +37,8 @@ export function readSessionEntryList(
   let source: SessionEntryListWorkerResult["source"];
   let revision: string | undefined;
   let unchanged: true | undefined;
+  let nextCronRunUpdatedAt: number | null = null;
+  let nextCronRunSessionKey: string | null = null;
 
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -42,6 +50,10 @@ export function readSessionEntryList(
               database,
               resolveSqliteScope({ ...scope, sessionKey: "" }),
               scope,
+              {
+                captureCronRunUpdatedAt: (value) => (nextCronRunUpdatedAt = value),
+                captureCronRunSessionKey: (value) => (nextCronRunSessionKey = value),
+              },
             );
           if (
             scope.projection !== "list" ||
@@ -49,26 +61,34 @@ export function readSessionEntryList(
             scope.sessionKeys !== undefined ||
             scope.cronRetention ||
             scope.expiredCronRuns ||
-            scope.readConsistency === "latest"
+            scope.readConsistency === "latest" ||
+            database.db.isTransaction
           ) {
             return read();
           }
-          // The token describes this metadata snapshot, including foreign commits and reopened readers.
-          return runSqlitePinnedReadSnapshotSync(database.db, () => {
-            const current = readSessionEntryCacheValidityToken(database.db);
-            revision = JSON.stringify([
-              readOpenClawAgentDatabaseIdentity(database).incarnation,
-              current.dataVersion,
-              current.sessionNodesGeneration,
-            ]);
-            if (request.ifRevision === revision) {
-              unchanged = true;
-              return [];
-            }
-            return read();
-          });
+          const current = readSessionEntryCacheValidityToken(database.db);
+          const token =
+            current.siblingWriteRevision === undefined
+              ? undefined
+              : JSON.stringify([
+                  readOpenClawAgentDatabaseIdentity(database).incarnation,
+                  current.siblingWriteRevision,
+                  current.sessionNodesGeneration,
+                  current.schemaVersion,
+                ]);
+          if (token !== undefined && request.ifRevision === token) {
+            revision = token;
+            unchanged = true;
+            return [];
+          }
+          const entries = runSqliteReadSnapshotSync(database.db, read);
+          // Publish a committed revision only when the read crossed no writer receipt.
+          if (cacheValidityTokensEqual(current, readSessionEntryCacheValidityToken(database.db))) {
+            revision = token;
+          }
+          return entries;
         }
-        return withSqlitePostCommitPublications(database.db, () =>
+        return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
           runSqliteDeferredTransactionSync(database.db, () => {
             const identities = executeSqliteQuerySync(
               database.db,
@@ -100,5 +120,12 @@ export function readSessionEntryList(
   if (!result.found && request.expectedIdentity?.key.startsWith("file:")) {
     throw new Error("Session listing lost its captured physical owner");
   }
-  return { entries: result.found ? result.value : [], source, revision, unchanged };
+  return {
+    entries: result.found ? result.value : [],
+    source,
+    revision,
+    unchanged,
+    ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
+    ...(scope.cronRetention ? { nextCronRunSessionKey } : {}),
+  };
 }

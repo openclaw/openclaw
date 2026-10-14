@@ -100,17 +100,20 @@ export function createDedicatedNodeLeaseAttestations(
       record: WorkerEnvironmentRecord,
       provider: WorkerProvider,
       lease: Parameters<WorkerProvider["inspect"]>[0],
+      signal?: AbortSignal,
     ) {
       const inspection = await options
-        .callProvider(record.environmentId, () => provider.inspect(lease))
+        .callProvider(record.environmentId, () => provider.inspect({ ...lease, signal }))
         .then((result) => ({
           ...requireWorkerLeaseStatus(result),
           explicitlyDedicated: result.status === "active" && result.sharedHost === false,
         }))
         .catch(async (error: unknown) => {
+          signal?.throwIfAborted();
           await options.saveError(record, error);
           return undefined;
         });
+      signal?.throwIfAborted();
       if (inspection) {
         assertCurrent(record);
         // A successful observation withdraws access now, even if persistence later

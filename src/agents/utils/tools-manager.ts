@@ -311,17 +311,9 @@ export async function ensureTool(tool: "fd" | "rg"): Promise<string | undefined>
     return existingPath;
   }
 
-  if (!toolsDir) {
-    return undefined;
-  }
-
-  if (isTruthyEnvValue(process.env.OPENCLAW_OFFLINE)) {
-    return undefined;
-  }
-
   // On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
   // Users must install via pkg.
-  if (platform() === "android") {
+  if (!toolsDir || isTruthyEnvValue(process.env.OPENCLAW_OFFLINE) || platform() === "android") {
     return undefined;
   }
 

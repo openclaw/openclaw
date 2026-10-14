@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -5,16 +6,32 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  getStateSchemaVersionAdmission,
+  publishStateSchemaVersionAdmission,
+} from "./openclaw-state-db-admission.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { markCurrentStateSchemaVersion } from "./openclaw-state-db-maintenance.js";
+import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   CONTENT_VERSION_KEY,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { reconcileOpenClawStateSchemaPublicationAsync } from "./openclaw-state-schema-publication.async.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const databases: DatabaseSync[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     for (const database of databases.splice(0).toReversed()) {
       database.close();
     }
@@ -78,7 +95,7 @@ describe("shared-state content version facts", () => {
         observation.queries.filter((sql) =>
           /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql.trim()),
         ),
-      ).toHaveLength(3);
+      ).toHaveLength(0);
     } finally {
       observation.restore();
     }
@@ -123,7 +140,7 @@ describe("shared-state content version facts", () => {
     expect(read(database)).toBe(11);
     update.run("12", CONTENT_VERSION_KEY);
     expect(read(database)).toBe(12);
-    runSqlitePinnedReadSnapshotSync(database, () => {
+    runSqliteSchemaReadSnapshotSync(database, () => {
       expect(read(database)).toBe(12);
       update.run("13", CONTENT_VERSION_KEY);
       expect(read(database)).toBe(12);
@@ -172,4 +189,165 @@ describe("shared-state content version facts", () => {
       }
     },
   );
+});
+
+it("publishes migration-owned content markers through rollback and authorizer checks", () => {
+  using database = openNodeSqliteDatabase(":memory:");
+  for (const table of ["config_machine_state", "audit_events", "update_runs"]) {
+    database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
+  }
+  database.prepare("INSERT INTO config_machine_state VALUES (?, '1', 1)").run(CONTENT_VERSION_KEY);
+  database
+    .prepare(`INSERT INTO update_runs (
+    run_id, created_at_ms, updated_at_ms, trigger, phase, status,
+    origin_json, target_json, before_json, after_json, steps_json, verification_json, repair_json
+  ) VALUES ('deferred-marker', ?, ?, 'cli', 'verifying', 'running', '{}', '{}',
+    '{"version":"2026.9.2"}', '{}', '[]', '{}', '[]')`)
+    .run(Date.now(), Date.now());
+  database.exec("PRAGMA user_version=1");
+  admitSqliteSchema(database);
+  const readVersion = (published?: number) =>
+    runSqliteReadOperationSync(database, () => readStateSchemaContentVersion(database, published));
+  expect(readVersion()).toBe(1);
+  const refusal = new Error("synthetic migration rollback");
+  runSqliteImmediateTransactionSync(database, () => {
+    expect(() =>
+      runSqliteImmediateTransactionSync(database, () => {
+        database
+          .prepare("UPDATE config_machine_state SET value_json='2' WHERE state_key=?")
+          .run(CONTENT_VERSION_KEY);
+        publishStateSchemaVersionAdmission(database, { userVersion: 1, contentVersion: 2 });
+        expect(readVersion()).toBe(2);
+        throw refusal;
+      }),
+    ).toThrow(refusal);
+    expect(
+      database
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key=?")
+        .get(CONTENT_VERSION_KEY),
+    ).toEqual({ value_json: "1" });
+    expect(readVersion()).toBe(1);
+    database.exec("SAVEPOINT raw_marker");
+    database
+      .prepare("UPDATE config_machine_state SET value_json='2' WHERE state_key=?")
+      .run(CONTENT_VERSION_KEY);
+    publishStateSchemaVersionAdmission(database, { userVersion: 1, contentVersion: 2 });
+    expect(readVersion()).toBe(2);
+    database.exec("ROLLBACK TO raw_marker; RELEASE raw_marker");
+    expect(
+      database
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key=?")
+        .get(CONTENT_VERSION_KEY),
+    ).toEqual({ value_json: "1" });
+    expect(readVersion()).toBe(1);
+  });
+  expect(readVersion()).toBe(1);
+  expect(() =>
+    runSqliteImmediateTransactionSync(database, () => {
+      markCurrentStateSchemaVersion(database);
+      expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+      throw refusal;
+    }),
+  ).toThrow(refusal);
+  expect(readVersion()).toBe(1);
+  runSqliteImmediateTransactionSync(database, () => markCurrentStateSchemaVersion(database));
+  expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+  expect(readVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1)).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
+  expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+  database.setAuthorizer((action, table) =>
+    action === constants.SQLITE_READ && table === "config_machine_state"
+      ? constants.SQLITE_DENY
+      : constants.SQLITE_OK,
+  );
+  expect(readVersion).toThrowError(
+    expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 23 }),
+  );
+  database.setAuthorizer(null);
+  expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+});
+
+async function createDeferredState() {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-publication-worker-") } };
+  const { db } = openOpenClawStateDatabase(options);
+  const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+  // Model completed content migration while the running legacy updater retains its version floor.
+  db.prepare(
+    "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+  ).run("state.schema.contentVersion", String(OPENCLAW_STATE_SCHEMA_VERSION), Date.now());
+  db.exec(`PRAGMA user_version = 15;
+    UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';`);
+  await closeOpenClawStateDatabaseAsync();
+  return { options, run, database: openOpenClawStateDatabase(options) };
+}
+
+describe("shared state schema publication worker", () => {
+  it("publishes through the worker after an in-process updater write and refreshes retained facts", async () => {
+    const { options, run, database } = await createDeferredState();
+    const { db } = database;
+    expect(getStateSchemaVersionAdmission(db)).toEqual({
+      userVersion: 15,
+      contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      expect(await reconcileOpenClawStateSchemaPublicationAsync(options)).toEqual({
+        runId: run.runId,
+        updaterVersion: "2026.9.2",
+        publishAfterMs: run.updatedAtMs + ABANDONED_UPDATE_RUN_MS + 1,
+      });
+      sql.expectIdle();
+
+      // Use persisted times, not fake worker clocks or a real grace-period wait.
+      const finishedAtMs = Date.now() - 10 * 60_000;
+      db.prepare(
+        "UPDATE update_runs SET status = 'succeeded', phase = 'finished', finished_at_ms = ?, updated_at_ms = ? WHERE run_id = ?",
+      ).run(finishedAtMs, finishedAtMs, run.runId);
+
+      sql.clear();
+      expect(
+        await withExistingOpenClawStateSchema({ path: database.path }, () =>
+          reconcileOpenClawStateSchemaPublicationAsync(options),
+        ),
+      ).toBeUndefined();
+      sql.expectIdle();
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      expect(getStateSchemaVersionAdmission(db)?.userVersion).toBe(15);
+
+      sql.clear();
+      expect(await reconcileOpenClawStateSchemaPublicationAsync(options)).toBeUndefined();
+      sql.expectIdle();
+      // Keep the original connection: reopening would hide a missing fact publication.
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(
+        db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+      expect(getStateSchemaVersionAdmission(db)).toEqual({
+        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it("leaves a missing state database and its parent directory uncreated", async () => {
+    const stateDir = tempDirs.make("state-publication-missing-");
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      expect(
+        await reconcileOpenClawStateSchemaPublicationAsync({
+          path: path.join(stateDir, "missing", "state.db"),
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        }),
+      ).toBeUndefined();
+      sql.expectIdle();
+      expect(readdirSync(stateDir)).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
 });

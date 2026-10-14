@@ -1,8 +1,19 @@
 #!/usr/bin/env node
-import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs";
+import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
 
-await runTsxCliShim(import.meta.url, {
-  implementation: "./run-vitest-child.mts",
-  failureTool: "test",
-  terminationOwner: "implementation",
-});
+const parent = getVitestWorkerDescriptor();
+const workerRun = parent
+  ? (await import("./lib/vitest-worker-run.mts")).createVitestWorkerRun(process.env, parent)
+  : undefined;
+try {
+  await runNodeCliShim(import.meta.url, {
+    workerRun,
+    implementation: "./run-vitest-child.mts",
+    failureTool: "test",
+    failureExitCode: 2,
+    terminationOwner: "implementation",
+  });
+} finally {
+  await workerRun?.dispose();
+}

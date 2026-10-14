@@ -179,6 +179,7 @@ function bundleNames(version) {
   return {
     appimage: `OpenClaw-${version}-amd64.AppImage`,
     deb: `OpenClaw-${version}-amd64.deb`,
+    windows: `OpenClaw-${version}-windows-x86_64.exe`,
     desktop: [
       `OpenClaw-${version}-darwin-aarch64.dmg`,
       `OpenClaw-${version}-darwin-aarch64.app.tar.gz`,
@@ -481,14 +482,18 @@ function parseManifest(bytes, publicKey) {
     "Linux publication trust root changed",
   );
   assert(
-    Array.isArray(proof.assets) && [3, 6].includes(proof.assets.length),
+    Array.isArray(proof.assets) && [3, 4, 6].includes(proof.assets.length),
     "Incomplete publication asset identity",
   );
   const expected = [
     names.appimage,
     names.deb,
     names.checksums,
-    ...(proof.assets.length === 6 ? names.desktop : []),
+    ...(proof.assets.length === 6
+      ? names.desktop
+      : proof.assets.length === 4
+        ? [names.windows]
+        : []),
   ].toSorted();
   assert.deepEqual(
     proof.assets.map((entry) => entry.name).toSorted(),
@@ -875,9 +880,9 @@ function finalizeCore(github, options) {
   };
 }
 
-function publishDesktopChannel(github, options, directory) {
-  const tag = "desktop-test";
-  const name = "latest-desktop-test.json";
+function publishDesktopChannel(github, options, directory, windows = false) {
+  const tag = windows ? "windows-stable" : "desktop-test";
+  const name = windows ? "latest-windows.json" : "latest-desktop-test.json";
   const version = releaseVersion(options.tag);
   let channel = github.release(tag, true);
   const creating = channel === null;
@@ -899,9 +904,11 @@ function publishDesktopChannel(github, options, directory) {
       "--prerelease",
       "--latest=false",
       "--title",
-      "OpenClaw desktop test update channel",
+      windows ? "OpenClaw Windows update channel" : "OpenClaw desktop test update channel",
       "--notes",
-      "Opt-in updater manifest for unsigned macOS and Windows Tauri test builds.",
+      windows
+        ? "Updater manifest for the OpenClaw Windows desktop app."
+        : "Opt-in updater manifest for unsigned macOS Tauri test builds.",
     ]);
     channel = github.release(tag);
   }
@@ -924,7 +931,7 @@ function publishDesktopChannel(github, options, directory) {
   return { state: "published", version };
 }
 
-function publicInputs(github, release, publicKey, desktop) {
+function publicInputs(github, release, publicKey, desktop, windows) {
   const version = releaseVersion(release.tag_name);
   const names = bundleNames(version);
   const immutable = github.metadata(release, manifestName(version));
@@ -939,7 +946,12 @@ function publicInputs(github, release, publicKey, desktop) {
   const checksumPath = github.publicAsset(release, checksumAsset);
   const rows = readFileSync(checksumPath, "utf8").trimEnd().split("\n");
   const hasDesktop = rows.length === 5;
-  const expected = [names.appimage, names.deb, ...(hasDesktop ? names.desktop : [])].toSorted();
+  const hasWindows = hasDesktop || rows.length === 3;
+  const expected = [
+    names.appimage,
+    names.deb,
+    ...(hasDesktop ? names.desktop : hasWindows ? [names.windows] : []),
+  ].toSorted();
   assert.deepEqual(
     rows
       .map((row) => {
@@ -952,6 +964,10 @@ function publicInputs(github, release, publicKey, desktop) {
     "Public Linux checksum inventory mismatch",
   );
   assert(!desktop || hasDesktop, "Opt-in desktop publication requires its complete public bundles");
+  assert(
+    !windows || hasWindows,
+    "This tag has a historical Linux-only publication; use a new release tag for Windows bundles.",
+  );
   const directory = mkdtempSync(join(github.directory, "public-inputs-"));
   copyFileSync(checksumPath, join(directory, names.checksums));
   for (const name of expected) {
@@ -964,7 +980,20 @@ function publicInputs(github, release, publicKey, desktop) {
     assert(metadata, "Public desktop test manifest is missing");
     writeFileSync(join(directory, "latest-desktop-test.json"), metadata, { flag: "wx" });
   }
-  return { directory, signature: manifest.platforms["linux-x86_64"].signature, hasDesktop };
+  if (windows) {
+    const metadata = github.metadata(release, "latest-windows.json");
+    assert(
+      metadata,
+      "Public Windows updater manifest is missing; reconcile publication before retrying",
+    );
+    writeFileSync(join(directory, "latest-windows.json"), metadata, { flag: "wx" });
+  }
+  return {
+    directory,
+    signature: manifest.platforms["linux-x86_64"].signature,
+    hasDesktop,
+    hasWindows,
+  };
 }
 
 function publish(github, options, publicKey) {
@@ -977,21 +1006,30 @@ function publish(github, options, publicKey) {
   );
   assert.equal(github.source(options.tag), options["source-sha"], "Linux release source mismatch");
   const desktop = options["desktop-test"] === "true";
+  const windows = options.windows === "true";
   // Idempotent native requests can finish channel publication from the exact
   // public bundles. They do not require or rebuild discarded runner artifacts.
-  const retainedInputs = options.assets ? null : publicInputs(github, release, publicKey, desktop);
+  const retainedInputs = options.assets
+    ? null
+    : publicInputs(github, release, publicKey, desktop, windows);
   const directory = retainedInputs?.directory ?? resolve(options.assets);
   const expected = [
     names.appimage,
     names.deb,
     names.checksums,
-    ...(retainedInputs?.hasDesktop || desktop ? names.desktop : []),
+    ...(retainedInputs?.hasDesktop || desktop
+      ? names.desktop
+      : retainedInputs?.hasWindows || windows
+        ? [names.windows]
+        : []),
   ].toSorted();
   assert.deepEqual(
     readdirSync(directory).toSorted(),
-    [...expected, ...(desktop ? ["latest-desktop-test.json"] : [])].toSorted((a, b) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    ),
+    [
+      ...expected,
+      ...(desktop ? ["latest-desktop-test.json"] : []),
+      ...(windows ? ["latest-windows.json"] : []),
+    ].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     "Release directory does not match the admitted bundle inventory",
   );
   const inputs = expected.map((name) => {
@@ -1026,6 +1064,60 @@ function publish(github, options, publicKey) {
   const verifySignature = (name) =>
     command("minisign", ["-Vm", join(directory, name), "-x", signaturePath, "-p", publicKeyPath]);
   verifySignature(names.appimage);
+
+  const desktopMetadata = [];
+  for (const [enabled, metadataName, platforms] of [
+    [windows, "latest-windows.json", [["windows-x86_64", names.windows]]],
+    [
+      desktop,
+      "latest-desktop-test.json",
+      [
+        ["darwin-aarch64", names.desktop[1]],
+        ["windows-x86_64", names.windows],
+      ],
+    ],
+  ]) {
+    if (!enabled) {
+      continue;
+    }
+    const metadataPath = join(directory, metadataName);
+    const candidate = JSON.parse(readFileSync(metadataPath, "utf8"));
+    assert.equal(candidate.version, version, "Desktop manifest version mismatch");
+    assert.deepEqual(
+      Object.keys(candidate.platforms).toSorted(),
+      platforms.map(([platform]) => platform).toSorted(),
+      "Unexpected desktop platforms",
+    );
+    const previous = github.metadata(
+      github.unchanged(release, options["source-sha"]),
+      metadataName,
+    );
+    const retained = previous ? JSON.parse(previous) : candidate;
+    assert.equal(retained.version, version, "Desktop manifest version changed");
+    assert.deepEqual(
+      Object.keys(retained.platforms).toSorted(),
+      Object.keys(candidate.platforms).toSorted(),
+      "Desktop platforms changed",
+    );
+    for (const [platform, name] of platforms) {
+      const target = retained.platforms[platform];
+      assert.equal(target.url, assetUrl(options.tag, name), "Desktop bundle URL mismatch");
+      assert.equal(candidate.platforms[platform].url, target.url, "Desktop bundle URL changed");
+      assert(
+        typeof target.signature === "string" &&
+          target.signature.length > 0 &&
+          target.signature.length <= 16_384,
+        "Invalid desktop signature",
+      );
+      writeFileSync(signaturePath, Buffer.from(target.signature, "base64"));
+      verifySignature(name);
+    }
+    if (previous) {
+      // Retain the published timestamp/notes and verified signature on identical-bundle replay.
+      writeFileSync(metadataPath, previous);
+    }
+    desktopMetadata.push([metadataName, metadataPath]);
+  }
 
   // Detect every immutable conflict before uploading any missing file.
   for (const entry of inputs) {
@@ -1191,62 +1283,26 @@ function publish(github, options, publicKey) {
     updateChannelBody(github, channel, channelSha, version);
     assert.deepEqual(canonical(github, publicKey).bytes, bytes, "Linux channel readback failed");
   }
-  if (desktop) {
-    const desktopName = "latest-desktop-test.json";
-    const desktopPath = join(directory, desktopName);
-    const candidate = JSON.parse(readFileSync(desktopPath, "utf8"));
-    assert.equal(candidate.version, version, "Desktop test manifest version mismatch");
-    assert.deepEqual(
-      Object.keys(candidate.platforms).toSorted(),
-      ["darwin-aarch64", "windows-x86_64"],
-      "Unexpected desktop test platforms",
-    );
-    const previous = github.metadata(github.unchanged(release, options["source-sha"]), desktopName);
-    if (previous) {
-      const retained = JSON.parse(previous);
-      assert.equal(retained.version, candidate.version, "Desktop test manifest version changed");
-      assert.deepEqual(
-        Object.keys(retained.platforms).toSorted(),
-        Object.keys(candidate.platforms).toSorted(),
-        "Desktop test platforms changed",
-      );
-      for (const [platform, name] of [
-        ["darwin-aarch64", names.desktop[1]],
-        ["windows-x86_64", names.desktop[2]],
-      ]) {
-        assert.equal(
-          retained.platforms[platform].url,
-          candidate.platforms[platform].url,
-          "Desktop test bundle URL changed",
-        );
-        const previousSignature = retained.platforms[platform].signature;
-        assert(
-          typeof previousSignature === "string" &&
-            previousSignature.length > 0 &&
-            previousSignature.length <= 16_384,
-          "Invalid retained desktop signature",
-        );
-        writeFileSync(signaturePath, Buffer.from(previousSignature, "base64"));
-        verifySignature(name);
-      }
-      // Keep the previously published date/notes on an identical bundle replay.
-      writeFileSync(desktopPath, previous);
-    }
+  for (const [metadataName, metadataPath] of desktopMetadata) {
     github.upload(
       github.unchanged(release, options["source-sha"]),
       options["source-sha"],
-      desktopName,
-      desktopPath,
+      metadataName,
+      metadataPath,
     );
   }
   const legacy = mirror(github, publicKey);
   const desktopChannel = desktop ? publishDesktopChannel(github, options, directory) : undefined;
+  const windowsChannel = windows
+    ? publishDesktopChannel(github, options, directory, true)
+    : undefined;
   return {
     state: comparison < 0 ? "kept-newer-channel" : "published",
     version,
     manifestSha256: digest(bytes),
     legacy,
     ...(desktop ? { desktop: desktopChannel } : {}),
+    ...(windows ? { windows: windowsChannel } : {}),
   };
 }
 
@@ -1271,6 +1327,7 @@ function main(args = process.argv.slice(2)) {
         "signature",
         "public-key-config",
         "desktop-test",
+        "windows",
         "latest",
       ].map((name) => [name, { type: "string" }]),
     ),
@@ -1314,7 +1371,8 @@ function main(args = process.argv.slice(2)) {
     assert(
       SHA.test(values["tooling-sha"]) &&
         Boolean(values.assets) === Boolean(values.signature) &&
-        ["true", "false"].includes(values["desktop-test"]),
+        ["true", "false"].includes(values["desktop-test"]) &&
+        (values.windows === undefined || ["true", "false"].includes(values.windows)),
       "Missing Linux publication inputs",
     );
   }

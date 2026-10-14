@@ -5,6 +5,7 @@ import { isMediaUnderstandingSkipError } from "../../packages/media-understandin
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { assertMediaExecutionCurrent } from "./provider-execution.js";
 import type { ResolvedMediaModelEntry } from "./resolve.js";
 import { buildModelDecision, runCliEntry, runProviderEntry } from "./runner.entries.js";
 import type {
@@ -29,13 +30,13 @@ export async function runAttachmentEntries(
   attempts: MediaUnderstandingModelDecision[];
   processing: MediaAttachmentProcessing;
 }> {
-  params.signal?.throwIfAborted();
+  assertMediaExecutionCurrent(params.execution);
   const { entries, capability } = params;
   const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
   let processing: MediaAttachmentProcessing = "omitted";
   for await (const candidate of entries) {
-    params.signal?.throwIfAborted();
+    assertMediaExecutionCurrent(params.execution);
     const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
     try {
@@ -48,7 +49,7 @@ export async function runAttachmentEntries(
               attachmentIndex,
               secretOwnerId: candidate.secretOwnerId,
             });
-      params.signal?.throwIfAborted();
+      assertMediaExecutionCurrent(params.execution);
       if (!attempt.ok) {
         if (
           !(params.automaticAudio && isProviderAuthError(attempt.error, "missing-provider-auth"))
@@ -86,7 +87,7 @@ export async function runAttachmentEntries(
         buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
       );
     } catch (err) {
-      params.signal?.throwIfAborted();
+      assertMediaExecutionCurrent(params.execution);
       if (isMediaUnderstandingSkipError(err)) {
         attempts.push(
           buildModelDecision({
@@ -118,6 +119,6 @@ export async function runAttachmentEntries(
     }
   }
 
-  params.signal?.throwIfAborted();
+  assertMediaExecutionCurrent(params.execution);
   return { output: null, attempts, processing };
 }

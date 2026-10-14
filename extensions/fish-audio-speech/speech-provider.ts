@@ -21,6 +21,7 @@ import {
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  FISH_AUDIO_MODELS,
   type FishAudioFormat,
   type FishAudioLatency,
   type FishAudioModel,
@@ -31,7 +32,6 @@ import {
   normalizeFishAudioBaseUrl,
 } from "./tts.js";
 
-const FISH_AUDIO_MODELS = ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"] as const;
 const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
@@ -235,6 +235,8 @@ async function resolveSynthesisRequest(
 }
 
 export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey));
   return {
     id: "fish-audio",
     label: "Fish Audio",
@@ -296,8 +298,9 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       });
     },
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey)),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const params = await resolveSynthesisRequest(req);
       return {

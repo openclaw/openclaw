@@ -1,3 +1,4 @@
+import { resolveModelServiceTierContextTokens } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * OpenAI Responses payload policy.
@@ -5,6 +6,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
  * server-compaction, service-tier, and reasoning payload rules.
  */
 import {
+  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -181,31 +183,92 @@ function resolveOpenAIResponsesCompactThreshold(model: {
   return 80_000;
 }
 
+export type OpenAIServiceTier = "auto" | "default" | "flex" | "priority" | "ultrafast";
+
+export function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized === "auto" ||
+    normalized === "default" ||
+    normalized === "flex" ||
+    normalized === "priority" ||
+    normalized === "ultrafast"
+    ? normalized
+    : undefined;
+}
+
+function resolveOpenAIRequestedServiceTier(
+  extraParams?: Record<string, unknown>,
+): OpenAIServiceTier | undefined {
+  const explicitTier = normalizeOpenAIServiceTier(
+    extraParams?.serviceTier ?? extraParams?.service_tier,
+  );
+  if (explicitTier) {
+    return explicitTier;
+  }
+  const rawFastMode = extraParams?.fastMode ?? extraParams?.fast_mode;
+  const fastMode = normalizeFastMode(
+    typeof rawFastMode === "function" ? rawFastMode() : rawFastMode,
+  );
+  return fastMode === "ultrafast" ? "ultrafast" : fastMode ? "priority" : undefined;
+}
+
+/** Resolve the same explicit-tier-before-fast-mode precedence used at request egress. */
+export function resolveOpenAIResponsesRequestContextTokens(
+  model: OpenAIResponsesPayloadModel,
+  extraParams?: Record<string, unknown>,
+  serviceTiers?: readonly string[],
+): number | undefined {
+  // Authored service tiers remain operator-owned; model restrictions apply to Fast mode.
+  if (
+    serviceTiers &&
+    !serviceTiers.includes("ultrafast") &&
+    !normalizeOpenAIServiceTier(extraParams?.serviceTier ?? extraParams?.service_tier)
+  ) {
+    return undefined;
+  }
+  return resolveOpenAIResponsesPayloadCapabilities(model).allowsOpenAIServiceTier
+    ? resolveModelServiceTierContextTokens(
+        normalizeOptionalLowercaseString(model.provider),
+        resolveOpenAIRequestedServiceTier(extraParams),
+      )
+    : undefined;
+}
+
 /** Resolve the server-compaction gate and effective threshold for a Responses route. */
 export function resolveOpenAIResponsesServerCompactionPlan(
   model: OpenAIResponsesPayloadModel,
   extraParams?: Record<string, unknown>,
 ): { enabled: boolean; threshold: number | undefined } {
   const provider = normalizeOptionalLowercaseString(model.provider);
-  const allowsResponsesStore =
-    resolveOpenAIResponsesPayloadCapabilities(model).allowsResponsesStore;
+  const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const configured = extraParams?.responsesServerCompaction;
   const enabled =
-    configured !== false && allowsResponsesStore && (configured === true || provider === "openai");
+    configured !== false &&
+    capabilities.allowsResponsesStore &&
+    (configured === true || provider === "openai");
   return {
     enabled,
     threshold: enabled
-      ? (parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
-        resolveOpenAIResponsesCompactThreshold(model))
+      ? Math.min(
+          parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
+            resolveOpenAIResponsesCompactThreshold(model),
+          (capabilities.allowsOpenAIServiceTier
+            ? resolveModelServiceTierContextTokens(
+                provider,
+                resolveOpenAIRequestedServiceTier(extraParams),
+              )
+            : undefined) ?? Infinity,
+        )
       : undefined,
   };
 }
 
-/** Resolve the Responses compact-endpoint gate for one route and compaction purpose. */
+/** Resolve the Responses compact-endpoint gate for one route. */
 export function resolveOpenAIResponsesCompactEndpointPlan(
   model: OpenAIResponsesPayloadModel,
   extraParams?: Record<string, unknown>,
-  purpose: "manual" | "budget" = "manual",
+  /** @deprecated The policy no longer depends on purpose. */
+  _purpose?: "manual" | "budget",
 ): { enabled: boolean } {
   const configured = extraParams?.responsesCompactEndpoint;
   const provider = typeof model.provider === "string" ? normalizeProviderId(model.provider) : "";
@@ -213,10 +276,7 @@ export function resolveOpenAIResponsesCompactEndpointPlan(
   const endpointClass = resolveOpenAIResponsesEndpointClass(model.baseUrl);
   const enabledByDefault =
     ((provider === "xai" || provider === "x-ai") && endpointClass === "xai-native") ||
-    (purpose === "budget" &&
-      provider === "openai" &&
-      api === "openai-responses" &&
-      endpointClass === "openai-public");
+    (provider === "openai" && api === "openai-responses" && endpointClass === "openai-public");
   return {
     enabled:
       isOpenAIResponsesApi(api) &&

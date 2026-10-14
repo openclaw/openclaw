@@ -1,4 +1,3 @@
-import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,
@@ -15,8 +14,6 @@ import {
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   createProgressDraftSnapshotState,
-  redactProgressDraftLine,
-  redactProgressPlanSteps,
   snapshotProgressDraftState,
 } from "./progress-draft-snapshot.js";
 import {
@@ -363,7 +360,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     });
 
   const noteProgress = async (
-    inputLine?: ChannelProgressDraftCompositorLine,
+    line?: ChannelProgressDraftCompositorLine,
     options?: { toolName?: string; startImmediately?: boolean; flush?: boolean },
   ) => {
     if (!isTurnActive()) {
@@ -372,7 +369,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
       return false;
     }
-    const line = inputLine === undefined ? undefined : redactProgressDraftLine(inputLine);
     if (params.isEmptyLine?.(line)) {
       return false;
     }
@@ -582,10 +578,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
-      planSteps = steps && steps.length > 0 ? redactProgressPlanSteps(steps) : undefined;
-      planExplanation = redactToolPayloadText(options?.explanation ?? "")
-        .replace(/\s+/g, " ")
-        .trim();
+      planSteps = steps && steps.length > 0 ? steps.map((step) => ({ ...step })) : undefined;
+      planExplanation = (options?.explanation ?? "").replace(/\s+/g, " ").trim();
       planExplanationFormat = options?.explanationFormat;
       if (!planSteps && !planExplanation) {
         return await renderAfterRetraction();
@@ -638,9 +632,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       if (!canUpdateProgress()) {
         return false;
       }
-      const normalized = redactToolPayloadText(text ?? "")
-        .replace(/\s+/g, " ")
-        .trim();
+      const normalized = (text ?? "").replace(/\s+/g, " ").trim();
       if (normalized === narrationText) {
         return false;
       }

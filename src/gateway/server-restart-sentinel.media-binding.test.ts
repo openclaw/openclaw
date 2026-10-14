@@ -9,6 +9,7 @@ import {
   scheduleMediaGenerationTaskCompletion,
 } from "../agents/tools/media-generate-background-shared.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as transcript from "../config/sessions/transcript.js";
@@ -49,6 +50,7 @@ async function withMediaSession(
 ) {
   await withOpenClawTestState({ prefix: "media-queue-binding-" }, async (state) => {
     await state.writeConfig({ agents: { ownership: "explicit", entries: { main: {} } } });
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:discord:channel:media-binding",

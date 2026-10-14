@@ -23,7 +23,6 @@ import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.type
 import type {
   ReadSessionUpdatedAt,
   RecordSessionMetaFromInbound,
-  UpdateLastRoute,
 } from "../../config/sessions/runtime-types.js";
 import type {
   ReadChannelAllowFromStoreForAccount,
@@ -118,7 +117,7 @@ export type PluginRuntimeChannel = {
   session: {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
-    /** @deprecated Use readSessionUpdatedAtAsync. Retained until the next Plugin SDK major. */
+    /** @deprecated Await readSessionUpdatedAtAsync. Final compatibility day: 2026-12-31. */
     readSessionUpdatedAt: ReadSessionUpdatedAt;
     readSessionUpdatedAtAsync: (
       ...params: Parameters<ReadSessionUpdatedAt>
@@ -126,7 +125,8 @@ export type PluginRuntimeChannel = {
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     recordInboundSession: RecordInboundSession;
-    updateLastRoute: UpdateLastRoute;
+    updateLastRoute: typeof import("../../plugin-sdk/session-store-runtime.js").updateLastRoute;
+    updateLastRouteWithAuthority: typeof import("../../plugin-sdk/session-store-runtime.js").updateLastRouteWithAuthority;
   };
   mentions: {
     buildMentionRegexes: BuildMentionRegexes;
@@ -182,14 +182,14 @@ export type PluginRuntimeChannel = {
     setMaxAgeBySessionKeyAsync: (
       params: Parameters<PluginRuntimeChannel["threadBindings"]["setMaxAgeBySessionKey"]>[0],
     ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
-    /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
+    /** @deprecated Use setIdleTimeoutBySessionKeyAsync; final compatibility day: 2026-12-31. */
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;
       accountId?: string;
       idleTimeoutMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
-    /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
+    /** @deprecated Use setMaxAgeBySessionKeyAsync; final compatibility day: 2026-12-31. */
     setMaxAgeBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;

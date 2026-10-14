@@ -31,7 +31,6 @@ const {
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 
-let handlersByAccount = new Map<string, Record<string, (data: unknown) => Promise<void>>>();
 let runtimesByAccount = new Map<string, RuntimeEnv>();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
@@ -122,9 +121,6 @@ async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
   runtimesByAccount.set(accountId, runtime);
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
-    onRegister: (registered) => {
-      handlersByAccount.set(accountId, registered);
-    },
     runtime,
     cfg: createLifecycleConfig(),
     account: createLifecycleAccount(accountId),
@@ -138,7 +134,6 @@ describe("Feishu broadcast reply-once lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
-    handlersByAccount = new Map();
     runtimesByAccount = new Map();
     setFeishuLifecycleStateDir("openclaw-feishu-broadcast");
 

@@ -1,8 +1,5 @@
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  countActiveDescendantRunsFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
-} from "../registry/subagent-registry-queries.js";
+import { buildScopedSubagentRunReadIndexFromRuns } from "../registry/subagent-registry-queries.js";
 import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
 import { withSubagentRunReadSnapshot } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -58,24 +55,20 @@ export function createRequesterDescendantReader(params: {
         if (!isCurrent()) {
           return undefined;
         }
-        const snapshot = new Map(runs);
+        const index = buildScopedSubagentRunReadIndexFromRuns(
+          new Map(runs),
+          params.requesterSessionKey,
+          params.requesterAgentId,
+          params.requesterStorePath,
+          params.rootRunIds,
+        );
         return {
-          unsettled: hasDescendantRunAwaitingSettleFromRuns(
-            snapshot,
+          unsettled: index.hasDescendantRunAwaitingSettle(
             params.requesterSessionKey,
             params.settledEntry.runId,
-            params.requesterAgentId,
-            params.requesterStorePath,
             params.settledBefore,
-            params.rootRunIds,
           ),
-          active: countActiveDescendantRunsFromRuns(
-            snapshot,
-            params.requesterSessionKey,
-            params.requesterAgentId,
-            params.requesterStorePath,
-            params.rootRunIds,
-          ),
+          active: index.countActiveDescendantRuns(params.requesterSessionKey),
         };
       },
       { sessionKeys: [params.requesterSessionKey], descendants: true },

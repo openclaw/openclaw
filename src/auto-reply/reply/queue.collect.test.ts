@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  IngressAdoptionLostError,
+  isIngressAdoptionLostError,
+} from "../../channels/message/ingress-drain-state.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -26,7 +31,7 @@ import {
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import type { QueuedFollowupReplyBatch } from "./queue/types.js";
+import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 type InternalFollowupRun = FollowupRun & {
   currentTurnImagesPrepared?: true;
@@ -38,6 +43,40 @@ type InternalFollowupRun = FollowupRun & {
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-overflow-session-");
 installQueueRuntimeErrorSilencer();
 describe("followup queue collect routing", () => {
+  it.each([false, true])(
+    "notifies every collected run observer before surfacing a callback failure (throws: %s)",
+    async (throws) => {
+      const q = createQueueCase();
+      const error = new Error("first observer failed");
+      const first = vi.fn(() => {
+        if (throws) {
+          throw error;
+        }
+      });
+      const second = vi.fn();
+      const onModelSelected = vi.fn();
+      for (const [prompt, runObservers] of [
+        ["first", { onAgentRunTerminalOutcome: first }],
+        ["second", { onAgentRunTerminalOutcome: second }],
+        ["last", { onModelSelected }],
+      ] as const) {
+        q.add({ ...createRun({ prompt, originatingChannel: "a2a" }), runObservers });
+      }
+      await q.drain();
+      expect(q.calls).toHaveLength(1);
+      const observers = q.calls[0]!.runObservers;
+      expect(observers?.onModelSelected).toBe(onModelSelected);
+      const fail = () => observers?.onAgentRunTerminalOutcome?.("failed");
+      if (throws) {
+        expect(fail).toThrow(error);
+      } else {
+        fail();
+      }
+      expect(first).toHaveBeenCalledExactlyOnceWith("failed");
+      expect(second).toHaveBeenCalledExactlyOnceWith("failed");
+    },
+  );
+
   it("settles every collected source while publishing content once", async () => {
     const q = createQueueCase();
     const first = vi.fn();
@@ -221,6 +260,91 @@ describe("followup queue collect routing", () => {
         expect(delivered).toEqual(["earlier turn", "deeper queued turn"]);
       } finally {
         clearFollowupQueue(key);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.for(["collect", "overflow"] as const)(
+    "resumes %s source heartbeats when preparation failure becomes a capacity wait",
+    async (mode, { signal }) => {
+      vi.useFakeTimers();
+      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+      const q = createQueueCase({
+        mode: mode === "collect" ? "collect" : "followup",
+        cap: mode === "collect" ? 2 : 1,
+        debounceMs: 10,
+      });
+      const releaseAdoption = createDeferred();
+      const sources = ["first source", "second source"].map((prompt) => ({
+        prompt,
+        heartbeat: vi.fn(),
+        adopted: vi.fn(async () => {}),
+        enqueued: vi.fn(),
+      }));
+      let attempts = 0;
+      let drainReleased: Promise<void> | undefined;
+      try {
+        for (const source of sources) {
+          q.add({
+            ...createRun({ prompt: source.prompt, originatingChannel: "webchat" }),
+            turnAdoptionLifecycle: {
+              admission: "cancel-only",
+              onDeferred: source.enqueued,
+              onAdopted: source.adopted,
+              onDeferredHeartbeat: source.heartbeat,
+              deferredHeartbeatIntervalMs: 2,
+            },
+          });
+        }
+        if (mode === "overflow") {
+          q.add(createRun({ prompt: "live item", originatingChannel: "webchat" }));
+        }
+        q.start(async (run) => {
+          const released = createDeferred();
+          captureGatewayRootWorkReleaseObserver()?.(() => released.resolve());
+          drainReleased = released.promise;
+          if (run.prompt !== "live item") {
+            attempts += 1;
+            if (attempts === 1) {
+              throw new Error("ENOSPC: preparation failed");
+            }
+            if (attempts === 2) {
+              throw new FollowupRunDeferredError("reply lane busy");
+            }
+            await releaseAdoption.promise;
+          }
+          await admitFollowupRunLifecycle(run);
+          completeFollowupRunLifecycle(run);
+        });
+        await vi.advanceTimersByTimeAsync(10);
+        expect(attempts).toBe(1);
+        const stoppedCounts = sources.map((source) => source.heartbeat.mock.calls.length);
+        await vi.advanceTimersByTimeAsync(5);
+        expect(sources.map((source) => source.heartbeat.mock.calls.length)).toEqual(stoppedCounts);
+        await vi.advanceTimersByTimeAsync(15);
+        expect(attempts).toBe(3);
+        const resumedCounts = sources.map((source) => source.heartbeat.mock.calls.length);
+        await vi.advanceTimersByTimeAsync(40);
+        for (const [index, source] of sources.entries()) {
+          expect(source.heartbeat.mock.calls.length).toBeGreaterThan(resumedCounts[index]!);
+          expect(source.enqueued).toHaveBeenCalledOnce();
+        }
+        releaseAdoption.resolve();
+        expect(drainReleased).toBeDefined();
+        await withinTest(drainReleased!, signal);
+        const adoptedCounts = sources.map((source) => source.heartbeat.mock.calls.length);
+        await vi.advanceTimersByTimeAsync(40);
+        expect(sources.map((source) => source.heartbeat.mock.calls.length)).toEqual(adoptedCounts);
+        for (const source of sources) {
+          expect(source.adopted).toHaveBeenCalledOnce();
+        }
+        expect(getExistingFollowupQueue(q.key)).toBeUndefined();
+      } finally {
+        releaseAdoption.resolve();
+        clearFollowupQueue(q.key);
+        await drainReleased;
+        vi.unstubAllEnvs();
         vi.useRealTimers();
       }
     },
@@ -945,16 +1069,11 @@ describe("followup queue collect routing", () => {
       const second = createRun({ prompt: "second" });
       second.turnAdoptionLifecycle = {
         admission: "exclusive",
-        onAdopted: vi
-          .fn<() => Promise<void>>()
-          .mockImplementationOnce(async () => {
-            events.push("second-rejected");
-            throw new Error("second admission failed");
-          })
-          .mockImplementationOnce(async () => {
-            events.push("second-admitted");
-          }),
+        onAdopted: vi.fn(async () => {
+          events.push("second-admitted");
+        }),
       };
+      let secondAttempts = 0;
       q.add(first);
       q.add(second);
       if (mode === "followup") {
@@ -969,6 +1088,10 @@ describe("followup queue collect routing", () => {
         const label = run.prompt.includes("first") ? "first" : "second";
         events.push(`run:${label}`);
         try {
+          if (label === "second" && secondAttempts++ === 0) {
+            events.push("second-rejected");
+            throw new Error("second preparation failed");
+          }
           await admitFollowupRunLifecycle(run);
         } catch (error) {
           events.push(`error:${label}`);
@@ -992,7 +1115,7 @@ describe("followup queue collect routing", () => {
         "model:second",
         ...(mode === "followup" ? ["live-followup"] : []),
       ]);
-      expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(2);
+      expect(second.turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
     },
   );
 
@@ -1010,6 +1133,79 @@ describe("followup queue collect routing", () => {
     });
     await q.done.promise;
   });
+
+  it.for(["collect", "overflow"] as const)(
+    "does not replay accepted %s sources after a sibling adoption times out",
+    async (mode, { signal }) => {
+      const q = createQueueCase({
+        mode: mode === "collect" ? "collect" : "followup",
+        cap: mode === "collect" ? 2 : 1,
+        debounceMs: 0,
+      });
+      const released = createDeferred();
+      const canceled = new AbortController();
+      const firstAdopted = vi.fn(async () => {});
+      const firstSettled = vi.fn();
+      const secondSettled = vi.fn();
+      const secondAdopted = vi.fn(async () => {
+        canceled.abort();
+        throw new IngressAdoptionLostError("guillotined");
+      });
+      for (const [prompt, onAdopted, onSettled, abortSignal] of [
+        ["first source", firstAdopted, firstSettled, undefined],
+        ["second source", secondAdopted, secondSettled, canceled.signal],
+      ] as const) {
+        q.add({
+          ...createRun({ prompt, originatingChannel: "webchat" }),
+          abortSignal,
+          turnAdoptionLifecycle: { admission: "cancel-only", onAdopted, onSettled },
+        });
+      }
+      if (mode === "overflow") {
+        q.add(createRun({ prompt: "live item", originatingChannel: "webchat" }));
+      }
+      const terminalErrors: unknown[] = [];
+      q.start(async (run) => {
+        if (q.calls.length === 0) {
+          const observeRelease = captureGatewayRootWorkReleaseObserver();
+          expect(observeRelease).toBeDefined();
+          observeRelease?.(() => released.resolve());
+        }
+        if (isFollowupRunAborted(run)) {
+          return;
+        }
+        q.calls.push(run);
+        try {
+          await admitFollowupRunLifecycle(run);
+        } catch (error) {
+          if (!isIngressAdoptionLostError(error)) {
+            throw error;
+          }
+          // Execution already owns the input and returns a terminal failure reply.
+          terminalErrors.push(error);
+        }
+        completeFollowupRunLifecycle(run);
+      });
+      try {
+        await withinTest(released.promise, signal);
+        expect(q.calls).toHaveLength(mode === "collect" ? 1 : 2);
+        expect(q.calls[0]?.prompt).toContain("second source");
+        if (mode === "overflow") {
+          expect(q.calls[1]?.prompt).toBe("live item");
+        }
+        expect(terminalErrors).toEqual([
+          expect.objectContaining({ name: "IngressAdoptionLostError", code: "guillotined" }),
+        ]);
+        expect(firstAdopted).toHaveBeenCalledOnce();
+        expect(secondAdopted).toHaveBeenCalledOnce();
+        expect(firstSettled).toHaveBeenCalledOnce();
+        expect(secondSettled).toHaveBeenCalledOnce();
+        expect(getExistingFollowupQueue(q.key)).toBeUndefined();
+      } finally {
+        clearFollowupQueue(q.key);
+      }
+    },
+  );
 
   it("retries survivors when an earlier source owns the sole pre-admission cancel signal", async () => {
     const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 1);

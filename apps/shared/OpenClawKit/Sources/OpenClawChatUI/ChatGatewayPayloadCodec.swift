@@ -14,7 +14,7 @@ public enum OpenClawChatSessionKey {
     }
 
     /// Match the Control UI's session-key comparison without folding opaque channel identifiers.
-    static func comparisonKey(_ key: String) -> String {
+    public static func comparisonKey(_ key: String) -> String {
         let raw = key.trimmingCharacters(in: .whitespacesAndNewlines)
         var parts = raw.components(separatedBy: ":")
         var start = 0

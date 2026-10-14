@@ -218,7 +218,7 @@ async function applyMediaUnderstandingWork(
           providerRegistry,
           config: cfg.tools?.media?.[capability],
           activeModel: params.activeModel,
-          signal: params.signal,
+          execution: params.signal ? { signal: params.signal } : undefined,
         };
         try {
           return await runCapability(request);

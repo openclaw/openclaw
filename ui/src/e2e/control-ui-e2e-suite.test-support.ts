@@ -20,6 +20,7 @@ import {
 import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiPaneRuntimeTestAdapterScript } from "../test-helpers/control-ui-pane-runtime.test-support.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -380,12 +381,14 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       const context = await currentBrowser.newContext(contextOptions);
       openBrowserContexts.set(context, owner);
       contextDiagnostics.set(context, { test });
+      await context.addInitScript({ content: createControlUiPaneRuntimeTestAdapterScript() });
       if (stopping || owner?.signal.aborted) {
         await closeBrowserContext(context);
         throw new ControlUiE2eAcquisitionClosedError(
           "Control UI E2E context arrived after teardown began",
         );
       }
+      context.on("page", installControlUiRpcDiagnostics);
       context.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       return context;
     });
@@ -620,7 +623,6 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           async () => {
             const page = await context.newPage();
             fixture = { context, page };
-            installControlUiRpcDiagnostics(page);
             // A CDP session attached after a test's own session clears that session's
             // emulation overrides (such as safe-area insets) on the next navigation.
             await installControlUiE2eRendererStallProbe(page);

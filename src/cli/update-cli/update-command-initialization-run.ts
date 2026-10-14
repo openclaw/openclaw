@@ -21,7 +21,6 @@ import {
 import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import {
   applyUpdateCandidateAdmission,
-  assertUpdateAdmissionConfigUnchanged,
   createUpdateCandidateAdmissionReport,
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
@@ -122,7 +121,7 @@ export async function initializeAndRunUpdate(
               const { root, serviceRoot } = selection.refusal
                 ? selection.refusal.report
                 : { root: selection.target.root, serviceRoot: selection.target.managedServiceRoot };
-              const packageAdmission = { serviceRoot };
+              const packageAdmission = { serviceRoot, dryRun: opts.dryRun };
               const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
                 ...selection,
@@ -311,7 +310,7 @@ export async function initializeAndRunUpdate(
                           applyUpdateCandidateAdmission({
                             target,
                             opts,
-                            result: initialization.candidateAdmission.result,
+                            result: initialization.candidateAdmission,
                           });
                         } catch (error) {
                           if (!(error instanceof UpdatePreMutationError)) {
@@ -339,31 +338,18 @@ export async function initializeAndRunUpdate(
                   return await runCapturedInitialization();
                 }
                 const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-                const selectedStoredChannel = target.storedChannel;
                 const candidateAdmissionChecks =
-                  initialization.candidateAdmission?.result.verdict?.verdict === "admit"
-                    ? initialization.candidateAdmission.result.verdict.facts.checks.map(
+                  initialization.candidateAdmission?.verdict?.verdict === "admit"
+                    ? initialization.candidateAdmission.verdict.facts.checks.map(
                         (check) => check.name,
                       )
                     : undefined;
-                const checkSchemas = async (phase?: "before" | "after") => {
+                const checkSchemas = async () => {
                   const config = await withOwnedManagedUpdateEnv(env, () =>
                     readUpdateChannelConfig(Boolean(opts.channel), {
                       tolerateReadFailure: candidateAdmissionChecks?.includes("config"),
                     }),
                   );
-                  if (candidateAdmissionChecks?.includes("config") && phase !== "after") {
-                    assertUpdateAdmissionConfigUnchanged(
-                      target.configSnapshot,
-                      config.configSnapshot,
-                    );
-                  }
-                  if (!opts.channel && config.storedChannel !== selectedStoredChannel) {
-                    await target.refuseUpdate(
-                      "update-channel-changed",
-                      "Stored update channel changed after target selection. Rerun the update, or specify --channel explicitly.",
-                    );
-                  }
                   Object.assign(target, config);
                   return await preflightUpdateCommandSchemas({
                     ...target,
@@ -451,7 +437,7 @@ export async function initializeAndRunUpdate(
                           invocationCwd,
                           progress: presentation.progress,
                           assertCurrent,
-                          checkSchemas: async (phase) => void (await checkSchemas(phase)),
+                          checkSchemas: async () => void (await checkSchemas()),
                         });
                       } finally {
                         presentation.dispose();

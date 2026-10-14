@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
+  findAuthorizedSwarmCollectorRequest,
+  getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
   getSubagentSessionReadLookup,
@@ -26,6 +28,74 @@ afterEach(() => {
 });
 
 describe("subagent run memory indexes", () => {
+  it.each(["global", "agent:main:subagent:shared"])(
+    "retains collector authorization beside unresolved rows (%s)",
+    (childSessionKey) => {
+      const collector = {
+        ...createRun("collector-owned", childSessionKey),
+        childAgentId: "main",
+        collect: true,
+        swarmLaunchIdempotencyKey: "launch-owned",
+      };
+      const retained = {
+        ...collector,
+        runId: "collector-unresolved",
+        childAgentId: childSessionKey === "global" ? undefined : "research",
+      };
+      subagentRuns.set(collector.runId, collector);
+      subagentRuns.set(retained.runId, retained);
+      expect(
+        findAuthorizedSwarmCollectorRequest({
+          childSessionKey,
+          childAgentId: "MAIN",
+          idempotencyKey: collector.swarmLaunchIdempotencyKey,
+        }),
+      ).toEqual(collector);
+      expect([...getSubagentRunsForChildSession(childSessionKey, "main")]).toEqual([collector]);
+      expect([...getSubagentChildSessionCandidates(childSessionKey)]).toEqual([
+        collector,
+        retained,
+      ]);
+      expect(subagentRuns.get(retained.runId)).toBe(retained);
+    },
+  );
+
+  it.each(["global", "agent:main:subagent:shared"])(
+    "preserves collector authorization across replacement and retirement (%s)",
+    (childSessionKey) => {
+      const first = {
+        ...createRun("collector-first", childSessionKey),
+        childAgentId: "main",
+        collect: true,
+        swarmLaunchIdempotencyKey: "launch-first",
+      };
+      const second = {
+        ...first,
+        runId: "collector-second",
+        swarmLaunchIdempotencyKey: "launch-second",
+      };
+      const authorizeSecond = () =>
+        findAuthorizedSwarmCollectorRequest({
+          childSessionKey,
+          childAgentId: "main",
+          idempotencyKey: second.swarmLaunchIdempotencyKey,
+        });
+      subagentRuns.set(first.runId, first);
+      subagentRuns.set(second.runId, second);
+      expect(authorizeSecond()).toEqual(second);
+
+      subagentRuns.set(first.runId, { ...first, collect: false });
+      expect(authorizeSecond()).toEqual(second);
+
+      subagentRuns.set(first.runId, first);
+      subagentRuns.delete(first.runId);
+      expect(authorizeSecond()).toEqual(second);
+
+      subagentRuns.clear();
+      expect(authorizeSecond()).toBeUndefined();
+    },
+  );
+
   it("tracks distinct scheduler slot aliases across replacement and deletion", () => {
     const first = {
       ...createRun("run-first", "agent:main:subagent:first"),

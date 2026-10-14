@@ -10,10 +10,8 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  replaceTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -347,7 +345,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
       expect(response.body.indexOf("history.replaceState")).toBeLessThan(
         response.body.indexOf('type="module"'),
       );
-      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers["cache-control"]).toBe("private, no-store");
       expect(response.headers["content-encoding"]).toBe("gzip");
       for (const hash of computeInlineScriptHashes(response.body)) {
         expect(response.headers["content-security-policy"]).toContain(hash);
@@ -364,12 +362,10 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     expect(probe.status).toBe(403);
     expectNoApp(probe);
     const document = await readHttp(port, entry, deniedEmail, signal);
-    expect(document.status).toBe(303);
-    expect(document.headers.location).toBe(privatePath);
+    expect(document.status).toBe(403);
+    expect(document.headers.location).toBeUndefined();
     expectNoApp(document);
-    const unavailable = await readHttp(port, document.headers.location!, deniedEmail, signal);
-    expect(unavailable.status).toBe(404);
-    expectNoApp(unavailable);
+    expect(document.body).toContain("Session unavailable");
   });
 
   it("ignores spoofed identity on anonymous canonical documents while protecting the handoff", async ({
@@ -430,8 +426,12 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         held.resume();
         const response = await pending;
         expect(response.status).toBe(403);
+        expect(response.headers.location).toBeUndefined();
+        expect(response.headers["cache-control"]).toBe("no-store");
         expect(response.headers["content-encoding"]).toBeUndefined();
-        expect(response.body).toBe("Session access changed. Reload the conversation.");
+        expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+        expect(response.headers["content-security-policy"]).toBeUndefined();
+        expect(response.body).toContain("Session access changed");
         expectNoApp(response);
       } finally {
         held.resume();

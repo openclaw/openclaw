@@ -11,6 +11,7 @@ import {
   inheritSpawnSessionOwner,
   type SessionOwnerAssignment,
 } from "../config/sessions/session-entry-provenance.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
@@ -18,8 +19,8 @@ import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { invalidSessionRequest } from "./session-request-error.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
   Pick<SessionEntry, "inheritedGitContributorProfileIds">;
@@ -27,9 +28,12 @@ type SessionCreation = NonNullable<CreateGatewaySessionParams["creation"]> &
 /** Inherit parent selection without replacing explicitly requested choices. */
 export function inheritSessionCreateParentFields(params: {
   parent: SessionEntry | undefined;
+  newExplicitChild: boolean;
+  newDashboardRoot: boolean;
+  selectedModel?: string;
   overrides: Pick<
     CreateGatewaySessionParams,
-    "catalogTarget" | "model" | "toolOverrides" | "fastMode"
+    "catalogTarget" | "model" | "toolOverrides" | "fastMode" | "communication"
   >;
 }): Partial<InternalSessionEntry> {
   const { parent, overrides } = params;
@@ -43,6 +47,15 @@ export function inheritSessionCreateParentFields(params: {
   if (overrides.fastMode !== undefined) {
     // Explicit choices have already been validated by the canonical patch owner.
     delete inherited.fastMode;
+  }
+  // Communication inheritance initializes only a new explicit child. Adopting a
+  // key or automatically grouping a dashboard root cannot replace its policy.
+  if (params.newExplicitChild && overrides.communication === undefined && parent?.communication) {
+    inherited.communication = { ...parent.communication };
+  }
+  // Main groups dashboard roots; it must not supply their reply-time model.
+  if (params.newDashboardRoot && !params.selectedModel) {
+    inherited.modelOverrideSource = "default";
   }
   return inherited;
 }
@@ -59,7 +72,9 @@ export async function prepareSessionCreateParent(input: {
     key: input.key,
     ...(input.agentId ? { agentId: input.agentId } : {}),
     assertActive: input.assertCurrent,
+    projection: "full",
   });
+  let entry = findCanonicalStoreMatch(target.store, target.storeKeys)?.entry;
   if (input.params.creation?.via === "spawn") {
     await waitForSessionParticipantRecording({
       agentId: target.agentId,
@@ -67,24 +82,29 @@ export async function prepareSessionCreateParent(input: {
       storePath: target.storePath,
     });
     input.assertCurrent?.();
+    entry = await readSessionEntryReadOnlyInWorker({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+    });
+    input.assertCurrent?.();
   }
-  const parent = loadGatewaySessionEntryReadOnly(input.key, { agentId: input.agentId });
-  if (!parent.entry?.sessionId) {
+  if (!entry?.sessionId) {
     return invalidSessionRequest(`unknown parent session: ${input.key}`);
   }
   const ownershipError = resolvePluginSessionOwnershipError({
     action: input.params.fork === true ? "fork" : "link",
-    entry: parent.entry,
-    key: parent.canonicalKey,
+    entry,
+    key: target.canonicalKey,
     pluginOwnerId: input.params.authorizedPluginId,
   });
   if (ownershipError) {
     return { ok: false as const, error: ownershipError };
   }
-  if (isModelSelectionLocked(parent.entry)) {
+  if (isModelSelectionLocked(entry)) {
     return invalidSessionRequest(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   }
-  return { ok: true as const, entry: parent.entry, canonicalKey: parent.canonicalKey, target };
+  return { ok: true as const, entry, canonicalKey: target.canonicalKey, target };
 }
 
 function resolveResidentProfileId(profileId: string): string | undefined {

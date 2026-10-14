@@ -13,6 +13,7 @@ import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import type * as CronHelpers from "./helpers.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -91,7 +92,6 @@ export const resolveCronPayloadOutcomeMock = vi.fn();
 export const resolveCronDeliveryPlanMock = vi.fn();
 export const resolveDeliveryTargetMock = vi.fn();
 export const dispatchCronDeliveryMock = vi.fn();
-export const queueCronMessageToolDeliveryAwarenessMock = vi.fn();
 export const preflightCronModelProviderMock = vi.fn();
 export const resolveSessionAuthSelectionMock = vi.fn();
 export const resolveFastModeStateMock = vi.fn();
@@ -197,8 +197,9 @@ vi.mock("../../web-search/runtime.js", () => ({
   hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
 }));
 
+// mock-isolation: Cron-run fixtures own skill snapshots and exclude filesystem scans and approval storage.
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+  resolveNodeExecEligibilityAsync: vi.fn(() => ({ canExec: false })),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,
   resolveReusableWorkspaceSkillSnapshot: (params: {
@@ -380,7 +381,6 @@ vi.mock("./run-delivery.runtime.js", async () => {
     ...actual,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
-    queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
   };
 });
 
@@ -388,8 +388,8 @@ vi.mock("./model-preflight.runtime.js", () => ({
   preflightCronModelProvider: preflightCronModelProviderMock,
 }));
 
-vi.mock("./helpers.js", () => ({
-  pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
+vi.mock("./helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof CronHelpers>()),
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
 }));
@@ -735,8 +735,6 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
-  queueCronMessageToolDeliveryAwarenessMock.mockReset();
-  queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
   preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   resolveSessionAuthSelectionMock.mockReset();

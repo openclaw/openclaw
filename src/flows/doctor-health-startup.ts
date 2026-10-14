@@ -1,10 +1,17 @@
 import fs from "node:fs";
+import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+
+export const showDoctorIntro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+export const showDoctorOutro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
 
 export function exitDoctorHealthFlow(runtime: RuntimeEnv, code: number): void {
   if (runtime === defaultRuntime) {
@@ -24,7 +31,7 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
 export async function prepareDoctorHealthFlow(
   runtime: RuntimeEnv | undefined,
   options: DoctorOptions,
-  intro: (message: string) => void,
+  showIntro: (message: string) => void,
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   const repairRuntime: RuntimeEnv = {
@@ -34,7 +41,7 @@ export async function prepareDoctorHealthFlow(
   // Config loading can initialize SQLite-backed state before integrity runs.
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
-  intro("OpenClaw doctor");
+  showIntro("OpenClaw doctor");
   const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
@@ -120,4 +127,44 @@ export async function prepareDoctorInteractiveMaintenance(params: {
       deep: params.options.deep,
     }),
   };
+}
+
+export async function prepareDoctorMaintenanceArchives(
+  databasePreflight: DoctorDatabasePreflight | undefined,
+  runtime: RuntimeEnv,
+): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
+  let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
+  try {
+    const { prepareDoctorDatabasePreflight } =
+      await import("../commands/doctor-database-preflight.js");
+    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight()))
+      .agentDatabaseMigrationDiscovery;
+    if (discovery) {
+      const { prepareCanonicalTranscriptArchiveMigrations } =
+        await import("../infra/state-migrations.transcript-directives-archives.js");
+      await prepareCanonicalTranscriptArchiveMigrations(discovery);
+    }
+  } catch (error) {
+    // Offline admission still owns repairable schema and discovery failures.
+    runtime.log(`Archive verification preparation deferred: ${String(error)}`);
+  }
+  const { waitForCliSignalExit } = await import("../cli/signal-exit-barrier.js");
+  // Keep an accepted signal during preparation ahead of service custody.
+  await waitForCliSignalExit();
+  return discovery;
+}
+
+export async function prepareDoctorStateSchema(
+  schemas: DoctorDatabasePreflight,
+  shouldRepair: boolean,
+) {
+  if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
+    return undefined;
+  }
+  const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
+  const { throwIfDoctorStateMigrationRefused } =
+    await import("../infra/state-migrations.messages.js");
+  const receipt = await prepareLegacyStateDatabaseSchema(process.env);
+  throwIfDoctorStateMigrationRefused([receipt]);
+  return receipt;
 }

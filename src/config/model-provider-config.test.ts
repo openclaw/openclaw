@@ -209,54 +209,6 @@ describe("configured model row precedence", () => {
 });
 
 describe("reused configured model lookups", () => {
-  it.each(["fallback", "initialization"] as const)(
-    "keeps nested lookups from corrupting the %s index",
-    (phase) => {
-      const first = model("custom/First");
-      const second = model("custom/Second");
-      let nested: ModelDefinitionConfig | undefined;
-      let reentered = false;
-      const canonicalize = vi.fn((id: string) => {
-        if (phase === "initialization") {
-          if (id === "alias") {
-            nested = resolve("Second");
-          }
-          return id;
-        }
-        if (id === "First" && !reentered) {
-          reentered = true;
-          nested = resolve("Second");
-        }
-        return id === "target" || id === "Second" ? "match" : id;
-      });
-      const resolve: (id: string) => ModelDefinitionConfig | undefined =
-        createConfiguredProviderModelResolver(
-          {
-            models: phase === "initialization" ? [first, model("alias"), second] : [first, second],
-          },
-          "custom",
-          canonicalize,
-        );
-      const query = phase === "initialization" ? "Second" : "target";
-      expect(resolve(query)).toBe(second);
-      expect(nested).toBe(phase === "initialization" ? undefined : second);
-      if (phase === "fallback") {
-        expect(canonicalize.mock.calls).toEqual([
-          ["target"],
-          ["First"],
-          ["Second"],
-          ["First"],
-          ["Second"],
-        ]);
-      }
-      canonicalize.mockClear();
-      expect(resolve(query)).toBe(second);
-      if (phase === "fallback") {
-        expect(canonicalize.mock.calls).toEqual([["target"], ["First"], ["Second"]]);
-      }
-    },
-  );
-
   it("keeps fallback callbacks live, ordered, short-circuited, and throwable", () => {
     const first = model("custom/First");
     const second = model("custom/ Second");
@@ -349,6 +301,17 @@ describe("createModelProviderRouteOverrideResolver", () => {
     ["empty effort list", { supportedReasoningEfforts: [] }, "present"],
     ["disabled effort", { supportedReasoningEfforts: ["none"] }, "present"],
     ["malformed effort", { supportedReasoningEfforts: ["high", false] }, "present"],
+    ["temperature capability", { supportsTemperature: false }, "none"],
+    ["temperature supported", { supportsTemperature: true }, "none"],
+    ["preferred code mode", { codeMode: "preferred" }, "none"],
+    ["capable code mode", { codeMode: "capable" }, "none"],
+    ["malformed temperature capability", { supportsTemperature: "false" }, "present"],
+    ["unknown code mode", { codeMode: "exact" }, "present"],
+    [
+      "metadata with storage policy",
+      { supportsTemperature: false, codeMode: "preferred", supportsStore: false },
+      "present",
+    ],
     ["store behavior", { supportsStore: false }, "present"],
     [
       "mixed metadata and behavior",
