@@ -127,4 +127,24 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(sleepWithAbort).not.toHaveBeenCalled();
     expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
   });
+
+  it("routes a Chinese usage-cap 429 straight to fallback with zero same-model retries", async () => {
+    // MiniMax Token Plan 2056 429 body from #172165: an exhausted window reported in
+    // Chinese with no Retry-After header. The retry-window owner must recognize it,
+    // otherwise the run burns the same-model retry spiral on a dead provider.
+    const errorMessage =
+      '429: {"error":{"message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)","type":"rate_limit_error"},"type":"error"}';
+
+    vi.mocked(sleepWithAbort).mockClear();
+    const fixture = await recoverAfterTransportDrop({
+      errorMessage,
+      diagnostics: [],
+      content: [],
+      replaySafe: true,
+    });
+
+    expect(fixture.recovery).toEqual({ action: "proceed" });
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
+  });
 });
