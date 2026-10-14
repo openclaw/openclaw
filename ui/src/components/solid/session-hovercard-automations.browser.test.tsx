@@ -77,13 +77,17 @@ it("tabs into a nested inspection, dismisses only the flyout with Escape, and re
   flush();
   const anchor = card.querySelector<HTMLAnchorElement>(".session-hovercard__automation-link")!;
   await vi.waitFor(() => expect(anchor.textContent).toBe("Check repository"));
-  await userEvent.click(anchor);
   const tooltip = card.querySelector("openclaw-tooltip")!;
+  const shown = new Promise<void>((resolve) =>
+    tooltip.addEventListener("overlay-after-show", () => resolve(), { once: true }),
+  );
+  await userEvent.click(anchor);
+  await shown;
   await vi.waitFor(() => expect(tooltip.hasAttribute("open")).toBe(true));
   anchor.focus();
   await userEvent.tab();
   const summary = card.querySelector("summary")!;
-  expect(document.activeElement).toBe(summary);
+  await vi.waitFor(() => expect(document.activeElement).toBe(summary));
   await userEvent.keyboard("{Enter}");
   expect(card.querySelector("details")!.open).toBe(true);
   await userEvent.keyboard("{Escape}");

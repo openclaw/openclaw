@@ -364,13 +364,20 @@ describe("DebugOverlay", () => {
 
     try {
       await content.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
+      vi.advanceTimersByTime(0);
       await waitForSolid(() => {
         expect(content.querySelector<TestSparkline>(".gateway-vital--cpu")?.samples).toHaveLength(
           1,
         );
       });
-      await vi.advanceTimersByTimeAsync(90 * 10_000);
+      for (let value = 2; value <= 91; value += 1) {
+        vi.advanceTimersByTime(10_000);
+        await waitForSolid(() => {
+          expect(
+            content.querySelector<TestSparkline>(".gateway-vital--cpu")?.samples.at(-1)?.value,
+          ).toBe(value);
+        });
+      }
       await waitForSolid(() => {
         const cpu = content.querySelector<TestSparkline>(".gateway-vital--cpu");
         expect(sampleCount).toBe(91);
