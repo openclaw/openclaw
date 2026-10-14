@@ -809,9 +809,8 @@ async function agentViaGatewayCommand(
     opts.to?.trim() &&
     classifySessionKeyShape(opts.to) !== "agent",
   );
-  const deferRemoteSessionId = Boolean(
-    remoteGateway && opts.sessionId?.trim() && !explicitSessionKey,
-  );
+  // The Gateway owns session metadata even when it shares this CLI's filesystem.
+  const deferSessionId = Boolean(opts.sessionId?.trim() && !explicitSessionKey);
   const deferRemoteBareSessionKey = Boolean(
     remoteGateway && explicitSessionKey && classifySessionKeyShape(explicitSessionKey) !== "agent",
   );
@@ -826,7 +825,7 @@ async function agentViaGatewayCommand(
   const sessionKey =
     preserveImplicitCompatibilitySession || deferRemoteBareSessionKey
       ? explicitSessionKey
-      : deferAgentDefaultSession || deferExplicitRecipientSession || deferRemoteSessionId
+      : deferAgentDefaultSession || deferExplicitRecipientSession || deferSessionId
         ? undefined
         : classifySessionKeyShape(explicitSessionKey) === "agent"
           ? explicitSessionKey
@@ -841,7 +840,7 @@ async function agentViaGatewayCommand(
                 sessionKey: explicitSessionKey,
               })
             ).sessionKey;
-  const abortSessionKey = deferRemoteSessionId
+  const abortSessionKey = deferSessionId
     ? undefined
     : deferExplicitRecipientSession
       ? (

@@ -19,6 +19,8 @@ Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or 
 
 When `--session-id` finds an existing session in an agent's storage partition, it retains that agent even if `session.store` uses one fixed JSON locator and the stored key is `global` or `unknown`.
 
+For Gateway-backed turns, the Gateway resolves `--session-id`, including when it runs on the same machine as the CLI. The CLI does not read session metadata before sending the request.
+
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
 
 Related: [Agent send tool](/tools/agent-send)
