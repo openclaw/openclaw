@@ -86,14 +86,14 @@ const publications = new WeakMap<
 const encodings = new WeakMap<GatewaySessionRow, string>();
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
-  const prepared = new WeakMap<T, Map<string, Partial<T>>>();
+  const prepared = new WeakMap<T, [string, Partial<T>][]>();
   return (sessions: T[]) => {
     type SharedFact = { fact: Partial<T>; rows: number[] };
     const candidates = new Map<string, SharedFact>();
     sessions.forEach((row, index) => {
       let facts = prepared.get(row);
       if (!facts) {
-        facts = new Map();
+        facts = [];
         for (const field in row) {
           const value = row[field];
           // Keep required fields and the projection marker readable without expanding the table.
@@ -105,7 +105,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           }
           const fact: Partial<T> = {};
           fact[field] = value;
-          facts.set(JSON.stringify(fact), fact);
+          facts.push([JSON.stringify(fact), fact]);
         }
         prepared.set(row, facts);
       }
