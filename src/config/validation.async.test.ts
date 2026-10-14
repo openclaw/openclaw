@@ -63,7 +63,11 @@ describe("async config plugin validation", () => {
       if (!result.ok) {
         throw new Error("Expected valid fixture");
       }
-      return result.config.plugins!.entries!["validation-fixture"].config!;
+      const config = result.config.plugins?.entries?.["validation-fixture"]?.config;
+      if (!config) {
+        throw new Error("Expected fixture plugin settings");
+      }
+      return config;
     };
     const check = vi.spyOn(schemaValidator, "validatePluginSchemaValue");
     try {
@@ -79,7 +83,10 @@ describe("async config plugin validation", () => {
         ],
       });
       raw.plugins.entries["validation-fixture"].config = {};
-      const schema = metadata.manifestRegistry.plugins[0].configSchema!;
+      const schema = metadata.manifestRegistry.plugins[0]?.configSchema;
+      if (!schema) {
+        throw new Error("Expected fixture plugin schema");
+      }
       schema.properties = { workspace: { type: "string", default: "edited-default" } };
       expect(readWorkspace(await validate()).workspace).toBe("edited-default");
       expect(check).toHaveBeenCalledTimes(3);
