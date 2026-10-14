@@ -46,7 +46,7 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
     await import("../src/plugins/provider-hook-runtime-core.js");
   const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
   const selectProviders = (params: {
-    onlyPluginIds?: string[];
+    onlyPluginIds?: readonly string[];
     providerRefs?: readonly string[];
   }) =>
     discovery.providers.filter(
