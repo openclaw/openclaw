@@ -250,8 +250,8 @@ describe("live terminal continuity with pending collaborators", () => {
       };
       const disposition =
         state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
-          : "Cancelled before the agent started it. It will not run automatically; copy it and send again.";
+          ? "Delivery interrupted. This saved agent update is not scheduled to retry."
+          : "This agent update was cancelled before delivery.";
       const originalRows = ["earlier", "active", "Earlier scheduled maintenance", disposition];
       for (const { overrides, expected } of [
         { overrides: {}, expected: originalRows },
