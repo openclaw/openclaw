@@ -10,7 +10,7 @@ Deploy OpenClaw on [Pethost](https://pethost.dev) with a one-click template and 
 
 ## How to get started
 
-1. Click [Deploy OpenClaw](https://console.pethost.dev/?template=openclaw) to open the template.
+1. Open the [OpenClaw template](https://pethost.dev/templates/openclaw/) and click **Deploy on Pethost**.
 2. Sign in, or create an account and choose a plan if you don't already have one.
 3. Click **Create project**. The template generates `OPENCLAW_GATEWAY_TOKEN` and writes it to the project's `.env`.
 4. Wait for the deployment to complete, then open the project's address, `https://openclaw.<your-account>.pethost.app`.
