@@ -4,7 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import type { RunOutputUsage } from "./tool-stream-contract.ts";
+import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
 
 type WorkingProgress = {
   key: string;
@@ -12,98 +12,79 @@ type WorkingProgress = {
   startedAt: number;
 };
 
-type WorkingProgressCache = WorkingProgress;
-
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
-export function isContextCompactionActivity(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
-}
-
-export function projectContextCompactionActivity(message: unknown): unknown {
+export function isContextCompactionMessage(message: unknown): boolean {
   const record = asRecord(message);
-  if (record?.role !== "custom" || record.customType !== CONTEXT_COMPACTION_CUSTOM_TYPE) {
-    return message;
-  }
-  const metadata = asRecord(record["__openclaw"]);
-  const details = asRecord(record.details);
-  const { idempotencyKey: _activityId, ...activity } = record;
-  return {
-    ...activity,
-    role: "assistant",
-    content: [{ type: "text", text: t("chat.composer.contextCompacted") }],
-    ...(typeof metadata?.runId === "string"
-      ? { runId: metadata.runId }
-      : typeof details?.runId === "string"
-        ? { runId: details.runId }
-        : {}),
-    __openclaw: {
-      ...metadata,
-      runtimeActivityKind: "context_compaction",
-    },
-  };
+  return record?.role === "custom" && record.customType === CONTEXT_COMPACTION_CUSTOM_TYPE;
 }
 
-const workingProgressBySession = new Map<string, WorkingProgressCache>();
+export function matchesCompactionOperation(message: unknown, status: CompactionStatus): boolean {
+  const record = asRecord(message);
+  const marker = asRecord(record?.["__openclaw"]);
+  return Boolean(
+    (marker?.kind === "compaction" || isContextCompactionMessage(message)) &&
+    status.runId &&
+    marker?.runId === status.runId &&
+    (!status.itemId || marker.itemId === status.itemId),
+  );
+}
+
+const workingProgressBySession = new Map<string, WorkingProgress>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
   notice: ChatGuardianNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  const item = {
+    kind: "notice" as const,
+    key: notice.key,
+    icon: "shieldCheck" as const,
+    timestamp: notice.timestamp,
+  };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
-      kind: "notice",
-      key: notice.key,
+      ...item,
       icon: "cpu",
       label: t("common.system"),
       text: notice.message ?? "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "approved") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.approvedSummary", { action }),
       text: "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "warning") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.warningLabel"),
       text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
       text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
+    ...item,
     label: t("chat.systemNotice.guardian.deniedLabel"),
     text: t("chat.systemNotice.guardian.deniedSummary", {
       action,
       risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
       rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
     }),
-    timestamp: notice.timestamp,
     tone: "danger",
   };
 }
@@ -112,6 +93,7 @@ export function buildCompactionDividerItem(
   marker: Record<string, unknown>,
   timestamp: number,
   index: number,
+  phase: "active" | "complete" = "complete",
 ): Extract<ChatItem, { kind: "divider" }> {
   const tokensBefore = marker.tokensBefore;
   const tokensAfter = marker.tokensAfter;
@@ -129,8 +111,10 @@ export function buildCompactionDividerItem(
       typeof marker.id === "string"
         ? `divider:compaction:${marker.id}`
         : `divider:compaction:${timestamp}:${index}`,
-    label: t("chat.compaction.label"),
-    icon: "foldVertical",
+    label: t(
+      phase === "active" ? "chat.composer.compactingContext" : "chat.composer.contextCompacted",
+    ),
+    compaction: phase,
     ...(tokensSaved === null
       ? {}
       : {
@@ -138,8 +122,6 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    description: t("chat.compaction.description"),
-    action: { kind: "session-checkpoints", label: t("chat.compaction.openCheckpoints") },
     timestamp,
   };
 }
@@ -163,7 +145,11 @@ export function buildResetDividerItem(
 }
 
 function queuedSendStarted(item: ChatQueueItem): boolean {
-  return typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+  // Submitting offline records timing without attempting delivery.
+  return (
+    (item.sendAttempts ?? 0) > 0 ||
+    (item.sendState !== "waiting-reconnect" && typeof item.sendSubmittedAtMs === "number")
+  );
 }
 
 export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
@@ -172,6 +158,8 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     !item.localCommandName &&
     (item.sendState === "failed" ||
       item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
+      item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );
 }
@@ -181,8 +169,8 @@ export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   return (
     queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
+      item.sendState === "submitting" ||
       item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect" ||
       isQueuedSendInlineState(item))
   );
 }
@@ -195,40 +183,51 @@ export function resolveWorkingProgress(
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
+  const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
+  const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
   const queuedProgress =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
-    queue.find(shouldRenderQueuedSendInThread);
+    pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
+    pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
   const segmentRunId = streamSegments
     .map((segment) => segment.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const toolRunId = toolMessages
-    .map((message) => (message as Record<string, unknown> | null)?.runId)
+  const toolProgress = toolMessages.map(asRecord);
+  const toolRunId = toolProgress
+    .map((message) => message?.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  // Stream and tool facts describe work already observed in this row. Queue
-  // identity is only a pre-run fallback and must not claim an active tail.
-  const explicitRunId = runId ?? segmentRunId ?? toolRunId ?? queuedRunId;
+  // A submitted send owns the acknowledgment gap; delayed activity from an
+  // earlier run must not claim it. Future queued sends remain a fallback.
+  const submittedRunId =
+    queuedProgress?.sendState === "submitting" || queuedProgress?.sendState === "sending"
+      ? queuedRunId
+      : undefined;
+  const explicitRunId = runId ?? submittedRunId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =
     cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;
   const candidates = [
     compatibleCached?.startedAt,
     streamStartedAt,
-    ...queue
-      .filter(shouldRenderQueuedSendInThread)
+    // Recovery rows cannot identify work, but matching durable timing survives reconnects.
+    ...visibleSends
+      .filter((item) =>
+        explicitRunId
+          ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
+          : item === queuedProgress,
+      )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
-    ...streamSegments.map((segment) => segment.ts),
-    ...toolMessages.map((message) => {
-      const receivedAt = (message as Record<string, unknown> | null)?.[
-        "__openclawToolStreamReceivedAt"
-      ];
-      return typeof receivedAt === "number" ? receivedAt : null;
-    }),
+    ...streamSegments
+      .filter((segment) => !explicitRunId || segment.runId === explicitRunId)
+      .map((segment) => segment.ts),
+    ...toolProgress
+      .filter((message) => !explicitRunId || message?.runId === explicitRunId)
+      .map((message) => message?.["__openclawToolStreamReceivedAt"]),
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const startedAt = candidates.length > 0 ? Math.min(...candidates) : Date.now();
   const key =
@@ -263,8 +262,28 @@ export type TurnRecapWatch = {
   agentId: string | null;
   gatewayClient: GatewayBrowserClient | null;
   runId: string;
+  /** For a run that resumed a handoff: when its request was asked and the runs before it. */
+  request: TurnRequest | null;
   recap: TurnRecap | null;
 };
+
+type TurnRequest = { askedAt: number; runIds: readonly string[] };
+
+/** Output tokens across the runs of one answer; null unless every run has reported. */
+export function sumRunOutputTokens(
+  usageByRun: ReadonlyMap<string, RunOutputUsage> | undefined,
+  runIds: readonly string[],
+): number | null {
+  let total = 0;
+  for (const runId of runIds) {
+    const usage = usageByRun?.get(runId);
+    if (!usage || usage.outputTokens === null) {
+      return null;
+    }
+    total += usage.outputTokens;
+  }
+  return runIds.length > 0 ? total : null;
+}
 
 export function resolveTurnRecap(
   host: { turnRecapWatch: TurnRecapWatch | null },
@@ -272,8 +291,8 @@ export function resolveTurnRecap(
     sessionKey: string;
     agentId?: string | null;
     gatewayClient?: GatewayBrowserClient | null;
-    indicator?: { runId?: string };
-    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs">;
+    indicator?: { runId?: string; request?: TurnRequest };
+    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
   },
 ): (TurnRecap & { runId: string }) | null {
@@ -293,19 +312,27 @@ export function resolveTurnRecap(
       return null;
     }
     if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, recap: null };
+      watch = { sessionKey, agentId, gatewayClient, runId, request: null, recap: null };
     }
+    watch.request = indicator.request ?? null;
   }
   host.turnRecapWatch = watch;
   if (!watch) {
     return null;
   }
-  const outputTokens =
-    usageByRun?.get(watch.runId)?.outputTokens ?? watch.recap?.outputTokens ?? null;
+  const runIds = [...(watch.request?.runIds ?? []), watch.runId];
+  const unavailable = runIds.some((runId) => usageByRun?.get(runId)?.outputTokens === null);
+  const outputTokens = unavailable
+    ? null
+    : (sumRunOutputTokens(usageByRun, runIds) ?? watch.recap?.outputTokens ?? null);
   if (row?.lastRunId === watch.runId) {
     const runtimeMs = row.runtimeMs;
     if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      watch.recap = { runtimeMs, outputTokens };
+      // A resumed answer reports the whole request, the wait included. Both
+      // ends are on the Gateway's clock; it never reports less than its last run.
+      const sinceRequest =
+        watch.request && typeof row.endedAt === "number" ? row.endedAt - watch.request.askedAt : 0;
+      watch.recap = { runtimeMs: Math.max(runtimeMs, sinceRequest), outputTokens };
     } else if (row.status && row.status !== "done") {
       watch.recap = null;
     }

@@ -1,0 +1,59 @@
+/* Keep the first paint hidden until the popup owner has applied its coordinates. */
+.emoji-menu-popup:not([data-current-placement]),
+.emoji-menu-popup:not([data-current-placement])::part(popup),
+.emoji-menu-popup:not([data-current-placement]) .emoji-menu {
+  visibility: hidden;
+}
+
+.emoji-menu-popup::part(popup) {
+  width: max-content;
+  max-width: min(300px, calc(100vw - 24px));
+}
+
+/* The popup owns placement; do not inherit the full-width slash sheet geometry. */
+.agent-chat__input .emoji-menu-popup .emoji-menu.slash-menu {
+  position: static;
+  inset: auto;
+  width: max-content;
+  min-width: 0;
+  max-width: min(300px, calc(100vw - 24px));
+  max-height: min(280px, var(--auto-size-available-height, 42vh));
+  border-radius: var(--menu-radius);
+  corner-shape: round;
+  box-shadow: var(--overlay-shadow);
+}
+
+.emoji-menu .slash-menu__scroll {
+  max-height: max(0px, calc(min(280px, var(--auto-size-available-height, 42vh)) - 10px));
+  margin: 4px;
+  padding: 0;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.emoji-menu .slash-menu-item {
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 7px;
+  min-height: 30px;
+  padding: 2px 7px;
+}
+
+.emoji-menu .slash-menu-icon {
+  width: 22px;
+  height: 22px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.emoji-menu .slash-menu-copy {
+  display: block;
+  width: auto;
+}
+
+.emoji-menu .slash-menu-name {
+  display: block;
+}
+
+.emoji-menu .slash-menu-desc {
+  display: none;
+}

@@ -1,22 +1,45 @@
 /** Pure mount and path helpers for the remote sandbox filesystem bridge. */
 import path from "node:path";
-import { normalizeContainerPathCore } from "./path-utils.js";
-
-export type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
+import { isPathInside } from "../../infra/path-guards.js";
+import { isPathInsideContainerRoot, normalizeContainerPathCore } from "./path-utils.js";
 
 export type RemoteMountInfo = {
   localRoot: string;
   containerRoot: string;
   writable: boolean;
-  source: RemoteMountSource;
+  source: "workspace" | "agent" | "protectedSkill";
 };
 
-export function compareRemoteMountsByContainerPath(a: RemoteMountInfo, b: RemoteMountInfo): number {
-  return b.containerRoot.length - a.containerRoot.length || mountPriority(b) - mountPriority(a);
+const MOUNT_SOURCE_PRIORITY = { workspace: 0, agent: 1, protectedSkill: 2 };
+
+export function resolveRemoteMountByContainerPath(
+  mounts: RemoteMountInfo[],
+  containerPath: string,
+): RemoteMountInfo | null {
+  return (
+    mounts
+      .toSorted(
+        (a, b) =>
+          b.containerRoot.length - a.containerRoot.length ||
+          MOUNT_SOURCE_PRIORITY[b.source] - MOUNT_SOURCE_PRIORITY[a.source],
+      )
+      .find((mount) => isPathInsideContainerRoot(mount.containerRoot, containerPath)) ?? null
+  );
 }
 
-export function compareRemoteMountsByLocalPath(a: RemoteMountInfo, b: RemoteMountInfo): number {
-  return b.localRoot.length - a.localRoot.length || mountPriority(b) - mountPriority(a);
+export function resolveRemoteMountByLocalPath(
+  mounts: RemoteMountInfo[],
+  localPath: string,
+): RemoteMountInfo | null {
+  return (
+    mounts
+      .toSorted(
+        (a, b) =>
+          b.localRoot.length - a.localRoot.length ||
+          MOUNT_SOURCE_PRIORITY[b.source] - MOUNT_SOURCE_PRIORITY[a.source],
+      )
+      .find((mount) => isPathInside(mount.localRoot, localPath)) ?? null
+  );
 }
 
 export function buildRemoteProtectedSkillRoots(params: {
@@ -24,33 +47,18 @@ export function buildRemoteProtectedSkillRoots(params: {
   agentContainerRoot: string;
   includeAgentMount: boolean;
 }): string[] {
-  const roots = [
-    path.posix.join(params.workspaceContainerRoot, "skills"),
-    path.posix.join(params.workspaceContainerRoot, ".agents", "skills"),
-    path.posix.join(params.workspaceContainerRoot, ".openclaw", "sandbox-skills", "skills"),
-  ];
-  if (params.includeAgentMount) {
-    roots.push(
-      path.posix.join(params.agentContainerRoot, "skills"),
-      path.posix.join(params.agentContainerRoot, ".agents", "skills"),
-      path.posix.join(params.agentContainerRoot, ".openclaw", "sandbox-skills", "skills"),
-    );
-  }
-  return roots;
-}
-
-function mountPriority(mount: RemoteMountInfo): number {
-  if (mount.source === "protectedSkill") {
-    return 2;
-  }
-  if (mount.source === "agent") {
-    return 1;
-  }
-  return 0;
+  return [
+    params.workspaceContainerRoot,
+    ...(params.includeAgentMount ? [params.agentContainerRoot] : []),
+  ].flatMap((root) => [
+    path.posix.join(root, "skills"),
+    path.posix.join(root, ".agents", "skills"),
+    path.posix.join(root, ".openclaw", "sandbox-skills", "skills"),
+  ]);
 }
 
 export function normalizeContainerPath(value: string): string {
-  const normalized = normalizeContainerPathCore(value.trim() || "/");
+  const normalized = normalizeContainerPathCore(value || "/");
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 

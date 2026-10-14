@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseDotEnv } from "dotenv";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const GEMINI_CLI_AMBIENT_AUTH_ENV = new Set([
   "GEMINI_API_KEY",
@@ -133,12 +138,7 @@ export async function readGeminiCliJsonObject(
     }
     return { ...parsed };
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (extractErrorCode(error) === "ENOENT") {
       return {};
     }
     throw error;
@@ -147,11 +147,11 @@ export async function readGeminiCliJsonObject(
 
 function projectGeminiCliSafeSettings(settings: Record<string, unknown>): Record<string, unknown> {
   const projected: Record<string, unknown> = {};
-  const privacy = isRecord(settings.privacy) ? settings.privacy : undefined;
+  const privacy = asOptionalRecord(settings.privacy);
   if (typeof privacy?.usageStatisticsEnabled === "boolean") {
     projected.privacy = { usageStatisticsEnabled: privacy.usageStatisticsEnabled };
   }
-  const telemetry = isRecord(settings.telemetry) ? settings.telemetry : undefined;
+  const telemetry = asOptionalRecord(settings.telemetry);
   const safeTelemetry: Record<string, boolean> = {};
   if (typeof telemetry?.enabled === "boolean") {
     safeTelemetry.enabled = telemetry.enabled;
@@ -211,12 +211,7 @@ async function readGeminiCliAmbientAuthEnv(
         : {}),
     };
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (extractErrorCode(error) === "ENOENT") {
       return undefined;
     }
     throw error;
@@ -248,29 +243,20 @@ export async function resolveGeminiCliAmbientAuth(
   const home = resolveGeminiCliAmbientHome(ctx);
   const settings = await readGeminiCliJsonObject(path.join(home, ".gemini", "settings.json"));
   const systemSettings = await readGeminiCliJsonObject(ctx.systemSettingsPath);
-  const userSecurity = isRecord(settings.security) ? settings.security : undefined;
-  const userAuth = userSecurity && isRecord(userSecurity.auth) ? userSecurity.auth : undefined;
-  const systemSecurity = isRecord(systemSettings.security) ? systemSettings.security : undefined;
-  const systemAuth =
-    systemSecurity && isRecord(systemSecurity.auth) ? systemSecurity.auth : undefined;
+  const userAuth = asOptionalRecord(asOptionalRecord(settings.security)?.auth);
+  const systemAuth = asOptionalRecord(asOptionalRecord(systemSettings.security)?.auth);
   const ambientEnv = await loadGeminiCliAmbientEnv(ctx);
   const preparedSelectorOwnsAuth = [...GEMINI_CLI_AUTH_SELECTOR_ENV].some((name) => {
     const value = normalizeOptionalString(ctx.baseEnv?.[name]);
     return value !== undefined && value !== "false" && value !== "0";
   });
-  const systemSelectedType = normalizeOptionalString(
-    typeof systemAuth?.selectedType === "string" ? systemAuth.selectedType : undefined,
-  );
-  const userSelectedType = normalizeOptionalString(
-    typeof userAuth?.selectedType === "string" ? userAuth.selectedType : undefined,
-  );
+  const systemSelectedType = normalizeOptionalString(systemAuth?.selectedType);
+  const userSelectedType = normalizeOptionalString(userAuth?.selectedType);
   // A request-prepared selector is the credential owner for this turn. It may
   // override ambient user preference, but never system-enforced selection.
   const selectedType =
     systemSelectedType ?? (preparedSelectorOwnsAuth ? undefined : userSelectedType);
-  const enforcedType = normalizeOptionalString(
-    typeof systemAuth?.enforcedType === "string" ? systemAuth.enforcedType : undefined,
-  );
+  const enforcedType = normalizeOptionalString(systemAuth?.enforcedType);
   if (enforcedType && enforcedType !== "gemini-api-key" && enforcedType !== "vertex-ai") {
     throw unsupportedExactToolAuthError(
       ctx,
@@ -345,7 +331,7 @@ export async function resolveGeminiCliAmbientAuth(
   }
   const safeSettings = projectGeminiCliSafeSettings(settings);
   if (ambientEnv.telemetryEnabled === false) {
-    const telemetry = isRecord(safeSettings.telemetry) ? safeSettings.telemetry : {};
+    const telemetry = asOptionalRecord(safeSettings.telemetry);
     safeSettings.telemetry = { ...telemetry, enabled: false };
   }
   return { selectedType, envOverrides, safeSettings };

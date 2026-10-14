@@ -25,7 +25,6 @@ import { isRecord } from "./lib/record-shared.mjs";
 
 const MAX_ARTIFACT_PAGES = 10;
 const CANDIDATE_DISCOVERY_BUDGET_MS = 8 * 60 * 1000;
-const GH_TIMEOUT_MS = 60_000;
 const CANDIDATE_GH_TIMEOUT_MS = 20_000;
 const CANDIDATE_GH_RETRY_ATTEMPTS = 2;
 const GH_RETRY_BASE_DELAY_MS = 1_000;
@@ -50,16 +49,11 @@ function requestContract(input) {
   };
 }
 
-function runGhJson(
-  repository,
-  path,
-  label,
-  { attempts = 3, deadlineMs, paginate = false, timeoutMs = GH_TIMEOUT_MS } = {},
-) {
-  let lastError = new Error(`${label} failed`);
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+function runGhJson(repository, path, label, deadlineMs, paginate = false) {
+  for (let attempt = 1; ; attempt += 1) {
     requireDiscoveryBudget(deadlineMs);
-    const remainingMs = deadlineMs === undefined ? timeoutMs : deadlineMs - Date.now();
+    const remainingMs =
+      deadlineMs === undefined ? CANDIDATE_GH_TIMEOUT_MS : deadlineMs - Date.now();
     const args = ["api"];
     if (paginate) {
       args.push("--paginate", "--slurp");
@@ -69,8 +63,10 @@ function runGhJson(
       encoding: "utf8",
       killSignal: "SIGKILL",
       maxBuffer: 2 * 1024 * 1024,
-      timeout: Math.max(1, Math.min(timeoutMs, remainingMs)),
+      timeout: Math.max(1, Math.min(CANDIDATE_GH_TIMEOUT_MS, remainingMs)),
     });
+    /** @type {Error} */
+    let lastError;
     if (result.error) {
       lastError = result.error;
     } else if (result.status !== 0) {
@@ -86,7 +82,10 @@ function runGhJson(
         );
       }
     }
-    if (attempt === attempts || classifyReleaseGhTransportError(lastError) !== "transient") {
+    if (
+      attempt === CANDIDATE_GH_RETRY_ATTEMPTS ||
+      classifyReleaseGhTransportError(lastError) !== "transient"
+    ) {
       throw lastError;
     }
     requireDiscoveryBudget(deadlineMs);
@@ -101,30 +100,16 @@ function runGhJson(
       retryDelayMs,
     );
   }
-  throw lastError;
 }
 
-function readCandidateWorkflowJobs(repository, runId, runAttempt, options) {
-  return readWorkflowJobPages(
+function readWorkflowJobPages(repository, path, deadlineMs) {
+  const pages = runGhJson(
     repository,
-    `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
-    options,
+    path,
+    "full release candidate workflow jobs",
+    deadlineMs,
+    true,
   );
-}
-
-function readCandidateWorkflowHistory(repository, runId, options) {
-  return readWorkflowJobPages(
-    repository,
-    `actions/runs/${runId}/jobs?filter=all&per_page=100`,
-    options,
-  );
-}
-
-function readWorkflowJobPages(repository, path, options) {
-  const pages = runGhJson(repository, path, "full release candidate workflow jobs", {
-    ...options,
-    paginate: true,
-  });
   if (
     !Array.isArray(pages) ||
     pages.length === 0 ||
@@ -136,7 +121,7 @@ function readWorkflowJobPages(repository, path, options) {
   return { jobs, total_count: pages[0].total_count };
 }
 
-function readRepositoryArtifacts(repository, requestSha256, options) {
+function readRepositoryArtifacts(repository, requestSha256, deadlineMs) {
   const artifacts = [];
   const name = encodeURIComponent(fullReleaseCandidateArtifactName(requestSha256));
   for (let page = 1; page <= MAX_ARTIFACT_PAGES; page += 1) {
@@ -144,7 +129,7 @@ function readRepositoryArtifacts(repository, requestSha256, options) {
       repository,
       `actions/artifacts?name=${name}&per_page=100&page=${page}`,
       "full release candidate artifact listing",
-      options,
+      deadlineMs,
     );
     if (!Array.isArray(response.artifacts)) {
       fail("full release candidate artifact listing is invalid");
@@ -209,16 +194,11 @@ async function discover(args) {
   output("request_sha256", contract.requestSha256);
   let selected;
   const deadlineMs = Date.now() + CANDIDATE_DISCOVERY_BUDGET_MS;
-  const ghOptions = {
-    attempts: CANDIDATE_GH_RETRY_ATTEMPTS,
-    deadlineMs,
-    timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
-  };
   try {
     const artifacts = readRepositoryArtifacts(
       contract.request.repository,
       contract.requestSha256,
-      ghOptions,
+      deadlineMs,
     );
     if (artifacts === null) {
       output("state", "unavailable");
@@ -235,10 +215,14 @@ async function discover(args) {
           contract.request.repository,
           `actions/runs/${runId}`,
           "full release candidate workflow run",
-          ghOptions,
+          deadlineMs,
         ),
       readWorkflowJobs: async (runId) =>
-        readCandidateWorkflowHistory(contract.request.repository, runId, ghOptions),
+        readWorkflowJobPages(
+          contract.request.repository,
+          `actions/runs/${runId}/jobs?filter=all&per_page=100`,
+          deadlineMs,
+        ),
     });
   } catch (error) {
     if (
@@ -280,17 +264,21 @@ async function discover(args) {
           contract.request.repository,
           `actions/artifacts/${artifactId}`,
           "full release candidate constituent artifact",
-          ghOptions,
+          deadlineMs,
         ),
       readRunAttempt: async (runId, runAttempt) =>
         runGhJson(
           contract.request.repository,
           `actions/runs/${runId}/attempts/${runAttempt}`,
           "full release candidate workflow attempt",
-          ghOptions,
+          deadlineMs,
         ),
       readWorkflowJobs: async (runId, runAttempt) =>
-        readCandidateWorkflowJobs(contract.request.repository, runId, runAttempt, ghOptions),
+        readWorkflowJobPages(
+          contract.request.repository,
+          `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+          deadlineMs,
+        ),
       request: contract.request,
       selected,
       token,
@@ -344,10 +332,6 @@ async function verify(args) {
     fail("GH_TOKEN is required");
   }
   const binding = validateCandidateBinding(plan.candidate);
-  const ghOptions = {
-    attempts: CANDIDATE_GH_RETRY_ATTEMPTS,
-    timeoutMs: CANDIDATE_GH_TIMEOUT_MS,
-  };
   await verifySealedFullReleaseCandidate({
     binding,
     consumerRunAttempt: option(args, "--consumer-run-attempt"),
@@ -357,17 +341,18 @@ async function verify(args) {
         binding.request.repository,
         `actions/artifacts/${artifactId}`,
         "sealed full release candidate artifact",
-        ghOptions,
       ),
     readRunAttempt: async (runId, runAttempt) =>
       runGhJson(
         binding.request.repository,
         `actions/runs/${runId}/attempts/${runAttempt}`,
         "sealed full release candidate workflow attempt",
-        ghOptions,
       ),
     readWorkflowJobs: async (runId, runAttempt) =>
-      readCandidateWorkflowJobs(binding.request.repository, runId, runAttempt, ghOptions),
+      readWorkflowJobPages(
+        binding.request.repository,
+        `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+      ),
     downloadArchive: (params) =>
       downloadExactActionsArtifactArchive({
         ...params,

@@ -54,7 +54,7 @@ export function normalizeMcpToolCatalog(
     }
     const disposition = classify(toolName);
     if (disposition === "exclude") {
-      excludedTools.push({ ...sourceTool, name: toolName });
+      excludedTools.push(tool);
       continue;
     }
     if (disposition === "include") {

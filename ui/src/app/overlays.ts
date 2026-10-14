@@ -1,8 +1,9 @@
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import type { GatewayEventFrame } from "../api/gateway.ts";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -18,7 +19,6 @@ import {
   syncDevicePairSetupCountdown,
 } from "../lib/device-pair-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -42,15 +42,9 @@ import {
   type ApplicationUpdateOverlayHooks,
 } from "./overlays-updates.ts";
 
-function isGatewayEvent(value: unknown): value is GatewayEventFrame {
-  return Boolean(value && typeof value === "object" && "event" in value);
-}
-
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
-  hooks: ApplicationUpdateOverlayHooks & {
-    connectionBootstrap?: ConnectionBootstrapCoordinator;
-  } = {},
+  hooks: ApplicationUpdateOverlayHooks = {},
 ): ApplicationOverlays {
   const updates = createApplicationUpdateOverlays(gateway, publish, hooks);
   const runConnectionBootstrap = (key: string, task: () => Promise<unknown>) =>
@@ -165,15 +159,14 @@ export function createApplicationOverlays(
       approvalDecision = null;
       promptState.execApprovalBusy = false;
     }
-    if (accessTransition.adminRevoked || accessTransition.pairingSetupRevoked) {
-      // Admin revocation invalidates bearer setup codes; losing both setup
-      // authorities must also close a pairing-only operator's retained modal.
+    if (accessTransition.adminRevoked) {
+      // Losing setup authority retires both the modal and any retained bearer code.
       closeDevicePairSetupState(devicePairSetupState);
       pairingPendingCount.invalidate({ clear: true });
     }
     if (accessTransition.pairingChanged) {
       pairingPendingCount.invalidate({
-        clear: !(operatorAccess.canAdmin || operatorAccess.canPair),
+        clear: !operatorAccess.canAdmin,
       });
     }
     activeClient = next.client;
@@ -188,19 +181,17 @@ export function createApplicationOverlays(
     }
     if (connected && !operatorAccess.canReviewApprovals) {
       approvalDecision = null;
+    }
+    if (!connected || !next.client || !operatorAccess.canReviewApprovals) {
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
       clearExecApprovalTimers(promptState);
     }
     if (!connected || !next.client) {
-      promptState.execApprovalQueue = [];
-      promptState.execApprovalBusy = false;
-      promptState.execApprovalErrors.clear();
       if (next.phase !== "reload-required" && !next.client) {
         connectedEpoch = 0;
       }
-      clearExecApprovalTimers(promptState);
       updates.synchronizeGateway(next);
       return;
     }
@@ -209,7 +200,7 @@ export function createApplicationOverlays(
     if (
       accessTransition.pairingChanged &&
       devicePairSetupState.devicePairSetupOpen &&
-      (operatorAccess.canAdmin || operatorAccess.canPair)
+      operatorAccess.canAdmin
     ) {
       void runConnectionBootstrap("pairing-pending-count", () =>
         pairingPendingCount.refresh(),
@@ -217,12 +208,11 @@ export function createApplicationOverlays(
     }
     if (connectedSourceChanged) {
       connectedEpoch += 1;
-      if (operatorAccess.canReviewApprovals) {
-        void runConnectionBootstrap("approvals", () =>
-          refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
-        ).catch(() => undefined);
-      }
-    } else if (accessTransition.reviewChanged && operatorAccess.canReviewApprovals) {
+    }
+    if (
+      (connectedSourceChanged || accessTransition.reviewChanged) &&
+      operatorAccess.canReviewApprovals
+    ) {
       void runConnectionBootstrap("approvals", () =>
         refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
       ).catch(() => undefined);
@@ -231,7 +221,7 @@ export function createApplicationOverlays(
   const stopGateway = gateway.subscribe(synchronizeGateway);
 
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (disposed || !isGatewayEvent(event)) {
+    if (disposed) {
       return;
     }
     if (event.event === "device.pair.setup.completed") {
@@ -258,6 +248,10 @@ export function createApplicationOverlays(
       );
       return;
     }
+    if (event.event === GATEWAY_EVENT_UPDATE_RUN_CHANGED) {
+      updates.handleUpdateRunChanged(event.payload);
+      return;
+    }
     if (
       !operatorAccess.canReviewApprovals ||
       !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
@@ -282,13 +276,14 @@ export function createApplicationOverlays(
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     refreshUpdateStatus: updates.refreshUpdateStatus,
+    acknowledgeUpdateRun: updates.acknowledgeUpdateRun,
+    captureUpdateTarget: updates.captureUpdateTarget,
     runUpdate: updates.runUpdate,
     holdUpdate: updates.holdUpdate,
+    diagnoseUpdateFailure: updates.diagnoseUpdateFailure,
+    reportUpdateFailure: updates.reportUpdateFailure,
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId
         ? (promptState.execApprovalQueue.find((entry) => entry.id === approvalId) ??
@@ -365,7 +360,7 @@ export function createApplicationOverlays(
     },
     async openDevicePairSetup() {
       const access = readGatewayOperatorAccess(gateway.snapshot);
-      if (disposed || (!access.canAdmin && !access.canPair)) {
+      if (disposed || gateway.snapshot.phase !== "connected" || !access.canAdmin) {
         return false;
       }
       devicePairSetupState.pendingCount = 0;

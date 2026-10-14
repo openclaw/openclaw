@@ -11,10 +11,29 @@ export type InternalAgentTurnPrincipalOptions = {
   isWebchatConnect?: (params: ConnectParams | null | undefined) => boolean;
 };
 
+export type AgentTurnStartOwner = {
+  observe: () => { executionStarted: boolean; expiresAtMs: number } | undefined;
+  abort: () => boolean;
+};
+
+/** A live frozen settle cohort may identify an already accepted legacy source. */
+export type RequesterSettleWakeReplay = {
+  sourceSessionKeys: readonly string[];
+  assertCurrent: () => void;
+};
+
 export type InternalAgentTurnDispatchOptions = {
+  /** Internal completion delivery owns its hidden input and durable processing receipt. */
+  privateCompletion?: true;
+  settleWakeReplay?: RequesterSettleWakeReplay;
+  /** Refresh the source before dispatch; accepted turns own their later execution. */
+  prepareDispatchCurrent?: () => Promise<void>;
+  // The source owns admission only; accepted children execute under their own lifetime.
+  assertAdmissionCurrent?: () => void;
   cancelOnDeadline?: boolean;
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   signal?: AbortSignal;
@@ -35,6 +54,7 @@ export type InternalAgentTurnFacade = {
     timeoutMs?: number,
     signal?: AbortSignal,
     onSignalAbort?: () => Promise<void> | void,
+    prepareDispatchCurrent?: () => Promise<void>,
   ) => Promise<T>;
 };
 

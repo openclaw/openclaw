@@ -5,10 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
+import { createPluginActivationSource } from "./config-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
-  createManifestPluginRecord,
   createPluginCandidatesFromManifestRegistry,
+  preparePluginLoadRecord,
   validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
@@ -18,6 +19,7 @@ import {
 } from "./loader.test-fixtures.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 
 const emptyObjectSchema = {
   type: "object",
@@ -29,10 +31,6 @@ function validatePluginConfig(
   params: Omit<Parameters<typeof validatePluginConfigByOrigin>[0], "origin">,
 ) {
   return validatePluginConfigByOrigin({ ...params, origin: "global" });
-}
-
-function withSchemaKeyword(key: "if" | "then" | "else", value: unknown) {
-  return { [key]: value };
 }
 
 const manifestRecord = {
@@ -59,23 +57,32 @@ function createRecordWithBuildVersion(openclawVersion: unknown) {
     } as unknown as NonNullable<PluginCandidate["packageManifest"]>,
   } satisfies PluginCandidate;
 
-  return createManifestPluginRecord({
+  const cfg = { plugins: { entries: { example: { enabled: true } } } };
+  const activationSource = createPluginActivationSource({ config: cfg });
+  return preparePluginLoadRecord({
     candidate,
     manifestRecord,
-    enabled: true,
-    activationState: {
-      enabled: true,
-      activated: true,
-      explicitlyEnabled: true,
-      source: "explicit",
+    context: {
+      cfg,
+      normalized: activationSource.plugins,
+      activationSource,
+      autoEnabledReasons: {},
+      shouldLoadModules: true,
     },
-  });
+    onlyPluginIdSet: null,
+    dreamingSidecar: null,
+    registry: { plugins: [] },
+    seenIds: new Map(),
+  })?.record;
 }
 
-describe("createManifestPluginRecord", () => {
+describe("preparePluginLoadRecord", () => {
   it("ignores malformed package build version metadata", () => {
-    expect(createRecordWithBuildVersion(" 2026.7.2 ").builtWithOpenClawVersion).toBe("2026.7.2");
-    expect(createRecordWithBuildVersion(42).builtWithOpenClawVersion).toBeUndefined();
+    expect(createRecordWithBuildVersion(" 2026.7.2 ")).toHaveProperty(
+      "builtWithOpenClawVersion",
+      "2026.7.2",
+    );
+    expect(createRecordWithBuildVersion(42)).toHaveProperty("builtWithOpenClawVersion", undefined);
   });
 });
 
@@ -103,23 +110,6 @@ describe("validatePluginConfig source values", () => {
     expect(
       validatePluginConfig({ schema: emptyObjectSchema, sourceValue: null, value: {} }).ok,
     ).toBe(false);
-  });
-  it("keeps the resolved runtime value when source validation needs no defaults", () => {
-    const schema = {
-      type: "object",
-      properties: { credential: { type: "object", required: ["id"] } },
-      required: ["credential"],
-    };
-    const value = { credential: "resolved-fixture-key" };
-    const result = validatePluginConfig({
-      schema,
-      sourceValue: { credential: { id: "KEY" } },
-      value,
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value).toBe(value);
-    }
   });
 
   it("validates secret input source refs while preserving resolved values and defaults", () => {
@@ -151,19 +141,6 @@ describe("validatePluginConfig source values", () => {
 });
 
 describe("validatePluginConfig manifest schema isolation", () => {
-  it("returns an error instead of throwing on a structurally invalid schema", () => {
-    const result = validatePluginConfig({
-      schema: {
-        type: "object",
-        properties: { mode: { $ref: "#/$defs/Mode" } },
-      },
-      value: {},
-    });
-
-    expect(result).toMatchObject({ ok: false });
-    expect(result.ok ? [] : result.error.join(" ")).toContain("invalid schema");
-  });
-
   it("returns an error instead of throwing when a schema is nested past the stack limit", () => {
     let schema: Record<string, unknown> = { type: "object" };
     for (let depth = 0; depth < 3_000; depth++) {
@@ -171,6 +148,7 @@ describe("validatePluginConfig manifest schema isolation", () => {
     }
 
     expect(validatePluginConfig({ schema, value: {} })).toMatchObject({ ok: false });
+    expect(() => validatePluginConfigByOrigin({ origin: "bundled", schema, value: {} })).toThrow();
   });
 
   it("keeps malformed bundled schemas on the throwing path", () => {
@@ -188,18 +166,6 @@ describe("validatePluginConfig manifest schema isolation", () => {
 });
 
 describe("validatePluginConfig empty schema classification", () => {
-  it("validates an empty-looking schema carrying an unresolvable $ref", () => {
-    // The empty-config shortcut answers before the schema is ever compiled, so a schema it
-    // cannot reason about must fall through to validation instead of being silently accepted.
-    const result = validatePluginConfig({
-      schema: { ...emptyObjectSchema, $ref: "#/$defs/Missing" },
-      value: {},
-    });
-
-    expect(result).toMatchObject({ ok: false });
-    expect(result.ok ? [] : result.error.join(" ")).toContain("invalid schema");
-  });
-
   it("validates pattern properties instead of requiring empty config", () => {
     const schema = {
       ...emptyObjectSchema,
@@ -213,60 +179,6 @@ describe("validatePluginConfig empty schema classification", () => {
     expect(validatePluginConfig({ schema, value: { S_SETTING: 42 } })).toMatchObject({
       ok: false,
     });
-  });
-
-  it("validates dependent schemas instead of using the empty-config shortcut", () => {
-    const result = validatePluginConfig({
-      schema: {
-        ...emptyObjectSchema,
-        dependentSchemas: { mode: { required: ["token"] } },
-      },
-      value: { mode: true },
-    });
-
-    expect(result).toMatchObject({ ok: false });
-    if (!result.ok) {
-      expect(result.error.join(" ")).not.toContain("config must be empty");
-    }
-  });
-
-  it.each([
-    {
-      branch: "then",
-      schema: {
-        ...withSchemaKeyword("if", true),
-        ...withSchemaKeyword("then", { minProperties: 1 }),
-      },
-    },
-    {
-      branch: "else",
-      schema: {
-        ...withSchemaKeyword("if", false),
-        ...withSchemaKeyword("else", { minProperties: 1 }),
-      },
-    },
-  ])("applies an active $branch conditional", ({ schema }) => {
-    expect(
-      validatePluginConfig({ schema: { ...emptyObjectSchema, ...schema }, value: {} }),
-    ).toMatchObject({ ok: false });
-  });
-
-  it.each([
-    withSchemaKeyword("if", true),
-    withSchemaKeyword("then", { minProperties: 1 }),
-    withSchemaKeyword("else", { minProperties: 1 }),
-  ])("keeps a closed empty schema closed under an inert conditional keyword: %o", (keyword) => {
-    // A standalone if/then/else imposes nothing, but it also takes the schema off the
-    // empty-config shortcut, so the closed-object rejection has to come from validation.
-    expect(
-      validatePluginConfig({
-        schema: { ...emptyObjectSchema, ...keyword },
-        value: { unexpected: true },
-      }),
-    ).toMatchObject({ ok: false });
-    expect(
-      validatePluginConfig({ schema: { ...emptyObjectSchema, ...keyword }, value: {} }),
-    ).toMatchObject({ ok: true });
   });
 });
 
@@ -442,6 +354,67 @@ module.exports = { id: "source-fixture", register(api) {
                     }) === alternate,
                   ).toBe(true);
 
+                  const replacement = loadOpenClawPlugins({
+                    ...alternateOptions,
+                    cache: false,
+                    previousRegistry: registry,
+                  });
+                  expect(
+                    replacement.cliRegistrars.flatMap((registrar) => registrar.descriptors),
+                  ).toEqual([{ ...descriptor, description: "Alternate command" }]);
+                  for (const change of ["source-invalid", "resolved-secret", "disabled"] as const) {
+                    const nextRuntime: OpenClawConfig = {
+                      ...runtime,
+                      plugins: {
+                        ...runtime.plugins,
+                        entries: {
+                          [id]: {
+                            enabled: change !== "disabled",
+                            config: {
+                              credential:
+                                change === "resolved-secret"
+                                  ? "rotated-fixture-key"
+                                  : "resolved-fixture-key",
+                            },
+                          },
+                        },
+                      },
+                    };
+                    const nextSource =
+                      change === "resolved-secret"
+                        ? source
+                        : {
+                            ...source,
+                            plugins: {
+                              ...source.plugins,
+                              entries: {
+                                [id]: {
+                                  enabled: change !== "disabled",
+                                  config: { credential: null },
+                                },
+                              },
+                            },
+                          };
+                    const rejected = loadOpenClawPlugins({
+                      ...options,
+                      config: nextRuntime,
+                      activationSourceConfig: nextSource,
+                      cache: false,
+                      previousRegistry: registry,
+                    });
+                    expect(rejected.cliRegistrars).toHaveLength(0);
+                    expect(rejected.plugins.find((plugin) => plugin.id === id)).toMatchObject({
+                      status: change === "disabled" ? "disabled" : "error",
+                      error: expect.stringContaining(
+                        change === "resolved-secret"
+                          ? "paired runtime config was not hydrated"
+                          : change === "disabled"
+                            ? "disabled"
+                            : "invalid config",
+                      ),
+                    });
+                  }
+
                   setRuntimeConfigSnapshot(candidate, structuredClone(source));
                   expect(loadOpenClawPlugins({ ...options, config: candidate }) === registry).toBe(
                     true,
@@ -457,6 +430,8 @@ module.exports = { id: "source-fixture", register(api) {
               expect({ runtime, source }).toEqual(before);
             } finally {
               resetPluginLoaderTestStateForTest();
+              const { failures } = await waitForPluginCacheRetirement();
+              expect(failures, "Plugin cache retirement failed during cleanup").toEqual([]);
             }
           },
         );

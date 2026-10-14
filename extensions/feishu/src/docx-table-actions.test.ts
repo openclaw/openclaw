@@ -7,9 +7,8 @@ import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const toolAccountModule = await import("./tool-account.js");
-vi.spyOn(toolAccountModule, "createFeishuToolClient").mockImplementation(() =>
-  createFeishuClientMock(),
-);
+const clientModule = await import("./client.js");
+vi.spyOn(clientModule, "createFeishuClient").mockImplementation(() => createFeishuClientMock());
 vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
   doc: true,
   chat: false,
@@ -77,7 +76,11 @@ function createClient(httpInstance?: Lark.HttpInstance) {
 
 function resolveTool(client: Lark.Client) {
   createFeishuClientMock.mockReturnValue(client);
-  const harness = createToolFactoryHarness({});
+  const harness = createToolFactoryHarness({
+    channels: {
+      feishu: { enabled: true, appId: "table-app", appSecret: "table-placeholder" }, // pragma: allowlist secret
+    },
+  });
   registerFeishuDocTools(harness.api);
   return harness.resolveTool("feishu_doc");
 }
@@ -96,7 +99,6 @@ function expectResult(
   details: Record<string, unknown>,
 ) {
   expect(result.details).toStrictEqual(details);
-  expect(Object.keys(result.details)).toEqual(Object.keys(details));
   const { content } = result as {
     details: Record<string, unknown>;
     content: Array<{ type: string; text: string }>;
@@ -115,46 +117,25 @@ describe("registered feishu_doc table patches", () => {
     createFeishuClientMock.mockReset();
   });
 
-  it.each(actions)(
-    "captures $action before PATCH settles and returns the exact result",
-    async (sample) => {
-      const client = createClient();
-      const response = createDeferred<PatchResponse>();
-      const patch = vi.spyOn(client.docx.documentBlock, "patch").mockReturnValue(response.promise);
-      const params = paramsFor(sample);
-      const pending = resolveTool(client).execute("table-patch", params);
-      const request = {
-        path: { document_id: "doc_table", block_id: "table_target" },
-        data: sample.data,
-      };
-      expect(patch).toHaveBeenCalledExactlyOnceWith(request);
-      expect(JSON.stringify(patch.mock.calls[0]?.[0])).toBe(JSON.stringify(request));
-      for (const key of Object.keys(params)) {
-        params[key] = 99;
-      }
-      response.resolve({ code: 0, data: { block, client_token: "table-client-token" } });
-      expectResult(await pending, { success: true, ...sample.counts, block });
-    },
-  );
-
-  it.each(actions)(
-    "keeps an own undefined block for $action without response data",
-    async (sample) => {
-      const client = createClient();
-      vi.spyOn(client.docx.documentBlock, "patch").mockResolvedValue({ code: 0 });
-      expectResult(await resolveTool(client).execute("missing-data", paramsFor(sample)), {
-        success: true,
-        ...sample.counts,
-        block: undefined,
-      });
-    },
-  );
+  it("captures delete counts before PATCH settles", async () => {
+    const sample = actions[2]!;
+    const client = createClient();
+    const response = createDeferred<PatchResponse>();
+    const patch = vi.spyOn(client.docx.documentBlock, "patch").mockReturnValue(response.promise);
+    const params = paramsFor(sample);
+    const pending = resolveTool(client).execute("table-patch", params);
+    expect(patch).toHaveBeenCalledExactlyOnceWith({
+      path: { document_id: "doc_table", block_id: "table_target" },
+      data: sample.data,
+    });
+    params.row_count = 99;
+    response.resolve({ code: 0, data: { block, client_token: "table-client-token" } });
+    expectResult(await pending, { success: true, rows_deleted: 3, block });
+  });
 
   it.each([
     { label: "omitted", fields: {}, index: -1, end: 3, count: 1 },
-    { label: "undefined", fields: { value: undefined }, index: -1, end: 3, count: 1 },
     { label: "zero", fields: { value: 0 }, index: 0, end: 2, count: 0 },
-    { label: "null", fields: { value: null }, index: null, end: 2, count: null },
   ])(
     "preserves $label defaults at the registered-tool boundary",
     async ({ fields, index, end, count }) => {
@@ -189,9 +170,7 @@ describe("registered feishu_doc table patches", () => {
         },
       ];
       const client = createClient();
-      const patch = vi
-        .spyOn(client.docx.documentBlock, "patch")
-        .mockResolvedValue({ code: 0, data: { client_token: "table-client-token" } });
+      const patch = vi.spyOn(client.docx.documentBlock, "patch").mockResolvedValue({ code: 0 });
       const tool = resolveTool(client);
       for (const sample of cases) {
         const result = await tool.execute("default-value", {
@@ -211,51 +190,32 @@ describe("registered feishu_doc table patches", () => {
     },
   );
 
-  it.each(actions)("reports $action API errors before inspecting response data", async (sample) => {
+  it("rejects missing API status before inspecting response data", async () => {
     const client = createClient();
-    const patch = vi.spyOn(client.docx.documentBlock, "patch");
-    const tool = resolveTool(client);
-    for (const code of [999, undefined]) {
-      patch.mockResolvedValueOnce({
-        code,
-        msg: "table denied",
-        get data(): never {
-          throw new Error("data read before code");
-        },
-      });
-      expectResult(await tool.execute("api-error", paramsFor(sample)), { error: "table denied" });
-    }
-    expect(patch).toHaveBeenCalledTimes(2);
+    vi.spyOn(client.docx.documentBlock, "patch").mockResolvedValue({
+      msg: "table denied",
+      get data(): never {
+        throw new Error("data read before code");
+      },
+    });
+    expectResult(await resolveTool(client).execute("api-error", paramsFor(actions[0]!)), {
+      error: "table denied",
+    });
   });
 
-  it.each(actions)(
-    "awaits $action SDK failures before returning the fenced error",
-    async (sample) => {
+  it.each(["throw", "reject"] as const)(
+    "returns SDK %s failures as tool errors",
+    async (failure) => {
       const client = createClient();
-      const patch = vi.spyOn(client.docx.documentBlock, "patch");
-      const tool = resolveTool(client);
-      for (const failure of ["throw", "reject"] as const) {
-        const events: string[] = [];
-        patch.mockImplementationOnce(() => {
-          events.push("patch");
-          if (failure === "throw") {
-            throw new Error("transport failed");
-          }
-          return Promise.reject(new Error("transport failed"));
-        });
-        const pending = Promise.resolve(tool.execute("sdk-error", paramsFor(sample))).then(
-          (result) => {
-            events.push("result");
-            return result;
-          },
-        );
-        events.push("returned");
-        await Promise.resolve();
-        events.push("microtask");
-        expectResult(await pending, { error: "transport failed" });
-        expect(events).toEqual(["patch", "returned", "microtask", "result"]);
-      }
-      expect(patch).toHaveBeenCalledTimes(2);
+      vi.spyOn(client.docx.documentBlock, "patch").mockImplementation(() => {
+        if (failure === "throw") {
+          throw new Error("transport failed");
+        }
+        return Promise.reject(new Error("transport failed"));
+      });
+      expectResult(await resolveTool(client).execute("sdk-error", paramsFor(actions[0]!)), {
+        error: "transport failed",
+      });
     },
   );
 

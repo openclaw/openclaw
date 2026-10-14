@@ -290,12 +290,7 @@ describe("agent session streaming", () => {
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["--import", "tsx", "src/entry.ts"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
+        useRepoCli: false,
         providerBaseUrl: `${provider.baseUrl}/v1`,
         providerMode: "mock-openai",
         primaryModel: MODEL_REF,

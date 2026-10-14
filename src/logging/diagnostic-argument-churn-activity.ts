@@ -1,3 +1,5 @@
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
+
 // A semantic-stall clock remains continuous across short model/tool handoffs,
 // but later model progress wins once no churn observation refreshes this lease.
 const ARGUMENT_CHURN_CONTINUITY_WINDOW_MS = 60_000;
@@ -16,13 +18,8 @@ export type DiagnosticArgumentChurnActivity = {
 // same-millisecond ties between progress, churn observations, and merged refs.
 let diagnosticActivitySequence = 0;
 
-function nextDiagnosticActivitySequence(): number {
-  diagnosticActivitySequence += 1;
-  return diagnosticActivitySequence;
-}
-
 export function recordDiagnosticActivityProgress(activity: DiagnosticArgumentChurnActivity): void {
-  activity.lastProgressSequence = nextDiagnosticActivitySequence();
+  activity.lastProgressSequence = ++diagnosticActivitySequence;
 }
 
 export type DiagnosticArgumentChurnObservationParams = {
@@ -35,18 +32,6 @@ export type DiagnosticArgumentChurnObservationParams = {
   policyWaitToken?: symbol;
   now?: number;
 };
-
-function resolveCurrentArgumentChurnOwner<T extends { sequence: number }>(
-  owners: Iterable<T>,
-): T | undefined {
-  let currentOwner: T | undefined;
-  for (const owner of owners) {
-    if (!currentOwner || owner.sequence > currentOwner.sequence) {
-      currentOwner = owner;
-    }
-  }
-  return currentOwner;
-}
 
 function hasArgumentChurnContinuityExpired(
   activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
@@ -69,15 +54,14 @@ function hasArgumentChurnContinuityExpired(
   );
 }
 
-export function resolveArgumentChurnProgress<T extends { runId: string; sequence: number }>(
+export function resolveArgumentChurnProgress(
   activity: DiagnosticArgumentChurnActivity & {
     lastProgressAt: number;
     lastProgressReason?: string;
   },
-  owners: Iterable<T>,
+  currentOwnerRunId: string | undefined,
   now: number,
 ): { lastProgressAt: number; lastProgressReason?: string } {
-  const currentOwnerRunId = resolveCurrentArgumentChurnOwner(owners)?.runId;
   if (
     currentOwnerRunId !== undefined &&
     activity.argumentChurnPolicyWaitRunId === currentOwnerRunId &&
@@ -88,13 +72,7 @@ export function resolveArgumentChurnProgress<T extends { runId: string; sequence
   const startedAt = activity.argumentChurnStartedAt;
   const belongsToOwner =
     startedAt !== undefined && currentOwnerRunId === activity.argumentChurnRunId;
-  if (!belongsToOwner) {
-    return {
-      lastProgressAt: activity.lastProgressAt,
-      lastProgressReason: activity.lastProgressReason,
-    };
-  }
-  if (hasArgumentChurnContinuityExpired(activity, now)) {
+  if (!belongsToOwner || hasArgumentChurnContinuityExpired(activity, now)) {
     return {
       lastProgressAt: activity.lastProgressAt,
       lastProgressReason: activity.lastProgressReason,
@@ -137,7 +115,7 @@ function recordArgumentChurnActivityObservation(
     activity.argumentChurnRunId = params.runId;
   }
   activity.argumentChurnObservationAt = params.now;
-  activity.argumentChurnObservationSequence = nextDiagnosticActivitySequence();
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
 }
 
 function updateArgumentChurnPolicyWait(
@@ -186,7 +164,7 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
 ): void {
   const now = params.now ?? Date.now();
   const runId = params.runId?.trim() || undefined;
-  const currentOwnerRunId = resolveCurrentArgumentChurnOwner(owners)?.runId;
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
   if (currentOwnerRunId !== undefined && currentOwnerRunId !== runId) {
     return;
   }
@@ -279,7 +257,7 @@ export function clearArgumentChurnActivity(
   const cleared = activity.argumentChurnStartedAt !== undefined;
   activity.argumentChurnStartedAt = undefined;
   activity.argumentChurnObservationAt = params.now ?? Date.now();
-  activity.argumentChurnObservationSequence = nextDiagnosticActivitySequence();
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
   activity.argumentChurnRunId = params.runId;
   return cleared;
 }

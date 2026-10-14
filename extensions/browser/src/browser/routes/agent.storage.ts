@@ -1,73 +1,25 @@
-/**
- * Browser storage and context mutation routes.
- *
- * Parses and applies cookies, local/session storage, geolocation, permissions,
- * and related browser-context mutations for the selected profile/tab.
- */
 import {
   asNullableRecord,
-  normalizeOptionalString,
+  readNonBlankString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  readBody,
-  resolveProfileContext,
-  resolveTargetIdFromBody,
-  resolveTargetIdFromQuery,
-  withPlaywrightRouteContext,
-} from "./agent.shared.js";
+import { createPlaywrightRouteRegistrar } from "./agent.playwright.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { jsonError, readHttpOrigin, toBoolean, toStringOrEmpty } from "./utils.js";
+import type { BrowserRouteRegistrar } from "./types.js";
+import { readHttpOrigin, toBoolean, toStringOrEmpty } from "./utils.js";
 
 type StorageKind = "local" | "session";
 
-type GeolocationOptions = {
-  clear: boolean;
-  latitude?: number;
-  longitude?: number;
-  accuracy?: number;
-  origin?: string;
-};
+type CookieSetOptions = Parameters<PwAiModule["cookiesSetViaPlaywright"]>[0]["cookie"];
 
-type CookieSetOptions = {
-  name: string;
-  value: string;
-  url?: string;
-  domain?: string;
-  path?: string;
-  expires?: number;
-  httpOnly?: boolean;
-  secure?: boolean;
-  sameSite?: "Lax" | "None" | "Strict";
-};
-
-type PlaywrightStorageMutationContext = Parameters<
-  Parameters<typeof withPlaywrightRouteContext>[0]["run"]
->[0];
-
-/** Parse the supported browser storage bucket names. */
-function parseStorageKind(raw: string): StorageKind | null {
+function parseStorageKind(raw: string): StorageKind {
   if (raw === "local" || raw === "session") {
     return raw;
   }
-  return null;
-}
-
-/** Parse storage mutations once at the request boundary. */
-function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserResponse) {
-  const body = readBody(req);
-  const kind = parseStorageKind(toStringOrEmpty(req.params.kind));
-  const targetId = resolveTargetIdFromBody(body);
-  if (!kind) {
-    jsonError(res, 400, "kind must be local|session");
-    return null;
-  }
-  return { body, parsed: { kind, targetId } };
+  throw new Error("kind must be local|session");
 }
 
 function assertRange(
@@ -97,7 +49,6 @@ function readOptionalHttpOrigin(raw: unknown): string | undefined {
   return origin;
 }
 
-/** Parse cookie options accepted by browser storage mutation routes. */
 function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
   return {
     name: toStringOrEmpty(cookie.name),
@@ -115,8 +66,7 @@ function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOption
   };
 }
 
-/** Parse geolocation override options accepted by context mutation routes. */
-function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
+function parseGeolocationOptions(body: Record<string, unknown>) {
   const clear = toBoolean(body.clear) ?? false;
   if (clear) {
     return { clear };
@@ -138,401 +88,179 @@ function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOpti
   if (accuracy !== undefined && accuracy < 0) {
     throw new Error("accuracy must be non-negative.");
   }
-  if (!clear && (latitude === undefined || longitude === undefined)) {
+  if (latitude === undefined || longitude === undefined) {
     throw new Error("latitude and longitude are required (or set clear=true)");
   }
   return { clear, latitude, longitude, accuracy, origin };
 }
 
-/** Register storage and browser-context mutation endpoints. */
 export function registerBrowserAgentStorageRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
-  const runMutation = async (
-    req: BrowserRequest,
-    res: BrowserResponse,
-    targetId: string | undefined,
-    feature: string,
-    run: (context: PlaywrightStorageMutationContext) => Promise<void | Record<string, unknown>>,
-    existingSessionUnsupported?: string,
-  ) => {
-    const profileCtx = existingSessionUnsupported
-      ? resolveProfileContext(req, res, ctx)
-      : undefined;
-    if (profileCtx === null) {
-      return;
-    }
-    if (
-      existingSessionUnsupported &&
-      profileCtx &&
-      getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp
-    ) {
-      return jsonError(res, 501, existingSessionUnsupported);
-    }
-    // Mutations intentionally do not apply the tab-scoped read/export URL guard.
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      profileCtx,
-      targetId,
-      feature,
-      run: async (context) => {
-        const result = await run(context);
-        context.signal.throwIfAborted();
-        res.json({ ok: true, targetId: context.tab.targetId, ...result });
-      },
-    });
-  };
+  const register = createPlaywrightRouteRegistrar(app, ctx, "state");
 
-  app.get("/cookies", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "cookies",
-      enforceCurrentUrlAllowed: true,
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        const result = await pw.cookiesGetViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId, ...result });
-      },
-    });
-  });
+  register(
+    "get",
+    "/cookies",
+    "cookies",
+    () =>
+      (pw, { cdpUrl, targetId }) =>
+        pw.cookiesGetViaPlaywright({ cdpUrl, targetId }),
+  );
 
-  app.post("/cookies/set", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+  register("post", "/cookies/set", "cookies set", (body) => {
     const cookie = asNullableRecord(body.cookie);
     if (!cookie) {
-      return jsonError(res, 400, "cookie is required");
+      throw new Error("cookie is required");
     }
-    let parsedCookie: CookieSetOptions;
-    try {
-      parsedCookie = parseCookieSetOptions(cookie);
-    } catch (err) {
-      return jsonError(res, 400, formatErrorMessage(err));
-    }
-
-    await runMutation(req, res, targetId, "cookies set", async ({ cdpUrl, tab, pw }) => {
-      await pw.cookiesSetViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        cookie: parsedCookie,
-      });
-    });
+    const parsedCookie = parseCookieSetOptions(cookie);
+    return (pw, target) => pw.cookiesSetViaPlaywright({ ...target, cookie: parsedCookie });
   });
 
-  app.post("/cookies/set-many", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+  register("post", "/cookies/set-many", "cookies set-many", (body) => {
     const rawCookies = body.cookies;
     if (!Array.isArray(rawCookies) || rawCookies.length === 0) {
-      return jsonError(res, 400, "cookies must be a non-empty array");
+      throw new Error("cookies must be a non-empty array");
     }
     const cookieRecords: Record<string, unknown>[] = [];
     for (const cookie of rawCookies) {
-      if (!cookie || typeof cookie !== "object" || Array.isArray(cookie)) {
-        return jsonError(res, 400, "cookies must contain only cookie objects");
+      const record = asNullableRecord(cookie);
+      if (!record) {
+        throw new Error("cookies must contain only cookie objects");
       }
-      cookieRecords.push(cookie as Record<string, unknown>);
+      cookieRecords.push(record);
     }
-    let cookies: CookieSetOptions[];
-    try {
-      cookies = cookieRecords.map((cookie) => parseCookieSetOptions(cookie));
-    } catch (err) {
-      return jsonError(res, 400, formatErrorMessage(err));
-    }
-
-    await runMutation(
-      req,
-      res,
-      targetId,
-      "cookies set-many",
-      async ({ cdpUrl, tab, pw, signal }) => {
-        const { added } = await pw.cookiesSetManyViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          cookies,
-          signal,
-        });
-        return { added };
-      },
-    );
+    const cookies = cookieRecords.map(parseCookieSetOptions);
+    return async (pw, target, signal) => {
+      const { added } = await pw.cookiesSetManyViaPlaywright({ ...target, cookies, signal });
+      return { added };
+    };
   });
 
-  app.post("/cookies/clear", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+  register(
+    "post",
+    "/cookies/clear",
+    "cookies clear",
+    () => (pw, target) => pw.cookiesClearViaPlaywright(target),
+  );
 
-    await runMutation(req, res, targetId, "cookies clear", async ({ cdpUrl, tab, pw }) => {
-      await pw.cookiesClearViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-      });
-    });
+  register("get", "/storage/:kind", "storage get", (input, params) => {
+    const kind = parseStorageKind(toStringOrEmpty(params.kind));
+    const key = readNonBlankString(readStringValue(input.key) ?? toStringOrEmpty(input.key));
+    return (pw, { cdpUrl, targetId }) =>
+      pw.storageGetViaPlaywright({ cdpUrl, targetId, kind, key });
   });
 
-  app.get("/storage/:kind", async (req, res) => {
-    const kind = parseStorageKind(toStringOrEmpty(req.params.kind));
-    if (!kind) {
-      return jsonError(res, 400, "kind must be local|session");
-    }
-    const targetId = resolveTargetIdFromQuery(req.query);
-    const key = toStringOrEmpty(req.query.key);
-
-    await withPlaywrightRouteContext({
-      req,
-      res,
-      ctx,
-      targetId,
-      feature: "storage get",
-      enforceCurrentUrlAllowed: true,
-      run: async ({ cdpUrl, tab, pw, signal }) => {
-        const result = await pw.storageGetViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          kind,
-          key: normalizeOptionalString(key),
-        });
-        signal.throwIfAborted();
-        res.json({ ok: true, targetId: tab.targetId, ...result });
-      },
-    });
-  });
-
-  app.post("/storage/:kind/set", async (req, res) => {
-    const mutation = parseStorageMutationFromRequest(req, res);
-    if (!mutation) {
-      return;
-    }
-    const key = toStringOrEmpty(mutation.body.key);
+  register("post", "/storage/:kind/set", "storage set", (body, params) => {
+    const kind = parseStorageKind(toStringOrEmpty(params.kind));
+    const key = readNonBlankString(readStringValue(body.key) ?? toStringOrEmpty(body.key));
     if (!key) {
-      return jsonError(res, 400, "key is required");
+      throw new Error("key is required");
     }
-    const value = typeof mutation.body.value === "string" ? mutation.body.value : "";
-
-    await runMutation(
-      req,
-      res,
-      mutation.parsed.targetId,
-      "storage set",
-      async ({ cdpUrl, tab, pw }) => {
-        await pw.storageSetViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          kind: mutation.parsed.kind,
-          key,
-          value,
-        });
-      },
-    );
+    const value = typeof body.value === "string" ? body.value : "";
+    return (pw, target) => pw.storageSetViaPlaywright({ ...target, kind, key, value });
   });
 
-  app.post("/storage/:kind/clear", async (req, res) => {
-    const mutation = parseStorageMutationFromRequest(req, res);
-    if (!mutation) {
-      return;
-    }
-
-    await runMutation(
-      req,
-      res,
-      mutation.parsed.targetId,
-      "storage clear",
-      async ({ cdpUrl, tab, pw }) => {
-        await pw.storageClearViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          kind: mutation.parsed.kind,
-        });
-      },
-    );
+  register("post", "/storage/:kind/clear", "storage clear", (_body, params) => {
+    const kind = parseStorageKind(toStringOrEmpty(params.kind));
+    return (pw, target) => pw.storageClearViaPlaywright({ ...target, kind });
   });
 
-  app.post("/set/offline", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+  register("post", "/set/offline", "offline", (body) => {
     const offline = toBoolean(body.offline);
     if (offline === undefined) {
-      return jsonError(res, 400, "offline is required");
+      throw new Error("offline is required");
     }
-
-    await runMutation(req, res, targetId, "offline", async ({ cdpUrl, tab, pw }) => {
-      await pw.setOfflineViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        offline,
-      });
-    });
+    return (pw, target) => pw.setOfflineViaPlaywright({ ...target, offline });
   });
 
-  app.post("/set/headers", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const headers =
-      body.headers && typeof body.headers === "object" && !Array.isArray(body.headers)
-        ? (body.headers as Record<string, unknown>)
-        : null;
+  register("post", "/set/headers", "headers", (body) => {
+    const headers = asNullableRecord(body.headers);
     if (!headers) {
-      return jsonError(res, 400, "headers is required");
+      throw new Error("headers is required");
     }
-
     const parsed: Record<string, string> = {};
     for (const [k, v] of Object.entries(headers)) {
       if (typeof v === "string") {
         parsed[k] = v;
       }
     }
-
-    await runMutation(req, res, targetId, "headers", async ({ cdpUrl, tab, pw }) => {
-      await pw.setExtraHTTPHeadersViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        headers: parsed,
-      });
-    });
+    return (pw, target) => pw.setExtraHTTPHeadersViaPlaywright({ ...target, headers: parsed });
   });
 
-  app.post("/set/credentials", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+  register("post", "/set/credentials", "http credentials", (body) => {
     const clear = toBoolean(body.clear) ?? false;
     const username = toStringOrEmpty(body.username) || undefined;
     const password = readStringValue(body.password);
-
-    await runMutation(req, res, targetId, "http credentials", async ({ cdpUrl, tab, pw }) => {
-      await pw.setHttpCredentialsViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        username,
-        password,
-        clear,
-      });
-    });
+    return (pw, target) =>
+      pw.setHttpCredentialsViaPlaywright({ ...target, username, password, clear });
   });
 
-  app.post("/set/geolocation", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    let geolocation: GeolocationOptions;
-    try {
-      geolocation = parseGeolocationOptions(body);
-    } catch (err) {
-      return jsonError(res, 400, formatErrorMessage(err));
-    }
-
-    await runMutation(req, res, targetId, "geolocation", async ({ cdpUrl, tab, pw }) => {
-      await pw.setGeolocationViaPlaywright({
-        cdpUrl,
-        targetId: tab.targetId,
-        ...geolocation,
-      });
-    });
+  register("post", "/set/geolocation", "geolocation", (body) => {
+    const geolocation = parseGeolocationOptions(body);
+    return (pw, target) => pw.setGeolocationViaPlaywright({ ...target, ...geolocation });
   });
 
-  app.post("/set/media", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const schemeRaw = toStringOrEmpty(body.colorScheme);
-    const colorScheme =
-      schemeRaw === "dark" || schemeRaw === "light" || schemeRaw === "no-preference"
-        ? schemeRaw
-        : schemeRaw === "none"
-          ? null
-          : undefined;
-    if (colorScheme === undefined) {
-      return jsonError(res, 400, "colorScheme must be dark|light|no-preference|none");
-    }
+  register(
+    "post",
+    "/set/media",
+    "media emulation",
+    (body) => {
+      const schemeRaw = toStringOrEmpty(body.colorScheme);
+      const colorScheme =
+        schemeRaw === "dark" || schemeRaw === "light" || schemeRaw === "no-preference"
+          ? schemeRaw
+          : schemeRaw === "none"
+            ? null
+            : undefined;
+      if (colorScheme === undefined) {
+        throw new Error("colorScheme must be dark|light|no-preference|none");
+      }
+      return (pw, target) => pw.emulateMediaViaPlaywright({ ...target, colorScheme });
+    },
+    EXISTING_SESSION_LIMITS.emulation,
+  );
 
-    await runMutation(
-      req,
-      res,
-      targetId,
-      "media emulation",
-      async ({ cdpUrl, tab, pw }) => {
-        await pw.emulateMediaViaPlaywright({ cdpUrl, targetId: tab.targetId, colorScheme });
-      },
-      EXISTING_SESSION_LIMITS.emulation,
-    );
-  });
+  register(
+    "post",
+    "/set/timezone",
+    "timezone",
+    (body) => {
+      const timezoneId = toStringOrEmpty(body.timezoneId);
+      if (!timezoneId) {
+        throw new Error("timezoneId is required");
+      }
+      return (pw, target) => pw.setTimezoneViaPlaywright({ ...target, timezoneId });
+    },
+    EXISTING_SESSION_LIMITS.emulation,
+  );
 
-  app.post("/set/timezone", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const timezoneId = toStringOrEmpty(body.timezoneId);
-    if (!timezoneId) {
-      return jsonError(res, 400, "timezoneId is required");
-    }
+  register(
+    "post",
+    "/set/locale",
+    "locale",
+    (body) => {
+      const locale = toStringOrEmpty(body.locale);
+      if (!locale) {
+        throw new Error("locale is required");
+      }
+      return (pw, target) => pw.setLocaleViaPlaywright({ ...target, locale });
+    },
+    EXISTING_SESSION_LIMITS.emulation,
+  );
 
-    await runMutation(
-      req,
-      res,
-      targetId,
-      "timezone",
-      async ({ cdpUrl, tab, pw }) => {
-        await pw.setTimezoneViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          timezoneId,
-        });
-      },
-      EXISTING_SESSION_LIMITS.emulation,
-    );
-  });
-
-  app.post("/set/locale", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const locale = toStringOrEmpty(body.locale);
-    if (!locale) {
-      return jsonError(res, 400, "locale is required");
-    }
-
-    await runMutation(
-      req,
-      res,
-      targetId,
-      "locale",
-      async ({ cdpUrl, tab, pw }) => {
-        await pw.setLocaleViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          locale,
-        });
-      },
-      EXISTING_SESSION_LIMITS.emulation,
-    );
-  });
-
-  app.post("/set/device", async (req, res) => {
-    const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
-    const name = toStringOrEmpty(body.name);
-    if (!name) {
-      return jsonError(res, 400, "name is required");
-    }
-
-    await runMutation(
-      req,
-      res,
-      targetId,
-      "device emulation",
-      async ({ cdpUrl, tab, pw, signal }) => {
-        await pw.setDeviceViaPlaywright({
-          cdpUrl,
-          targetId: tab.targetId,
-          name,
-          signal,
-        });
-      },
-      EXISTING_SESSION_LIMITS.emulation,
-    );
-  });
+  register(
+    "post",
+    "/set/device",
+    "device emulation",
+    (body) => {
+      const name = toStringOrEmpty(body.name);
+      if (!name) {
+        throw new Error("name is required");
+      }
+      return (pw, target, signal) => pw.setDeviceViaPlaywright({ ...target, name, signal });
+    },
+    EXISTING_SESSION_LIMITS.emulation,
+  );
 }

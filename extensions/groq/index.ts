@@ -5,11 +5,25 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  buildAssistantMessage,
+  createEmptyTransportUsage,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const GROQ_OVERSIZED_RECOVERY_MODEL_ID = "llama-3.3-70b-versatile";
 const GROQ_FALLBACK_MAX_TOKENS = 1_024;
+
+function wrapGroqParsedReasoning(streamFn: StreamFn | undefined): StreamFn {
+  return createPayloadPatchStreamWrapper(streamFn, ({ model, payload }) => {
+    if (model.id.startsWith("qwen/") && model.reasoning && payload.reasoning_effort !== "none") {
+      // Groq Qwen otherwise inlines reasoning in visible content; GPT OSS has a separate contract.
+      payload.reasoning_format = "parsed";
+    }
+  });
+}
 
 function hasWireMaxTokens(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -101,26 +115,18 @@ function wrapGroqOversizedRequestRecovery(
           }
         }
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         output.push({
           type: "error",
           reason: "error",
           error: {
-            role: "assistant",
-            content: [],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "error",
-            errorMessage: error instanceof Error ? error.message : String(error),
-            timestamp: Date.now(),
+            ...buildAssistantMessage({
+              model,
+              content: [],
+              usage: createEmptyTransportUsage(),
+              stopReason: "error",
+            }),
+            errorMessage,
           },
         });
       } finally {
@@ -140,10 +146,10 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Groq",
     docsPath: "/providers/groq",
-    catalog: { liveModelDiscovery: true },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
     wrapStreamFn: (ctx) =>
       wrapGroqOversizedRequestRecovery(
-        ctx.streamFn,
+        wrapGroqParsedReasoning(ctx.streamFn),
         // Older compatible hosts omit this provenance. Only a known discovered default
         // is safe to replace; an unknown value could be a user-configured cap.
         ctx.modelId === GROQ_OVERSIZED_RECOVERY_MODEL_ID &&
@@ -151,6 +157,7 @@ export default defineSingleProviderPluginEntry({
           !hasExplicitMaxTokens(ctx.model?.params) &&
           ctx.model?.maxTokensSource === "discovered",
       ),
+    wrapSimpleCompletionStreamFn: (ctx) => wrapGroqParsedReasoning(ctx.streamFn),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(groqMediaUnderstandingProvider);

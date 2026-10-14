@@ -26,8 +26,10 @@ OpenAI-compatible API. OpenClaw supports both browser OAuth and API-key auth.
 
 ```bash
 openclaw plugins install @openclaw/chutes-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -66,11 +68,10 @@ the Chutes catalog.
 
 When Chutes auth is available, OpenClaw queries `GET /v1/models` with that
 credential and uses the discovered models, cached for 5 minutes per
-credential. On an expired/unauthorized key (HTTP 401), OpenClaw retries once
-without credentials. If discovery still returns no rows, fails, or returns any
-other non-2xx status, it falls back to the bundled static catalog (both API-key
-and OAuth discovery use this same path). If discovery fails at startup, the
-static catalog is used automatically.
+credential. A rejected credential produces a catalog authentication failure;
+OpenClaw does not retry anonymously. Other request failures produce an
+unavailable catalog outcome, not a successful static list. A successful empty
+response stays empty. API-key and OAuth discovery use this same path.
 
 Token prices come from the native [Chutes model catalog](https://llm.chutes.ai/v1/models).
 Its numeric prompt, completion, and cached-input rates are already in USD per

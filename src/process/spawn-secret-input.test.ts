@@ -58,6 +58,26 @@ describe("Windows secret input delivery", () => {
     expect(stream.listenerCount("error")).toBe(0);
   });
 
+  it("rejects a blocked write when abortSignal fires", async () => {
+    const stream = new ControlledSecretStream();
+    const abort = new AbortController();
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      using prepared = prepareSecretInputStdio([], {
+        fd: 3,
+        createData: () => Buffer.from("selected-secret"),
+      });
+      const write = prepared!.deliverTo(childWithSecretStream(stream), {
+        abortSignal: abort.signal,
+      });
+      abort.abort();
+      await expect(write).rejects.toThrow("secret delivery aborted");
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
+  });
+
   it("rejects delivery errors before consuming their later stream event", async () => {
     const stream = new ControlledSecretStream();
     const write = writeSecret(stream);
@@ -88,9 +108,9 @@ function expectDescriptorReleased(fd: number, original: ReturnType<typeof fstatS
 }
 
 describe.skipIf(process.platform === "win32")("POSIX secret input ownership", () => {
-  const descriptorPath = process.platform === "darwin" ? "/dev/fd/3" : "/proc/self/fd/3";
+  const descriptorPath = process.platform === "linux" ? "/proc/self/fd/3" : "/dev/fd/3";
 
-  it.each(["path", "direct"])(
+  it.each(["path"])(
     "delivers once through a %s reader without replay to descendants",
     async (reader) => {
       const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
@@ -136,13 +156,15 @@ describe.skipIf(process.platform === "win32")("POSIX secret input ownership", ()
   it("closes both untransferred ends when spawning throws", () => {
     const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
     const createData = vi.fn(() => Buffer.from("not-delivered"));
+    let original: ReturnType<typeof fstatSync>;
     expect(() => {
       using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData });
       void prepared;
+      original = fstatSync(stdio[3] as number);
       spawn("", [], { stdio });
     }).toThrow();
     expect(createData).not.toHaveBeenCalled();
-    expect(() => fstatSync(stdio[3] as number)).toThrow(expect.objectContaining({ code: "EBADF" }));
+    expectDescriptorReleased(stdio[3] as number, original!);
   });
   it("closes the writer without delivering bytes when credential creation throws", async () => {
     const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];

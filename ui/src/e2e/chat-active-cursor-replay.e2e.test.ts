@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -149,38 +151,37 @@ suite.define(() => {
       await expect
         .poll(async () => (await cursorRequests()).length)
         .toBeGreaterThan(cursorRequestsBeforeReturn);
-      const activeRunState = () =>
-        page.locator('openclaw-chat-pane[aria-hidden="false"]').evaluate((element) => {
-          const state = (
-            element as HTMLElement & {
-              state?: {
-                chatRunId?: string | null;
-                chatStreamSegments?: Array<{ text?: string }>;
-              };
-            }
-          ).state;
-          return {
-            runId: state?.chatRunId ?? null,
-            segmentTexts: state?.chatStreamSegments?.map((segment) => segment.text) ?? [],
-          };
-        });
-      await expect.poll(activeRunState).toEqual({
-        runId: "run-b",
-        segmentTexts: expect.arrayContaining([commentary]),
-      });
       await page
-        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-thread p')
+        .locator('openclaw-chat-pane[aria-hidden="false"]')
+        .getByRole("button", { name: "Stop generating", exact: true })
+        .waitFor({ timeout: 10_000 });
+      await page
+        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-group.assistant .chat-text')
         .getByText(commentary, { exact: true })
         .waitFor({ timeout: 10_000 });
+      expect(
+        await page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .chat-group.assistant .chat-text')
+          .allTextContents()
+          .then((texts) => texts.map((text) => text.trim())),
+      ).toEqual([commentary]);
+      expect(
+        await page
+          .locator('openclaw-chat-pane[aria-hidden="false"] .chat-bubble')
+          .getByText(commentary, { exact: true })
+          .count(),
+      ).toBe(1);
       expect((await cursorRequests()).at(-1)).toMatchObject({
         cursor: "cursor-b",
         sessionKey: sessionB,
       });
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "cursor-active-commentary-return.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "cursor-active-commentary-return.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-thread'),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

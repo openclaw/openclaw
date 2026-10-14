@@ -9,14 +9,28 @@ title: "Browser login"
 ## Manual login (recommended)
 
 When a site requires login, sign in manually in the host browser's `openclaw`
-profile. Do not give the model your credentials: automated logins often
-trigger anti-bot defenses and can lock the account.
+profile. Automated logins often trigger anti-bot defenses and can lock the account.
+
+For an owner-authorized task, the agent may use owner-supplied credentials through
+browser form fills. Keep credentials out of chat and replies.
 
 Use the host browser (manual login) for both reading (search/threads) and
 posting on X/Twitter and other bot-sensitive sites. Sandboxed browser sessions
 are more likely to trigger bot detection.
 
 Back to the main browser docs: [Browser](/tools/browser).
+
+## Passkeys in headless browsers
+
+Chrome's invisible passkey dialog can block clicks and key presses in headless
+mode. OpenClaw dismisses modal passkey requests in headless Chromium so the site
+can offer another sign-in method, such as a password or one-time code. Passkey
+autofill requests and headed browsers keep Chrome's normal behavior.
+
+Use a headed profile to sign in with a passkey or security key. If a page already
+requested a passkey before OpenClaw connected, navigate to the same URL to reload
+it. Attached and remote browsers must report their headless launch flags; a
+failed detection is logged. `existing-session` profiles are unchanged.
 
 ## Which Chrome profile is used?
 

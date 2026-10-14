@@ -1,5 +1,13 @@
 import type { toolIcons } from "../../components/icons-tools.ts";
 
+export type PendingInputStatus =
+  | "queued"
+  | "waitingForWorkerSetup"
+  | "waitingForWorkspaceSync"
+  | "resuming"
+  | "cancelled"
+  | "interrupted";
+
 type SystemNoticeKind = {
   icon: keyof typeof toolIcons;
   labelKey: string;
@@ -7,6 +15,7 @@ type SystemNoticeKind = {
   // producer emits variable, informative text (reasons, doctor hints) that must
   // stay visible; the notice then keeps the message body under the kind label.
   summaryKey?: string;
+  pendingSummaryKeys?: Partial<Record<PendingInputStatus, string>>;
   // Collapse the variable body behind a disclosure. For bulky injected context
   // (skill instructions, continuation summaries) the label stays visible while
   // the payload opens on demand.
@@ -21,6 +30,15 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
     icon: "cpu",
     labelKey: "chat.systemNotice.restartRecovery.label",
     summaryKey: "chat.systemNotice.restartRecovery.summary",
+    pendingSummaryKeys: {
+      interrupted: "chat.systemNotice.restartRecovery.interrupted",
+      cancelled: "chat.systemNotice.restartRecovery.cancelled",
+    },
+  },
+  cron_failure_repair: {
+    icon: "cpu",
+    labelKey: "chat.systemNotice.automationRecovery.label",
+    summaryKey: "chat.systemNotice.automationRecovery.summary",
   },
   "restart-sentinel": {
     icon: "cpu",
@@ -29,6 +47,12 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
   cli_harness_context: {
     icon: "cpu",
     labelKey: "chat.systemNotice.cliHarnessContext.label",
+    collapsedBody: true,
+    startsTurn: false,
+  },
+  claude_cli_task_notification: {
+    icon: "cpu",
+    labelKey: "chat.systemNotice.claudeCliTaskNotification.label",
     collapsedBody: true,
     startsTurn: false,
   },

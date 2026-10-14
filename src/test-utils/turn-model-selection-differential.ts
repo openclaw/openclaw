@@ -13,18 +13,18 @@ type TurnModelSelectionSource =
   | "default";
 
 export type TurnModelSelectionVerdict = ModelRef & { source: TurnModelSelectionSource };
-export type TurnModelSelectionPath = "reply" | "status" | "harness" | "command";
+type TurnModelSelectionPath = "reply" | "status" | "harness" | "command";
 
 export const TURN_MODEL_DEFAULT_REF = { provider: "openai", model: "default-model" } as const;
 export const TURN_MODEL_CHANNEL_REF = {
   provider: "anthropic",
   model: "channel-model",
 } as const;
-export const TURN_MODEL_SESSION_REF = { provider: "google", model: "session-model" } as const;
+const TURN_MODEL_SESSION_REF = { provider: "google", model: "session-model" } as const;
 const TURN_MODEL_PARENT_REF = { provider: "xai", model: "parent-model" } as const;
 export const TURN_MODEL_OVERRIDE_REF = { provider: "mistral", model: "turn-model" } as const;
 const TURN_MODEL_LOCKED_REF = { provider: "cohere", model: "locked-model" } as const;
-export const TURN_MODEL_PERSISTED_CHANNEL_REF = {
+const TURN_MODEL_PERSISTED_CHANNEL_REF = {
   provider: "anthropic",
   model: "persisted-channel-model",
 } as const;
@@ -32,7 +32,7 @@ export const TURN_MODEL_LIVE_CHANNEL_REF = {
   provider: "google",
   model: "live-channel-model",
 } as const;
-export const TURN_MODEL_PERSISTED_PEER_REF = {
+const TURN_MODEL_PERSISTED_PEER_REF = {
   provider: "xai",
   model: "persisted-peer-model",
 } as const;
@@ -265,6 +265,29 @@ export const TURN_MODEL_DIFFERENTIAL_FIXTURES: TurnModelDifferentialFixture[] = 
       status: turnModelVerdict(TURN_MODEL_PARENT_REF),
       harness: turnModelVerdict(TURN_MODEL_PARENT_REF),
       command: turnModelVerdict(TURN_MODEL_PARENT_REF),
+    },
+  },
+  {
+    name: "explicit default rejects stale child and parent overrides",
+    ctx: { Provider: undefined, Surface: undefined, ChatType: "group" },
+    child: {
+      ...createTurnModelEntry({
+        chatType: "group",
+        groupId: "thread",
+        parentSessionKey: "agent:main:telegram:group:parent",
+        override: TURN_MODEL_SESSION_REF,
+      }),
+      modelOverrideSource: "default",
+    },
+    parent: {
+      key: "agent:main:telegram:group:parent",
+      entry: createTurnModelEntry({ sessionId: "parent-session", override: TURN_MODEL_PARENT_REF }),
+    },
+    expected: {
+      reply: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
+      status: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
+      harness: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
+      command: turnModelVerdict(TURN_MODEL_DEFAULT_REF),
     },
   },
 ];

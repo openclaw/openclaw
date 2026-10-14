@@ -13,10 +13,7 @@ import { snapshotOwnCronRecord } from "./own-record.js";
 
 type UnknownRecord = Record<string, unknown>;
 
-function normalizeTrimmedStringArray(
-  value: unknown,
-  options?: { allowNull?: boolean },
-): string[] | null | undefined {
+function normalizeTrimmedStringArray(value: unknown): string[] | null | undefined {
   if (Array.isArray(value)) {
     const normalized = normalizeTrimmedStringList(value);
     if (normalized.length === 0 && value.length > 0) {
@@ -24,10 +21,7 @@ function normalizeTrimmedStringArray(
     }
     return normalized;
   }
-  if (options?.allowNull && value === null) {
-    return null;
-  }
-  return undefined;
+  return value === null ? null : undefined;
 }
 
 function normalizeCommandEnv(value: unknown): Record<string, string> {
@@ -73,61 +67,30 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
-  } else if (kindRaw === "command") {
-    next.kind = "command";
-  } else if (kindRaw === "script") {
-    next.kind = "script";
-  } else if (kindRaw === "skillcollectionreview") {
-    next.kind = "skillCollectionReview";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
-  if (typeof next.message === "string") {
-    const trimmed = normalizeOptionalString(next.message) ?? "";
-    if (trimmed) {
-      next.message = trimmed;
-    } else {
-      next.message = "";
-    }
-  }
-  if (typeof next.text === "string") {
-    const trimmed = normalizeOptionalString(next.text) ?? "";
-    if (trimmed) {
-      next.text = trimmed;
-    } else {
-      next.text = "";
+  for (const field of ["message", "text"] as const) {
+    if (typeof next[field] === "string") {
+      next[field] = normalizeOptionalString(next[field]) ?? "";
     }
   }
   if (typeof next.script === "string") {
     next.script = next.script.trim();
   }
-  if ("model" in next) {
-    if (next.model === null) {
-      next.model = null;
-    } else {
-      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-      if (model !== undefined) {
-        next.model = model;
+  for (const field of ["model", "thinking"] as const) {
+    // Preserve explicit null so patches can clear stored overrides,
+    // matching the fallbacks/toolsAllow clear paths.
+    if (field in next && next[field] !== null) {
+      const value = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next[field]);
+      if (value !== undefined) {
+        next[field] = value;
       } else {
-        delete next.model;
+        delete next[field];
       }
     }
   }
-  if ("thinking" in next) {
-    // Preserve an explicit null so patches can clear a stored thinking override,
-    // matching the model/fallbacks/toolsAllow clear paths.
-    if (next.thinking === null) {
-      next.thinking = null;
-    } else {
-      const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
-      if (thinking !== undefined) {
-        next.thinking = thinking;
-      } else {
-        delete next.thinking;
-      }
-    }
-  }
-  if ("timeoutSeconds" in next) {
+  if ("timeoutSeconds" in next && next.timeoutSeconds !== null) {
     const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
     if (timeoutSeconds !== undefined) {
       next.timeoutSeconds = timeoutSeconds;
@@ -135,25 +98,19 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.timeoutSeconds;
     }
   }
-  if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
-    if (fallbacks !== undefined) {
-      next.fallbacks = fallbacks;
-    } else {
-      delete next.fallbacks;
-    }
-  }
-  if ("toolsAllow" in next) {
-    const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
-    if (toolsAllow !== undefined) {
-      next.toolsAllow = toolsAllow;
-    } else {
-      delete next.toolsAllow;
+  for (const field of ["fallbacks", "toolsAllow"] as const) {
+    if (field in next) {
+      const value = normalizeTrimmedStringArray(next[field]);
+      if (value !== undefined) {
+        next[field] = value;
+      } else {
+        delete next[field];
+      }
     }
   }
   if ("argv" in next) {
     const argv = normalizeCronCommandArgv(next.argv);
-    if (Array.isArray(argv) && argv.length > 0) {
+    if (argv) {
       next.argv = argv;
     } else {
       delete next.argv;
@@ -184,20 +141,14 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.noOutputTimeoutSeconds;
     }
   }
-  if ("outputMaxBytes" in next) {
-    const outputMaxBytes = parseOptionalField(TimeoutSecondsFieldSchema, next.outputMaxBytes);
-    if (outputMaxBytes !== undefined && outputMaxBytes > 0) {
-      next.outputMaxBytes = Math.floor(outputMaxBytes);
-    } else {
-      delete next.outputMaxBytes;
-    }
-  }
-  if ("toolBudget" in next) {
-    const toolBudget = parseOptionalField(TimeoutSecondsFieldSchema, next.toolBudget);
-    if (toolBudget !== undefined && toolBudget > 0) {
-      next.toolBudget = Math.floor(toolBudget);
-    } else {
-      delete next.toolBudget;
+  for (const field of ["outputMaxBytes", "toolBudget"] as const) {
+    if (field in next) {
+      const value = parseOptionalField(TimeoutSecondsFieldSchema, next[field]);
+      if (value !== undefined && value > 0) {
+        next[field] = Math.floor(value);
+      } else {
+        delete next[field];
+      }
     }
   }
   if (
@@ -210,56 +161,33 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     next.kind = "agentTurn";
     next.message = next.text;
   }
-  if (next.kind === "systemEvent") {
-    delete next.message;
-    delete next.model;
-    delete next.fallbacks;
-    delete next.thinking;
-    delete next.timeoutSeconds;
-    delete next.lightContext;
-    delete next.allowUnsafeExternalContent;
-    delete next.argv;
-    delete next.cwd;
-    delete next.env;
-    delete next.input;
-    delete next.noOutputTimeoutSeconds;
-    delete next.outputMaxBytes;
-    delete next.script;
-    delete next.toolBudget;
-  } else if (next.kind === "agentTurn") {
-    delete next.text;
-    delete next.argv;
-    delete next.cwd;
-    delete next.env;
-    delete next.input;
-    delete next.noOutputTimeoutSeconds;
-    delete next.outputMaxBytes;
-    delete next.script;
-    delete next.toolBudget;
-  } else if (next.kind === "command") {
-    delete next.text;
-    delete next.message;
-    delete next.model;
-    delete next.fallbacks;
-    delete next.thinking;
-    delete next.lightContext;
-    delete next.allowUnsafeExternalContent;
-    delete next.script;
-    delete next.toolBudget;
-  } else if (next.kind === "script") {
-    delete next.text;
-    delete next.message;
-    delete next.model;
-    delete next.fallbacks;
-    delete next.thinking;
-    delete next.lightContext;
-    delete next.allowUnsafeExternalContent;
-    delete next.argv;
-    delete next.cwd;
-    delete next.env;
-    delete next.input;
-    delete next.noOutputTimeoutSeconds;
-    delete next.outputMaxBytes;
+  const kind = next.kind;
+  if (kind === "systemEvent" || kind === "agentTurn" || kind === "command" || kind === "script") {
+    if (kind !== "systemEvent") {
+      delete next.text;
+    } else {
+      delete next.timeoutSeconds;
+    }
+    if (kind !== "agentTurn") {
+      delete next.message;
+      delete next.model;
+      delete next.fallbacks;
+      delete next.thinking;
+      delete next.lightContext;
+      delete next.allowUnsafeExternalContent;
+    }
+    if (kind !== "command") {
+      delete next.argv;
+      delete next.cwd;
+      delete next.env;
+      delete next.input;
+      delete next.noOutputTimeoutSeconds;
+      delete next.outputMaxBytes;
+    }
+    if (kind !== "script") {
+      delete next.script;
+      delete next.toolBudget;
+    }
   }
   return { ...next };
 }

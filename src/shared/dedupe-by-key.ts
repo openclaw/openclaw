@@ -1,4 +1,7 @@
-export function dedupeByKey<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
+export function indexFirstByKey<T>(
+  items: readonly T[],
+  keyOf: (item: T) => string,
+): Map<string, T> {
   const deduped = new Map<string, T>();
   for (const item of items) {
     const key = keyOf(item);
@@ -6,5 +9,9 @@ export function dedupeByKey<T>(items: readonly T[], keyOf: (item: T) => string):
       deduped.set(key, item);
     }
   }
-  return [...deduped.values()];
+  return deduped;
+}
+
+export function dedupeByKey<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
+  return [...indexFirstByKey(items, keyOf).values()];
 }

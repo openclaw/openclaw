@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-// Fixture npm registry server for plugin E2E scenarios.
 import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -32,7 +31,8 @@ function normalizeUpstreamRegistry(raw) {
 const upstreamRegistry = normalizeUpstreamRegistry(
   process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM || process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL,
 );
-const mergeUpstream = process.env.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM === "1";
+const upstreamMergeMode = process.env.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM;
+const mergeUpstream = upstreamMergeMode === "1" || upstreamMergeMode === "versions";
 const distTagOverrides = new Map(
   (process.env.OPENCLAW_NPM_REGISTRY_DIST_TAGS ?? "")
     .split(",")
@@ -65,8 +65,11 @@ const packages = new Map();
 
 function readPackageManifest(tarballPath, packageName) {
   try {
+    // GNU tar treats Windows drive letters as remote archive hosts. Keep the
+    // archive argument local, as in the prerelease artifact validator.
     const packageJson = JSON.parse(
-      execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+      execFileSync("tar", ["-xOf", path.basename(tarballPath), "package/package.json"], {
+        cwd: path.dirname(tarballPath),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }),
@@ -203,39 +206,71 @@ async function metadataWithPublishedVersions(entry, baseUrl) {
     );
   }
   const published = metadataForProxy(await upstreamMetadata.get(entry.packageName), baseUrl);
+  // Baseline installs keep published tags; candidate installs select each local
+  // package's release while retaining published versions for older dependencies.
+  const distTags =
+    upstreamMergeMode === "versions"
+      ? { ...published["dist-tags"], ...local["dist-tags"] }
+      : { ...local["dist-tags"], ...published["dist-tags"] };
   return {
     ...published,
     ...local,
     "dist-tags": {
-      ...local["dist-tags"],
-      ...published["dist-tags"],
+      ...distTags,
       ...Object.fromEntries(distTagOverrides),
     },
     versions: { ...published.versions, ...local.versions },
   };
 }
 
-function decodePackagePath(pathname) {
+function findPackageForPath(pathname) {
   try {
-    return decodeURIComponent(pathname.slice(1));
+    return packages.get(decodeURIComponent(pathname.slice(1)));
   } catch {
     return undefined;
   }
 }
 
-function findPackageForPath(pathname) {
-  const packageName = decodePackagePath(pathname);
-  return packageName === undefined ? undefined : packages.get(packageName);
+function findPackageTargetForPath(pathname) {
+  for (const entry of packages.values()) {
+    const prefixes = [
+      `/${entry.encodedPackageName}/`,
+      `/${encodeURIComponent(entry.packageName)}/`,
+      `/${entry.packageName}/`,
+    ];
+    const prefix = prefixes.find((candidate) =>
+      pathname.toLowerCase().startsWith(candidate.toLowerCase()),
+    );
+    if (!prefix) {
+      continue;
+    }
+    const encodedTarget = pathname.slice(prefix.length);
+    if (!encodedTarget || encodedTarget.includes("/")) {
+      continue;
+    }
+    try {
+      return { entry, target: decodeURIComponent(encodedTarget) };
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function findTarballForPath(pathname) {
   for (const entry of packages.values()) {
-    const prefix = `/${entry.encodedPackageName}/-/`;
-    if (!pathname.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const prefixes = [`/${entry.encodedPackageName}/-/`, `/${entry.packageName}/-/`];
+    const prefix = prefixes.find((candidate) =>
+      pathname.toLowerCase().startsWith(candidate.toLowerCase()),
+    );
+    if (!prefix) {
       continue;
     }
-    for (const versionEntry of entry.versions.values()) {
-      if (pathname.endsWith(`/${versionEntry.tarballName}`)) {
+    const requestedName = pathname.slice(prefix.length);
+    const packageBaseName = entry.packageName.split("/").at(-1);
+    for (const [version, versionEntry] of entry.versions) {
+      const canonicalTarballName = `${packageBaseName}-${version}.tgz`;
+      if (requestedName === versionEntry.tarballName || requestedName === canonicalTarballName) {
         return versionEntry;
       }
     }
@@ -352,6 +387,18 @@ async function handleRequest(request, response) {
     return;
   }
 
+  const packageTarget = findPackageTargetForPath(url.pathname);
+  if (packageTarget) {
+    const metadata = await metadataWithPublishedVersions(packageTarget.entry, baseUrl);
+    const version = metadata["dist-tags"]?.[packageTarget.target] ?? packageTarget.target;
+    const manifest = metadata.versions?.[version];
+    if (manifest) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(manifest)}\n`);
+      return;
+    }
+  }
+
   const tarballEntry = findTarballForPath(url.pathname);
   if (tarballEntry) {
     response.writeHead(200, {
@@ -384,5 +431,14 @@ const server = http.createServer((request, response) => {
 const bindHost = process.env.OPENCLAW_NPM_REGISTRY_BIND_HOST || "127.0.0.1";
 const requestedPort = Number(process.env.OPENCLAW_NPM_REGISTRY_PORT || 0);
 server.listen(requestedPort, bindHost, () => {
-  fs.writeFileSync(portFile, String(server.address().port));
+  // Callers use file existence as readiness; publish only the complete port.
+  const tempFile = `${portFile}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tempFile, String(server.address().port));
+    fs.renameSync(tempFile, portFile);
+    // Node test callers own IPC; shell callers retain the atomic port-file receipt.
+    process.send?.(server.address().port);
+  } finally {
+    fs.rmSync(tempFile, { force: true });
+  }
 });

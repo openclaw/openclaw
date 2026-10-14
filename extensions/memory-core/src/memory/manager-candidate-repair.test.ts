@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -15,9 +17,9 @@ describe("automatic candidates during provenance repair", () => {
     closeAllMemorySearchManagers,
   });
 
-  it.each([false, true])(
-    "returns promptly while a large rebuild is pending (startup catch-up: %s)",
-    async (startupCatchup) => {
+  it.for([false, true])(
+    "returns before a pending rebuild finishes (startup catch-up: %s)",
+    async (startupCatchup, { signal }) => {
       const projectKey = "github.com/example/project";
       await fs.writeFile(
         path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -46,7 +48,7 @@ describe("automatic candidates during provenance repair", () => {
       }
       const initial = await fixture.getFreshManager(cfg, "cli");
       await initial.sync({ reason: "cli", force: true });
-      const db = Reflect.get(initial, "db") as DatabaseSync;
+      const db = memoryIndexFixtureWriter(initial);
       // Older indexes have neither classified provenance nor a chunking version.
       db.exec("DELETE FROM memory_index_chunk_provenance; DELETE FROM memory_embedding_cache");
       const row = db
@@ -61,18 +63,27 @@ describe("automatic candidates during provenance repair", () => {
       await initial.close();
 
       const gate = createDeferred<void>();
+      const batchEntered = createDeferred<void>();
       fixture.provider.providerRuntimeBatchGate = gate.promise;
-      const upgraded = await fixture.getFreshManager(cfg);
+      fixture.provider.providerRuntimeBatchEntered = () => batchEntered.resolve();
+      // Native test cancellation must release both rendezvous before manager teardown.
+      const abort = () => {
+        batchEntered.resolve();
+        gate.resolve();
+      };
+      signal.addEventListener("abort", abort, { once: true });
       const candidates: Promise<unknown>[] = [];
       try {
+        signal.throwIfAborted();
+        const upgraded = await fixture.getFreshManager(cfg);
         expect(upgraded.status().custom?.indexIdentity).toMatchObject({
           status: "mismatched",
           reason: "index provenance classifier changed",
         });
         if (startupCatchup) {
-          await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1), {
-            timeout: 10_000,
-          });
+          await batchEntered.promise;
+          signal.throwIfAborted();
+          expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         }
         let completed = 0;
         for (const lookup of [
@@ -86,31 +97,35 @@ describe("automatic candidates during provenance repair", () => {
             }),
           );
         }
-        await vi.waitFor(() => expect(completed).toBe(2));
+        // Both public lookups must complete while the repair is still gated.
         expect(await Promise.all(candidates)).toEqual([[], []]);
-        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1), {
-          timeout: 10_000,
-        });
+        expect(completed).toBe(2);
+        await batchEntered.promise;
+        signal.throwIfAborted();
+        expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         expect(upgraded.status().dirty).toBe(true);
+        gate.resolve();
+        await upgraded.sync({ reason: "test-repair-complete" });
+        expect(upgraded.status().dirty).toBe(false);
+        const expected = [
+          expect.objectContaining({
+            projectKey,
+            triggers: "release local",
+            provenance: expect.objectContaining({ originClass: "agent" }),
+          }),
+        ];
+        expect(
+          await upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+        ).toEqual(expected);
+        expect(await upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] })).toEqual(
+          expected,
+        );
       } finally {
+        signal.removeEventListener("abort", abort);
+        fixture.provider.providerRuntimeBatchEntered = null;
         gate.resolve();
         await Promise.allSettled(candidates);
       }
-      await upgraded.sync({ reason: "test-repair-complete" });
-      expect(upgraded.status().dirty).toBe(false);
-      const expected = [
-        expect.objectContaining({
-          projectKey,
-          triggers: "release local",
-          provenance: expect.objectContaining({ originClass: "agent" }),
-        }),
-      ];
-      expect(
-        await upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-      ).toEqual(expected);
-      expect(await upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] })).toEqual(
-        expected,
-      );
     },
   );
 
@@ -124,7 +139,7 @@ describe("automatic candidates during provenance repair", () => {
     const initial = await fixture.getFreshManager(ftsConfig, "cli");
     await initial.sync({ reason: "cli", force: true });
     // The existing migration will invalidate these sources on the next open.
-    const initialDb = Reflect.get(initial, "db") as DatabaseSync;
+    const initialDb = memoryIndexFixtureWriter(initial);
     initialDb.exec("DELETE FROM memory_index_chunk_provenance");
     await initial.close();
 
@@ -142,14 +157,24 @@ describe("automatic candidates during provenance repair", () => {
     };
     const runSync = owner.runSync.bind(upgraded);
     let pendingRetry: Promise<void> | undefined;
-    const retryGate = vi.spyOn(owner, "runSync").mockImplementation((params) => {
-      retryStarted.resolve();
-      pendingRetry = retry.promise.then(() => runSync(params));
-      return pendingRetry;
-    });
+    const retryGate = vi
+      .spyOn(owner, "runSync")
+      .mockImplementation((params) => {
+        retryStarted.resolve();
+        pendingRetry = retry.promise.then(() => runSync(params));
+        return pendingRetry;
+      })
+      .mockImplementationOnce(runSync);
     // This is the same public sync admission used by detached startup catch-up.
-    // Attach rejection handling immediately; its failed initialization is expected.
-    const startup = upgraded.sync({ reason: "session-startup-catchup" });
+    // Optional initialization now falls back successfully. Fail its first real
+    // keyword generation so candidate repair must still admit a separate retry.
+    const startupFailure = new Error("startup progress callback failed");
+    const startup = upgraded.sync({
+      reason: "session-startup-catchup",
+      progress: () => {
+        throw startupFailure;
+      },
+    });
     const startupOutcome = startup.then(
       () => undefined,
       (error: unknown) => error,
@@ -169,6 +194,8 @@ describe("automatic candidates during provenance repair", () => {
       await Promise.resolve();
       initialization.resolve();
       await retryStarted.promise;
+      expect(await startupOutcome).toBe(startupFailure);
+      expect(retryGate).toHaveBeenCalledTimes(2);
       // Give teardown a turn to finish while the admitted retry remains gated.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -176,7 +203,6 @@ describe("automatic candidates during provenance repair", () => {
       expect(closeSettled).toBe(false);
       retry.resolve();
       await closing;
-      expect(await startupOutcome).toBeInstanceOf(Error);
 
       // Observable persistence proof: close did not merely cancel or abandon
       // the retry; its classified candidates survive a fresh manager open.

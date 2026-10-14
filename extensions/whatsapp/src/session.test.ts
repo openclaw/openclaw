@@ -14,37 +14,10 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
-
-const { envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
-  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-    this: { options: unknown; dispatch: () => void },
-    options: unknown,
-  ) {
-    this.options = options;
-    this.dispatch = () => {};
-  }),
-  proxyAgentCtor: vi.fn(function MockProxyAgent(
-    this: { options: unknown; dispatch: () => void },
-    options: unknown,
-  ) {
-    this.options = options;
-    this.dispatch = () => {};
-  }),
-}));
-
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
-vi.mock("undici", async () => {
-  const actual = await vi.importActual<typeof import("undici")>("undici");
-  return {
-    ...actual,
-    EnvHttpProxyAgent: envHttpProxyAgentCtor,
-    ProxyAgent: proxyAgentCtor,
-  };
-});
 
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
@@ -77,13 +50,6 @@ function createTempAuthDir(prefix: string) {
   return path.resolve(
     fsSync.mkdtempSync(path.join((process.env.TMPDIR ?? "/tmp").replace(/\/+$/, ""), `${prefix}-`)),
   );
-}
-
-function createTempCaFile(contents: string): string {
-  const dir = createTempAuthDir("openclaw-wa-proxy-ca");
-  const caFile = path.join(dir, "proxy-ca.pem");
-  fsSync.writeFileSync(caFile, contents, "utf8");
-  return caFile;
 }
 
 function mockFsOpenForCredsWrites(params?: {
@@ -157,10 +123,8 @@ function firstMockCall(
 }
 
 function readLastSocketOptions(): {
-  agent?: unknown;
   connectTimeoutMs?: number;
   defaultQueryTimeoutMs?: number;
-  fetchAgent?: unknown;
   fireInitQueries?: boolean;
   keepAliveIntervalMs?: number;
   printQRInTerminal?: boolean;
@@ -175,10 +139,8 @@ function readLastSocketOptions(): {
     throw new Error("expected Baileys socket options");
   }
   return options as {
-    agent?: unknown;
     connectTimeoutMs?: number;
     defaultQueryTimeoutMs?: number;
-    fetchAgent?: unknown;
     fireInitQueries?: boolean;
     keepAliveIntervalMs?: number;
     printQRInTerminal?: boolean;
@@ -201,16 +163,6 @@ function expectRuntimeLogContaining(
   expect(runtime.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
-function installUndiciRuntimeDeps(): void {
-  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-    Agent: vi.fn(),
-    EnvHttpProxyAgent: envHttpProxyAgentCtor,
-    Pool: vi.fn(),
-    ProxyAgent: proxyAgentCtor,
-    fetch: vi.fn(),
-  };
-}
-
 describe("web session", () => {
   beforeAll(async () => {
     ({
@@ -227,15 +179,11 @@ describe("web session", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    envHttpProxyAgentCtor.mockClear();
-    proxyAgentCtor.mockClear();
-    installUndiciRuntimeDeps();
     resetBaileysMocks();
     resetLoadConfigMock();
   });
 
   afterEach(async () => {
-    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     await waitForCredsSaveQueue();
     resetLogger();
     setLoggerOverride(null);
@@ -464,16 +412,6 @@ describe("web session", () => {
     expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49153/ws/chat");
   });
 
-  it("preserves explicit Baileys WebSocket URL options over environment", async () => {
-    vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, "ws://127.0.0.1:49153/ws/chat");
-
-    await createWaSocket(false, false, {
-      waWebSocketUrl: "ws://127.0.0.1:49154/ws/chat",
-    });
-
-    expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49154/ws/chat");
-  });
-
   it("ignores blank Baileys WebSocket URL environment overrides", async () => {
     vi.stubEnv(OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV, " ");
 
@@ -499,113 +437,6 @@ describe("web session", () => {
     });
 
     expect(readLastSocketOptions().waWebSocketUrl).toBe("ws://127.0.0.1:49154/ws/chat");
-  });
-
-  it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    const agent = requireValue(
-      passed.agent as { constructor: { name: string } } | undefined,
-      "WebSocket proxy agent",
-    );
-    const fetchAgent = requireValue(passed.fetchAgent, "fetch proxy agent");
-    expect(fetchAgent).not.toBe(agent);
-    expect(typeof (fetchAgent as { dispatch?: unknown }).dispatch).toBe("function");
-  });
-
-  it("adds managed proxy CA trust to WhatsApp env proxy agents", async () => {
-    const caFile = createTempCaFile("whatsapp-managed-proxy-ca");
-    vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    const agent = requireValue(
-      passed.agent as { constructor: { name: string } } | undefined,
-      "WebSocket proxy agent",
-    );
-    expect(agent.constructor.name).toBe("ProxylineNodeProxyAgent");
-    expect(proxyAgentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-proxy-ca" }),
-      }),
-    );
-  });
-
-  it("adds managed proxy CA trust to WhatsApp env fetch dispatchers", async () => {
-    const caFile = createTempCaFile("whatsapp-managed-env-proxy-ca");
-    vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
-    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    expect(passed.agent).toBeUndefined();
-    expect(envHttpProxyAgentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-env-proxy-ca" }),
-      }),
-    );
-  });
-
-  it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://upper-proxy.test:8080");
-    vi.stubEnv("https_proxy", "http://lower-proxy.test:8080");
-
-    await createWaSocket(false, false);
-
-    const agent = requireValue(
-      readLastSocketOptions().agent as { getProxyForUrl?: (url: string) => string } | undefined,
-      "WebSocket proxy agent",
-    );
-    expect(agent.getProxyForUrl?.("https://mmg.whatsapp.net/")).toContain("lower-proxy.test");
-  });
-
-  it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    expect(passed.agent).toBeUndefined();
-    requireValue(passed.fetchAgent, "fetch proxy agent");
-  });
-
-  it("does not create a proxy agent when no env proxy is configured", async () => {
-    for (const key of [
-      "ALL_PROXY",
-      "all_proxy",
-      "HTTP_PROXY",
-      "http_proxy",
-      "HTTPS_PROXY",
-      "https_proxy",
-    ]) {
-      vi.stubEnv(key, "");
-    }
-
-    await createWaSocket(false, false);
-
-    const passed = readLastSocketOptions();
-    expect(passed.agent).toBeUndefined();
-    expect(passed.fetchAgent).toBeUndefined();
-  });
-
-  it("waits for connection open", async () => {
-    const ev = new EventEmitter();
-    const promise = waitForWaConnection(
-      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      { timeout: "none" },
-    );
-    ev.emit("connection.update", { connection: "open" });
-    await expect(promise).resolves.toBeUndefined();
   });
 
   it("keeps one-argument callers on the old no-timeout wait policy", async () => {
@@ -684,11 +515,7 @@ describe("web session", () => {
       JSON.stringify({ me: { id: "12345@s.whatsapp.net" } }),
       "utf-8",
     );
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     logWebSelfId(authDir, runtime as never, true);
 
@@ -707,11 +534,7 @@ describe("web session", () => {
       }),
       "utf-8",
     );
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     logWebSelfId(authDir, runtime as never, true);
 
@@ -1005,7 +828,9 @@ describe("web session", () => {
             fsSync.constants.O_NOFOLLOW |
             fsSync.constants.O_NONBLOCK,
         );
-        expect(parentHandle.chmod).toHaveBeenCalledWith(0o700);
+        // fs-safe 0.8.0 skips the directory chmod when the dir already has the
+        // target mode; the fixture starts at 0o700, so no chmod is dispatched.
+        expect(parentHandle.chmod).not.toHaveBeenCalled();
         expect(parentHandle.close).toHaveBeenCalledTimes(1);
         expect(fsSync.statSync(authDir).mode & 0o777).toBe(0o700);
       }

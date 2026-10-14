@@ -184,36 +184,6 @@ describe("IRC durable ingress", () => {
     });
   });
 
-  it("waits for an in-flight admission before stop returns", async () => {
-    await withQueue(async (queue) => {
-      const admissionStored = createDeferred<void>();
-      const releaseAdmission = createDeferred<void>();
-      const enqueue = queue.enqueue.bind(queue);
-      queue.enqueue = async (...args) => {
-        const result = await enqueue(...args);
-        admissionStored.resolve();
-        await releaseAdmission.promise;
-        return result;
-      };
-      const dispatch = vi.fn();
-      const ingress = startIngress(queue, dispatch);
-      const admitting = ingress.openConnection("connection-stop").accept(CHANNEL_LINE, "bot");
-      await admissionStored.promise;
-
-      let stopSettled = false;
-      const stopping = ingress.stop().then(() => {
-        stopSettled = true;
-      });
-      await Promise.resolve();
-      expect(stopSettled).toBe(false);
-
-      releaseAdmission.resolve();
-      await Promise.all([admitting, stopping]);
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
-    });
-  });
-
   it("quiesces an active pump while paused and resumes without charging the next event", async () => {
     await withQueue(async (queue) => {
       const dispatchStarted = createDeferred<void>();

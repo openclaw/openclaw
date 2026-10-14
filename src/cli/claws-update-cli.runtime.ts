@@ -1,5 +1,6 @@
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { readClawStatus } from "../claws/lifecycle-state.js";
+import { withAuthoredAgentRoster } from "../claws/migrate-validation.js";
 import { preflightClawPackage } from "../claws/packages.js";
 import { readClawManifestFile } from "../claws/reader.js";
 import { CLAW_OUTPUT_STABILITY } from "../claws/types.js";
@@ -18,10 +19,15 @@ import {
   logClawExperimentalWarning,
   logClawUpdatePlanSummary,
 } from "./claws-cli-output.js";
+import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type { ClawsUpdateOptions } from "./claws-cli.js";
+import { offlineClawAction } from "./claws-cli.state-owner.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
+import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
 
-export async function runClawsUpdateCommand(
+export const runClawsUpdateCommand = offlineClawAction("update", runClawsUpdateCommandLocal);
+
+async function runClawsUpdateCommandLocal(
   target: string,
   opts: ClawsUpdateOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -59,8 +65,10 @@ export async function runClawsUpdateCommand(
     });
     return;
   }
-  const config = listedMcpServers.config;
-
+  const config = withAuthoredAgentRoster(
+    listedMcpServers.runtimeConfig ?? listedMcpServers.config,
+    listedMcpServers.sourceConfigBeforeMigrations,
+  );
   let source = opts.from;
   if (!source) {
     const database = await openExistingOpenClawStateDatabaseReadOnly();
@@ -177,11 +185,13 @@ export async function runClawsUpdateCommand(
       },
       {
         config,
+        reloadPlugins: await resolvePluginBatchReload(),
         sourceMcpServers: listedMcpServers.mcpServers,
         consentPlanIntegrity: opts.planIntegrity,
         packagePreflight: preflightClawPackage,
         runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
+          waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
           add: async (input) => await callGatewayFromCli("cron.add", {}, input),
           get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
           remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),

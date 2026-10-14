@@ -7,7 +7,10 @@ import { normalizeCodexAppServerArgs } from "./launch-args.js";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="ephemeral"';
 
-export function resolveCodexAppServerHomeDir(agentDir: string): string {
+export function resolveCodexAppServerHomeDir(agentDir: string | undefined): string {
+  if (!agentDir) {
+    throw new Error("Agent-scoped Codex requires an OpenClaw agent directory");
+  }
   return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
 }
 
@@ -23,9 +26,12 @@ export function resolveCodexAppServerUserHomeDir(
 /** Resolves the local CODEX_HOME used when starting one app-server connection. */
 export function resolveCodexAppServerLocalHomeDir(
   startOptions: CodexAppServerStartOptions,
-  agentDir: string,
+  agentDir: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  if (startOptions.codexHome) {
+    return startOptions.codexHome;
+  }
   const configured = startOptions.env?.CODEX_HOME;
   if (configured?.trim()) {
     return configured;
@@ -47,4 +53,19 @@ export function withEphemeralCodexAuthStore(params: {
   }
   const args = normalizeCodexAppServerArgs(startOptions.args, CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE);
   return args === startOptions.args ? startOptions : { ...startOptions, args };
+}
+
+export function withClearedEnvironmentVariables(
+  startOptions: CodexAppServerStartOptions,
+  envVars: readonly string[],
+): CodexAppServerStartOptions {
+  const clearEnv = startOptions.clearEnv ?? [];
+  const missingEnvVars = envVars.filter((envVar) => !clearEnv.includes(envVar));
+  if (missingEnvVars.length === 0) {
+    return startOptions;
+  }
+  return {
+    ...startOptions,
+    clearEnv: [...clearEnv, ...missingEnvVars],
+  };
 }

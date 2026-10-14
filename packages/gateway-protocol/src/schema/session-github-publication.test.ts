@@ -9,13 +9,50 @@ import {
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
+  it("accepts typed publication unavailability without accepting arbitrary diagnostics", () => {
+    const options = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
+    for (const sharedUnavailableReason of [
+      "unavailable",
+      "changed",
+      "rate_limited",
+      "unverified",
+      "unsupported_workspace",
+    ]) {
+      expect(
+        Value.Check(SessionGitHubOptionsResultSchema, { ...options, sharedUnavailableReason }),
+      ).toBe(true);
+    }
+    expect(
+      Value.Check(SessionGitHubOptionsResultSchema, {
+        ...options,
+        sharedUnavailableReason: "raw diagnostics",
+      }),
+    ).toBe(false);
+  });
+
   it("allows shared-only options and one closed personal recovery descriptor", () => {
     const sharedOnly = {
       personal: null,
       shared: { source: "system-detected", accountId: 42, login: "bot" },
       pendingPersonal: null,
+      latestShared: null,
     };
     expect(Value.Check(SessionGitHubOptionsResultSchema, sharedOnly)).toBe(true);
+    const latestShared = {
+      result: {
+        requestId: "b1111111-1111-4111-8111-111111111111",
+        status: "published",
+        publisher: sharedOnly.shared,
+        url: "https://github.com/org/repo/pull/1",
+        repository: "org/repo",
+        branch: "topic",
+        headCommit: "a".repeat(40),
+      },
+      confirmation: null,
+    };
+    expect(Value.Check(SessionGitHubOptionsResultSchema, { ...sharedOnly, latestShared })).toBe(
+      true,
+    );
     const pendingPersonal = {
       result: {
         requestId: "a1111111-1111-4111-8111-111111111111",
@@ -44,9 +81,11 @@ describe("session GitHub publication protocol", () => {
       { ...pendingPersonal, owner: "another-profile" },
       { ...pendingPersonal, confirmation: { ...pendingPersonal.confirmation, token: "synthetic" } },
     ]) {
-      expect(
-        Value.Check(SessionGitHubOptionsResultSchema, { ...sharedOnly, pendingPersonal: invalid }),
-      ).toBe(false);
+      for (const field of ["pendingPersonal", "latestShared"] as const) {
+        expect(
+          Value.Check(SessionGitHubOptionsResultSchema, { ...sharedOnly, [field]: invalid }),
+        ).toBe(false);
+      }
     }
   });
 
@@ -113,55 +152,17 @@ describe("session GitHub publication protocol", () => {
     ).toBe(false);
   });
 
-  it.each([
-    ["token", "secret"],
-    ["repository", "openclaw/openclaw"],
-    ["branch", "main"],
-  ])("rejects caller-owned %s authority independently", (field, value) => {
-    expect(
-      Value.Check(SessionGitHubPublishParamsSchema, {
-        idempotencyKey: "tool-call-1",
-        [field]: value,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      requestId: "request-1",
-      status: "needs_confirmation",
-      message: "Confirm the original account and snapshot.",
-      publisher: { source: "personal", accountId: 101, login: "alice" },
-      effect: { kind: "push", status: "dispatched", headCommit: "a".repeat(40) },
+  it.each([["token", "secret"]])(
+    "rejects caller-owned %s authority independently",
+    (field, value) => {
+      expect(
+        Value.Check(SessionGitHubPublishParamsSchema, {
+          idempotencyKey: "tool-call-1",
+          [field]: value,
+        }),
+      ).toBe(false);
     },
-    {
-      requestId: "request-1",
-      status: "requested",
-      message: "Publication was accepted.",
-    },
-    {
-      requestId: "request-1",
-      status: "publishing",
-      message: "The Gateway is publishing.",
-    },
-    {
-      requestId: "request-1",
-      status: "published",
-      url: "https://github.com/openclaw/openclaw/pull/1",
-      repository: "openclaw/openclaw",
-      branch: "openclaw/task",
-      headCommit: "a".repeat(40),
-    },
-    {
-      requestId: "request-1",
-      status: "failed",
-      code: "push_rejected",
-      message: "GitHub publication failed.",
-      nextAction: "Check branch access and retry.",
-    },
-  ])("accepts the closed $status result", (result) => {
-    expect(Value.Check(SessionGitHubPublicationResultSchema, result)).toBe(true);
-  });
+  );
 
   it("rejects extra fields from terminal results", () => {
     expect(

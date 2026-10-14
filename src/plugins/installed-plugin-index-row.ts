@@ -1,26 +1,52 @@
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
-  resolveInstalledPluginIndexStateDatabaseOptions,
-  type InstalledPluginIndexStoreOptions,
-} from "./installed-plugin-index-store-path.js";
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
+import {
+  INSTALLED_PLUGIN_INDEX_STATE_KEY,
+  readPluginMetadataStateRowsInDatabase,
+  type PluginMetadataStateKey,
+  type PluginMetadataStateRow,
+  type PluginMetadataStateSelector,
+} from "./plugin-metadata-state.kernel.js";
 
-/** Read failures must escape before either projection can authorize recovery or rebuilding. */
-export function readPersistedInstalledPluginIndexRowSync(
-  options: InstalledPluginIndexStoreOptions,
+export {
+  INSTALLED_PLUGIN_INDEX_STATE_KEY,
+  type PluginMetadataStateKey,
+  type PluginMetadataStateRow,
+  type PluginMetadataStateSelector,
+} from "./plugin-metadata-state.kernel.js";
+
+/** Shared inspection commands use the same existing-only, artifact-preserving reader. */
+export function readPluginMetadataStateRowSync(
+  selector: PluginMetadataStateSelector,
+  databaseOptions: Parameters<typeof withExistingOpenClawStateDatabaseReadOnly>[1],
+  artifactPreservingReadOnly = false,
 ): { value_json: string } | undefined {
-  if (options.filePath?.endsWith(".json")) {
-    return undefined;
-  }
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "config_machine_state")) {
-      return undefined;
-    }
-    return (
-      db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
-        .get("plugins.installedIndex") as { value_json: string } | undefined
-    );
-  }, resolveInstalledPluginIndexStateDatabaseOptions(options));
+  const row = readPluginMetadataStateRowsSync(
+    [
+      selector === "installed-index"
+        ? INSTALLED_PLUGIN_INDEX_STATE_KEY
+        : "plugins.bundledDiscovery",
+    ],
+    databaseOptions,
+    artifactPreservingReadOnly,
+  )[0];
+  return row ? { value_json: row.value_json } : undefined;
+}
+
+/** Acquire related metadata facts from the same prepared database bytes. */
+export function readPluginMetadataStateRowsSync(
+  stateKeys: readonly PluginMetadataStateKey[],
+  databaseOptions: Parameters<typeof withExistingOpenClawStateDatabaseReadOnly>[1],
+  artifactPreservingReadOnly = false,
+): PluginMetadataStateRow[] {
+  const read = ({ db }: { db: EngineConnection }) =>
+    readPluginMetadataStateRowsInDatabase(db, stateKeys);
+  return (
+    (artifactPreservingReadOnly
+      ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, databaseOptions)
+      : withExistingOpenClawStateDatabaseReadOnly(read, databaseOptions)) ?? []
+  );
 }

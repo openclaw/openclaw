@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { hashMemoryContent, writeMemoryContent } from "./short-term-promotion-memory-write.js";
+import {
+  commitMemoryContent,
+  hashMemoryContent,
+  MemoryWriteConflictError,
+  resolveMemoryWritePath,
+} from "./short-term-promotion-memory-write.js";
 
 const openState = vi.hoisted(() => ({
   failInPlaceWriteAfterBytes: null as number | null,
@@ -40,6 +45,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, default: { ...actual, open }, open };
 });
 
+// Root ignores directory permissions, so a read-only parent cannot force the
+// in-place fallback there; those cases would silently prove atomic replacement.
+const readOnlyParentRejectsWrites = process.getuid?.() !== 0;
+
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -50,7 +59,7 @@ afterEach(async () => {
   }
 });
 
-async function setupReadOnlyMemoryDir(originalContent: string): Promise<string> {
+async function setupMemoryFile(originalContent: string, readOnlyParent = false): Promise<string> {
   const tempRoot = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "memory-write-test-")),
   );
@@ -58,7 +67,9 @@ async function setupReadOnlyMemoryDir(originalContent: string): Promise<string> 
   await fs.mkdir(memoryDir);
   const memoryPath = path.join(memoryDir, "MEMORY.md");
   await fs.writeFile(memoryPath, originalContent, "utf-8");
-  await fs.chmod(memoryDir, 0o555);
+  if (readOnlyParent) {
+    await fs.chmod(memoryDir, 0o555);
+  }
   cleanups.push(async () => {
     await fs.chmod(memoryDir, 0o755);
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -66,42 +77,108 @@ async function setupReadOnlyMemoryDir(originalContent: string): Promise<string> 
   return memoryPath;
 }
 
-it.runIf(process.platform !== "win32")(
-  "keeps the original MEMORY.md when the in-place fallback write fails partway",
-  async () => {
-    const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
-    const memoryPath = await setupReadOnlyMemoryDir(original);
-    const promoted = `${original}${"- promoted entry\n".repeat(200)}`;
-    openState.failInPlaceWriteAfterBytes = 1024;
+it.each(["missing/MEMORY.md", ...(process.platform === "win32" ? [] : ["missing/../MEMORY.md"])])(
+  "rejects a memory target whose missing suffix is %s",
+  async (suffix) => {
+    const memoryPath = await setupMemoryFile("existing memory");
+    const filePath = `${path.dirname(memoryPath)}${path.sep}${suffix.replaceAll("/", path.sep)}`;
 
-    await expect(
-      writeMemoryContent({
-        memoryPath,
-        memoryWritePath: memoryPath,
-        expectedHash: hashMemoryContent(original),
-        expectedContent: original,
-        allowInPlaceFallback: true,
-        content: promoted,
-      }),
-    ).rejects.toMatchObject({ code: "EFBIG" });
-
-    expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
+    await expect(resolveMemoryWritePath(filePath)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
 
-it.runIf(process.platform !== "win32")(
+it.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
+  "rejects a non-directory symlink before a parent traversal",
+  async () => {
+    const tempRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "memory-write-not-directory-")),
+    );
+    cleanups.push(async () => await fs.rm(tempRoot, { recursive: true, force: true }));
+    const regularFile = path.join(tempRoot, "regular-file");
+    const regularLink = path.join(tempRoot, "regular-link");
+    const collision = path.join(tempRoot, "collision.md");
+    await fs.writeFile(regularFile, "regular");
+    await fs.writeFile(collision, "collision");
+    await fs.symlink(regularFile, regularLink);
+
+    const invalidPath = `${regularLink}${path.sep}..${path.sep}${path.basename(collision)}`;
+    await expect(resolveMemoryWritePath(invalidPath)).rejects.toMatchObject({ code: "ENOTDIR" });
+    expect(await fs.readFile(collision, "utf8")).toBe("collision");
+  },
+);
+
+it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
+  "uses the checked in-place fallback when the parent rejects a sibling temp file",
+  async () => {
+    const original = "# Long-Term Memory\n\n- existing entry\n";
+    const memoryPath = await setupMemoryFile(original, true);
+    const replacement = `${original}- replacement entry\n`;
+
+    await commitMemoryContent({
+      filePath: memoryPath,
+      tempPrefix: `${path.basename(memoryPath)}.test`,
+      expectedHash: hashMemoryContent(original),
+      expectedContent: original,
+      allowInPlaceFallback: true,
+      content: replacement,
+    });
+
+    expect(await fs.readFile(memoryPath, "utf-8")).toBe(replacement);
+  },
+);
+
+it.each([
+  { label: "atomic replacement", readOnlyParent: false },
+  ...(readOnlyParentRejectsWrites ? [{ label: "in-place fallback", readOnlyParent: true }] : []),
+])("rejects a changed preimage before $label", async ({ readOnlyParent }) => {
+  const original = "# Long-Term Memory\n\n- original entry\n";
+  const externalEdit = `${original}- external edit\n`;
+  const memoryPath = await setupMemoryFile(externalEdit, readOnlyParent);
+
+  await expect(
+    commitMemoryContent({
+      filePath: memoryPath,
+      tempPrefix: `${path.basename(memoryPath)}.test`,
+      expectedHash: hashMemoryContent(original),
+      expectedContent: original,
+      allowInPlaceFallback: true,
+      content: `${original}- replacement entry\n`,
+    }),
+  ).rejects.toBeInstanceOf(MemoryWriteConflictError);
+
+  expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
+});
+
+it("rejects a changed preimage before removing a memory file", async () => {
+  const original = "# Long-Term Memory\n\n- original entry\n";
+  const externalEdit = `${original}- external edit\n`;
+  const memoryPath = await setupMemoryFile(externalEdit);
+
+  await expect(
+    commitMemoryContent({
+      filePath: memoryPath,
+      tempPrefix: `${path.basename(memoryPath)}.test`,
+      expectedContent: original,
+      content: null,
+    }),
+  ).rejects.toBeInstanceOf(MemoryWriteConflictError);
+
+  expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
+});
+
+it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
   "completes the restore across short writes before truncating",
   async () => {
     const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
-    const memoryPath = await setupReadOnlyMemoryDir(original);
+    const memoryPath = await setupMemoryFile(original, true);
     const promoted = `# Long-Term Memory\n\n## 2026-08-19\n${"- promoted entry\n".repeat(200)}`;
     openState.failInPlaceWriteAfterBytes = 1024;
     openState.shortFirstRestoreWrite = true;
 
     await expect(
-      writeMemoryContent({
-        memoryPath,
-        memoryWritePath: memoryPath,
+      commitMemoryContent({
+        filePath: memoryPath,
+        tempPrefix: `${path.basename(memoryPath)}.promotion`,
         expectedHash: hashMemoryContent(original),
         expectedContent: original,
         allowInPlaceFallback: true,

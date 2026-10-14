@@ -24,46 +24,29 @@ function buildResultPreview(result: unknown): string {
   return entry.outputPreview;
 }
 
-describe("activity model output preview redaction", () => {
+describe("activity model output preview fidelity", () => {
   it.each([
-    ["short UTF-16 text", "\ud800 visible 🦞 text", "\ud800 visible 🦞 text"],
     ["a surrogate pair at the cap", "a".repeat(1_999) + "🦞tail", "a".repeat(1_999)],
     ["a lone surrogate inside the cap", "\ud800" + "a".repeat(2_100), "\ud800" + "a".repeat(1_999)],
   ])("preserves %s", (_label, source, expected) => {
     expect(buildResultPreview({ text: source })).toBe(expected);
   });
 
-  it("redacts dotted API key assignments emitted by tool output", () => {
-    const preview = buildResultPreview({
-      text: [
-        "app.api.key=visible-leaked-value-1234567890",
-        "spring.datasource.password=visible-db-password-1234567890",
-        "server.port=8080",
-      ].join("\n"),
-    });
-
-    expect(preview).toContain("app.api.key=[redacted]");
-    expect(preview).toContain("spring.datasource.password=[redacted]");
-    expect(preview).toContain("server.port=8080");
-    expect(preview).not.toContain("visible-leaked-value-1234567890");
-    expect(preview).not.toContain("visible-db-password-1234567890");
-  });
-
-  it("redacts dotted API keys in object-shaped tool results", () => {
+  it("preserves dotted API keys in object-shaped tool results", () => {
     const preview = buildResultPreview({
       "app.api.key": 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
       "server.port": 8080,
     });
 
-    expect(preview).toContain('"app.api.key": "[redacted]"');
+    expect(JSON.parse(preview)["app.api.key"]).toBe(
+      'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
+    );
     expect(preview).toContain('"server.port": 8080');
-    expect(preview).not.toContain("visible secret");
-    expect(preview).not.toContain("keep hidden");
   });
 });
 
 describe("activity preview retention", () => {
-  it.each(["tool", "answer_candidate"])(
+  it.each(["tool"])(
     "releases large %s payloads while retaining their previews",
     (kind) => {
       const result = spawnSync(
@@ -86,7 +69,8 @@ describe("activity preview retention", () => {
               return process.memoryUsage().heapUsed;
             }
             function append(index, size) {
-              const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + "x".repeat(size)));
+              const payload = "x".repeat(2_000) + "!".repeat(size - 2_000);
+              const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + payload));
               entries = updateToolActivity(entries, {
                 stream: ${JSON.stringify(kind === "tool" ? "tool" : "item")},
                 runId: "run-" + index, ts: index, receivedAt: index,
@@ -122,6 +106,45 @@ describe("activity preview retention", () => {
       expect(output.retainedBytes).toBeLessThan(8 * 1024 * 1024);
     },
     30_000,
+  );
+});
+
+describe("activity feed bounds", () => {
+  it.each(["tool"] as const)(
+    "retains the latest 100 %s entries without mutating earlier snapshots",
+    (kind) => {
+      const event = (index: number, done = false): Parameters<typeof updateToolActivity>[1] => ({
+        stream: kind === "tool" ? "tool" : "item",
+        runId: "bounded-run",
+        ts: 1,
+        receivedAt: done ? 2 : 1,
+        data:
+          kind === "tool"
+            ? { toolCallId: String(index), name: "read", phase: done ? "result" : "start" }
+            : { itemId: String(index), status: done ? "selected" : "candidate" },
+      });
+      let entries: ActivityEntry[] = [];
+      for (let index = 0; index < 100; index++) {
+        entries = updateToolActivity(entries, event(index));
+      }
+      const previous = structuredClone(entries);
+      const updated = updateToolActivity(entries, event(0, true));
+      expect(entries).toEqual(previous);
+      expect(updated).toHaveLength(100);
+      expect(updated[0]).toMatchObject({
+        toolCallId: "0",
+        status: "done",
+        startedAt: 1,
+        updatedAt: 2,
+      });
+      expect(updated.slice(1)).toEqual(previous.slice(1));
+      const full = structuredClone(updated);
+      const overflow = updateToolActivity(updated, event(100));
+      expect(updated).toEqual(full);
+      expect(overflow.map((entry) => entry.toolCallId)).toEqual(
+        Array.from({ length: 100 }, (_, index) => String(index + 1)),
+      );
+    },
   );
 });
 

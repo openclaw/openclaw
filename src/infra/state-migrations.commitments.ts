@@ -2,10 +2,8 @@
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  openExistingOpenClawStateDatabaseReadOnly,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   markLegacyMigrationSourceRemoved,
@@ -34,35 +32,28 @@ type LegacyCommitmentsSnapshot = LegacyMigrationSourceSnapshot & {
   recordCount: number;
 };
 
-function resolveLegacyCommitmentsPath(stateDir: string): string {
-  return path.join(stateDir, LEGACY_COMMITMENTS_PATH);
-}
-
 /** Detect the exact retired store only when an explicit Doctor flow opts in. */
 export async function detectLegacyCommitments(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
 }): Promise<NonNullable<LegacyStateDetection["commitments"]>> {
-  const sourcePath = resolveLegacyCommitmentsPath(params.stateDir);
+  const sourcePath = path.join(params.stateDir, LEGACY_COMMITMENTS_PATH);
   let hasPendingReceipt = false;
   if (
     params.doctorOnlyStateMigrations === true &&
     !legacyMigrationSourceOrClaimMayExist(sourcePath, DOCTOR_CLAIM_SUFFIX)
   ) {
     try {
-      const database = await openExistingOpenClawStateDatabaseReadOnly({ env: params.env });
-      try {
-        const receipt = database
-          ? readLegacyMigrationReceiptFromDatabase(
-              database.db,
-              resolveLegacyMigrationSourceKey("commitments-json", sourcePath),
-            )
-          : null;
-        hasPendingReceipt = receipt !== null && !receipt.removedSource;
-      } finally {
-        database?.walMaintenance.close();
-      }
+      const receipt = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+        ({ db }) =>
+          readLegacyMigrationReceiptFromDatabase(
+            db,
+            resolveLegacyMigrationSourceKey("commitments-json", sourcePath),
+          ),
+        { env: params.env },
+      );
+      hasPendingReceipt = receipt !== undefined && receipt !== null && !receipt.removedSource;
     } catch {
       // Detection must not replace the schema repair diagnostics for an older or unhealthy DB.
     }

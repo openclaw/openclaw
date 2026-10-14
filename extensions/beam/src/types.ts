@@ -26,6 +26,11 @@ export type BeamTranscriptItem = {
   text: string;
 };
 
+export type BeamSourceModel = {
+  provider: string;
+  model: string;
+};
+
 export type BeamUpload = {
   version: 1;
   beamId: string;
@@ -35,6 +40,7 @@ export type BeamUpload = {
   completed: boolean;
   truncated?: boolean;
   hookEvent?: string;
+  sourceModel?: BeamSourceModel;
   items: BeamTranscriptItem[];
 };
 
@@ -54,10 +60,11 @@ const TOP_LEVEL_KEYS = new Set([
   "completed",
   "truncated",
   "hookEvent",
+  "sourceModel",
   "items",
 ]);
 const ITEM_KEYS = new Set(["type", "text"]);
-const ITEM_TYPES = new Set<BeamTranscriptItem["type"]>(["userMessage", "agentMessage", "other"]);
+const SOURCE_MODEL_KEYS = new Set(["provider", "model"]);
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -120,6 +127,18 @@ export function parseBeamUpload(
   if (value.hookEvent !== undefined && !hookEvent) {
     return { ok: false, error: "hookEvent must be a short string" };
   }
+  let sourceModel: BeamSourceModel | undefined;
+  if (value.sourceModel !== undefined) {
+    if (!isRecord(value.sourceModel) || !hasOnlyKeys(value.sourceModel, SOURCE_MODEL_KEYS)) {
+      return { ok: false, error: "sourceModel must be a closed object" };
+    }
+    const provider = readBoundedString(value.sourceModel.provider, 64);
+    const model = readBoundedString(value.sourceModel.model, 256);
+    if (!provider || !/^[a-z0-9._-]+$/i.test(provider) || !model || !/^\S+$/u.test(model)) {
+      return { ok: false, error: "sourceModel must contain a provider and model" };
+    }
+    sourceModel = { provider: provider.toLowerCase(), model };
+  }
   if (
     !Array.isArray(value.items) ||
     value.items.length === 0 ||
@@ -133,8 +152,9 @@ export function parseBeamUpload(
       return { ok: false, error: "each transcript item must be a closed object" };
     }
     if (
-      typeof rawItem.type !== "string" ||
-      !ITEM_TYPES.has(rawItem.type as BeamTranscriptItem["type"])
+      rawItem.type !== "userMessage" &&
+      rawItem.type !== "agentMessage" &&
+      rawItem.type !== "other"
     ) {
       return { ok: false, error: "transcript item type is invalid" };
     }
@@ -145,7 +165,7 @@ export function parseBeamUpload(
         error: `transcript item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
       };
     }
-    items.push({ type: rawItem.type as BeamTranscriptItem["type"], text });
+    items.push({ type: rawItem.type, text });
   }
 
   return {
@@ -159,6 +179,7 @@ export function parseBeamUpload(
       completed: value.completed,
       ...(value.truncated === true ? { truncated: true } : {}),
       ...(hookEvent ? { hookEvent } : {}),
+      ...(sourceModel ? { sourceModel } : {}),
       items,
     },
   };

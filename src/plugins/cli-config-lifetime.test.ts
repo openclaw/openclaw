@@ -162,7 +162,7 @@ describe("CLI config producer lifetime", () => {
       );
     },
   );
-  it("retains skipped-validation metadata but rejects an invalid plugin at the fresh registration read", async () => {
+  it("keeps skipped validation lazy but rejects an invalid plugin at the fresh registration read", async () => {
     const root = fs.realpathSync(makePluginLoaderTempDir());
     const plugin = writePlugin({
       id: "invalid-cli",
@@ -208,8 +208,7 @@ describe("CLI config producer lifetime", () => {
           readBestEffortConfigSnapshot({ observe: false, skipPluginValidation: true }),
         );
         expect(read.configDiagnostics).toBeNull();
-        const initialDiscoveries = discover.mock.calls.length;
-        expect(initialDiscoveries).toBeGreaterThan(0);
+        expect(discover).not.toHaveBeenCalled();
         const invalid = await session.readConfig(() =>
           readConfigFileSnapshotFromContext(createConfigIoContext({ env: process.env })),
         );
@@ -219,12 +218,15 @@ describe("CLI config producer lifetime", () => {
         ]);
         expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
         const program = new Command();
-        expect(
-          await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+        await expect(
+          registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             session,
             primary: "prepared",
           }),
-        ).toBeNull();
+        ).rejects.toMatchObject({
+          code: "INVALID_CONFIG",
+          details: expect.stringContaining("plugins.entries.invalid-cli.config.label"),
+        });
         expect(program.commands).toEqual([]);
         session.close();
       },

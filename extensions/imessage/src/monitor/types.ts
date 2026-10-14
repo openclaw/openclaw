@@ -1,9 +1,9 @@
-// Imessage type declarations define plugin contracts.
 import type {
   ChannelAccountSnapshot,
   ChannelRuntimeSurface,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 export type IMessageAttachment = {
@@ -43,6 +43,7 @@ export type IMessagePayload = {
   poll?: IMessagePoll | null;
   chat_id?: number | null;
   sender?: string | null;
+  sender_name?: string | null;
   destination_caller_id?: string | null;
   is_from_me?: boolean | null;
   text?: string | null;
@@ -69,16 +70,11 @@ export type IMessagePayload = {
 };
 
 export type MonitorIMessageOpts = {
+  scheduler: PluginServiceSchedulerV1;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  cliPath?: string;
-  dbPath?: string;
   accountId?: string;
   config?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowFrom?: Array<string | number>;
-  includeAttachments?: boolean;
-  mediaMaxMb?: number;
   requireMention?: boolean;
   /**
    * Surface for registering channel runtime contexts (e.g. the approval native

@@ -8,6 +8,7 @@ import {
   fingerprintCodexAppServerAuthBinding,
   prepareCodexAppServerAuthBinding,
 } from "./auth-binding.js";
+import { resolveCodexAppServerPreparedAuthProfileSnapshot } from "./auth-bridge.js";
 
 describe("Codex app-server auth binding", () => {
   afterEach(() => {
@@ -69,6 +70,45 @@ describe("Codex app-server auth binding", () => {
       }),
     ).rejects.toThrow(/could not resolve.*[Rr]epair/);
   });
+
+  it.each(["api_key", "token"] as const)(
+    "prepares %s login only when the selected request config owns the profile",
+    async (type) => {
+      const profileId = "openai:work";
+      const token = `e30.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "workspace-a" } })).toString("base64url")}.signature`;
+      const params = {
+        authProfileId: profileId,
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            [profileId]:
+              type === "api_key"
+                ? { type, provider: "openai", key: "work-key" }
+                : { type, provider: "openai", token },
+          },
+        } satisfies AuthProfileStore,
+        agentDir: "/tmp/openclaw-codex-auth-binding",
+      };
+      await expect(
+        resolveCodexAppServerPreparedAuthProfileSnapshot({
+          ...params,
+          config: { auth: { profiles: { [profileId]: { provider: "anthropic", mode: type } } } },
+        }),
+      ).rejects.toThrow("does not contain usable credentials");
+
+      await expect(
+        resolveCodexAppServerPreparedAuthProfileSnapshot({
+          ...params,
+          config: { auth: { profiles: { [profileId]: { provider: "openai", mode: type } } } },
+        }),
+      ).resolves.toMatchObject({
+        loginParams:
+          type === "api_key"
+            ? { type: "apiKey", apiKey: "work-key" }
+            : { type: "chatgptAuthTokens", accessToken: token, chatgptAccountId: "workspace-a" },
+      });
+    },
+  );
 
   it("uses the materialized runtime SecretRef snapshot and fingerprints the executed store", async () => {
     const profileId = "openai:work";

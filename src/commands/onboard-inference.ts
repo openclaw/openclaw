@@ -1,17 +1,17 @@
-import { randomInt } from "node:crypto";
 // Inference backend detection shared by onboarding bootstrap and OpenClaw setup.
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
-  readCodexCliCredentialsCached,
+  hasCodexCliAuthFile,
   readGeminiCliCredentialsCached,
+  resolveCodexCliHomePath,
 } from "../agents/cli-credentials.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOsHomeDir } from "../infra/home-dir.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
 import {
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -19,7 +19,6 @@ import {
   GEMINI_CLI_DEFAULT_MODEL_REF,
   detectAmbientInferenceBackends,
   type InferenceBackendCandidate,
-  type InferenceBackendKind,
 } from "./onboard-inference-ambient.js";
 
 export {
@@ -33,18 +32,14 @@ export {
 
 /**
  * Onboarding treats inference as the one required step: reuse whatever the
- * machine already has (env API keys, Claude Code login, Codex login) before
- * asking the user anything. The ladder order is a documented contract
- * (docs/cli/setup.md "Setup bootstrap") — change docs when changing it.
+ * machine already has without activating providers. CLI version and credential
+ * presence are detection evidence; explicit setup verifies the selected login.
  */
 
 type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
-  detectClaudeLoginState?: typeof detectClaudeLoginState;
-  readCodexCliCredentials?: () => { type: string } | null;
+  hasCodexCliAuthFile?: () => boolean;
   readGeminiCliCredentials?: () => { type: string } | null;
-  detectCodexLoginState?: typeof detectCodexLoginState;
-  randomInt?: (maxExclusive: number) => number;
 };
 
 type DetectInferenceBackendsOptions = {
@@ -54,130 +49,6 @@ type DetectInferenceBackendsOptions = {
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
 };
-
-type DetectNativeCodexAppServerOptions = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  probeLocalCommand?: typeof probeLocalCommand;
-};
-
-function detectCliCredentialState(params: {
-  probe: LocalCommandProbe;
-  hasStoredCredentials: boolean;
-  platform: NodeJS.Platform;
-}): boolean | undefined {
-  if (!params.probe.found) {
-    return undefined;
-  }
-  if (params.hasStoredCredentials) {
-    return true;
-  }
-  // On macOS both CLIs may keep their login in the keychain, which we must not
-  // read here (it can trigger a password prompt). Missing file creds is only a
-  // definitive logout signal elsewhere.
-  return params.platform === "darwin" ? undefined : false;
-}
-
-type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription";
-type CliLoginState = { credentials: boolean | undefined; authKind?: CliAuthKind };
-
-const CLI_AUTH_KIND_LABEL: Record<CliAuthKind, string> = {
-  "api-key": "API key (usage-billed)",
-  "chatgpt-subscription": "ChatGPT subscription",
-  "claude-subscription": "Claude subscription",
-};
-
-function describeCliDetail(state: CliLoginState, loginHint: string): string {
-  if (state.authKind) {
-    return `logged in · ${CLI_AUTH_KIND_LABEL[state.authKind]}`;
-  }
-  if (state.credentials === true) {
-    return "logged in";
-  }
-  if (state.credentials === false) {
-    return `installed, not logged in — ${loginHint}, then check again`;
-  }
-  return "installed";
-}
-
-function describeGeminiCliDetail(credentials: boolean | undefined): string {
-  return credentials === true
-    ? "installed; credentials found"
-    : "installed; login status unavailable";
-}
-
-async function classifyCodexLoginStatus(
-  probe: typeof probeLocalCommand,
-  command: string,
-): Promise<CliLoginState> {
-  const status = await probe(command, ["login", "status"], { timeoutMs: 3_000 });
-  if (status.error) {
-    // Codex login status covers its own auth store, not custom model-provider
-    // credentials. Keep failures indeterminate so the live probe decides usability.
-    return { credentials: undefined };
-  }
-  if (status.version === "Logged in using ChatGPT") {
-    return { credentials: true, authKind: "chatgpt-subscription" };
-  }
-  if (/^Logged in using an API key - .+$/u.test(status.version ?? "")) {
-    return { credentials: true, authKind: "api-key" };
-  }
-  return { credentials: true };
-}
-
-async function detectClaudeLoginState(
-  probe: typeof probeLocalCommand,
-  command: string,
-): Promise<CliLoginState> {
-  const status = await probe(command, ["auth", "status", "--text"], { timeoutMs: 3_000 });
-  if (status.timedOut) {
-    return { credentials: undefined };
-  }
-  if (status.error) {
-    return { credentials: false };
-  }
-  const method = status.version?.replace(/^Login method:\s*/iu, "").trim();
-  return {
-    credentials: true,
-    ...(method
-      ? {
-          authKind: /api\s*key/iu.test(method)
-            ? ("api-key" as const)
-            : ("claude-subscription" as const),
-        }
-      : {}),
-  };
-}
-
-// Deliberately boolean-shaped: this signature is reachable from the exported
-// detectInferenceBackends options type and therefore part of the plugin-sdk
-// agent-harness API contract. Widening it would bump the contract hash — the
-// rich classification stays module-local in classifyCodexLoginStatus.
-async function detectCodexLoginState(
-  probe: typeof probeLocalCommand,
-  command: string,
-): Promise<boolean | undefined> {
-  return (await classifyCodexLoginStatus(probe, command)).credentials;
-}
-
-function randomizeClaudeCodexTie(
-  candidates: InferenceBackendCandidate[],
-  pickRandomInt: (maxExclusive: number) => number,
-): void {
-  const claudeIndex = candidates.findIndex(
-    (candidate) => candidate.kind === "claude-cli" && candidate.credentials !== false,
-  );
-  const codexIndex = candidates.findIndex(
-    (candidate) => candidate.kind === "codex-cli" && candidate.credentials !== false,
-  );
-  if (claudeIndex === -1 || codexIndex === -1 || pickRandomInt(2) === 0) {
-    return;
-  }
-  const claudeCandidate = candidates[claudeIndex];
-  const codexCandidate = candidates[codexIndex];
-  candidates[claudeIndex] = expectDefined(codexCandidate, "Codex onboarding candidate");
-  candidates[codexIndex] = expectDefined(claudeCandidate, "Claude onboarding candidate");
-}
 
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
@@ -212,22 +83,10 @@ async function probeCodexCommand(params: {
   }
   return pathProbe;
 }
-/** Detects a native Codex App Server without coupling it to inference selection. */
-async function detectNativeCodexAppServer(
-  options: DetectNativeCodexAppServerOptions = {},
-): Promise<LocalCommandProbe> {
-  return await probeCodexCommand({
-    probe: options.probeLocalCommand ?? probeLocalCommand,
-    env: options.env ?? process.env,
-    platform: options.platform ?? process.platform,
-  });
-}
-
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
- * for backends that exist on this machine; the first entry is the bootstrap
- * default. Backends that are definitively logged out sink below logged-in and
- * unknown ones so a stale install never outranks a working login.
+ * for backends that exist on this machine; explicit setup owns selection.
+ * Native CLI discovery stays passive; environment credentials precede unverified CLIs.
  */
 export async function detectInferenceBackends(
   options: DetectInferenceBackendsOptions = {},
@@ -235,9 +94,15 @@ export async function detectInferenceBackends(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const probe = options.deps?.probeLocalCommand ?? probeLocalCommand;
-  const readCodex =
-    options.deps?.readCodexCliCredentials ??
-    (() => readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
+  const hasCodexLogin =
+    options.deps?.hasCodexCliAuthFile ??
+    (() => {
+      const home = resolveOsHomeDir(env, env === process.env ? os.homedir : () => "");
+      if (!home && !env.CODEX_HOME?.trim()) {
+        return false;
+      }
+      return hasCodexCliAuthFile(resolveCodexCliHomePath(undefined, env));
+    });
   const readGemini =
     options.deps?.readGeminiCliCredentials ??
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
@@ -269,62 +134,36 @@ export async function detectInferenceBackends(
       credentials: true,
     });
   }
-  const envCandidates = detectAmbientInferenceBackends(env).filter(
-    (candidate) => candidate.kind === "openai-api-key" || candidate.kind === "anthropic-api-key",
-  );
+  const envCandidates = detectAmbientInferenceBackends(env);
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
     probe("claude"),
-    detectNativeCodexAppServer({ probeLocalCommand: probe, env, platform }),
+    probeCodexCommand({ probe, env, platform }),
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];
-  const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
-    const loginState = options.deps?.detectClaudeLoginState
-      ? await options.deps.detectClaudeLoginState(probe, claudeProbe.command)
-      : await detectClaudeLoginState(probe, claudeProbe.command);
-    const credentials = loginState.credentials;
-    if (credentials === true && loginState.authKind === "claude-subscription") {
-      subscriptionPromotionEligibleCliKinds.add("claude-cli");
-    }
-    const detail = describeCliDetail(loginState, "run `claude auth login`");
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail,
-      ...(credentials === undefined ? {} : { credentials }),
+      detail: "installed; login status unverified",
     });
   }
-  if (codexProbe.found && !codexProbe.timedOut) {
-    const codexCredential = readCodex();
-    const loginState: CliLoginState = options.deps?.detectCodexLoginState
-      ? { credentials: await options.deps.detectCodexLoginState(probe, codexProbe.command) }
-      : options.deps?.readCodexCliCredentials
-        ? {
-            credentials: detectCliCredentialState({
-              probe: codexProbe,
-              hasStoredCredentials: codexCredential !== null,
-              platform,
-            }),
-            ...(codexCredential?.type === "oauth"
-              ? { authKind: "chatgpt-subscription" as const }
-              : {}),
-          }
-        : await classifyCodexLoginStatus(probe, codexProbe.command);
-    const credentials = loginState.credentials;
-    // Promote only prompt-free ChatGPT OAuth tokens. Status-only logins may be metered;
-    // keychain-only ChatGPT users conservatively stay usable in the fallback tier.
-    if (credentials === true && codexCredential?.type === "oauth") {
-      subscriptionPromotionEligibleCliKinds.add("codex-cli");
-    }
+  const storedCodexCredentials = hasCodexLogin();
+  if ((codexProbe.found && !codexProbe.timedOut) || storedCodexCredentials) {
+    // Native status starts provider initialization (including migrations and
+    // token refresh). A saved record proves neither the active store nor login.
     cliCandidates.push({
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail: describeCliDetail(loginState, "run `codex login`"),
-      ...(credentials === undefined ? {} : { credentials }),
+      detail: storedCodexCredentials
+        ? codexProbe.found && !codexProbe.timedOut
+          ? "installed; stored credentials found; login status unverified"
+          : "stored credentials found; runtime installation required"
+        : "installed; login status unverified",
+      credentials: storedCodexCredentials,
     });
   }
   if (geminiProbe.found && !geminiProbe.timedOut) {
@@ -337,28 +176,9 @@ export async function detectInferenceBackends(
       kind: "gemini-cli",
       modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       label: "Gemini CLI",
-      detail: describeGeminiCliDetail(credentials),
+      detail: credentials ? "installed; credentials found" : "installed; login status unavailable",
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  // Claude Code and Codex share rank within a credential tier. Randomize before
-  // partitioning so logged-in and unknown ties keep no provider preference.
-  randomizeClaudeCodexTie(cliCandidates, options.deps?.randomInt ?? randomInt);
-  const loggedInSubscriptionCliCandidates = cliCandidates.filter(
-    (candidate) =>
-      candidate.credentials === true && subscriptionPromotionEligibleCliKinds.has(candidate.kind),
-  );
-  const remainingCliCandidates = cliCandidates.filter(
-    (candidate) => !loggedInSubscriptionCliCandidates.includes(candidate),
-  );
-  // Verified flat-rate subscription logins outrank metered environment keys.
-  // Existing models stay first so guided setup never silently replaces one.
-  candidates.push(
-    ...loggedInSubscriptionCliCandidates,
-    ...envCandidates,
-    // Unknown login states and Gemini remain fallbacks; definitive logouts sink last.
-    ...remainingCliCandidates.filter((candidate) => candidate.credentials !== false),
-    ...remainingCliCandidates.filter((candidate) => candidate.credentials === false),
-  );
-  return candidates;
+  return [...candidates, ...envCandidates, ...cliCandidates];
 }

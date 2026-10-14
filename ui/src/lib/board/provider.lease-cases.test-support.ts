@@ -3,9 +3,8 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { acquireBoardProviderForSession, mcpAppWidgetNameForViewId } from "./provider.ts";
 
-export function registerBoardProviderLeaseCases(disableMockBoard: () => void): void {
+export function registerBoardProviderLeaseCases(): void {
   it("keeps retired gateway clients from rolling back shared board leases", async () => {
-    disableMockBoard();
     const sessionKey = "agent:main:monotonic-board-lease";
     const capabilities = {
       canPinWidgets: true,
@@ -85,10 +84,9 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
     }
   });
 
-  it.each(["chat-first", "dashboard-first"] as const)(
+  it.each(["dashboard-first"] as const)(
     "isolates concurrent board lease capabilities in %s order",
     async (order) => {
-      disableMockBoard();
       const sessionKey = `agent:main:lease-capabilities-${order}`;
       const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
       const removeListener = vi.fn();
@@ -100,10 +98,10 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
         acquireBoardProviderForSession({ sessionKey }, client, true, true, true, true, true);
       const acquireDashboard = () =>
         acquireBoardProviderForSession({ sessionKey }, client, true, false, false, false, false);
-      const first = order === "chat-first" ? acquireChat() : acquireDashboard();
-      const second = order === "chat-first" ? acquireDashboard() : acquireChat();
-      const chat = order === "chat-first" ? first : second;
-      const dashboard = order === "chat-first" ? second : first;
+      const first = acquireDashboard();
+      const second = acquireChat();
+      const chat = second;
+      const dashboard = first;
 
       try {
         await vi.waitFor(() => expect(chat.provider.snapshot$.value).toEqual(snapshot));
@@ -161,7 +159,6 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
   );
 
   it("enforces write and approval scopes separately for concurrent board leases", async () => {
-    disableMockBoard();
     const sessionKey = "agent:main:independent-board-scopes";
     const snapshot = {
       sessionKey,

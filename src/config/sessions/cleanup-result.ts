@@ -3,7 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   SessionDiskBudgetSweepResult,
   SessionUnreferencedArtifactSweepResult,
-} from "./disk-budget.js";
+} from "./disk-budget.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionStoreTarget } from "./targets.js";
@@ -19,6 +19,7 @@ export type SessionCleanupSummary = {
   dmScopeRetired: number;
   modelRunPruned: number;
   archived?: number;
+  capArchived?: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -133,6 +134,7 @@ function isSessionCleanupSummary(value: unknown): value is SessionCleanupSummary
     typeof value.dmScopeRetired === "number" &&
     typeof value.modelRunPruned === "number" &&
     (value.archived === undefined || typeof value.archived === "number") &&
+    (value.capArchived === undefined || typeof value.capArchived === "number") &&
     typeof value.pruned === "number" &&
     typeof value.capped === "number" &&
     typeof value.unreferencedArtifacts.removedFiles === "number" &&

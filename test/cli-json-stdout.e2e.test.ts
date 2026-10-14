@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -45,19 +46,22 @@ describe("cli json stdout contract", () => {
             ["telemetry", "show", ...(format === "JSON" ? ["--json"] : [])],
             {
               ...env,
-              NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
               OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
               OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
               ...(tty ? { FORCE_COLOR: "1" } : {}),
             },
-            { inheritEnvironment: false },
+            {
+              inheritEnvironment: false,
+              execArgv: [`--import=data:text/javascript;base64,${preload}`],
+            },
           );
 
           expect(result.status, result.stderr).toBe(0);
           const endpoint =
             env.OPENCLAW_TELEMETRY_ENDPOINT ?? "https://telemetry.openclaw.ai/api/latest-version";
           if (format === "JSON") {
-            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            expect(result.stdout, result.stderr).not.toContain("\u001B");
+            expect(result.stdout, result.stderr).not.toContain("\u0007");
             const payload = JSON.parse(result.stdout);
             expect(payload).toEqual({
               featureStatsEnabled: false,
@@ -122,8 +126,10 @@ describe("cli json stdout contract", () => {
         expect(Object.keys(parsed).toSorted((a, b) => a.localeCompare(b))).toEqual([
           "availability",
           "channel",
+          "recoverySets",
           "update",
         ]);
+        expect(parsed).toHaveProperty("recoverySets", []);
         expect(stdout).not.toContain("Doctor warnings");
         expect(stdout).not.toContain("Doctor changes");
         expect(stdout).not.toContain("Config invalid");
@@ -145,7 +151,10 @@ describe("cli json stdout contract", () => {
             message: "--timeout must be a positive integer (seconds)",
           },
         });
-        expect(result.stderr).toContain("--timeout must be a positive integer (seconds)");
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).toContain(
+          "[openclaw] Reason: --timeout must be a positive integer (seconds)",
+        );
       },
       { prefix: "openclaw-update-empty-timeout-e2e-" },
     );
@@ -199,20 +208,25 @@ describe("cli json stdout contract", () => {
                 : []),
             ].join("\n"),
           ).toString("base64");
-          const result = runBuiltCli(tempHome, testCase.args, {
-            NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
-            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-            OPENCLAW_GATEWAY_PORT: "29871",
-            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-          });
+          const result = runBuiltCli(
+            tempHome,
+            testCase.args,
+            {
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+              OPENCLAW_GATEWAY_PORT: "29871",
+              ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+              ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+            },
+            { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
+          );
 
           expect(result.status, result.stderr).toBe(1);
           if ("human" in testCase) {
             expect(result.stdout).toBe("");
           } else {
-            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            expect(result.stdout, result.stderr).not.toContain("\u001B");
+            expect(result.stdout, result.stderr).not.toContain("\u0007");
             expect(JSON.parse(result.stdout)).toEqual({
               ok: false,
               error: { type: "cli_error", message: testCase.message },
@@ -225,6 +239,112 @@ describe("cli json stdout contract", () => {
           }
         },
         { prefix: "openclaw-channels-capabilities-failure-e2e-" },
+      );
+    },
+  );
+
+  it.each(["probe", "diagnostics"])(
+    "keeps the CLI alive until stalled channel capability %s reports its timeout",
+    async (stage) => {
+      await withTempHome(
+        async (tempHome) => {
+          const pluginDir = path.join(tempHome, "capability-plugin");
+          const workspace = path.join(tempHome, "workspace");
+          await fs.mkdir(pluginDir);
+          await fs.mkdir(workspace);
+          const id = "capability-fixture";
+          const meta = {
+            id,
+            label: "Capability fixture",
+            selectionLabel: "Capability fixture",
+            docsPath: "/channels/test",
+            blurb: "Synthetic channel",
+          };
+          const schema = {
+            type: "object",
+            additionalProperties: false,
+            properties: { enabled: { type: "boolean" } },
+          };
+          await fs.writeFile(
+            path.join(pluginDir, "package.json"),
+            JSON.stringify({
+              name: id,
+              version: "1.0.0",
+              type: "module",
+              openclaw: {
+                extensions: ["./index.js"],
+                setupEntry: "./index.js",
+                channel: meta,
+              },
+            }),
+          );
+          await fs.writeFile(
+            path.join(pluginDir, "openclaw.plugin.json"),
+            JSON.stringify({
+              id,
+              channels: [id],
+              configSchema: { type: "object", additionalProperties: false, properties: {} },
+              channelConfigs: { [id]: { schema } },
+            }),
+          );
+          await fs.writeFile(
+            path.join(pluginDir, "index.js"),
+            `export const plugin = {
+              id: ${JSON.stringify(id)}, meta: ${JSON.stringify(meta)},
+              capabilities: { chatTypes: ["direct"] },
+              configSchema: { schema: ${JSON.stringify(schema)} },
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({ accountId: "default", enabled: true }),
+                isConfigured: () => true, isEnabled: () => true,
+              },
+              status: {
+                async probeAccount() { return ${stage === "probe" ? "new Promise(() => {})" : "{ ok: true }"}; },
+                async buildCapabilitiesDiagnostics() { return ${stage === "diagnostics" ? "new Promise(() => {})" : "{ lines: [] }"}; },
+              },
+            };
+            export default { id: plugin.id, register(api) { api.registerChannel({ plugin }); } };`,
+          );
+          const configPath = path.join(tempHome, "openclaw.json");
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({
+              agents: { defaults: { workspace } },
+              plugins: { load: { paths: [pluginDir] }, entries: { [id]: { enabled: true } } },
+              channels: { [id]: { enabled: true } },
+              logging: { level: "silent", consoleLevel: "silent" },
+            }),
+          );
+
+          const result = runBuiltCli(
+            tempHome,
+            ["channels", "capabilities", "--json", "--timeout", "20"],
+            {
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            },
+            { inheritEnvironment: false },
+          );
+
+          expect(result.status, result.stderr).toBe(0);
+          const [report] = JSON.parse(result.stdout).channels;
+          expect(report.channel).toBe(id);
+          if (stage === "probe") {
+            expect(report.probe).toEqual({
+              ok: false,
+              timedOut: true,
+              error: "check timed out after 20ms",
+            });
+          } else {
+            expect(report.probe).toEqual({ ok: true });
+            expect(report.diagnostics).toEqual({
+              lines: [{ text: "Diagnostics: timed out after 20ms", tone: "error" }],
+              details: { timedOut: true },
+            });
+          }
+        },
+        { prefix: "openclaw-capabilities-timeout-e2e-" },
       );
     },
   );
@@ -245,6 +365,44 @@ describe("cli json stdout contract", () => {
         });
       },
       { prefix: "openclaw-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "secrets apply",
+      args: (tempHome: string) => [
+        "secrets",
+        "apply",
+        "--from",
+        path.join(tempHome, "missing-plan.json"),
+        "--json",
+      ],
+      status: 1,
+      message: (tempHome: string) =>
+        `Secrets plan file not found: ${path.join(tempHome, "missing-plan.json")}`,
+    },
+    {
+      name: "secrets store get",
+      args: () => ["secrets", "store", "get", "MISSING_VALUE", "--json"],
+      status: 3,
+      message: () => 'Secret store entry "MISSING_VALUE" was not found.',
+    },
+  ])("keeps $name failures machine-readable", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, testCase.args(tempHome), {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+        });
+
+        expect(result.status, result.stderr).toBe(testCase.status);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: testCase.message(tempHome) },
+        });
+        expect(result.stdout).not.toContain("[openclaw]");
+      },
+      { prefix: "openclaw-secrets-json-failure-e2e-" },
     );
   });
 
@@ -275,10 +433,54 @@ describe("cli json stdout contract", () => {
             error: { type: "cli_error", message: conflict.message },
           });
           expect(result.stdout).not.toContain("[openclaw]");
-          expect(result.stderr).toContain(conflict.message);
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(conflict.message);
         }
       },
       { prefix: "openclaw-qr-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "qr", command: ["qr"] },
+    { name: "clawbot qr", command: ["clawbot", "qr"] },
+  ])("keeps combined $name output flags as one JSON document on stdout", async ({ command }) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            gateway: {
+              bind: "custom",
+              customBindHost: "127.0.0.1",
+              auth: { mode: "token", token: "e2e-token" },
+            },
+          }),
+        );
+
+        for (const flags of [
+          ["--setup-code-only", "--json"],
+          ["--json", "--setup-code-only"],
+        ]) {
+          const result = runBuiltCli(
+            tempHome,
+            [...command, ...flags],
+            {
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            },
+            { inheritEnvironment: false },
+          );
+
+          expect(result.status, result.stderr).toBe(0);
+          const payload = JSON.parse(result.stdout);
+          expect(typeof payload.setupCode).toBe("string");
+          expect(payload.gatewayUrl).toBe("ws://127.0.0.1:18789");
+          expect(result.stderr).not.toContain(payload.setupCode);
+        }
+      },
+      { prefix: "openclaw-qr-setup-code-json-e2e-" },
     );
   });
 
@@ -303,7 +505,8 @@ describe("cli json stdout contract", () => {
             message: 'Sandbox explain agent "alpha" does not match session agent "beta".',
           },
         });
-        expect(result.stderr).toContain(
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(
           'Sandbox explain agent "alpha" does not match session agent "beta".',
         );
       },
@@ -317,9 +520,14 @@ describe("cli json stdout contract", () => {
         const preload = `data:text/javascript,${encodeURIComponent(
           'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
         )}`;
-        const result = runBuiltCli(tempHome, ["docs", "offline", "--json"], {
-          NODE_OPTIONS: `--import=${preload}`,
-        });
+        const result = runBuiltCli(
+          tempHome,
+          ["docs", "offline", "--json"],
+          {},
+          {
+            execArgv: [`--import=${preload}`],
+          },
+        );
 
         expect(result.status).toBe(1);
         expect(JSON.parse(result.stdout)).toEqual({
@@ -329,7 +537,8 @@ describe("cli json stdout contract", () => {
             message: "Docs search failed: offline fixture",
           },
         });
-        expect(result.stderr).toContain("Docs search failed: offline fixture");
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain("Docs search failed: offline fixture");
       },
       { prefix: "openclaw-docs-json-failure-e2e-" },
     );
@@ -470,7 +679,8 @@ describe("cli json stdout contract", () => {
         expect(payload.error.message).toBe(
           'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
         );
-        expect(payload.error.message).not.toMatch(/[\u001B\u0007]/u);
+        expect(payload.error.message).not.toContain("\u001B");
+        expect(payload.error.message).not.toContain("\u0007");
         expect(result.stdout).not.toContain("\\u001b");
         expect(result.stderr).toContain("\u001B[");
       },

@@ -32,57 +32,59 @@ export async function assertCodexArchiveDescendantsUnowned(params: {
     throw new Error("cannot verify Codex archive descendants for an invalid thread id");
   }
 
-  const seenCursors = new Set<string>();
   const seenThreadIds = new Set<string>([ancestorThreadId]);
-  let cursor: string | undefined;
+  let pageIndex = 0;
+  // Native archive also stops archived descendants resumed through collaboration.
+  for (const archived of [false, true]) {
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      if (pageIndex++ >= MAX_DESCENDANT_PAGES) {
+        throw new Error("Codex descendant enumeration exceeded its safety limit");
+      }
+      const response = await params.listPage({
+        ancestorThreadId,
+        archived,
+        limit: DESCENDANT_PAGE_LIMIT,
+        sortKey: "created_at",
+        sortDirection: "desc",
+        useStateDbOnly: true,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (!isJsonObject(response) || !Array.isArray(response.data)) {
+        throw new Error("Codex app-server returned an invalid descendant-list response");
+      }
+      if (response.data.length > DESCENDANT_PAGE_LIMIT) {
+        throw new Error("Codex app-server exceeded the descendant-list page limit");
+      }
 
-  for (let pageIndex = 0; pageIndex < MAX_DESCENDANT_PAGES; pageIndex += 1) {
-    const response = await params.listPage({
-      ancestorThreadId,
-      archived: false,
-      limit: DESCENDANT_PAGE_LIMIT,
-      sortKey: "created_at",
-      sortDirection: "desc",
-      useStateDbOnly: true,
-      ...(cursor ? { cursor } : {}),
-    });
-    if (!isJsonObject(response) || !Array.isArray(response.data)) {
-      throw new Error("Codex app-server returned an invalid descendant-list response");
-    }
-    if (response.data.length > DESCENDANT_PAGE_LIMIT) {
-      throw new Error("Codex app-server exceeded the descendant-list page limit");
-    }
+      for (const value of response.data) {
+        if (!isJsonObject(value)) {
+          throw new Error("Codex app-server returned an invalid descendant thread");
+        }
+        const descendantThreadId = readBoundedId(value.id, MAX_THREAD_ID_LENGTH);
+        if (!descendantThreadId) {
+          throw new Error("Codex app-server returned a descendant without a valid thread id");
+        }
+        if (seenThreadIds.has(descendantThreadId)) {
+          throw new Error("Codex app-server returned a cyclic descendant thread list");
+        }
+        seenThreadIds.add(descendantThreadId);
+        await params.assertDescendantIdle(descendantThreadId);
+        if (await params.bindingStore.hasOtherThreadOwner(descendantThreadId)) {
+          throw new Error(
+            "cannot archive a Codex thread while a spawned descendant is owned by an OpenClaw session",
+          );
+        }
+      }
 
-    for (const value of response.data) {
-      if (!isJsonObject(value)) {
-        throw new Error("Codex app-server returned an invalid descendant thread");
+      cursor = readNextCursor(response.nextCursor);
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          throw new Error("Codex app-server returned a repeated descendant-list cursor");
+        }
+        seenCursors.add(cursor);
       }
-      const descendantThreadId = readBoundedId(value.id, MAX_THREAD_ID_LENGTH);
-      if (!descendantThreadId) {
-        throw new Error("Codex app-server returned a descendant without a valid thread id");
-      }
-      if (seenThreadIds.has(descendantThreadId)) {
-        throw new Error("Codex app-server returned a cyclic descendant thread list");
-      }
-      seenThreadIds.add(descendantThreadId);
-      await params.assertDescendantIdle(descendantThreadId);
-      if (await params.bindingStore.hasOtherThreadOwner(descendantThreadId)) {
-        throw new Error(
-          "cannot archive a Codex thread while a spawned descendant is owned by an OpenClaw session",
-        );
-      }
-    }
-
-    const nextCursor = readNextCursor(response.nextCursor);
-    if (!nextCursor) {
-      return;
-    }
-    if (seenCursors.has(nextCursor)) {
-      throw new Error("Codex app-server returned a repeated descendant-list cursor");
-    }
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
+    } while (cursor);
   }
-
-  throw new Error("Codex descendant enumeration exceeded its safety limit");
 }

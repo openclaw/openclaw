@@ -286,16 +286,11 @@ export function describeGithubCopilotProviderRuntimeContract(
       ]);
       const createManifestModel = createManifestModelFactory("github-copilot", manifestCatalog);
 
-      async function resolveStaticModel(modelId: string, discoveryEnabled = false) {
+      async function resolveStaticModel(modelId: string) {
         const { createBundledStaticCatalogModelResolver } =
           await import("../../agents/embedded-agent-runner/model.static-catalog.js");
         const config = {
           models: { catalogRefresh: { enabled: false } },
-          plugins: {
-            entries: {
-              "github-copilot": { config: { discovery: { enabled: discoveryEnabled } } },
-            },
-          },
         };
         const metadataSnapshot = createPluginMetadataSnapshot({
           config,
@@ -337,50 +332,46 @@ export function describeGithubCopilotProviderRuntimeContract(
       }
 
       it.each([
-        ["gemini-3.6-flash", "openai-completions", false],
-        ["gemini-3.1-pro-preview", "openai-completions", false],
-        ["gemini-3.5-flash", "openai-completions", false],
-        ["gemini-2.5-pro", "openai-completions", false],
-        ["gpt-5.6-sol", "openai-responses", false],
-        ["claude-sonnet-5", "anthropic-messages", false],
-        ["gemini-3.6-flash", "openai-completions", true],
-      ] as const)(
-        "routes static %s through %s with discovery enabled=%s",
-        async (modelId, api, discoveryEnabled) => {
-          const { config, model } = await resolveStaticModel(modelId, discoveryEnabled);
-          expect(model.api).toBe(api);
-          if (api === "openai-completions") {
-            expect(model.compat).toMatchObject({
-              supportsStore: false,
-              supportsDeveloperRole: false,
-              supportsUsageInStreaming: false,
-              maxTokensField: "max_tokens",
-            });
-          }
-          const provider = requireProviderContractProvider("github-copilot");
-          expect(
-            provider.preferRuntimeResolvedModel?.({
-              config,
-              provider: "github-copilot",
-              modelId,
-            }),
-          ).toBe(discoveryEnabled);
-          // A missing prepared live row also occurs when enabled discovery is unavailable.
-          expect(
-            provider.resolveDynamicModel?.({
-              config,
-              provider: "github-copilot",
-              modelId,
-              modelRegistry: {
-                find: () => model,
-                getAll: () => [model],
-                getAvailable: () => [],
-                hasConfiguredAuth: () => false,
-              },
-            }),
-          ).toBeUndefined();
-        },
-      );
+        ["gemini-3.6-flash", "openai-completions"],
+        ["gemini-3.1-pro-preview", "openai-completions"],
+        ["gemini-3.5-flash", "openai-completions"],
+        ["gemini-2.5-pro", "openai-completions"],
+        ["gpt-5.6-sol", "openai-responses"],
+        ["claude-sonnet-5", "anthropic-messages"],
+      ] as const)("routes static %s through %s", async (modelId, api) => {
+        const { config, model } = await resolveStaticModel(modelId);
+        expect(model.api).toBe(api);
+        if (api === "openai-completions") {
+          expect(model.compat).toMatchObject({
+            supportsStore: false,
+            supportsDeveloperRole: false,
+            supportsUsageInStreaming: false,
+            maxTokensField: "max_tokens",
+          });
+        }
+        const provider = requireProviderContractProvider("github-copilot");
+        expect(
+          provider.preferRuntimeResolvedModel?.({
+            config,
+            provider: "github-copilot",
+            modelId,
+          }),
+        ).toBe(true);
+        // A missing prepared live row also occurs when enabled discovery is unavailable.
+        expect(
+          provider.resolveDynamicModel?.({
+            config,
+            provider: "github-copilot",
+            modelId,
+            modelRegistry: {
+              find: () => model,
+              getAll: () => [model],
+              getAvailable: () => [],
+              hasConfiguredAuth: () => false,
+            },
+          }),
+        ).toBeUndefined();
+      });
 
       it.each([
         ["minimal", "low"],
@@ -689,6 +680,50 @@ export function describeOpenAIProviderRuntimeContract(
       await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
     });
 
+    it("uses the subscription budget with a manifest-backed startup registry", async () => {
+      const [{ ModelRegistry }, { AuthStorage }] = await Promise.all([
+        import("../../agents/sessions/model-registry.js"),
+        import("../../agents/sessions/auth-storage.js"),
+      ]);
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), undefined, {
+        modelsJsonContents: null,
+        pluginCatalogs: [],
+        staticProviderConfigs: {
+          openai: buildManifestModelProviderConfig({
+            providerId: "openai",
+            catalog: manifestCatalog,
+          }),
+        },
+      });
+      // Startup publishes the shared Platform manifest before account discovery.
+      expect(registry.find("openai", "gpt-6.1-sol")).toMatchObject({
+        api: "openai-responses",
+        contextTokens: 272_000,
+      });
+      const provider = requireProviderContractProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-6.1-sol",
+        agentRuntimeId: "openclaw",
+        authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
+        modelRegistry: registry,
+      });
+      expect(model).toMatchObject({
+        api: "openai-chatgpt-responses",
+        contextTokens: 500_000,
+      });
+      expect(
+        provider.resolveDynamicModel?.({
+          provider: "openai",
+          modelId: "gpt-6.1-sol",
+          agentRuntimeId: "openclaw",
+          authProfileMode: "api_key",
+          modelRegistry: registry,
+        }),
+      ).toMatchObject({ api: "openai-responses", contextTokens: 272_000 });
+    });
+
     it("owns forward-compat codex models", () => {
       const provider = requireProviderContractProvider("openai");
       // Codex gpt-5.4 has no OpenAI manifest row; this keeps its transport mapping independent.
@@ -955,7 +990,8 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
             ZAI_API_KEY: "env-zai-token",
           } as NodeJS.ProcessEnv,
           provider: "zai",
-          resolveApiKeyFromConfigAndStore: () => "env-zai-token",
+          resolveApiKeyFromConfigAndStore: () => undefined,
+          resolveApiKeyCandidatesFromConfigAndStore: async () => ["env-zai-token"],
           resolveOAuthToken: async () => null,
         }),
       ).resolves.toEqual({

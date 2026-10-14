@@ -1,5 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
@@ -7,6 +13,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -29,8 +37,19 @@ import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
 
+const fault = useSqliteWorkerFault([
+  {
+    name: "fail_second_source",
+    match: /^insert into transcript_events\b/u,
+    sql: `CREATE TEMP TRIGGER fail_second_source BEFORE INSERT ON main.transcript_events
+      WHEN instr(NEW.event_json, 'second:user') > 0
+      BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END;`,
+  },
+]);
+
 describe("followup queue durable input consumption", () => {
   const fixture = useTempSessionsFixture("openclaw-queue-pending-");
+  let config: OpenClawConfig;
   let caseSequence = 0;
   let sessionKey = "";
   const sessionId = "queue-pending-session";
@@ -38,6 +57,8 @@ describe("followup queue durable input consumption", () => {
   const scope = () => ({ agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() });
 
   beforeEach(async () => {
+    config = { session: { store: fixture.storePath() } };
+    setRuntimeConfigSnapshot(config);
     sessionKey = `agent:main:queue-pending-${++caseSequence}`;
     vi.mocked(executeAgentTurn).mockReset();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
@@ -49,6 +70,7 @@ describe("followup queue durable input consumption", () => {
       recorder.finishPendingInput?.("interrupted");
     }
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   const createStagedRun = async (runId: string) => {
@@ -58,7 +80,7 @@ describe("followup queue durable input consumption", () => {
     }));
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: `${runId} private source`, idempotencyKey: `${runId}:user` },
-      target: { ...scope(), sessionEntry: undefined },
+      target: { ...scope(), sessionEntry: undefined, config },
       beforeMessageWrite,
       updateMode: "none",
     });
@@ -76,7 +98,7 @@ describe("followup queue durable input consumption", () => {
         agentId: "main",
         sessionKey,
         sessionId,
-        config: { session: { store: fixture.storePath() } },
+        config,
       },
     };
     return { run, beforeMessageWrite };
@@ -90,6 +112,54 @@ describe("followup queue durable input consumption", () => {
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
 
+  it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
+    const first = await createStagedRun("first");
+    const second = await createStagedRun("second");
+    await persistQueuedRun(first.run);
+    fault.enable();
+    try {
+      await expect(persistQueuedRun(second.run)).rejects.toThrow("injected second source failure");
+    } finally {
+      fault.disable();
+    }
+    expect(first.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+    expect(second.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
+    const before = await loadTranscriptEvents(scope());
+    const settings = { mode: "collect" as const, debounceMs: 0 };
+    expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
+    expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
+    const prompts: string[] = [];
+    const consumers: UserTurnTranscriptRecorder[] = [];
+    const failures: unknown[] = [];
+    scheduleFollowupDrain(sessionKey, async (run) => {
+      try {
+        await admitFollowupRunLifecycle(run);
+        await persistQueuedRun(run);
+        prompts.push(run.prompt);
+        consumers.push(run.userTurnTranscriptRecorder!);
+      } catch (error) {
+        failures.push(error);
+      }
+    });
+    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+    expect(failures).toEqual([]);
+    expect(prompts).toEqual(["first approved", "second approved"]);
+    expect(consumers).toEqual([
+      first.run.userTurnTranscriptRecorder,
+      second.run.userTurnTranscriptRecorder,
+    ]);
+    const after = await loadTranscriptEvents(scope());
+    expect(after.slice(0, before.length)).toEqual(before);
+    const messages = after.filter(isRecord).filter((event) => event.type === "message");
+    expect(messages.map((event) => event.message)).toEqual([
+      expect.objectContaining({ content: "first approved", idempotencyKey: "first:user" }),
+      expect.objectContaining({ content: "second approved", idempotencyKey: "second:user" }),
+    ]);
+    expect((await listSessionPendingInputs(scope())).items).toEqual([]);
+    expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
+    expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
+  });
+
   it("keeps unstaged input out of an already-approved collect group", async () => {
     const staged = await createStagedRun("staged");
     const unstaged: FollowupRun = {
@@ -99,7 +169,7 @@ describe("followup queue durable input consumption", () => {
       messageId: "unstaged",
       userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
         input: { text: "unstaged transcript body" },
-        target: { ...scope(), sessionEntry: undefined },
+        target: { ...scope(), sessionEntry: undefined, config: staged.run.run.config },
       }),
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
     };
@@ -119,9 +189,9 @@ describe("followup queue durable input consumption", () => {
     expect(calls[1]?.transcriptPrompt).toContain("unstaged transcript body");
   });
 
-  it.each([false, true])(
+  it.for([false, true])(
     "binds collected custody before runtime append (cancel during preparation: %s)",
-    async (abortDuringPreparation) => {
+    async (abortDuringPreparation, { signal }) => {
       const first = await createStagedRun("first");
       const second = await createStagedRun("second");
       first.run.prompt = "first private source";
@@ -132,6 +202,7 @@ describe("followup queue durable input consumption", () => {
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
       const pendingTotals: number[] = [];
+      const drainReleased = createDeferred<"settled" | "reset">();
       vi.mocked(executeAgentTurn).mockImplementation(async (params) => {
         const message = await params.followupRun.userTurnTranscriptRecorder?.resolveMessage();
         if (!message) {
@@ -142,11 +213,14 @@ describe("followup queue durable input consumption", () => {
         return { runId: "collected-run", outcome: { kind: "rejected", payload: { text: "done" } } };
       });
       scheduleFollowupDrain(sessionKey, async (run) => {
+        const observeRelease = captureGatewayRootWorkReleaseObserver();
+        assert(observeRelease, "followup execution must own root admission");
+        observeRelease(drainReleased.resolve);
         calls.push(run);
         const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
         const typing = createTypingController({});
         try {
-          pendingTotals.push(listSessionPendingInputs(scope()).total);
+          pendingTotals.push((await listSessionPendingInputs(scope())).total);
           await admitFollowupRunLifecycle(run);
           if (abortDuringPreparation) {
             const recorder = second.run.userTurnTranscriptRecorder!;
@@ -176,7 +250,7 @@ describe("followup queue durable input consumption", () => {
             onToolResult: async () => {},
             onCompactionNoticePayload: async () => {},
           });
-          pendingTotals.push(listSessionPendingInputs(scope()).total);
+          pendingTotals.push((await listSessionPendingInputs(scope())).total);
         } catch (error) {
           failures.push(error);
         } finally {
@@ -184,7 +258,8 @@ describe("followup queue durable input consumption", () => {
           typing.cleanup();
         }
       });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+      expect(await withinTest(drainReleased.promise, signal)).toBe("settled");
+      expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
 
       expect(failures).toHaveLength(abortDuringPreparation ? 1 : 0);
       expect(pendingTotals).toEqual(abortDuringPreparation ? [2] : [2, 0]);
@@ -204,7 +279,7 @@ describe("followup queue durable input consumption", () => {
       if (!abortDuringPreparation) {
         expect(messages[0]?.message).toMatchObject({ role: "user", content: expected });
       }
-      expect(listSessionPendingInputs(scope()).total).toBe(abortDuringPreparation ? 2 : 0);
+      expect((await listSessionPendingInputs(scope())).total).toBe(abortDuringPreparation ? 2 : 0);
       expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
       expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
     },
@@ -233,7 +308,9 @@ describe("followup queue durable input consumption", () => {
       try {
         await admitFollowupRunLifecycle(run);
         await persistQueuedRun(run);
-        pendingRunIds.push(listSessionPendingInputs(scope()).items.map((input) => input.runId));
+        pendingRunIds.push(
+          (await listSessionPendingInputs(scope())).items.map((input) => input.runId),
+        );
       } catch (error) {
         failures.push(error);
       }

@@ -1,37 +1,59 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { z } from "zod";
 
-type ReadinessDeps = {
-  execFileSync: typeof execFileSync;
-};
-
-const DEFAULT_DEPS: ReadinessDeps = { execFileSync };
+const MxcProbeOutputSchema = z.object({
+  tier: z.enum(["base-container", "appcontainer-bfs", "appcontainer-dacl"]).optional(),
+  warnings: z.array(z.string()).default([]),
+  error: z.string().optional(),
+});
 
 function resolveWindowsSystemExecutable(name: string): string {
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
   return path.win32.join(systemRoot || "C:\\Windows", "System32", name);
 }
 
-// The IsoEnvBroker service is demand-started, so it does not need to be RUNNING
-// at plugin load: we only require that it is installed. `sc.exe query` exits
-// non-zero (1060) when the service is absent, which surfaces as a thrown error;
-// a successful query means the service exists and Windows will start it on use.
-function assertWindowsIsoEnvBrokerInstalled(deps: ReadinessDeps): void {
+// `wxc-exec --probe` can exit 0 even when detection fails; only a selected tier
+// means this host can run MXC sandboxes.
+function probeMxcIsolationTier(executablePath: string): { tier: string; warnings: string[] } {
+  const notReady = (reason: string, cause?: unknown) =>
+    new Error(
+      `[mxc] MXC Windows ProcessContainer sandbox is not ready: ${reason}. ` +
+        `Run "${executablePath}" --probe for host details. ` +
+        `The selected executor must be compatible with MXC 0.8.0 and support --probe. ` +
+        `If mxcBinaryPath points to an older executor, update it or unset ` +
+        `plugins.entries.mxc.config.mxcBinaryPath and restart the Gateway to use ` +
+        `the bundled SDK executor.`,
+      cause === undefined ? undefined : { cause },
+    );
+  let output: string;
   try {
-    deps.execFileSync(resolveWindowsSystemExecutable("sc.exe"), ["query", "IsoEnvBroker"], {
+    output = execFileSync(executablePath, ["--probe"], {
       encoding: "utf-8",
       stdio: "pipe",
-      timeout: 5_000,
+      timeout: 15_000,
       windowsHide: true,
     });
   } catch (error) {
     const detail = error instanceof Error && error.message ? `: ${error.message.trim()}` : "";
-    throw new Error(
-      `[mxc] MXC Windows ProcessContainer sandbox is not ready: IsoEnvBroker service is not installed${detail}. ` +
-        `Install the IsoEnvBroker service before enabling MXC sandbox execution.`,
-      { cause: error },
-    );
+    throw notReady(`the MXC host check failed${detail}`, error);
   }
+  let probe: unknown;
+  try {
+    probe = JSON.parse(output);
+  } catch (error) {
+    throw notReady("the MXC host check did not return JSON", error);
+  }
+  const parsed = MxcProbeOutputSchema.safeParse(probe);
+  if (!parsed.success) {
+    throw notReady("the MXC host check returned an unexpected result", parsed.error);
+  }
+  const { tier, warnings, error } = parsed.data;
+  if (!tier) {
+    const reason = error || "the check reported no isolation tier";
+    throw notReady(`MXC cannot select an isolation tier on this host (${reason})`);
+  }
+  return { tier, warnings };
 }
 
 // AppContainer processes need directory-traversal/list rights on the system
@@ -42,11 +64,11 @@ function assertWindowsIsoEnvBrokerInstalled(deps: ReadinessDeps): void {
 // sandbox fails with "Access is denied". This is advisory: the sandbox still
 // runs basic cmd.exe read/write workloads without it, so a missing grant warns
 // rather than blocking activation.
-function isSystemDrivePrepared(deps: ReadinessDeps): boolean {
+function isSystemDrivePrepared(): boolean {
   const systemDrive = process.env.SystemDrive || "C:";
   let output: string;
   try {
-    output = deps.execFileSync(resolveWindowsSystemExecutable("icacls.exe"), [`${systemDrive}\\`], {
+    output = execFileSync(resolveWindowsSystemExecutable("icacls.exe"), [`${systemDrive}\\`], {
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 5_000,
@@ -76,34 +98,28 @@ function systemDrivePrepWarning(systemDrive: string): string {
  * Emits an advisory warning when the system drive is not prepared for
  * AppContainer directory access. Non-fatal: the sandbox still activates.
  */
-export function warnMxcHostPrepIfNeeded(
-  params: {
-    platform?: NodeJS.Platform;
-    deps?: Partial<ReadinessDeps>;
-    warn?: (message: string) => void;
-  } = {},
-): void {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32") {
+export function warnMxcHostPrepIfNeeded(): void {
+  if (process.platform !== "win32") {
     return;
   }
-  const deps = { ...DEFAULT_DEPS, ...params.deps };
-  if (!isSystemDrivePrepared(deps)) {
-    const warn = params.warn ?? ((message: string) => console.warn(message));
-    warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
+  if (!isSystemDrivePrepared()) {
+    console.warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
   }
 }
 
-export function assertMxcReadiness(
-  params: {
-    platform?: NodeJS.Platform;
-    deps?: Partial<ReadinessDeps>;
-  } = {},
-): void {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32") {
+/**
+ * Fails plugin activation unless MXC's host probe selects an isolation tier for
+ * `executablePath`. Degradation warnings from the probe are reported but do not
+ * block activation.
+ */
+export function assertMxcReadiness(params: { executablePath: string }): void {
+  if (process.platform !== "win32") {
     return;
   }
-  const deps = { ...DEFAULT_DEPS, ...params.deps };
-  assertWindowsIsoEnvBrokerInstalled(deps);
+  const probe = probeMxcIsolationTier(params.executablePath);
+  if (probe.warnings.length > 0) {
+    console.warn(
+      `[mxc] MXC sandbox is using the ${probe.tier} isolation tier: ${probe.warnings.join("; ")}`,
+    );
+  }
 }

@@ -158,9 +158,13 @@ export function pinExecToolTarget(tool: AnyAgentTool, target: PinnedExecToolTarg
   const pinArgs = (args: unknown) => pinExecToolArgs(args, target, pinnedNode);
   const prepare = tool.prepareBeforeToolCallParams;
   const finalize = tool.finalizeBeforeToolCallParams;
+  const getExecutionTimeoutMs = tool.getExecutionTimeoutMs;
   return {
     ...tool,
     parameters: restrictExecToolParameters(tool.parameters, target.host, Boolean(pinnedNode)),
+    ...(getExecutionTimeoutMs
+      ? { getExecutionTimeoutMs: (args: unknown) => getExecutionTimeoutMs(pinArgs(args)) }
+      : {}),
     // The whole tool lifecycle sees only pinned arguments: preparation resolves
     // workdir/env against the pinned host, finalize's host-consistency checks
     // compare against the pinned host, and execution runs the pinned host —

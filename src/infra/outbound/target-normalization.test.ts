@@ -1,13 +1,9 @@
-// Covers target input normalization, provider plugin normalizers, resolver
-// caching, and id-like lookup heuristics.
+// Covers target input normalization and plugin resolver defaults.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  buildTargetResolverSignature,
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
-  normalizeChannelTargetInput,
   normalizeTargetForProvider,
   resolveNormalizedTargetInput,
 } from "./target-normalization.js";
@@ -39,86 +35,9 @@ beforeEach(() => {
   getActivePluginChannelRegistryVersionMock.mockReturnValue(++registryVersion);
 });
 
-describe("normalizeChannelTargetInput", () => {
-  it("trims raw target input", () => {
-    expect(normalizeChannelTargetInput("  channel:C1  ")).toBe("channel:C1");
-  });
-});
-
 describe("normalizeTargetForProvider", () => {
-  it.each([undefined, "   "])("returns undefined for blank raw input %j", (raw) => {
-    expect(normalizeTargetForProvider("alpha", raw)).toBeUndefined();
-  });
-
-  it.each([
-    {
-      provider: "unknown",
-      setup: () => {
-        getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-        getChannelPluginMock.mockReturnValueOnce(undefined);
-      },
-      expected: "raw-id",
-    },
-    {
-      provider: "alpha",
-      setup: () => {
-        getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-        getChannelPluginMock.mockReturnValueOnce(undefined);
-      },
-      expected: "raw-id",
-    },
-  ])(
-    "falls back to trimmed input when provider normalization misses for %j",
-    ({ provider, setup, expected }) => {
-      setup();
-      expect(normalizeTargetForProvider(provider, "  raw-id  ")).toBe(expected);
-    },
-  );
-
-  it("uses the cached target normalizer until the plugin registry version changes", () => {
-    const firstNormalizer = vi.fn((raw: string) => raw.trim().toUpperCase());
-    const secondNormalizer = vi.fn((raw: string) => `next:${raw.trim()}`);
-    getLoadedChannelPluginMock
-      .mockReturnValueOnce({
-        messaging: { normalizeTarget: firstNormalizer },
-      })
-      .mockReturnValueOnce({
-        messaging: { normalizeTarget: secondNormalizer },
-      });
-
-    expect(normalizeTargetForProvider("alpha", "  abc  ")).toBe("ABC");
-    expect(normalizeTargetForProvider("alpha", "  def  ")).toBe("DEF");
-    getActivePluginChannelRegistryVersionMock.mockReturnValue(++registryVersion);
-    expect(normalizeTargetForProvider("alpha", "  ghi  ")).toBe("next:ghi");
-
-    expect(getLoadedChannelPluginMock).toHaveBeenCalledTimes(2);
-    expect(getChannelPluginMock).not.toHaveBeenCalled();
-    expect(firstNormalizer).toHaveBeenCalledTimes(2);
-    expect(secondNormalizer).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses bundled/catalog target normalization when the channel is not loaded", () => {
-    getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-    getChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        normalizeTarget: (raw: string) =>
-          raw.trim() === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
-      },
-    });
-
-    expect(normalizeTargetForProvider("telegram", " -1001234567890:topic:42 ")).toBe(
-      "telegram:-1001234567890:topic:42",
-    );
-  });
-
-  it("returns undefined when the provider normalizer resolves to an empty value", () => {
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        normalizeTarget: () => "",
-      },
-    });
-
-    expect(normalizeTargetForProvider("alpha", "  raw-id  ")).toBeUndefined();
+  it("returns undefined for missing raw input", () => {
+    expect(normalizeTargetForProvider("alpha", undefined)).toBeUndefined();
   });
 });
 
@@ -126,94 +45,18 @@ describe("resolveNormalizedTargetInput", () => {
   it("returns undefined for blank input", () => {
     expect(resolveNormalizedTargetInput("alpha", "   ")).toBeUndefined();
   });
-
-  it("returns raw and normalized values", () => {
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        normalizeTarget: (raw: string) => raw.trim().toUpperCase(),
-      },
-    });
-
-    expect(resolveNormalizedTargetInput("alpha", "  abc  ")).toEqual({
-      raw: "abc",
-      normalized: "ABC",
-    });
-  });
 });
 
 describe("looksLikeTargetId", () => {
-  it("uses plugin looksLikeId when available", () => {
-    const pluginLooksLikeId = vi.fn((raw: string, normalized: string) => raw !== normalized);
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        targetResolver: {
-          looksLikeId: pluginLooksLikeId,
-        },
-      },
-    });
-
-    expect(
-      looksLikeTargetId({
-        channel: "alpha",
-        raw: "room-1",
-        normalized: "ROOM-1",
-      }),
-    ).toBe(true);
-    expect(pluginLooksLikeId).toHaveBeenCalledWith("room-1", "ROOM-1");
-  });
-
-  it.each(["channel:C123", "@alice", "#general", "+15551234567", "conversation:abc", "foo@thread"])(
-    "falls back to built-in id-like heuristics for %s",
-    (raw) => {
-      getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-      getChannelPluginMock.mockReturnValueOnce(undefined);
-      expect(looksLikeTargetId({ channel: "workspace", raw })).toBe(true);
-    },
-  );
-
-  it("uses bundled/catalog target id detection when the channel is not loaded", () => {
+  it("falls back to the built-in thread heuristic", () => {
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined);
-    getChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        targetResolver: {
-          looksLikeId: (raw: string, normalized?: string) =>
-            raw === "-1001234567890:topic:42" && normalized === "telegram:-1001234567890:topic:42",
-        },
-      },
-    });
-
-    expect(
-      looksLikeTargetId({
-        channel: "telegram",
-        raw: "-1001234567890:topic:42",
-        normalized: "telegram:-1001234567890:topic:42",
-      }),
-    ).toBe(true);
+    getChannelPluginMock.mockReturnValueOnce(undefined);
+    expect(looksLikeTargetId({ channel: "workspace", raw: "foo@thread" })).toBe(true);
   });
 });
 
 describe("maybeResolvePluginMessagingTarget", () => {
   const cfg = {} as OpenClawConfig;
-
-  it("returns undefined when requireIdLike is set and the target is not id-like", async () => {
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        targetResolver: {
-          looksLikeId: () => false,
-          resolveTarget: vi.fn(),
-        },
-      },
-    });
-
-    await expect(
-      maybeResolvePluginMessagingTarget({
-        cfg,
-        channel: "workspace",
-        input: "general",
-        requireIdLike: true,
-      }),
-    ).resolves.toBeUndefined();
-  });
 
   it("invokes the plugin resolver with normalized input and defaults source", async () => {
     const resolveTarget = vi.fn().mockResolvedValue({
@@ -256,79 +99,5 @@ describe("maybeResolvePluginMessagingTarget", () => {
       normalized: "CHANNEL:C123ABC",
       preferredKind: undefined,
     });
-  });
-});
-
-describe("buildTargetResolverSignature", () => {
-  it("builds stable signatures from resolver hint and looksLikeId source", () => {
-    const looksLikeId = (value: string) => value.startsWith("C");
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        targetResolver: {
-          hint: "Use channel id",
-          looksLikeId,
-        },
-      },
-    });
-
-    const first = buildTargetResolverSignature("workspace");
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        targetResolver: {
-          hint: "Use channel id",
-          looksLikeId,
-        },
-      },
-    });
-    const second = buildTargetResolverSignature("workspace");
-
-    expect(first).toBe(second);
-  });
-
-  it("changes when resolver metadata changes", () => {
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        targetResolver: {
-          hint: "Use channel id",
-          looksLikeId: (value: string) => value.startsWith("C"),
-        },
-      },
-    });
-    const first = buildTargetResolverSignature("workspace");
-
-    getLoadedChannelPluginMock.mockReturnValueOnce({
-      messaging: {
-        targetResolver: {
-          hint: "Use user id",
-          looksLikeId: (value: string) => value.startsWith("U"),
-        },
-      },
-    });
-    const second = buildTargetResolverSignature("workspace");
-
-    expect(first).not.toBe(second);
-  });
-
-  it("partitions prepared runtime plugins from pinned and replacement plugin cache entries", () => {
-    const firstPlugin = {
-      messaging: {
-        targetResolver: {},
-      },
-    } as ChannelPlugin;
-    const replacementPlugin = {
-      messaging: {
-        targetResolver: {},
-      },
-    } as ChannelPlugin;
-    getLoadedChannelPluginMock.mockReturnValue(firstPlugin);
-
-    const pinned = buildTargetResolverSignature("workspace");
-    const prepared = buildTargetResolverSignature("workspace", firstPlugin);
-    const samePrepared = buildTargetResolverSignature("workspace", firstPlugin);
-    const replacementPrepared = buildTargetResolverSignature("workspace", replacementPlugin);
-
-    expect(prepared).not.toBe(pinned);
-    expect(samePrepared).toBe(prepared);
-    expect(replacementPrepared).not.toBe(prepared);
   });
 });

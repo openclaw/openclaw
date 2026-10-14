@@ -3,13 +3,8 @@ import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 export class SessionGoalTransitionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionGoalTransitionError";
-  }
+  override name = "SessionGoalTransitionError";
 }
-
-const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["complete"]);
 
 function normalizeTokenCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -23,12 +18,6 @@ function resolveEntryFreshTotalTokens(
   return normalizeTokenCount(resolveFreshSessionTotalTokens(entry));
 }
 
-function resolveEntryGoalStartTokens(
-  entry: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
-): number {
-  return resolveEntryFreshTotalTokens(entry) ?? 0;
-}
-
 function normalizeTokenBudget(value: number | undefined): number | undefined {
   const normalized = normalizeTokenCount(value);
   return normalized && normalized > 0 ? normalized : undefined;
@@ -39,8 +28,6 @@ export function accountSessionGoalUsage(
   now: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
-  // `goal` is introduced here as a core-owned slot; no shipped plugin-owned
-  // goal state exists to migrate, and plugin slot registration now reserves it.
   const goal = entry.goal;
   if (!goal) {
     return undefined;
@@ -90,7 +77,7 @@ export function buildCreatedSessionGoal(
     throw new SessionGoalTransitionError("goal already exists");
   }
   const tokenBudget = normalizeTokenBudget(options.tokenBudget);
-  const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
+  const tokenStart = resolveEntryFreshTotalTokens(entry);
   return {
     schemaVersion: 1,
     id: crypto.randomUUID(),
@@ -98,8 +85,8 @@ export function buildCreatedSessionGoal(
     status: "active",
     createdAt: now,
     updatedAt: now,
-    tokenStart: resolveEntryGoalStartTokens(entry),
-    tokenStartFresh,
+    tokenStart: tokenStart ?? 0,
+    tokenStartFresh: tokenStart !== undefined,
     tokensUsed: 0,
     ...(tokenBudget ? { tokenBudget } : {}),
     continuationTurns: 0,
@@ -118,7 +105,7 @@ export function buildUpdatedSessionGoalStatus(
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
   }
-  if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
+  if (accounted.status === "complete" && accounted.status !== options.status) {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
   }
   const resetsBudgetWindow =
@@ -135,7 +122,7 @@ export function buildUpdatedSessionGoalStatus(
     ...(options.note ? { lastStatusNote: options.note } : {}),
     ...(options.status === "paused" ? { pausedAt: now } : {}),
     ...(options.status === "blocked" ? { blockedAt: now } : {}),
-    ...(options.status === "complete" ? { completedAt: now } : {}),
+    ...(options.status === "complete" ? { completedAt: accounted.completedAt ?? now } : {}),
   };
   if (resetsBudgetWindow) {
     next.tokenStart = freshTokenStart ?? 0;
@@ -167,7 +154,7 @@ export function buildUpdatedSessionGoalObjective(
   if (!accounted) {
     throw new SessionGoalTransitionError("goal not found");
   }
-  if (TERMINAL_GOAL_STATUSES.has(accounted.status)) {
+  if (accounted.status === "complete") {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
   }
   // Rewording keeps status and token accounting; only the target moves.

@@ -47,19 +47,36 @@ describe("chat pane header identity links", () => {
     const ownerLink = container.querySelector<HTMLAnchorElement>(
       "a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
     );
-    expect(ownerLink?.getAttribute("href")).toBe("/activity?person=ada");
+    expect(ownerLink?.getAttribute("href")).toBe("/activity/ada");
     const participantLinks = [
       ...container.querySelectorAll<HTMLAnchorElement>(
         ".chat-pane__participants a.person-activity-avatar-link",
       ),
     ];
     expect(participantLinks.map((link) => link.getAttribute("href"))).toEqual([
-      "/activity?person=mira",
-      "/activity?person=riley",
+      "/activity/mira",
+      "/activity/riley",
     ]);
 
     ownerLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenCalledWith("ada");
+    expect(navigate).toHaveBeenCalledWith("ada", "Ada King");
+  });
+
+  it("retains the rename control and focus while header facts and callbacks update", () => {
+    const previousRename = vi.fn();
+    const currentRename = vi.fn();
+    const { container, update } = mountHeader({ onBeginRename: previousRename });
+    const button = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button")!;
+    const title = button.querySelector(".chat-pane__session-title-text");
+    button.focus();
+    update({ title: "Current session", onBeginRename: currentRename, ownerViewing: true });
+    expect(container.querySelector(".chat-pane__session-title-button")).toBe(button);
+    expect(button.querySelector(".chat-pane__session-title-text")).toBe(title);
+    expect(button.textContent).toBe("Current session");
+    expect(document.activeElement).toBe(button);
+    button.click();
+    expect(currentRename).toHaveBeenCalledOnce();
+    expect(previousRename).not.toHaveBeenCalled();
   });
 
   it("leaves identities unlinked when the header has no activity routing", () => {

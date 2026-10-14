@@ -28,25 +28,13 @@ const VENICE_DISCOVERY_HARD_MAX_TOKENS = 131_072;
 const VENICE_DISCOVERY_TIMEOUT_MS = 10_000;
 const VENICE_DISCOVERY_CACHE_TTL_MS = 60_000;
 
-function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
-  return {
-    ...entry,
-    compat: {
-      supportsUsageInStreaming: false,
-      ...entry.compat,
-    },
-  };
-}
-
-/** Venice's decorated network-free fallback catalog. */
 export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
   providerId: "venice",
   catalog: VENICE_MANIFEST_CATALOG,
-}).models.map(decorateVeniceModelDefinition);
+}).models;
 
 interface VeniceModelSpec {
   name: string;
-  privacy: "private" | "anonymized";
   availableContextTokens?: number;
   maxCompletionTokens?: number;
   pricing?: unknown;
@@ -87,11 +75,6 @@ function resolveApiMaxCompletionTokens(params: {
   return Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
 }
 
-function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
-  const supportsFunctionCalling = apiModel.model_spec?.capabilities?.supportsFunctionCalling;
-  return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
-}
-
 function projectVeniceModels(
   rows: readonly unknown[],
   fallback: ModelProviderConfig,
@@ -112,7 +95,7 @@ function projectVeniceModels(
       apiModel,
       knownMaxTokens: catalogEntry?.maxTokens,
     });
-    const apiSupportsTools = resolveApiSupportsTools(apiModel);
+    const supportsTools = apiModel.model_spec?.capabilities?.supportsFunctionCalling;
     if (catalogEntry) {
       const definition: ModelDefinitionConfig = {
         ...catalogEntry,
@@ -123,7 +106,7 @@ function projectVeniceModels(
       if (apiMaxTokens !== undefined) {
         definition.maxTokens = apiMaxTokens;
       }
-      if (apiSupportsTools === false) {
+      if (supportsTools === false) {
         definition.compat = {
           ...definition.compat,
           supportsTools: false,
@@ -150,7 +133,7 @@ function projectVeniceModels(
         maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
         compat: {
           supportsUsageInStreaming: false,
-          ...(apiSupportsTools === false ? { supportsTools: false } : {}),
+          ...(supportsTools === false ? { supportsTools: false } : {}),
         },
       });
     }
@@ -161,6 +144,6 @@ function projectVeniceModels(
 export const VENICE_MODEL_DISCOVERY_OPTIONS = {
   timeoutMs: VENICE_DISCOVERY_TIMEOUT_MS,
   ttlMs: VENICE_DISCOVERY_CACHE_TTL_MS,
-  buildRequestHeaders: () => ({ Accept: "application/json" }),
+  authentication: "none",
   projectRows: projectVeniceModels,
 } as const;

@@ -9,6 +9,7 @@ import { WebSocketServer } from "ws";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 type RealtimeOutcome = {
+  callbackOrder: string[];
   errors: string[];
   outcomes: RealtimeVoiceResponseOutcome[];
   transcripts: Array<{ speaker: string; text: string; final: boolean }>;
@@ -16,6 +17,7 @@ type RealtimeOutcome = {
 };
 
 type CaptureRealtimeOutcomeOptions = {
+  closeOnToolCall?: boolean;
   completeQueuedResponse?: boolean;
   queuedUserMessage?: string;
   onClientEvent?: (event: Record<string, unknown>) => void;
@@ -27,7 +29,13 @@ async function captureRealtimeOutcome(
   options: CaptureRealtimeOutcomeOptions = {},
 ): Promise<RealtimeOutcome> {
   const events = Array.isArray(eventInput) ? eventInput : [eventInput];
-  const outcome: RealtimeOutcome = { errors: [], outcomes: [], transcripts: [], tools: [] };
+  const outcome: RealtimeOutcome = {
+    callbackOrder: [],
+    errors: [],
+    outcomes: [],
+    transcripts: [],
+    tools: [],
+  };
   const serverEventHandled = createDeferred<void>();
   const responseCreatedHandled = createDeferred<void>();
   const queuedResponseCompleted = createDeferred<void>();
@@ -91,6 +99,7 @@ async function captureRealtimeOutcome(
     onClearAudio() {},
     onError: (error) => outcome.errors.push(error.message),
     onResponseDone: (responseOutcome) => {
+      outcome.callbackOrder.push("outcome");
       outcome.outcomes.push(responseOutcome);
       if (responseOutcome.responseId === "response_2") {
         queuedResponseCompleted.resolve();
@@ -99,9 +108,21 @@ async function captureRealtimeOutcome(
         throw new Error("consumer callback failed");
       }
     },
-    onTranscript: (speaker, text, final) => outcome.transcripts.push({ speaker, text, final }),
-    onToolCall: (tool) => outcome.tools.push(tool),
+    onTranscript: (speaker, text, final) => {
+      outcome.callbackOrder.push("transcript");
+      outcome.transcripts.push({ speaker, text, final });
+    },
+    onToolCall: (tool) => {
+      outcome.callbackOrder.push("tool");
+      outcome.tools.push(tool);
+      if (options.closeOnToolCall) {
+        void bridge.close();
+      }
+    },
     onEvent: (observed) => {
+      if (observed.direction === "server" && observed.type === "response.done") {
+        outcome.callbackOrder.push("terminal");
+      }
       if (observed.direction === "server" && observed.type === "response.created") {
         responseCreatedHandled.resolve();
       }
@@ -133,7 +154,7 @@ async function captureRealtimeOutcome(
     }
     return outcome;
   } finally {
-    bridge.close();
+    await bridge.close();
     for (const socket of sockets) {
       socket.terminate();
     }
@@ -204,6 +225,7 @@ describe("xAI realtime terminal event ownership", () => {
     );
 
     expect(outcome).toEqual({
+      callbackOrder: ["outcome", "terminal"],
       errors: [],
       outcomes: [{ status: "completed" }],
       transcripts: [],
@@ -214,6 +236,34 @@ describe("xAI realtime terminal event ownership", () => {
       "conversation.item.create",
       "response.create",
     ]);
+  });
+
+  it("stops terminal output when a tool callback closes the bridge", async () => {
+    const outcome = await captureRealtimeOutcome(
+      {
+        type: "response.done",
+        response: {
+          id: "response_1",
+          status: "completed",
+          output: [
+            completedTool,
+            { ...completedTool, id: "item_late", call_id: "call_late" },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_audio", transcript: "late answer" }],
+            },
+          ],
+        },
+      },
+      { closeOnToolCall: true },
+    );
+
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.tools).toEqual([expectedTool]);
+    expect(outcome.transcripts).toEqual([]);
+    expect(outcome.outcomes).toEqual([{ responseId: "response_1", status: "completed" }]);
+    expect(outcome.callbackOrder).toEqual(["tool", "outcome", "terminal"]);
   });
 
   it.each([
@@ -276,11 +326,6 @@ describe("xAI realtime terminal event ownership", () => {
       expected: { errors: [], transcripts: [], tools: [] },
     },
     {
-      name: "retains immediate completed replay delivery for resumed conversations",
-      event: { type: "conversation.item.created", item: completedTool },
-      expected: { errors: [], transcripts: [], tools: [expectedTool] },
-    },
-    {
       name: "buffers authoritative function-call arguments until response completion",
       event: {
         type: "response.function_call_arguments.done",
@@ -326,31 +371,17 @@ describe("xAI realtime terminal event ownership", () => {
       expected: { errors: [], transcripts: [], tools: [expectedTool] },
     },
     {
-      name: "releases finalized tool arguments only after a completed response",
-      event: [
-        {
-          type: "response.function_call_arguments.done",
-          item_id: completedTool.id,
-          call_id: completedTool.call_id,
-          name: completedTool.name,
-          arguments: completedTool.arguments,
-        },
-        { type: "response.done", response: { status: "completed" } },
-      ],
-      expected: { errors: [], transcripts: [], tools: [expectedTool] },
-    },
-    ...["failed", "incomplete", "cancelled"].map((status) => ({
-      name: `does not recover terminal-output tool calls from a ${status} response`,
+      name: "does not recover terminal-output tool calls from a failed response",
       event: {
         type: "response.done",
-        response: { status, output: [completedTool] },
+        response: { status: "failed", output: [completedTool] },
       },
       expected: {
-        errors: status === "cancelled" ? [] : [`xAI realtime voice response ${status}`],
+        errors: ["xAI realtime voice response failed"],
         transcripts: [],
         tools: [],
       },
-    })),
+    },
     {
       name: "does not dispatch incomplete items from a completed terminal response",
       event: {
@@ -391,6 +422,7 @@ describe("xAI realtime terminal event ownership", () => {
       return;
     }
     expect(actual.outcomes).toHaveLength(1);
+    expect(actual.callbackOrder.slice(-2)).toEqual(["outcome", "terminal"]);
     const rawStatus = responseDone.response?.status;
     if (
       rawStatus !== "completed" &&

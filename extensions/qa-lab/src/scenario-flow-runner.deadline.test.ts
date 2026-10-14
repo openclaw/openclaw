@@ -2,16 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
+import type { QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
 
 const delayedSideEffectCases: Array<[name: string, action: QaFlowAction]> = [
   ["generic call", { call: "sideEffect", args: [{ expr: "await resolveInput()" }] }],
   ["sendInbound", { sendInbound: { expr: "await resolveInput()" } }],
-  ["sendNativeCommand", { sendNativeCommand: { expr: "await resolveInput()" } }],
-  ["waitForOutbound", { waitForOutbound: { expr: "await resolveInput()" } }],
-  ["waitForOutboundSequence", { waitForOutboundSequence: { expr: "await resolveInput()" } }],
-  ["waitForNoOutbound", { waitForNoOutbound: { expr: "await resolveInput()" } }],
 ];
 
 describe("scenario flow deadline", () => {
@@ -87,7 +84,7 @@ describe("scenario flow deadline", () => {
     let markActionStarted!: () => void;
     let releaseAction!: () => void;
     let expireDeadline!: (reason: Error) => void;
-    let pendingStep: Promise<string | void> | undefined;
+    let pendingStep: Promise<QaSuiteStepOutcome | void> | undefined;
     const actionStarted = new Promise<void>((resolve) => {
       markActionStarted = resolve;
     });

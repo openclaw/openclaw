@@ -1,4 +1,3 @@
-// Diffs plugin module implements viewer client behavior.
 import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type { FileDiffOptions, SupportedLanguages } from "@pierre/diffs";
 import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
@@ -7,20 +6,6 @@ import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
 declare const __OPENCLAW_DIFFS_LANGUAGE_PACK__: boolean | undefined;
-
-// Build-time esbuild define; the typeof guard keeps the module loadable when
-// the define is absent under Vitest or direct Node execution.
-function readInjectedLanguagePackFlag(): boolean | undefined {
-  return typeof __OPENCLAW_DIFFS_LANGUAGE_PACK__ === "boolean"
-    ? __OPENCLAW_DIFFS_LANGUAGE_PACK__
-    : undefined;
-}
-
-function resolveViewerLanguagePackAvailability(
-  buildFlag: boolean | undefined = readInjectedLanguagePackFlag(),
-): boolean {
-  return buildFlag === true;
-}
 
 type ViewerState = {
   theme: DiffTheme;
@@ -242,7 +227,7 @@ function createToolbar(): HTMLElement {
   return toolbar;
 }
 
-function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined> {
+function createRenderOptions(payload: DiffViewerPayload): FileDiffOptions<undefined, undefined> {
   return {
     theme: payload.options.theme,
     themeType: viewerState.theme,
@@ -277,10 +262,8 @@ function syncAllControllers(): void {
 }
 
 export async function hydrateViewer(): Promise<void> {
-  // Rehydration replaces the current DOM card set; do not retain controllers
-  // from a previous render because they can keep stale DOM references alive.
-  controllers.length = 0;
-  const languagePackAvailable = resolveViewerLanguagePackAvailability();
+  const languagePackAvailable =
+    typeof __OPENCLAW_DIFFS_LANGUAGE_PACK__ === "boolean" && __OPENCLAW_DIFFS_LANGUAGE_PACK__;
   const cards = await Promise.all(
     getCards().map(async ({ host, payload }) => ({
       host,
@@ -311,24 +294,20 @@ export async function hydrateViewer(): Promise<void> {
   syncDocumentTheme();
 
   for (const { host, payload } of cards) {
-    try {
-      const diff = new FileDiff(createRenderOptions(payload));
-      const hydration = {
-        fileContainer: host,
-        prerenderedHTML: payload.prerenderedHTML,
-        fileDiff: payload.fileDiff,
-      };
-      diff.hydrate(
-        payload.oldFile && payload.newFile
-          ? { ...hydration, oldFile: payload.oldFile, newFile: payload.newFile }
-          : hydration,
-      );
-      const controller = { payload, diff };
-      applyState(controller);
-      controllers.push(controller);
-    } catch (error) {
-      console.warn("Skipping diff card that failed to hydrate", error);
-    }
+    const diff = new FileDiff(createRenderOptions(payload));
+    const hydration = {
+      fileContainer: host,
+      prerenderedHTML: payload.prerenderedHTML,
+      fileDiff: payload.fileDiff,
+    };
+    diff.hydrate(
+      payload.oldFile && payload.newFile
+        ? { ...hydration, oldFile: payload.oldFile, newFile: payload.newFile }
+        : hydration,
+    );
+    const controller = { payload, diff };
+    applyState(controller);
+    controllers.push(controller);
   }
 }
 

@@ -107,7 +107,6 @@ describe("native chat drafts", () => {
       key: "ArrowUp",
       selectionStart: 0,
       selectionEnd: 0,
-      valueLength: 0,
       altKey: false,
       ctrlKey: false,
       metaKey: false,

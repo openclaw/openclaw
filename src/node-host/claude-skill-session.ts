@@ -9,6 +9,7 @@ import {
   CallToolRequestSchema,
   CallToolResultSchema,
   ListToolsRequestSchema,
+  type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Value } from "typebox/value";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
@@ -21,6 +22,7 @@ import {
   NodeClaudeSkillResultSchema,
   type NodeClaudeSkillInit,
 } from "../infra/node-claude-skill-protocol.js";
+import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { materializeSkillResources } from "../skills/runtime/resources.js";
@@ -33,7 +35,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
   }
   const initialized = createDeferredCore<NodeClaudeSkillInit>();
   void initialized.promise.catch(() => {});
-  const pending = new Map<string, ReturnType<typeof createDeferredCore<unknown>>>();
+  const pending = new Map<string, ReturnType<typeof createDeferredCore<CallToolResult>>>();
   let receivedInit = false;
   let closed = false;
   let artifacts: Awaited<ReturnType<typeof materializeSkillResources>> | undefined;
@@ -72,12 +74,9 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
     }
   };
   const cleanup = async () => {
-    try {
-      await artifacts?.cleanup();
-    } finally {
-      if (directory) {
-        await fs.rm(directory, { recursive: true, force: true });
-      }
+    await artifacts?.cleanup();
+    if (directory) {
+      await removeTemporaryArtifacts(directory, "Node Claude skill session");
     }
   };
   try {
@@ -101,22 +100,28 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
       if (!call) {
         throw new Error("Claude Workshop response has no pending caller.");
       }
-      pending.delete(value.id);
-      call.resolve(CallToolResultSchema.parse(value.result));
+      try {
+        call.resolve(CallToolResultSchema.parse(value.result));
+      } catch (error) {
+        call.reject(error);
+        throw error;
+      } finally {
+        pending.delete(value.id);
+      }
     });
     const init = await initialized.promise;
     assertCurrent();
-    directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-skills-"));
-    assertCurrent();
     if (init.resources) {
-      artifacts = await materializeSkillResources(init.resources, directory, assertCurrent);
+      artifacts = await materializeSkillResources(init.resources, assertCurrent);
       assertCurrent();
     }
     // Claude's native Read permission covers the project plus --add-dir roots.
     // Expose only verified resources, never the separate MCP configuration file.
-    const argv: string[] = artifacts ? ["--add-dir", path.join(directory, "skill-resources")] : [];
+    const argv: string[] = artifacts ? ["--add-dir", artifacts.directory] : [];
     const workshop = init.workshop;
     if (workshop) {
+      directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-skills-"));
+      assertCurrent();
       // An unguessable local route prevents unrelated browser traffic; the
       // Gateway's exact pending invocation remains the privileged effect owner.
       const route = `/mcp/${randomUUID()}`;
@@ -162,7 +167,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
               throw new Error("Only this turn's Skill Workshop is available.");
             }
             const id = randomUUID();
-            const call = createDeferredCore<unknown>();
+            const call = createDeferredCore<CallToolResult>();
             void call.promise.catch(() => {});
             pending.set(id, call);
             try {
@@ -174,7 +179,7 @@ export async function prepareNodeClaudeSkillSession(io: OpenClawPluginNodeHostCo
               );
               const result = await call.promise;
               assertCurrent();
-              return CallToolResultSchema.parse(result);
+              return result;
             } finally {
               pending.delete(id);
             }

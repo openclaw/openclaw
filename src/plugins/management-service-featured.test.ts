@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { OfficialExternalPluginCatalogEntry } from "./official-external-plugin-catalog.js";
@@ -25,7 +26,8 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
   };
 });
 
-const { clearManagedPluginOfficialCatalogCache, listManagedPlugins, resolveManagedPluginIconUrl } =
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
+const { listManagedPlugins, resolveManagedPluginIconSources } =
   await import("./management-service.js");
 
 function metadataSnapshot(params: {
@@ -36,7 +38,6 @@ function metadataSnapshot(params: {
   installRecord?: Record<string, unknown>;
   featured?: boolean;
   description?: string;
-  icon?: string;
 }) {
   const id = params.id ?? "workboard";
   const packageName =
@@ -49,7 +50,6 @@ function metadataSnapshot(params: {
       name: params.name ?? "Workboard",
       description: params.description ?? "Coordinate agent work in a shared board.",
       catalog: { featured: params.featured ?? true, order: 10 },
-      ...(params.icon ? { icon: params.icon } : {}),
       channels: [],
       providers: [],
       cliBackends: [],
@@ -181,66 +181,58 @@ const hostedImpostorEntry = hostedFeedEntry({
 });
 
 describe("plugin management Featured authority", () => {
-  it("projects listing metadata from a top-level hosted feed entry", async () => {
-    const icon = "https://cdn.example.test/expedia.png";
-    const officialCatalog = {
-      entries: [
-        hostedFeedEntry({
-          packageName: "@expediagroup/expedia-openclaw",
-          title: "Expedia Travel",
-          featured: true,
-          pluginId: "@expediagroup/expedia-openclaw",
-          order: 10,
-          description: "Search flights, stays, and travel options.",
-          icon,
-        }),
-      ],
-    };
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-
-    const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const resolved = await resolveManagedPluginIconUrl({
-      config: {},
-      env: {},
-      pluginId: "@expediagroup/expedia-openclaw",
-      officialCatalog,
-    });
-
-    expect(catalog.plugins[0]).toMatchObject({
-      id: "@expediagroup/expedia-openclaw",
-      name: "Expedia Travel",
-      description: "Search flights, stays, and travel options.",
-      featured: true,
-      order: 10,
-      hasIcon: true,
-    });
-    expect(resolved).toBe(icon);
-  });
+  it.each([
+    ["slack", "@openclaw/slack"],
+    ["msteams", "@openclaw/msteams"],
+    ["amazon-bedrock", "@openclaw/amazon-bedrock-provider"],
+  ])(
+    "joins the published %s counterpart to its bundled or npm installation",
+    async (id, packageName) => {
+      for (const origin of ["bundled", "global"] as const) {
+        mocks.metadata.mockReturnValue(
+          metadataSnapshot({
+            id,
+            packageName,
+            origin,
+            ...(origin === "global" ? { installRecord: { source: "npm", spec: packageName } } : {}),
+          }),
+        );
+        mocks.officialCatalog.mockResolvedValue(
+          hostedCatalog([hostedFeedEntry({ packageName, title: id })]),
+        );
+        clearManagedPluginCatalogCache();
+        const local = await listManagedPlugins({ config: {}, env: {} });
+        const items = joinClawHubPluginCatalog({
+          local,
+          remote: [
+            {
+              packageName,
+              displayName: id,
+              ownerHandle: "openclaw",
+              family: "code-plugin",
+              isOfficial: true,
+              categories: [],
+            },
+          ],
+          includeBundledOnly: true,
+          intent: "all",
+          query: id,
+        });
+        expect(items).toHaveLength(1);
+        expect(items[0]).toMatchObject({
+          catalog: { packageName, official: true, author: "openclaw" },
+          local: { pluginId: id, installed: true, action: "manage" },
+        });
+      }
+    },
+  );
 
   beforeEach(() => {
     mocks.bundledEntries = undefined;
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
     mocks.officialCatalog.mockResolvedValue(hostedCatalog([]));
-  });
-
-  it("lets a live unfeature override bundled metadata without removing installability", async () => {
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.officialCatalog.mockResolvedValue(
-      hostedCatalog([{ ...hostedFeedDiffsEntry, featured: false }]),
-    );
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "diffs",
-        featured: false,
-        order: 40,
-        install: { source: "official", pluginId: "diffs" },
-      }),
-    ]);
   });
 
   it("treats a legacy hosted row without featured as unfeatured", async () => {
@@ -261,30 +253,6 @@ describe("plugin management Featured authority", () => {
       featured: false,
       install: { source: "official", pluginId: "diffs" },
     });
-  });
-
-  it("surfaces a newly featured live official package without static fallback metadata", async () => {
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.officialCatalog.mockResolvedValue(
-      hostedCatalog([
-        hostedFeedEntry({
-          packageName: "@openclaw/new-tool",
-          title: "New Tool",
-          featured: true,
-        }),
-      ]),
-    );
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "@openclaw/new-tool",
-        name: "New Tool",
-        featured: true,
-        install: { source: "official", pluginId: "@openclaw/new-tool" },
-      }),
-    ]);
   });
 
   it("orders live featured packages by when they were featured", async () => {
@@ -350,32 +318,6 @@ describe("plugin management Featured authority", () => {
     ]);
   });
 
-  it("clears stale embedded curation on a matched package without bundled curation", async () => {
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.officialCatalog.mockResolvedValue(
-      hostedCatalog([
-        hostedFeedEntry({
-          packageName: "@openclaw/copilot",
-          title: "Copilot",
-          featured: false,
-          pluginId: "copilot",
-          catalogFeatured: true,
-          order: 80,
-        }),
-      ]),
-    );
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "copilot",
-        featured: false,
-        order: 80,
-      }),
-    ]);
-  });
-
   it("lets a live unfeature override an installed published plugin manifest", async () => {
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
@@ -401,59 +343,6 @@ describe("plugin management Featured authority", () => {
     ]);
   });
 
-  it("applies live ClawHub curation to a bundled-known npm installation", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        id: "diffs",
-        name: "Diffs",
-        origin: "global",
-        installRecord: { source: "npm", spec: "@openclaw/diffs" },
-        featured: false,
-      }),
-    );
-    mocks.officialCatalog.mockResolvedValue(hostedCatalog([hostedFeedDiffsEntry]));
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "diffs",
-        featured: true,
-        order: 40,
-      }),
-    ]);
-  });
-
-  it.each([
-    { id: "workboard", name: "Workboard", packageName: "@openclaw/workboard" },
-    { id: "memory-wiki", name: "Memory Wiki", packageName: "@openclaw/memory-wiki" },
-  ])("keeps local curation for private bundled-only $name", async (plugin) => {
-    mocks.metadata.mockReturnValue(metadataSnapshot(plugin));
-    mocks.officialCatalog.mockResolvedValue(
-      hostedCatalog([
-        hostedFeedEntry({
-          packageName: `@community/${plugin.id}`,
-          title: "Impostor",
-          featured: false,
-          pluginId: plugin.id,
-          catalogFeatured: false,
-        }),
-      ]),
-    );
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: plugin.id,
-        name: plugin.name,
-        packageName: plugin.packageName,
-        featured: true,
-        order: 10,
-      }),
-    ]);
-  });
-
   it("applies hosted curation to the exact published package for bundled FireCrawl", async () => {
     const hostedIcon = "https://cdn.example.test/firecrawl-company.png";
     mocks.metadata.mockReturnValue(
@@ -463,7 +352,6 @@ describe("plugin management Featured authority", () => {
         packageName: "@openclaw/firecrawl-plugin",
         featured: false,
         description: "Optional OpenClaw capability.",
-        icon: "https://cdn.example.test/firecrawl-bundled.png",
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
@@ -481,7 +369,7 @@ describe("plugin management Featured authority", () => {
     );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
-    const resolvedIcon = await resolveManagedPluginIconUrl({
+    const resolvedIcon = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "firecrawl",
@@ -496,43 +384,19 @@ describe("plugin management Featured authority", () => {
         featured: true,
         featuredAt: 1_784_280_000_000,
         order: 10,
-        hasIcon: true,
       }),
     ]);
-    expect(resolvedIcon).toBe(hostedIcon);
-  });
-
-  it("keeps local curation for an unproven global package identity", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        id: "diffs",
-        name: "Private Diffs",
-        origin: "global",
-        packageName: "@openclaw/diffs",
-      }),
-    );
-    mocks.officialCatalog.mockResolvedValue(
-      hostedCatalog([{ ...hostedFeedDiffsEntry, featured: false }]),
-    );
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "diffs",
-        featured: true,
-        order: 10,
-      }),
+    expect(catalog.plugins[0]?.hasIcon).toBe(true);
+    expect(resolvedIcon).toEqual([
+      { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@openclaw/firecrawl-plugin" },
     ]);
   });
 
   it("does not identify a package-less private bundled plugin by hosted runtime id", async () => {
-    const localIcon = "https://cdn.example.test/private-workboard.png";
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         packageName: null,
         description: "Private local workboard.",
-        icon: localIcon,
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
@@ -547,7 +411,7 @@ describe("plugin management Featured authority", () => {
     );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
-    const resolvedIcon = await resolveManagedPluginIconUrl({
+    const resolvedIcon = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "workboard",
@@ -562,48 +426,45 @@ describe("plugin management Featured authority", () => {
         order: 10,
       }),
     ]);
-    expect(resolvedIcon).toBe(localIcon);
+    expect(resolvedIcon).toEqual([]);
   });
 
-  it("does not identify a package-less global plugin by hosted runtime id alone", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot({ origin: "global", packageName: null }));
-    mocks.officialCatalog.mockResolvedValue(hostedCatalog([hostedImpostorEntry]));
+  it.each([
+    {
+      id: "diffs",
+      name: "Diffs",
+      origin: "global" as const,
+      installRecord: { source: "npm", spec: "@openclaw/diffs" },
+    },
+    { id: "published-plugin", name: "Published bundled plugin", origin: "bundled" as const },
+  ])(
+    "clears local curation when declared catalog counterpart $name is omitted from a live feed",
+    async (plugin) => {
+      mocks.bundledEntries = [
+        compositionEntry(plugin.id, {
+          clawhubSpec: `clawhub:@openclaw/${plugin.id}`,
+          npmSpec: `@openclaw/${plugin.id}`,
+        }),
+      ];
+      mocks.metadata.mockReturnValue(metadataSnapshot(plugin));
+      mocks.officialCatalog.mockResolvedValue(hostedCatalog([]));
 
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
+      const catalog = await listManagedPlugins({ config: {}, env: {} });
 
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "workboard",
-        featured: true,
-        order: 10,
-      }),
-    ]);
-  });
-
-  it("clears local curation when a known published plugin is omitted from a live feed", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        id: "diffs",
-        name: "Diffs",
-        origin: "global",
-        installRecord: { source: "npm", spec: "@openclaw/diffs" },
-      }),
-    );
-    mocks.officialCatalog.mockResolvedValue(hostedCatalog([]));
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "diffs",
-        packageName: "@openclaw/diffs",
-        featured: false,
-        order: 10,
-      }),
-    ]);
-  });
+      expect(catalog.plugins).toEqual([
+        expect.objectContaining({
+          id: plugin.id,
+          packageName: `@openclaw/${plugin.id}`,
+          clawhubPackage: `@openclaw/${plugin.id}`,
+          featured: false,
+          order: 10,
+        }),
+      ]);
+    },
+  );
 
   it("preserves npm-only bundled curation outside the hosted producer identity", async () => {
+    mocks.bundledEntries = [compositionEntry("acpx", { npmSpec: "@openclaw/acpx" })];
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         id: "acpx",
@@ -621,35 +482,6 @@ describe("plugin management Featured authority", () => {
       expect.objectContaining({
         id: "acpx",
         featured: true,
-        order: 10,
-      }),
-    ]);
-  });
-
-  it("clears hosted-only curation using trusted official install provenance", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        id: "new-tool",
-        name: "New Tool",
-        origin: "global",
-        packageName: "@openclaw/new-tool",
-        installRecord: {
-          source: "clawhub",
-          clawhubUrl: "https://clawhub.ai",
-          clawhubChannel: "official",
-          clawhubPackage: "@openclaw/new-tool",
-        },
-      }),
-    );
-    mocks.officialCatalog.mockResolvedValue(hostedCatalog([]));
-
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
-
-    expect(catalog.plugins).toEqual([
-      expect.objectContaining({
-        id: "new-tool",
-        packageName: "@openclaw/new-tool",
-        featured: false,
         order: 10,
       }),
     ]);
@@ -736,14 +568,12 @@ describe("plugin management Featured authority", () => {
   ])(
     "preserves installed identity and package suppression for %s hosted occurrence",
     async (mode) => {
-      const localIcon = "https://cdn.example.test/local.png";
       const hostedIcon = "https://cdn.example.test/hosted.png";
       mocks.metadata.mockReturnValue(
         metadataSnapshot({
           id: "installed",
           name: "Local",
           packageName: "@acme/installed",
-          icon: localIcon,
         }),
       );
       mocks.bundledEntries = [
@@ -787,7 +617,7 @@ describe("plugin management Featured authority", () => {
       mocks.officialCatalog.mockResolvedValue(hostedCatalog(entries));
 
       const catalog = await listManagedPlugins({ config: {}, env: {} });
-      const icon = await resolveManagedPluginIconUrl({
+      const icon = await resolveManagedPluginIconSources({
         config: {},
         env: {},
         pluginId: "installed",
@@ -809,10 +639,12 @@ describe("plugin management Featured authority", () => {
           installed: true,
           name: curated ? "Remote" : "Local",
           featured: curated,
-          hasIcon: true,
         }),
       ]);
-      expect(icon).toBe(curated ? hostedIcon : localIcon);
+      expect(catalog.plugins.find((entry) => entry.id === "installed")?.hasIcon).toBe(true);
+      expect(icon).toEqual([
+        { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/shared" },
+      ]);
     },
   );
 
@@ -830,7 +662,6 @@ describe("plugin management Featured authority", () => {
       name: "First",
       origin: "global",
       packageName: "@acme/first",
-      icon: "https://cdn.example.test/raw-first.png",
       installRecord: {
         source: "clawhub",
         clawhubUrl: "https://clawhub.ai",
@@ -878,49 +709,21 @@ describe("plugin management Featured authority", () => {
         },
       ],
     };
-    const expected = firstIcon ?? fallbackIcon;
-
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const icon = await resolveManagedPluginIconUrl({
+    const icon = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "ALIAS",
-      officialCatalog,
     });
 
     expect(catalog.plugins).toHaveLength(2);
     for (const plugin of catalog.plugins) {
-      expect(plugin.hasIcon).toBe(expected ? true : undefined);
+      expect(plugin.hasIcon).toBe(true);
     }
-    expect(icon).toBe(expected);
+    expect(icon).toEqual([
+      { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/first" },
+    ]);
   });
-
-  it.each([undefined, "https://cdn.example.test/first.png"])(
-    "resolves the first uninstalled duplicate catalog ID with icon %s",
-    async (firstIcon) => {
-      mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-      const officialCatalog = {
-        entries: [
-          { ...compositionEntry("duplicate"), icon: firstIcon },
-          { ...compositionEntry("duplicate"), icon: "https://cdn.example.test/second.png" },
-        ],
-      };
-
-      const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-      const icon = await resolveManagedPluginIconUrl({
-        config: {},
-        env: {},
-        pluginId: "duplicate",
-        officialCatalog,
-      });
-
-      expect(catalog.plugins.map((plugin) => plugin.hasIcon)).toEqual([
-        firstIcon ? true : undefined,
-        true,
-      ]);
-      expect(icon).toBe(firstIcon);
-    },
-  );
 
   it.each([
     {

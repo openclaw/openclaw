@@ -93,12 +93,10 @@ barrels, package-boundary tests, or extension suites.
    - runtime capture should be quiet and config-tolerant.
    - command output should include wall time, exit code, and peak RSS when
      available.
-4. For broad or package-heavy plugin proof, use the current dedicated Linux
-   worker when available. On a maintainer workstation, use Crabbox-backed
-   Blacksmith Testbox:
-   - `pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>`
-   - add `--keep`/`--id <id-or-slug>` only when several commands must share one
-     warmed box; stop it with `pnpm crabbox:stop -- <id-or-slug>`.
+4. Follow `$openclaw-testing` for host selection. Trusted source benchmarks
+   can run locally with comparable machine/load conditions. Use `$crabbox` when
+   clean packaging, Linux/platform behavior, isolation, or an explicit remote
+   request is part of the proof; reuse and clean up only the owned lease.
 5. If plugin performance is package-artifact sensitive, switch to
    `release-openclaw-plugin-testing` and Package Acceptance rather than
    trusting source-only timing.
@@ -228,8 +226,7 @@ pnpm test:perf:groups --report <vitest-json> \
 ## Verification
 
 - Always run the targeted test surface that proves the change.
-- For source changes, run `pnpm check:changed` before push; in maintainer
-  Testbox mode run it in the warmed Testbox.
+- Source changes: focused local tests + targeted typecheck/lint/format before push; `pnpm check:changed` optional. PR CI = broad proof. Testbox only for CI/local gaps, immediate grant; warmed Testbox reuse when selected.
 - For test-only changes, run `pnpm test:changed` or the exact edited tests.
 - Run `pnpm build` when touching lazy-loading, bundled artifacts, package
   boundaries, dynamic imports, build output, or public surfaces.

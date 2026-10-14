@@ -1,4 +1,3 @@
-// Gateway WebSocket device pairing resolves approvals, metadata upgrades, and device tokens.
 import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
@@ -7,13 +6,16 @@ import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
+  ConnectErrorDetailCodes,
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
+import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../../../infra/device-pairing-approval.js";
+import { waitForDevicePairingResolution } from "../../../infra/device-pairing-resolution.js";
 import {
   getPairedDevice,
   hasEffectivePairedDeviceRole,
@@ -26,7 +28,9 @@ import {
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
+import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js";
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
+import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -34,15 +38,20 @@ import {
   applyConnectionScopeCap,
   isStartupNodeBootstrapConnect,
   rejectGatewayStartupConnect,
+  resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
 import {
   pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
+  resolvePinnedClientMetadata,
 } from "./connect-device-metadata.js";
 import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
 import { authorizeExistingGatewayDevice } from "./connect-existing-device.js";
 import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.js";
-import { resolvePairingApprovalPlan } from "./connect-pairing-approval-plan.js";
+import {
+  resolveLocalPairingApproval,
+  resolvePairingApprovalPlan,
+} from "./connect-pairing-approval-plan.js";
 import type {
   AuthenticatedGatewayConnect,
   DeviceAuthorizedGatewayConnect,
@@ -57,14 +66,13 @@ export async function authorizeGatewayConnectDevice(
     connId,
     buildRequestContext,
     close,
-    send,
     setHandshakeState,
     setCloseCause,
     logGateway,
     requestOrigin,
   } = context.handler;
   const {
-    frame,
+    sendHandshakeErrorResponse,
     connectParams,
     configSnapshot,
     reportedClientIp,
@@ -83,9 +91,13 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
+  const isConnectAuthorizationCurrent = () =>
+    resolveGatewayConnectPolicyFailure(context, state) === undefined;
   const failPairingHandshake = (params: {
     message: string;
-    details?: ReturnType<typeof buildPairingConnectErrorDetails>;
+    details?:
+      | ReturnType<typeof buildPairingConnectErrorDetails>
+      | { code: typeof ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED };
     closeCause?: { cause: string; meta: Record<string, unknown> };
     closeReason?: string;
   }) => {
@@ -94,18 +106,22 @@ export async function authorizeGatewayConnectDevice(
     if (closeCause) {
       setCloseCause(closeCause.cause, closeCause.meta);
     }
-    send({
-      type: "res",
-      id: frame.id,
-      ok: false,
-      error: errorShape(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined),
-    });
+    sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined);
     close(1008, truncateCloseReason(closeReason ?? message));
   };
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
   const sharedSecretOwner = authMethod === "token" || authMethod === "password";
-  if (roleConfiguredHumanOperator && !sharedSecretOwner && !authResult.user?.trim()) {
-    failPairingHandshake({ message: "operator role policies require a verified user identity" });
+  if (
+    roleConfiguredHumanOperator &&
+    !sharedSecretOwner &&
+    !authResult.user?.trim() &&
+    state.remoteIngressPrincipal?.operatorRoleActor.kind !== "operator"
+  ) {
+    failPairingHandshake({
+      message:
+        "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+      details: { code: ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED },
+    });
     return undefined;
   }
   let hasServerApprovedDeviceTokenBaseline = false;
@@ -159,7 +175,7 @@ export async function authorizeGatewayConnectDevice(
           requestedScopes,
           allowedScopes: resolvePairedAccessScopes(pairedCandidate),
         });
-      const plan = await resolvePairingApprovalPlan({
+      const pairingPlanParams = {
         reason,
         existingPairedDevice,
         state,
@@ -172,14 +188,15 @@ export async function authorizeGatewayConnectDevice(
         devicePublicKey,
         scopes,
         hasRequestedScopes,
-        connectionScopeCap: (capped) =>
+        connectionScopeCap: (capped: string[]) =>
           applyConnectionScopeCap({ scopes: capped, upgradeReq: context.handler.upgradeReq }),
-      });
+      };
+      const plan = await resolvePairingApprovalPlan(pairingPlanParams);
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
       if (
         reason === "scope-upgrade" &&
-        plan.isTrustedProxySameKeyUpgrade &&
-        plan.trustedProxyAutoApproveScopes !== null
+        plan.isSameKeyScopeUpgrade &&
+        plan.autoApproveOperatorScopes !== null
       ) {
         // Authority is the live row, not the pre-plan snapshot: a revoke, key
         // replacement, or grant reduction landing during the plan await must
@@ -188,11 +205,11 @@ export async function authorizeGatewayConnectDevice(
         const livePaired = await getPairedDevice(device.id);
         if (
           livePaired &&
-          pairingStateAllowsRequestedAccess(livePaired, plan.trustedProxyAutoApproveScopes)
+          pairingStateAllowsRequestedAccess(livePaired, plan.autoApproveOperatorScopes)
         ) {
           const livePairedScopes = resolvePairedAccessScopes(livePaired);
           scopes = normalizeSortedUniqueTrimmedStringList(
-            [...scopes, ...plan.trustedProxyAutoApproveScopes].filter((scope) =>
+            [...scopes, ...plan.autoApproveOperatorScopes].filter((scope) =>
               roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: livePairedScopes }),
             ),
           );
@@ -207,22 +224,41 @@ export async function authorizeGatewayConnectDevice(
           existingPairedDevice ? resolvePairedAccessScopes(existingPairedDevice) : undefined,
         );
       }
-      const pairing = await requestDevicePairing({
-        deviceId: device.id,
-        publicKey: devicePublicKey,
-        ...clientPairingMetadata,
-        scopes,
-        ...(plan.bootstrapPairingRoles
-          ? {
-              roles: plan.bootstrapPairingRoles,
-              scopes: plan.bootstrapPairingScopes ?? [],
+      const waitForResolution = state.isControlUi && role === "operator";
+      const pairingAbort = new AbortController();
+      const cancelPairingWait = () => pairingAbort.abort();
+      let resolution: ReturnType<typeof waitForDevicePairingResolution> | undefined;
+      const pairing = await requestDevicePairing(
+        {
+          deviceId: device.id,
+          publicKey: devicePublicKey,
+          ...clientPairingMetadata,
+          scopes,
+          ...(plan.bootstrapPairingRoles
+            ? {
+                roles: plan.bootstrapPairingRoles,
+                scopes: plan.bootstrapPairingScopes ?? [],
+              }
+            : {}),
+          silent: plan.silent,
+        },
+        undefined,
+        waitForResolution
+          ? (pending) => {
+              context.handler.socket.once("close", cancelPairingWait);
+              resolution = waitForDevicePairingResolution(pending.request, {
+                expiresAtMs: pending.expiresAtMs,
+                signal: pairingAbort.signal,
+              }).finally(() => context.handler.socket.off("close", cancelPairingWait));
+              if (context.handler.isClosed()) {
+                cancelPairingWait();
+              }
             }
-          : {}),
-        silent: plan.silent,
-      });
-      const trustedProxyApprovalScopes =
-        pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade
-          ? plan.trustedProxyAutoApproveScopes
+          : undefined,
+      );
+      const operatorApprovalScopes =
+        pairing.request.isRepair !== true || plan.isSameKeyScopeUpgrade
+          ? plan.autoApproveOperatorScopes
           : null;
       const requestContext = buildRequestContext();
       // A replacement request obsoletes older pending requestIds; tell approval
@@ -241,66 +277,83 @@ export async function authorizeGatewayConnectDevice(
         );
       }
       let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
-      let resolvedByConcurrentApproval = false;
-      let recoveryRequestId: string | undefined;
-      const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
-        const pendingList = await listDevicePairing();
-        const exactPending = pendingList.pending.find(
-          (pending) => pending.requestId === pairing.request.requestId,
-        );
-        if (exactPending) {
-          return exactPending.requestId;
-        }
-        const replacementPending = pendingList.pending.find(
-          (pending) => pending.deviceId === device.id && pending.publicKey === devicePublicKey,
-        );
-        return replacementPending?.requestId;
-      };
       const inlineApprovalAttempted =
-        trustedProxyApprovalScopes !== null || pairing.request.silent === true;
+        operatorApprovalScopes !== null ||
+        pairing.request.silent === true ||
+        // A previously interactive first-node request may now qualify locally.
+        (role === "node" && reason === "role-upgrade" && plan.localApproval === "silent");
       if (inlineApprovalAttempted) {
-        approved =
-          trustedProxyApprovalScopes !== null
-            ? await approveDevicePairing(pairing.request.requestId, {
-                callerScopes: trustedProxyApprovalScopes,
-                accessMetadata: clientAccessMetadata,
-                approvedVia: "trusted-proxy",
-                autoApproveNewDeviceScopes: trustedProxyApprovalScopes,
-              })
-            : plan.bootstrapApprovalProfile
-              ? await approveBootstrapDevicePairing(
-                  pairing.request.requestId,
-                  plan.bootstrapApprovalProfile,
-                  { accessMetadata: clientAccessMetadata },
-                )
-              : await approveDevicePairing(pairing.request.requestId, {
-                  // A silent self-grant's authority is locality plus proven
-                  // local-grade auth, not the requested scope list. Approval
-                  // merges the existing row's scopes back in, so the caller
-                  // set must cover requested plus already-held — nothing new.
-                  callerScopes: uniqueStrings([
-                    ...scopes,
-                    ...(existingPairedDevice
-                      ? resolvePairedAccessScopes(existingPairedDevice)
-                      : []),
-                  ]),
-                  accessMetadata: clientAccessMetadata,
-                  // Same-host local approvals are prune-eligible "silent";
-                  // trusted-CIDR approvals cross hosts and must never be
-                  // auto-pruned, so they carry their own provenance.
-                  approvedVia: plan.allowSilentLocalPairing ? "silent" : "trusted-cidr",
-                });
+        if (operatorApprovalScopes !== null && plan.operatorApprovalKind) {
+          approved = await approveDevicePairing(pairing.request.requestId, {
+            callerScopes: operatorApprovalScopes,
+            accessMetadata: clientAccessMetadata,
+            approvedVia: plan.operatorApprovalKind,
+            autoApproveNewDeviceScopes: operatorApprovalScopes,
+            isApprovalCurrent: isConnectAuthorizationCurrent,
+          });
+        } else if (plan.bootstrapApprovalProfile) {
+          approved = await approveBootstrapDevicePairing(
+            pairing.request.requestId,
+            plan.bootstrapApprovalProfile,
+            {
+              accessMetadata: clientAccessMetadata,
+              isApprovalCurrent: isConnectAuthorizationCurrent,
+              onTokensReplaced: (deviceId, roles) =>
+                retireDeviceTokenClients(requestContext, deviceId, roles, "device-token-rotated"),
+            },
+          );
+        } else if (plan.localApproval) {
+          approved = await approveDevicePairing(pairing.request.requestId, {
+            // A silent self-grant's authority is locality plus proven
+            // local-grade auth, not the requested scope list. Approval
+            // merges the existing row's scopes back in, so the caller
+            // set must cover requested plus already-held — nothing new.
+            callerScopes: uniqueStrings([
+              ...scopes,
+              ...(existingPairedDevice ? resolvePairedAccessScopes(existingPairedDevice) : []),
+            ]),
+            accessMetadata: clientAccessMetadata,
+            // Same-host local approvals are prune-eligible "silent";
+            // trusted-CIDR approvals cross hosts and must never be
+            // auto-pruned, so they carry their own provenance.
+            approvedVia: plan.localApproval,
+            isApprovalCurrent: ({ pending, existing }) => {
+              const currentConfig = getRuntimeConfigSnapshot();
+              if (
+                !currentConfig ||
+                !isConnectAuthorizationCurrent() ||
+                pending.deviceId !== device.id ||
+                pending.publicKey !== devicePublicKey ||
+                // Pending retries can merge roles; a node connect cannot approve
+                // an unrelated operator request carried by the same pending row.
+                (role === "node" &&
+                  (pending.role !== role || pending.roles?.some((entry) => entry !== role))) ||
+                (plan.localApproval === "trusted-cidr" && !isScopelessNodePairingRequest(pending))
+              ) {
+                return false;
+              }
+              return (
+                resolveLocalPairingApproval({
+                  ...pairingPlanParams,
+                  configSnapshot: currentConfig,
+                  existingPairedDevice: existing ?? null,
+                  scopes: pending.scopes ?? [],
+                }) === plan.localApproval
+              );
+            },
+          });
+        }
         if (approved?.status === "approved") {
-          if (trustedProxyApprovalScopes !== null) {
-            scopes = trustedProxyApprovalScopes;
+          if (operatorApprovalScopes !== null) {
+            scopes = operatorApprovalScopes;
             connectParams.scopes = scopes;
           }
           if (plan.bootstrapApprovalProfile) {
             handoffBootstrapProfile = plan.bootstrapApprovalProfile;
           }
-          if (trustedProxyApprovalScopes !== null && plan.trustedProxyUser) {
+          if (operatorApprovalScopes !== null && plan.trustedProxyUser) {
             logGateway.warn(
-              `security audit: trusted-proxy browser device auto-approved user=${formatForLog(plan.trustedProxyUser)} device=${formatForLog(approved.device.deviceId.slice(0, 12))} scopes=${formatAuditList(scopes)}`,
+              `security audit: trusted-proxy operator device auto-approved user=${formatForLog(plan.trustedProxyUser)} device=${formatForLog(approved.device.deviceId.slice(0, 12))} scopes=${formatAuditList(scopes)}`,
             );
           } else {
             logGateway.info(
@@ -323,6 +376,9 @@ export async function authorizeGatewayConnectDevice(
             try {
               await pruneSupersededSilentPairingsAfterApproval({
                 deviceId: approved.device.deviceId,
+                connectedDeviceIds: [...context.handler.clients].flatMap((client) =>
+                  client.connect.device && !client.invalidated ? [client.connect.device.id] : [],
+                ),
                 context: requestContext,
               });
             } catch (error) {
@@ -331,36 +387,12 @@ export async function authorizeGatewayConnectDevice(
               );
             }
           }
-        } else {
-          // A concurrent connection approved this device first, so this
-          // invocation never replaces `scopes` with the trusted-proxy cap.
-          // That is safe: pairingStateAllowsRequestedAccess gates continuation
-          // on roleScopesAllow(scopes ⊆ device-granted scopes), so the session
-          // can never exceed what the device was actually approved for.
-          const pairedAfterConcurrentApproval = await getPairedDevice(device.id);
-          resolvedByConcurrentApproval = plan.bootstrapApprovalProfile
-            ? pairedDeviceAllowsBootstrapProfile({
-                device: pairedAfterConcurrentApproval,
-                devicePublicKey,
-                profile: plan.bootstrapApprovalProfile,
-              })
-            : pairingStateAllowsRequestedAccess(pairedAfterConcurrentApproval);
-          let requestStillPending = false;
-          if (!resolvedByConcurrentApproval) {
-            recoveryRequestId = await resolveLivePendingRequestId();
-            requestStillPending = recoveryRequestId === pairing.request.requestId;
-          }
-          if (requestStillPending) {
-            requestContext.broadcast("device.pair.requested", pairing.request, {
-              dropIfSlow: true,
-            });
-          }
         }
       } else if (pairing.created) {
         requestContext.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
       }
-      // SSH verification runs detached: this connection still closes with
-      // pairing-required, and the node retry loop picks up the approval.
+      // SSH verification runs detached; the live-record check below can admit
+      // an approval that finishes before this handshake's final check.
       const sshVerifyStarted = startGatewayNodePairingSshApproval({
         context,
         state: { ...state, scopes, handoffBootstrapProfile },
@@ -370,12 +402,38 @@ export async function authorizeGatewayConnectDevice(
         clientAccessMetadata,
         reason,
       });
-      // Re-resolve: another connection may have superseded/approved the request since we created it
-      recoveryRequestId = await resolveLivePendingRequestId();
+      // Approval may come from another connection or be revoked during the
+      // awaits above. Only the current device record can authorize continuation.
+      const livePaired = await getPairedDevice(device.id);
+      const liveMetadata = resolvePinnedClientMetadata({
+        clientId: connectParams.client.id,
+        clientMode: connectParams.client.mode,
+        claimedPlatform: connectParams.client.platform,
+        claimedDeviceFamily: connectParams.client.deviceFamily,
+        pairedPlatform: livePaired?.platform,
+        pairedDeviceFamily: livePaired?.deviceFamily,
+      });
       const pairingResolved =
-        inlineApprovalAttempted &&
-        (approved?.status === "approved" || resolvedByConcurrentApproval);
+        !liveMetadata.platformMismatch &&
+        !liveMetadata.deviceFamilyMismatch &&
+        (plan.bootstrapApprovalProfile
+          ? pairedDeviceAllowsBootstrapProfile({
+              device: livePaired,
+              devicePublicKey,
+              profile: plan.bootstrapApprovalProfile,
+            })
+          : pairingStateAllowsRequestedAccess(livePaired));
       if (!pairingResolved) {
+        const { pending } = await listDevicePairing();
+        const recoveryRequestId = (
+          pending.find((entry) => entry.requestId === pairing.request.requestId) ??
+          pending.find(
+            (entry) => entry.deviceId === device.id && entry.publicKey === devicePublicKey,
+          )
+        )?.requestId;
+        if (inlineApprovalAttempted && recoveryRequestId === pairing.request.requestId) {
+          requestContext.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+        }
         const exposeApprovedAccess = existingPairedDevice?.publicKey === devicePublicKey;
         const approvedRoles = exposeApprovedAccess
           ? listApprovedPairedDeviceRoles(existingPairedDevice)
@@ -389,29 +447,63 @@ export async function authorizeGatewayConnectDevice(
           role === "node" &&
           scopes.length === 0 &&
           !existingPairedDevice;
-        // Keep the node retrying while a detached approval can still land
-        // (bootstrap redemption or a running ssh-verify probe); default
-        // pairing-required behavior pauses the client reconnect loop.
-        const retryWhileDetachedApprovalPending =
-          retryAfterBootstrapPairingApproval || sshVerifyStarted;
+        const retryWhileControlUiApprovalPending =
+          state.isControlUi && role === "operator" && Boolean(recoveryRequestId);
+        const retryWhileNodeApprovalPending = role === "node" && Boolean(recoveryRequestId);
+        // Retry pending node and browser approvals without
+        // changing which connects require approval or what access they receive.
+        const retryWhileApprovalPending =
+          retryAfterBootstrapPairingApproval ||
+          sshVerifyStarted ||
+          retryWhileNodeApprovalPending ||
+          retryWhileControlUiApprovalPending;
+        const details = buildPairingConnectErrorDetails({
+          reason,
+          requestId: resolution ? pairing.request.requestId : recoveryRequestId,
+          ...(resolution || retryWhileApprovalPending
+            ? {
+                recommendedNextStep: "wait_then_retry",
+                retryable: true,
+                pauseReconnect: false,
+              }
+            : {}),
+          ...(resolution ? { waitForResolution: true } : {}),
+          deviceId: device.id,
+          requestedRole: role,
+          requestedScopes: scopes,
+          ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
+          ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
+        });
+        if (resolution) {
+          context.onPairingWait();
+          sendHandshakeErrorResponse(
+            ErrorCodes.NOT_PAIRED,
+            buildPairingConnectErrorMessage(reason),
+            { details },
+          );
+          void resolution.then((decision) => {
+            if (!decision || context.handler.isClosed()) {
+              return;
+            }
+            if (decision !== "superseded") {
+              context.handler.send({
+                type: "event",
+                event: "device.pair.resolved",
+                payload: {
+                  requestId: pairing.request.requestId,
+                  deviceId: device.id,
+                  decision,
+                  ts: Date.now(),
+                },
+              });
+            }
+            close(1008, `pairing ${decision}`);
+          });
+          return false;
+        }
         failPairingHandshake({
           message: buildPairingConnectErrorMessage(reason),
-          details: buildPairingConnectErrorDetails({
-            reason,
-            requestId: recoveryRequestId,
-            ...(retryWhileDetachedApprovalPending
-              ? {
-                  recommendedNextStep: "wait_then_retry",
-                  retryable: true,
-                  pauseReconnect: false,
-                }
-              : {}),
-            deviceId: device.id,
-            requestedRole: role,
-            requestedScopes: scopes,
-            ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
-            ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
-          }),
+          details,
           closeCause: {
             cause: "pairing-required",
             meta: {
@@ -424,11 +516,21 @@ export async function authorizeGatewayConnectDevice(
         });
         return false;
       }
+      cancelPairingWait();
+      pairedClientId = livePaired?.clientId;
+      pairedBrowserOrigin = livePaired?.browserOrigin;
       return true;
     };
 
     const paired = await getPairedDevice(device.id);
     const isPaired = paired?.publicKey === devicePublicKey;
+    if (paired && !isPaired && state.remoteIngressPrincipal) {
+      failPairingHandshake({
+        message:
+          "Remote Control UI device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
+      });
+      return undefined;
+    }
     if (
       state.startupPending &&
       !isStartupNodeBootstrapConnect(connectParams) &&
@@ -455,20 +557,10 @@ export async function authorizeGatewayConnectDevice(
         hasServerApprovedDeviceTokenBaseline = true;
       }
     } else if (!isPaired) {
-      if (controlUiPairingKind === null) {
-        const ok = await requirePairing("not-paired", paired);
-        if (!ok) {
-          return undefined;
-        }
-        const approvedDevice = await getPairedDevice(device.id);
-        pairedClientId =
-          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
-        pairedBrowserOrigin =
-          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.browserOrigin : undefined;
-        hasServerApprovedDeviceTokenBaseline = true;
-      } else {
-        hasServerApprovedDeviceTokenBaseline = true;
+      if (controlUiPairingKind === null && !(await requirePairing("not-paired", paired))) {
+        return undefined;
       }
+      hasServerApprovedDeviceTokenBaseline = true;
     } else {
       pairedClientId = paired.clientId;
       pairedBrowserOrigin = paired.browserOrigin;
@@ -479,7 +571,6 @@ export async function authorizeGatewayConnectDevice(
         paired,
         devicePublicKey,
         clientAccessMetadata,
-        handoffBootstrapProfile,
         requirePairing,
       });
       if (!existingDevice.ok) {
@@ -502,15 +593,16 @@ export async function authorizeGatewayConnectDevice(
     return undefined;
   }
 
-  // Device tokens do not carry profile identity and existing broader grants may be reused.
-  // Team-role operators must reauthenticate as their verified person on every connection.
+  // Ingress authenticates exclusively from its live principal grant and signed
+  // device proof. Never mint a reusable credential that can outlive that grant.
   const { deviceToken, bootstrapDeviceTokens } =
-    roleConfiguredHumanOperator && authResult.user?.trim()
+    state.remoteIngressPrincipal || (roleConfiguredHumanOperator && authResult.user?.trim())
       ? { deviceToken: null, bootstrapDeviceTokens: [] }
       : await issueGatewayConnectDeviceTokens({
           state: { ...state, scopes, handoffBootstrapProfile },
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
+          isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
 
   return {

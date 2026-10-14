@@ -1,47 +1,18 @@
-// QA Lab Matrix destructive E2EE CLI recovery helpers.
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { createMatrixQaClient } from "../substrate/client.js";
 import {
   createMatrixQaOpenClawCliRuntime,
-  formatMatrixQaCliCommand,
-  redactMatrixQaCliOutput,
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
+import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-config.js";
+import {
+  loginMatrixQaCliDevice,
+  parseMatrixQaCliVerificationStatus,
+  type MatrixQaCliBackupRestoreStatus,
+  type MatrixQaCliVerificationStatus,
+  writeMatrixQaCliOutputArtifacts,
+} from "./scenario-runtime-e2ee-cli-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
-
-export type MatrixQaCliBackupStatus = {
-  backup?: {
-    decryptionKeyCached?: boolean | null;
-    keyLoadError?: string | null;
-    matchesDecryptionKey?: boolean | null;
-    trusted?: boolean | null;
-  };
-  backupVersion?: string | null;
-  error?: string;
-  imported?: number;
-  loadedFromSecretStorage?: boolean;
-  success?: boolean;
-  total?: number;
-};
-
-export type MatrixQaCliVerificationStatus = {
-  backup?: MatrixQaCliBackupStatus["backup"];
-  crossSigningVerified?: boolean;
-  deviceId?: string | null;
-  serverDeviceKnown?: boolean | null;
-  error?: string;
-  recoveryKeyAccepted?: boolean;
-  backupUsable?: boolean;
-  deviceOwnerVerified?: boolean;
-  recoveryKeyStored?: boolean;
-  signedByOwner?: boolean;
-  success?: boolean;
-  userId?: string | null;
-  verified?: boolean;
-};
 
 export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
   if (!context.outputDir) {
@@ -76,15 +47,19 @@ export async function createMatrixQaRecoveryCliRuntime(params: {
   userId: string;
 }) {
   return await createMatrixQaOpenClawCliRuntime({
-    accountId: params.accountId,
-    accessToken: params.accessToken,
     artifactLabel: params.label,
-    baseUrl: params.context.baseUrl,
-    deviceId: params.deviceId,
-    displayName: `Matrix QA ${params.label}`,
+    initialConfig: buildMatrixQaCliE2eeAccountConfig({
+      accountId: params.accountId,
+      accessToken: params.accessToken,
+      baseUrl: params.context.baseUrl,
+      deviceId: params.deviceId,
+      encryption: true,
+      initialSyncLimit: 0,
+      name: `Matrix QA ${params.label}`,
+      userId: params.userId,
+    }),
     outputDir: requireMatrixQaE2eeOutputDir(params.context),
     runtimeEnv: requireMatrixQaCliRuntimeEnv(params.context),
-    userId: params.userId,
   });
 }
 
@@ -93,66 +68,18 @@ export async function loginMatrixQaRecoveryDevice(params: {
   deviceName: string;
   userId: string;
   password: string;
-}): Promise<{
-  accessToken: string;
-  deviceId: string;
-  password?: string;
-  userId: string;
-}> {
-  const loginClient = createMatrixQaClient({ baseUrl: params.context.baseUrl });
-  const device = await loginClient.loginWithPassword({
-    deviceName: params.deviceName,
-    password: params.password,
-    userId: params.userId,
-  });
-  if (!device.deviceId) {
-    throw new Error(`Matrix destructive recovery login did not return a device id`);
-  }
-  return {
-    ...device,
-    deviceId: device.deviceId,
-  };
-}
-
-function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
-  const stdout = result.stdout.trim();
-  const stderr = result.stderr.trim();
-  const payload = stdout || stderr;
-  if (!payload) {
-    throw new Error(`${formatMatrixQaCliCommand(result.args)} did not print JSON`);
-  }
-  try {
-    return JSON.parse(payload) as unknown;
-  } catch (error) {
-    throw new Error(
-      `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }\n${redactMatrixQaCliOutput(payload)}`,
-      { cause: error },
-    );
-  }
-}
-
-async function writeMatrixQaCliArtifacts(params: {
-  label: string;
-  result: MatrixQaCliRunResult;
-  runtime: MatrixQaCliRuntime;
 }) {
-  await mkdir(params.runtime.artifactDir, { mode: 0o700, recursive: true });
-  const safe = params.label.replace(/[^A-Za-z0-9_-]/g, "-");
-  const stdoutPath = path.join(params.runtime.artifactDir, `${safe}.stdout.txt`);
-  const stderrPath = path.join(params.runtime.artifactDir, `${safe}.stderr.txt`);
-  await Promise.all([
-    writeFile(stdoutPath, redactMatrixQaCliOutput(params.result.stdout), { mode: 0o600 }),
-    writeFile(stderrPath, redactMatrixQaCliOutput(params.result.stderr), { mode: 0o600 }),
-  ]);
-  return { stderrPath, stdoutPath };
+  return await loginMatrixQaCliDevice(
+    params.context.baseUrl,
+    params,
+    params.deviceName,
+    "Matrix destructive recovery",
+  );
 }
 
-export async function runMatrixQaCliJson<T>(params: {
+export async function runMatrixQaCliJson(params: {
   allowNonZero?: boolean;
   args: string[];
-  decode?: (payload: unknown) => T;
   label: string;
   runtime: MatrixQaCliRuntime;
   stdin?: string;
@@ -163,21 +90,20 @@ export async function runMatrixQaCliJson<T>(params: {
     stdin: params.stdin,
     timeoutMs: params.timeoutMs,
   });
-  const artifacts = await writeMatrixQaCliArtifacts({
+  const artifacts = await writeMatrixQaCliOutputArtifacts({
     label: params.label,
     result,
-    runtime: params.runtime,
+    rootDir: params.runtime.artifactDir,
   });
-  const parsed = parseMatrixQaCliJson(result);
   return {
     artifacts,
-    payload: params.decode ? params.decode(parsed) : (parsed as T),
+    payload: parseMatrixQaCliVerificationStatus(result),
     result,
   };
 }
 
 export function assertMatrixQaCliBackupRestoreSucceeded(
-  restore: MatrixQaCliBackupStatus,
+  restore: MatrixQaCliBackupRestoreStatus,
   label: string,
 ) {
   if (restore.success !== true) {
@@ -195,7 +121,7 @@ export function assertMatrixQaCliBackupRestoreSucceeded(
 
 export function assertMatrixQaCliBackupRestoreFailed(
   restore: {
-    payload: MatrixQaCliBackupStatus;
+    payload: MatrixQaCliBackupRestoreStatus;
     result: Pick<MatrixQaCliRunResult, "exitCode">;
   },
   params: {
@@ -274,29 +200,4 @@ export function isMatrixQaDeletedDeviceStatus(params: {
     deviceMissing,
     invalidated: authInvalidated || deviceMissing,
   };
-}
-
-export async function runMatrixQaExternalKeyRestore(params: {
-  accountId: string;
-  context: MatrixQaScenarioContext;
-  deviceName: string;
-  label: string;
-  password: string;
-  userId: string;
-}) {
-  const device = await loginMatrixQaRecoveryDevice({
-    context: params.context,
-    deviceName: params.deviceName,
-    password: params.password,
-    userId: params.userId,
-  });
-  const cli = await createMatrixQaRecoveryCliRuntime({
-    accountId: params.accountId,
-    accessToken: device.accessToken,
-    context: params.context,
-    deviceId: device.deviceId,
-    label: params.label,
-    userId: device.userId,
-  });
-  return { cli, device };
 }

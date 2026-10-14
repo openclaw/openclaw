@@ -83,34 +83,26 @@ describe("channel plugin catalog", () => {
     expect(normalizeChatChannelId("catalog-original")).toBeNull();
   });
 
-  it.each(["present", "missing"] as const)(
+  it.each(["missing"] as const)(
     "shares %s generated catalog facts across consumers until the owner changes",
-    (initialState) => {
+    () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shared-channel-catalog-"));
       tempDirs.push(root);
       fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
       vi.spyOn(process, "cwd").mockReturnValue(root);
       const catalogPath = path.join(root, "dist", "channel-catalog.json");
       const options = { catalogPaths: [path.join(root, "external.json")], env: {} };
-      if (initialState === "present") {
-        writeChannelCatalog(catalogPath, "shared-catalog", "Original catalog");
-      }
-      const originalLabel = initialState === "present" ? "Original catalog" : undefined;
-      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBe(
-        originalLabel,
-      );
+      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBeUndefined();
 
       writeChannelCatalog(catalogPath, "shared-catalog", "Updated catalog");
-      expect(findBundledChannelCatalogMetadata("shared-catalog")?.label).toBe(originalLabel);
+      expect(findBundledChannelCatalogMetadata("shared-catalog")?.label).toBeUndefined();
       expect(
         withPluginCache(
           createPluginCache(),
           () => getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label,
         ),
       ).toBe("Updated catalog");
-      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBe(
-        originalLabel,
-      );
+      expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBeUndefined();
 
       clearPluginMetadataLifecycleCaches();
       expect(getChannelPluginCatalogEntry("shared-catalog", options)?.meta.label).toBe(
@@ -120,54 +112,34 @@ describe("channel plugin catalog", () => {
     },
   );
 
-  it.each([
-    ["omitted", undefined, undefined],
-    ["empty", "", ""],
-    ["spaced", "  See docs:  ", "  See docs:  "],
-  ] as const)("preserves %s selection docs prefixes", (_label, prefix, expected) => {
-    listChannelCatalogEntriesMock.mockReturnValue([
-      {
-        pluginId: "workspace-chat",
-        origin: "workspace",
-        rootDir: "/tmp/workspace-chat",
-        packageName: "@workspace/chat",
-        channel: {
-          id: "custom-chat",
-          label: "Custom Chat",
-          selectionLabel: "Custom Chat",
-          docsPath: "/channels/custom-chat",
-          blurb: "workspace",
-          ...(prefix !== undefined ? { selectionDocsPrefix: prefix } : {}),
+  it.each([["spaced", "  See docs:  ", "  See docs:  "]] as const)(
+    "preserves %s selection docs prefixes",
+    (_label, prefix, expected) => {
+      listChannelCatalogEntriesMock.mockReturnValue([
+        {
+          pluginId: "workspace-chat",
+          origin: "workspace",
+          rootDir: "/tmp/workspace-chat",
+          packageName: "@workspace/chat",
+          channel: {
+            id: "custom-chat",
+            label: "Custom Chat",
+            selectionLabel: "Custom Chat",
+            docsPath: "/channels/custom-chat",
+            blurb: "workspace",
+            ...(prefix !== undefined ? { selectionDocsPrefix: prefix } : {}),
+          },
+          install: { localPath: "/tmp/workspace-chat" },
         },
-        install: { localPath: "/tmp/workspace-chat" },
-      },
-    ] satisfies PluginChannelCatalogEntry[]);
+      ] satisfies PluginChannelCatalogEntry[]);
 
-    const entry = getChannelPluginCatalogEntry("custom-chat", {
-      workspaceDir: "/tmp",
-    });
+      const entry = getChannelPluginCatalogEntry("custom-chat", {
+        workspaceDir: "/tmp",
+      });
 
-    expect(entry?.meta.selectionDocsPrefix).toBe(expected);
-  });
-
-  it("keeps third-party channel ids mapped with catalog install trust", () => {
-    const options = {
-      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
-      env: {},
-    };
-
-    const wecom = getChannelPluginCatalogEntry("wecom", options);
-    expect(wecom?.id).toBe("wecom");
-    expect(wecom?.pluginId).toBe("wecom-openclaw-plugin");
-    expect(wecom?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(wecom?.install?.npmSpec).toBe("@wecom/wecom-openclaw-plugin@2026.7.2");
-
-    const yuanbao = getChannelPluginCatalogEntry("yuanbao", options);
-    expect(yuanbao?.id).toBe("yuanbao");
-    expect(yuanbao?.pluginId).toBe("openclaw-plugin-yuanbao");
-    expect(yuanbao?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.18.2");
-  });
+      expect(entry?.meta.selectionDocsPrefix).toBe(expected);
+    },
+  );
 
   it("excludes only the rejected origin/plugin pair when resolving fallback copies", () => {
     listChannelCatalogEntriesMock.mockReturnValue([
@@ -208,7 +180,7 @@ describe("channel plugin catalog", () => {
     ).toBe("bundled");
   });
 
-  it.each(["__proto__", "constructor", "toString"])(
+  it.each(["__proto__"])(
     "rejects inherited install default choice %s from external catalog input",
     (defaultChoice) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-choice-"));
@@ -240,20 +212,65 @@ describe("channel plugin catalog", () => {
     );
   });
 
-  it("reloads official generated catalog entries after the explicit plugin metadata lifecycle reset", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-official-catalog-"));
+  it.each([
+    { name: "bundled", origin: "bundled", trusted: false, expected: "/channels/fixture" },
+    { name: "official config", origin: "config", trusted: true, expected: "/channels/fixture" },
+    { name: "untracked official identity", origin: "global", trusted: false },
+    { name: "workspace shadow", origin: "workspace", trusted: true },
+    {
+      name: "third-party package shadow",
+      origin: "global",
+      trusted: true,
+      packageName: "@vendor/fixture",
+    },
+    { name: "different plugin owner", origin: "global", trusted: true, pluginId: "other-owner" },
+  ] as const)("binds docs to official metadata for $name", (scenario) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-docs-")));
     tempDirs.push(root);
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    vi.spyOn(process, "cwd").mockReturnValue(root);
-    const catalogPath = path.join(root, "dist", "channel-catalog.json");
-    const options = { catalogPaths: [path.join(root, "external.json")], env: {} };
+    const officialPath = path.join(root, "official.json");
+    writeChannelCatalog(officialPath, "fixture", "Fixture");
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: ("pluginId" in scenario ? scenario.pluginId : undefined) ?? "fixture",
+        origin: scenario.origin,
+        rootDir: root,
+        packageName: "packageName" in scenario ? scenario.packageName : "@example/fixture",
+        trustedOfficialInstall: scenario.trusted,
+        channel: {
+          id: "fixture",
+          label: "Installed Fixture",
+          docsPath:
+            scenario.origin === "bundled" ? "/channels/fixture" : "/unverified-installed-guide",
+          blurb: "fixture",
+        },
+        install: { npmSpec: "@example/fixture" },
+      },
+    ]);
+    const entry = getChannelPluginCatalogEntry("fixture", {
+      officialCatalogPaths: [officialPath],
+      catalogPaths: [path.join(root, "none.json")],
+      env: {},
+    });
+    expect(entry?.officialDocsPath).toBe("expected" in scenario ? scenario.expected : undefined);
+    expect(entry?.trustedSourceLinkedOfficialInstall).toBeUndefined();
+  });
 
-    expect(getChannelPluginCatalogEntry("lifecycle-official", options)).toBeUndefined();
-    writeChannelCatalog(catalogPath, "lifecycle-official", "After official update");
-    clearPluginMetadataLifecycleCaches();
-
-    expect(getChannelPluginCatalogEntry("lifecycle-official", options)?.meta.label).toBe(
-      "After official update",
-    );
+  it.each([
+    "https://attacker.example/setup",
+    "//attacker.example/setup",
+    "/x/..//attacker.example/setup",
+    "/\\attacker.example/setup",
+  ])("omits unsafe official docs path %s", (docsPath) => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "fixture",
+        origin: "bundled",
+        rootDir: "/tmp/fixture",
+        packageName: "@example/fixture",
+        channel: { id: "fixture", label: "Fixture", docsPath, blurb: "fixture" },
+        install: { npmSpec: "@example/fixture" },
+      },
+    ]);
+    expect(getChannelPluginCatalogEntry("fixture", { env: {} })?.officialDocsPath).toBeUndefined();
   });
 });

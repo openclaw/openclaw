@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-plugin-sdk.tsbuildinfo"
+  },
+  "include": [
+    "../../src/channels/**/*.test.ts",
+    "../../src/channels/**/*.test.tsx",
+    "../../src/plugin-sdk/**/*.test.ts",
+    "../../src/plugin-sdk/**/*.test.tsx"
+  ]
+}

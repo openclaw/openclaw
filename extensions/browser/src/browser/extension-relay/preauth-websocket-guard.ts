@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { Duplex } from "node:stream";
-import type { RawData, WebSocket, WebSocketServer } from "ws";
+import type { RawData, WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 
 export const MAX_WEBSOCKET_AUTH_MESSAGE_BYTES = 16 * 1024;
 // A masked 16 KiB frame needs at most 8 bytes of framing. Keep a small bounded

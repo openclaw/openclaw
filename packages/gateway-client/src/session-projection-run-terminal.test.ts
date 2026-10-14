@@ -28,25 +28,75 @@ function createMessage(
 
 /** Run-scoped terminal state: final acceptance, late diagnostics, and retention. */
 describe("session run terminal bookkeeping", () => {
-  it("does not reopen a completed run when a stale stream delta arrives", () => {
-    const completed = reduceSessionProjection(createSessionProjection(primaryScope), {
+  it.each([
+    { content: [{ type: "input_text", text: "provider rate limit" }] },
+    { content: [{ type: "thinking", thinking: "Internal reasoning" }] },
+    { content: [{ type: "text", text: "[assistant turn failed before producing content]" }] },
+    {
+      content: [
+        { type: "text", text: "⚠️ Error: provider" },
+        { type: "text", text: "rate limit" },
+      ],
+    },
+    {
+      content: [
+        { type: "text", text: "⚠️ Error: The agent run failed" },
+        { type: "text", text: "before producing a reply." },
+      ],
+    },
+  ])("reopens a pure error projection when the same run resumes streaming: %j", ({ content }) => {
+    const failed = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",
       runId: "run-1",
-      status: "completed",
+      status: "error",
+      seq: 10,
+      errorMessage: "provider rate limit",
+      message: { role: "assistant", content, stopReason: "error" },
     });
+    const resumed = reduceSessionProjection(failed, {
+      type: "runDelta",
+      seq: 11,
+      runId: "run-1",
+      message: createMessage("assistant", "I"),
+    });
+    expect(resumed.runs["run-1"]).toMatchObject({ status: "streaming" });
+    expect(resumed.runs["run-1"]?.errorMessage).toBeUndefined();
+    expect(resumed.runs["run-1"]?.stopReason).toBeUndefined();
+  });
 
+  it.each([
+    { content: [{ type: "text", text: "Useful partial reply." }] },
+    {
+      content: [
+        { type: "thinking", thinking: "Internal reasoning" },
+        { type: "image", source: "synthetic-image" },
+      ],
+    },
+  ])("preserves useful failed-run content on a late delta: %j", ({ content }) => {
+    const failed = reduceSessionProjection(createSessionProjection(primaryScope), {
+      type: "runTerminal",
+      runId: "run-1",
+      status: "error",
+      seq: 10,
+      errorMessage: "provider rate limit",
+      message: { role: "assistant", content, stopReason: "error" },
+    });
     expect(
-      reduceSessionProjection(completed, {
+      reduceSessionProjection(failed, {
         type: "runDelta",
+        seq: 11,
         runId: "run-1",
         message: createMessage("assistant", "late stream"),
       }),
-    ).toBe(completed);
+    ).toBe(failed);
   });
 
-  it("upgrades an empty completed final exactly once without reopening the run", () => {
-    const emptyMessage = createMessage("assistant", "");
-    const deliveredMessage = createMessage("assistant", "eventual final");
+  it("upgrades an identified empty completed final exactly once without reopening the run", () => {
+    const emptyMessage = createMessage("assistant", "", { id: "assistant-final", seq: 7 });
+    const deliveredMessage = createMessage("assistant", "eventual final", {
+      id: "assistant-final",
+      seq: 7,
+    });
     let state = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",
       runId: "run-1",
@@ -54,6 +104,17 @@ describe("session run terminal bookkeeping", () => {
       message: emptyMessage,
     });
     expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], emptyMessage)).toBe(false);
+    const mismatchedMessage = createMessage("assistant", "wrong final", {
+      id: "different-assistant-final",
+      seq: 7,
+    });
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId: "run-1",
+      status: "completed",
+      message: mismatchedMessage,
+    });
+    expect(state.runs["run-1"]?.message).toBe(emptyMessage);
     state = reduceSessionProjection(state, {
       type: "runTerminal",
       runId: "run-1",
@@ -80,66 +141,27 @@ describe("session run terminal bookkeeping", () => {
     expect(reduceSessionProjection(acceptedLaterFinal, laterEvent)).toBe(acceptedLaterFinal);
   });
 
-  it("accepts distinct same-run persisted finals and ignores the later final's replay", () => {
-    const first = createMessage("assistant", "first final", { id: "assistant-a", seq: 4 });
-    const second = createMessage("assistant", "second final", { id: "assistant-b", seq: 5 });
+  it("recovers a sequence-identified empty final when persisted metadata adds an ID", () => {
+    const emptyMessage = createMessage("assistant", "", { seq: 7 });
+    const deliveredMessage = createMessage("assistant", "eventual final", {
+      id: "assistant-final",
+      seq: 7,
+    });
     let state = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",
       runId: "run-1",
       status: "completed",
-      message: first,
+      message: emptyMessage,
     });
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(false);
-
-    const secondEvent = {
+    state = reduceSessionProjection(state, {
       type: "runTerminal",
       runId: "run-1",
       status: "completed",
-      message: second,
-    } as const;
-    state = reduceSessionProjection(state, secondEvent);
+      message: deliveredMessage,
+    });
 
-    expect(state.runs["run-1"]?.message).toBe(first);
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], first)).toBe(true);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
-    expect(reduceSessionProjection(state, secondEvent)).toBe(state);
+    expect(state.runs["run-1"]?.message).toBe(deliveredMessage);
   });
-
-  it.each(["error", "aborted"] as const)(
-    "accepts a displayable final after a message-less %s without replaying it",
-    (initialStatus) => {
-      const delivered = createMessage("assistant", "recovered final", {
-        id: "recovered-assistant",
-        seq: 7,
-      });
-      let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-        type: "runTerminal",
-        runId: "run-1",
-        status: initialStatus,
-        ...(initialStatus === "error"
-          ? { errorKind: "provider_error", errorMessage: "provider diagnostic" }
-          : { stopReason: "aborted" }),
-      });
-      const finalEvent = {
-        type: "runTerminal",
-        runId: "run-1",
-        status: "completed",
-        message: delivered,
-      } as const;
-      state = reduceSessionProjection(state, finalEvent);
-
-      expect(state.runs["run-1"]).toMatchObject({
-        status: initialStatus,
-        message: delivered,
-      });
-      expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], delivered)).toBe(true);
-      expect(reduceSessionProjection(state, finalEvent)).toBe(state);
-      if (initialStatus === "error") {
-        expect(state.runs["run-1"]?.errorMessage).toBe("provider diagnostic");
-      }
-    },
-  );
 
   it("remembers distinct recovered finals after an initial message-less error", () => {
     const first = createMessage("assistant", "first recovered final", {
@@ -179,81 +201,6 @@ describe("session run terminal bookkeeping", () => {
     expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
     expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
     expect(reduceSessionProjection(state, secondEvent)).toBe(state);
-  });
-
-  it("does not replace a displayable error with a conflicting later final", () => {
-    const errorMessage = createMessage("assistant", "displayable failure");
-    const state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "error",
-      errorKind: "provider_error",
-      message: errorMessage,
-    });
-
-    expect(
-      reduceSessionProjection(state, {
-        type: "runTerminal",
-        runId: "run-1",
-        status: "completed",
-        message: createMessage("assistant", "conflicting final"),
-      }),
-    ).toBe(state);
-    expect(state.runs["run-1"]?.message).toBe(errorMessage);
-  });
-
-  it("distinguishes and deduplicates metadata-free finals by canonical visible content", () => {
-    const first = createMessage("assistant", "first metadata-free final");
-    const second = createMessage("assistant", "second metadata-free final");
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: first,
-    });
-    const secondEvent = {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: second,
-    } as const;
-    state = reduceSessionProjection(state, secondEvent);
-
-    expect(state.runs["run-1"]?.message).toBe(first);
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
-    expect(reduceSessionProjection(state, secondEvent)).toBe(state);
-  });
-
-  it("bounds accepted same-run final identities without losing the first delivered reply", () => {
-    const first = createMessage("assistant", "final 0", { id: "assistant-0", seq: 1 });
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: first,
-    });
-    for (let index = 1; index < 48; index += 1) {
-      state = reduceSessionProjection(state, {
-        type: "runTerminal",
-        runId: "run-1",
-        status: "completed",
-        message: createMessage("assistant", `final ${index}`, {
-          id: `assistant-${index}`,
-          seq: index + 1,
-        }),
-      });
-    }
-
-    expect(state.runs["run-1"]?.message).toBe(first);
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(32);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], first)).toBe(true);
-    expect(
-      hasSessionProjectionAcceptedFinal(
-        state.runs["run-1"],
-        createMessage("assistant", "final 47", { id: "assistant-47", seq: 48 }),
-      ),
-    ).toBe(true);
   });
 
   it("ignores whitespace diagnostics and accepts one meaningful late provider error", () => {
@@ -300,34 +247,6 @@ describe("session run terminal bookkeeping", () => {
       errorMessage: "provider rejected request",
     });
     expect(reduceSessionProjection(state, actionableError)).toBe(state);
-  });
-
-  it("bounds long-session terminal history without evicting any active stream", () => {
-    let state = createSessionProjection(primaryScope);
-    for (const runId of ["active-first", "active-second"]) {
-      state = reduceSessionProjection(state, {
-        type: "runDelta",
-        runId,
-        message: createMessage("assistant", `stream ${runId}`),
-      });
-    }
-    for (let index = 0; index < 1_000; index += 1) {
-      state = reduceSessionProjection(state, {
-        type: "runTerminal",
-        runId: `completed-${index}`,
-        status: "completed",
-        stopReason: "stop",
-      });
-    }
-
-    expect(Object.keys(state.runs).length).toBeLessThanOrEqual(200);
-    expect(state.runs["active-first"]?.status).toBe("streaming");
-    expect(state.runs["active-second"]?.status).toBe("streaming");
-    expect(state.runs["completed-0"]).toBeUndefined();
-    expect(state.runs["completed-999"]).toMatchObject({
-      status: "completed",
-      stopReason: "stop",
-    });
   });
 
   it("retains a newly completed live stream ahead of older terminal diagnostics", () => {

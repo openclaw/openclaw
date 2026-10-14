@@ -28,8 +28,5 @@ export function parseBrowserSessionTabCloseResult(value: unknown): CloseTrackedC
   ) {
     return { status };
   }
-  if (status === "unavailable") {
-    return { status, reason: "target-close-failed" };
-  }
   return { status: "unavailable", reason: "target-close-failed" };
 }

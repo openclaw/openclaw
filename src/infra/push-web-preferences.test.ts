@@ -15,8 +15,8 @@ describe("Web Push notification preferences", () => {
       approvalRequested: true,
       agentFinished: false,
       agentQuestion: false,
+      humanMentioned: false,
       scheduledTaskFailed: false,
-      backgroundTaskFailed: false,
     });
   });
 
@@ -35,15 +35,17 @@ describe("Web Push notification preferences", () => {
       device: {
         enabled: true,
         label: "Slot 1",
-        categories: { agentQuestion: false, backgroundTaskFailed: true },
+        categories: { agentQuestion: false, scheduledTaskFailed: true, humanMentioned: true },
       },
     });
 
     expect(effective.label).toBe("Slot 1");
     expect(effective.detailLevel).toBe("identified");
     expect(webPushCategoryEnabled(effective, "agent-question")).toBe(false);
-    expect(webPushCategoryEnabled(effective, "background-task-failed")).toBe(true);
+    expect(webPushCategoryEnabled(effective, "scheduled-task-failed")).toBe(true);
+    expect(webPushCategoryEnabled(effective, "human-mentioned")).toBe(true);
     expect(user.categories.agentQuestion).toBe(true);
+    expect(user.categories.humanMentioned).toBe(false);
   });
 
   it("handles overnight quiet hours in the configured time zone", () => {

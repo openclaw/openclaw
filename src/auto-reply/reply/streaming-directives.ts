@@ -1,4 +1,3 @@
-// Converts streaming reply directives into payload delivery decisions.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   parseInlineDirectives,
@@ -13,12 +12,6 @@ import {
 } from "../tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
-type PendingReplyState = {
-  explicitId?: string;
-  sawCurrent: boolean;
-  hasTag: boolean;
-};
-
 type ConsumeOptions = {
   final?: boolean;
   silentToken?: string;
@@ -28,17 +21,18 @@ type ConsumeOptions = {
 // live drafts still carry inline markers mid-run. Delete alongside the marker
 // parser when the visibleReplies default flips to "message_tool".
 // Hold incomplete tails until the inline parser can read complete reply/audio tags.
-export const splitTrailingDirective = (text: string): { text: string; tail: string } => {
+export const splitTrailingDirective = (
+  text: string,
+  options?: { preserveTrailingWhitespace?: boolean },
+): { text: string; tail: string } => {
   let bufferStart = text.length;
   let trimTextBeforeTail = false;
 
-  // 1. Unclosed `[[…` reply/audio directive tail.
+  // Unclosed `[[…` reply/audio directive tail.
   const openIndex = text.lastIndexOf("[[");
   if (openIndex >= 0 && !text.includes("]]", openIndex + 2)) {
-    if (openIndex < bufferStart) {
-      bufferStart = openIndex;
-      trimTextBeforeTail = true;
-    }
+    bufferStart = openIndex;
+    trimTextBeforeTail = true;
   }
   if (text.endsWith("[") && text.length - 1 < bufferStart) {
     bufferStart = text.length - 1;
@@ -47,29 +41,19 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
 
   // Keep a possible final-reply MEDIA directive out of partial streaming
   // payloads. The final message parser still owns legacy MEDIA delivery.
-  const lastNewline = text.lastIndexOf("\n");
-  const lastLine = lastNewline < 0 ? text : text.slice(lastNewline + 1);
-  if (/^\s*MEDIA:/i.test(lastLine)) {
-    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
-    if (mediaLineStart < bufferStart) {
-      bufferStart = mediaLineStart;
-    }
-  }
-
-  const prefixMatch = lastLine.match(/^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i);
-  if (prefixMatch) {
-    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
-    if (mediaLineStart < bufferStart) {
-      bufferStart = mediaLineStart;
-    }
+  const mediaLineStart = text.lastIndexOf("\n") + 1;
+  const lastLine = text.slice(mediaLineStart);
+  if (/^\s*MEDIA:/i.test(lastLine) || /^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i.test(lastLine)) {
+    bufferStart = Math.min(bufferStart, mediaLineStart);
   }
 
   if (bufferStart >= text.length) {
     return { text, tail: "" };
   }
 
+  const head = text.slice(0, bufferStart);
   return {
-    text: trimTextBeforeTail ? text.slice(0, bufferStart).trimEnd() : text.slice(0, bufferStart),
+    text: trimTextBeforeTail && !options?.preserveTrailingWhitespace ? head.trimEnd() : head,
     tail: text.slice(bufferStart),
   };
 };
@@ -77,15 +61,17 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
   let pendingSeparator = "";
-  let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
-  let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+  let replyToId: string | undefined;
+  let replyToCurrent = false;
+  let replyToTag = false;
   let hasReturnedText = false;
 
   const reset = () => {
     pendingTail = "";
     pendingSeparator = "";
-    pendingReply = { sawCurrent: false, hasTag: false };
-    activeReply = { sawCurrent: false, hasTag: false };
+    replyToId = undefined;
+    replyToCurrent = false;
+    replyToTag = false;
     hasReturnedText = false;
   };
 
@@ -132,41 +118,25 @@ export function createStreamingDirectiveAccumulator() {
     if (options?.final && !hasReturnedText) {
       text = stripInlineDirectiveTagsForDelivery(text).text;
     }
-    const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed?.hasReplyTag === true;
-    const sawCurrent =
-      activeReply.sawCurrent || pendingReply.sawCurrent || parsed?.replyToCurrent === true;
-    const explicitId =
-      parsed?.replyToExplicitId ?? pendingReply.explicitId ?? activeReply.explicitId;
+    // Reply context survives directive-only and visible chunks until the assistant message resets.
+    replyToId = parsed?.replyToExplicitId ?? replyToId;
+    replyToCurrent ||= parsed?.replyToCurrent === true;
+    replyToTag ||= parsed?.hasReplyTag === true;
 
     const combinedResult = {
       text,
-      replyToId: explicitId,
+      replyToId,
       replyToExplicitId: parsed?.replyToExplicitId,
-      replyToCurrent: sawCurrent,
-      replyToTag: hasTag,
+      replyToCurrent,
+      replyToTag,
       audioAsVoice: parsed?.audioAsVoice ?? false,
       isSilent,
     };
 
     if (!hasOutboundReplyContent(combinedResult) && !combinedResult.audioAsVoice) {
-      if (hasTag) {
-        pendingReply = {
-          explicitId,
-          sawCurrent,
-          hasTag,
-        };
-      }
       return null;
     }
 
-    // Keep reply context sticky for the full assistant message so split/newline chunks
-    // stay on the same native reply target until reset() is called for the next message.
-    activeReply = {
-      explicitId,
-      sawCurrent,
-      hasTag,
-    };
-    pendingReply = { sawCurrent: false, hasTag: false };
     hasReturnedText ||= Boolean(combinedResult.text);
     return combinedResult;
   };

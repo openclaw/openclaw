@@ -77,12 +77,65 @@ describe("createDedupeCache", () => {
     expect(cache.peek("a", 400)).toBe(false);
   });
 
-  it("prunes other entries at the exact TTL boundary", () => {
+  it.each([
+    {
+      name: "exact TTL boundary",
+      entries: [{ key: "expired", at: 100, duplicate: false }],
+      now: 1_100,
+      retained: ["current"],
+    },
+    {
+      name: "older timestamp inserted after a newer entry",
+      entries: [
+        { key: "newer", at: 1_000, duplicate: false },
+        { key: "older", at: 100, duplicate: false },
+      ],
+      now: 1_100,
+      retained: ["newer", "current"],
+    },
+    {
+      name: "duplicate refreshed with an older timestamp",
+      entries: [
+        { key: "refreshed", at: 1_000, duplicate: false },
+        { key: "newer", at: 1_100, duplicate: false },
+        { key: "refreshed", at: 100, duplicate: true },
+      ],
+      now: 1_150,
+      retained: ["newer", "current"],
+    },
+    {
+      name: "NaN timestamp alongside an expiring entry",
+      entries: [
+        { key: "invalid", at: Number.NaN, duplicate: false },
+        { key: "expired", at: 100, duplicate: false },
+      ],
+      now: 1_100,
+      retained: ["invalid", "current"],
+    },
+    {
+      name: "positive Infinity cutoff",
+      entries: [{ key: "expired", at: 100, duplicate: false }],
+      now: Number.POSITIVE_INFINITY,
+      retained: [],
+    },
+    {
+      name: "negative Infinity cutoff",
+      entries: [],
+      now: Number.NEGATIVE_INFINITY,
+      retained: [],
+    },
+  ])("prunes expired entries with $name", ({ entries, now, retained }) => {
     const cache = createDedupeCache({ ttlMs: 1_000, maxSize: 10 });
 
-    cache.check("expired", 100);
-    cache.check("current", 1_100);
+    for (const { key, at, duplicate } of entries) {
+      expect(cache.check(key, at)).toBe(duplicate);
+    }
+    expect(cache.check("current", now)).toBe(false);
 
-    expect(cache.size()).toBe(1);
+    // Observe eager pruning before a peek could delete a missed expired entry.
+    expect(cache.size()).toBe(retained.length);
+    for (const key of new Set([...entries.map((entry) => entry.key), "current"])) {
+      expect(cache.peek(key, now)).toBe(retained.includes(key));
+    }
   });
 });

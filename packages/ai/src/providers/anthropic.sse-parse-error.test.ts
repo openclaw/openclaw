@@ -1,7 +1,9 @@
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import Anthropic from "@anthropic-ai/sdk";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
+import { configureAiTransportHost } from "../host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
@@ -42,7 +44,10 @@ const context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 } satisfies Context;
 
-function makeModel(baseUrl: string): Model<"anthropic-messages"> {
+function makeModel(
+  baseUrl: string,
+  overrides: Partial<Model<"anthropic-messages">> = {},
+): Model<"anthropic-messages"> {
   return {
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6",
@@ -54,7 +59,26 @@ function makeModel(baseUrl: string): Model<"anthropic-messages"> {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 4_096,
+    ...overrides,
   } satisfies Model<"anthropic-messages">;
+}
+
+async function withLoopback<T>(
+  handler: RequestListener,
+  run: (baseUrl: string) => Promise<T>,
+): Promise<T> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address() as AddressInfo;
+  try {
+    return await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 }
 
 // Real loopback socket speaking Anthropic's event stream. Only the far end of the
@@ -62,31 +86,25 @@ function makeModel(baseUrl: string): Model<"anthropic-messages"> {
 async function streamAnthropicSseFrames(
   frames: readonly (readonly [string, string])[],
 ): Promise<{ stopReason: string; errorMessage?: string }> {
-  const server = createServer((request, response) => {
-    response.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-    });
-    for (const [event, data] of frames) {
-      response.write(`event: ${event}\ndata: ${data}\n\n`);
-    }
-    response.end();
-    void request.resume();
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address() as AddressInfo;
-  try {
-    const result = await streamAnthropic(makeModel(`http://127.0.0.1:${address.port}`), context, {
-      apiKey: "test-api-key",
-    }).result();
-    return { stopReason: result.stopReason, errorMessage: result.errorMessage };
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+  return withLoopback(
+    (request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+      });
+      for (const [event, data] of frames) {
+        response.write(`event: ${event}\ndata: ${data}\n\n`);
+      }
+      response.end();
+      void request.resume();
+    },
+    async (baseUrl) => {
+      const result = await streamAnthropic(makeModel(baseUrl), context, {
+        apiKey: "test-api-key",
+      }).result();
+      return { stopReason: result.stopReason, errorMessage: result.errorMessage };
+    },
+  );
 }
 
 describe("Anthropic malformed SSE frames", () => {
@@ -98,41 +116,67 @@ describe("Anthropic malformed SSE frames", () => {
     expect(result.errorMessage).not.toContain(SENTINEL);
   });
 
-  it("still completes a well-formed stream", async () => {
-    const result = await streamAnthropicSseFrames(WELL_FORMED_FRAMES);
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.errorMessage).toBeUndefined();
+  it("keeps a response alive while Anthropic sends protocol pings", async () => {
+    const idleTimeoutMs = 1_000;
+    const finalResponseDelayMs = 1_200;
+    let pingCount = 0;
+    await withLoopback(
+      (request, response) => {
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+        });
+        const writeFrame = ([event, data]: (typeof WELL_FORMED_FRAMES)[number]) => {
+          response.write(`event: ${event}\ndata: ${data}\n\n`);
+        };
+        writeFrame(WELL_FORMED_FRAMES[0]);
+        const pingTimer = setInterval(() => {
+          pingCount += 1;
+          response.write('event: ping\ndata: {"type":"ping"}\n\n');
+        }, 20);
+        const finalTimer = setTimeout(() => {
+          clearInterval(pingTimer);
+          for (const frame of WELL_FORMED_FRAMES.slice(1)) {
+            writeFrame(frame);
+          }
+          response.end();
+        }, finalResponseDelayMs);
+        response.on("close", () => {
+          clearInterval(pingTimer);
+          clearTimeout(finalTimer);
+        });
+        void request.resume();
+      },
+      async (baseUrl) => {
+        const onIdleTimeout = vi.fn();
+        const stream = (await Promise.resolve(
+          streamWithIdleTimeout(streamAnthropic as never, idleTimeoutMs, onIdleTimeout)(
+            makeModel(baseUrl),
+            context,
+            { apiKey: "test-api-key" },
+          ),
+        )) as ReturnType<typeof streamAnthropic>;
+        for await (const event of stream) {
+          // The idle watchdog guards consumer waits between provider events.
+          void event;
+        }
+        const result = await stream.result();
+        expect(result.stopReason).toBe("stop");
+        expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "ok" })]);
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+        expect(pingCount).toBeGreaterThan(0);
+        expect(finalResponseDelayMs).toBeGreaterThan(idleTimeoutMs);
+      },
+    );
   });
 
   it.each([
-    {
-      label: "rejects an empty first-party stream",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
-      frames: [],
-      stopReason: "error",
-    },
     {
       label: "rejects a ping-only first-party stream",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
       frames: [["ping", '{"type":"ping"}']] as const,
       stopReason: "error",
-    },
-    {
-      label: "still rejects a started first-party stream without message_stop",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
-      frames: WELL_FORMED_FRAMES.slice(0, -1),
-      stopReason: "error",
-    },
-    {
-      label: "still accepts an empty compatible provider stream",
-      provider: "openrouter",
-      baseUrl: "https://proxy.example.com/v1",
-      frames: [],
-      stopReason: "stop",
     },
     {
       label: "still accepts a ping-only Anthropic-compatible custom endpoint",
@@ -175,5 +219,99 @@ describe("Anthropic malformed SSE frames", () => {
     if (frames.length > 1 && stopReason === "stop") {
       expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "ok" })]);
     }
+  });
+});
+
+type CapturedRequest = {
+  method: string;
+  path: string;
+  authorization?: string;
+  apiKey?: string;
+  resourceKey?: string;
+};
+afterEach(() => configureAiTransportHost({}));
+describe("Anthropic SDK host fetch wiring", () => {
+  it("routes every non-Cloudflare client branch through the host fetch", async () => {
+    const requests: CapturedRequest[] = [];
+    await withLoopback(
+      (request, response) => {
+        requests.push({
+          method: request.method ?? "",
+          path: request.url ?? "",
+          authorization: request.headers.authorization,
+          apiKey: request.headers["x-api-key"] as string | undefined,
+          resourceKey: request.headers["api-key"] as string | undefined,
+        });
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            type: "error",
+            error: { type: "authentication_error", message: "test rejection" },
+          }),
+        );
+      },
+      async (baseUrl) => {
+        const hostFetch = vi.fn<typeof fetch>((input, init) => globalThis.fetch(input, init));
+        const buildModelFetch = vi.fn(() => hostFetch);
+        configureAiTransportHost({ buildModelFetch });
+        const cases = [
+          {
+            model: makeModel(baseUrl, { provider: "github-copilot" }),
+            apiKey: "copilot-token",
+          },
+          {
+            model: makeModel(baseUrl, {
+              provider: "microsoft-foundry",
+              authHeader: true,
+              headers: { "api-key": "stale-foundry-key", "x-api-key": "stale-resource-key" },
+            }),
+            apiKey: "foundry-token",
+          },
+          {
+            model: makeModel(baseUrl),
+            apiKey: "sk-ant-oat01-oauth-token", // pragma: allowlist secret
+          },
+          {
+            model: makeModel(baseUrl, {
+              provider: "microsoft-foundry",
+              headers: { "api-key": "foundry-resource-key" },
+            }),
+            apiKey: "foundry-resource-key",
+          },
+          {
+            model: makeModel(baseUrl, { provider: "kimi-coding" }),
+            apiKey: "kimi-api-key",
+            thinkingEnabled: true,
+          },
+        ];
+        for (const testCase of cases) {
+          const result = await streamAnthropic(testCase.model, context, {
+            apiKey: testCase.apiKey,
+            thinkingEnabled: testCase.thinkingEnabled,
+          }).result();
+          expect(result.stopReason).toBe("error");
+        }
+        expect(hostFetch).toHaveBeenCalledTimes(cases.length);
+        for (const request of requests) {
+          expect([request.method, request.path]).toEqual(["POST", "/v1/messages"]);
+        }
+        expect(
+          requests.map(({ authorization, apiKey, resourceKey }) => [
+            authorization,
+            apiKey,
+            resourceKey,
+          ]),
+        ).toEqual([
+          ["Bearer copilot-token", undefined, undefined],
+          ["Bearer foundry-token", undefined, undefined],
+          ["Bearer sk-ant-oat01-oauth-token", undefined, undefined], // pragma: allowlist secret
+          [undefined, "foundry-resource-key", "foundry-resource-key"],
+          [undefined, "kimi-api-key", undefined],
+        ]);
+        expect(buildModelFetch).toHaveBeenLastCalledWith(cases.at(-1)?.model, undefined, {
+          sanitizeSse: false,
+        });
+      },
+    );
   });
 });

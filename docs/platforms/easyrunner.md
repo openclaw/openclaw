@@ -115,3 +115,10 @@ SecretRef, plugin, or channel auth failures.
 - Browser or channel plugins fail: check whether the required external
   binaries, network egress, and mounted credentials are available inside the
   container.
+
+## Related
+
+- [Platforms](/platforms) — the VPS and hosting index this page sits under
+- [Docker](/install/docker) — the container image and environment variables this Compose file uses
+- [Trusted proxy auth](/gateway/trusted-proxy-auth) — the auth mode used behind Caddy
+- [Gateway runbook](/gateway) — operating the Gateway once it is up

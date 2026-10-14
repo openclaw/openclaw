@@ -1,4 +1,3 @@
-// Shared parser for CLI flags that select a local Gateway TCP port.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
@@ -9,17 +8,7 @@ export function parseGatewayPortOption(raw: unknown, flagName = "--port"): numbe
     return undefined;
   }
 
-  const value =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? String(raw)
-        : "";
-  if (!value) {
-    return undefined;
-  }
-
-  const parsed = parseStrictPositiveInteger(value);
+  const parsed = parseStrictPositiveInteger(typeof raw === "bigint" ? String(raw) : raw);
   if (parsed === undefined || parsed > MAX_TCP_PORT) {
     throw new Error(`${flagName} must be an integer between 1 and ${MAX_TCP_PORT}.`);
   }

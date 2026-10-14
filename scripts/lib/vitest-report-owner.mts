@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JsonTestResults } from "vitest/node";
+import type { CliOptions, JsonTestResults } from "vitest/node";
+import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
+import { parseVitestExecutionArgs } from "./vitest-cli.mts";
+import { vitestInfrastructureExitCode } from "./vitest-outcome.mts";
 import type { VitestReportCapture } from "./vitest-report-capture.mts";
 
 export type VitestReportOutcome = {
@@ -14,17 +17,35 @@ type Invocation = { config: string; args: string[]; includePatterns?: string[] |
 type Attempt = { json: string; blob: string; outcome?: VitestReportOutcome; error?: string };
 
 const captureReporter = fileURLToPath(new URL("./vitest-report-capture.mts", import.meta.url));
+const reporterConfigModule = new URL("../../test/vitest/vitest.reporters.ts", import.meta.url).href;
 const consoleReporters = new Set([
-  "json",
   "default",
   "verbose",
   "dot",
   "agent",
   "minimal",
   "tree",
-  "github-actions",
   "hanging-process",
 ]);
+
+/** CLI overrides establish output ownership without evaluating each config twice. */
+export function canParallelizeVitestOutput(
+  options: Pick<CliOptions, "coverage" | "outputFile" | "reporter" | "reporters">,
+  reportOwner: boolean,
+) {
+  const reporters = [options.reporter ?? [], options.reporters ?? []].flat();
+  // JSON needs the existing artifact owner; github-actions can append a shared
+  // config-owned job summary even when its name was explicitly selected by CLI.
+  return (
+    reporters.length > 0 &&
+    reporters.every(
+      (reporter) =>
+        typeof reporter === "string" &&
+        (consoleReporters.has(reporter) || (reportOwner && reporter === "json")),
+    ) &&
+    (reportOwner || (options.coverage?.enabled === false && !options.outputFile))
+  );
+}
 
 function withoutOutputArgs(args: string[]) {
   const result: string[] = [];
@@ -34,9 +55,7 @@ function withoutOutputArgs(args: string[]) {
       return [...result, ...args.slice(index)];
     }
     if (/^--(?:output(?:File|-file)(?:\.[^=]+)?|coverage\.reportsDirectory)(?:=|$)/u.test(arg)) {
-      if (!arg.includes("=")) {
-        index++;
-      }
+      index += vitestOptionConsumesNextArg(arg, args[index + 1]) ? 1 : 0;
     } else {
       result.push(arg);
     }
@@ -56,48 +75,7 @@ function caseInventory(reports: JsonTestResults[]) {
     .toSorted();
 }
 
-export function nativeHelpRequested(
-  args: string[],
-  parseCLI: typeof import("vitest/node").parseCLI,
-) {
-  const controls: string[] = [];
-  for (const [index, original] of args.entries()) {
-    if (original === "--") {
-      break;
-    }
-    // CAC treats every prefix except exactly two dashes as a short-option group.
-    const arg = original.replace(/^---+/u, "-");
-    // Project only help onto native watch's boolean/short-alias grammar.
-    // parseCLI(help) prints and skips validation; only the real child may do that.
-    const projected = arg.startsWith("--")
-      ? arg.replace(
-          /^--(no-)?(help|h)(?=[.=]|$)/u,
-          (_, no: string | undefined, name: string) =>
-            `--${no ?? ""}${name === "h" ? "w" : "watch"}`,
-        )
-      : arg.startsWith("-no-")
-        ? arg.replace(/^-no-(help|h)$/u, (_, name: string) =>
-            name === "h" ? "-no-w" : "-no-watch",
-          )
-        : arg.replace(
-            /^-(?!-)([^=]+)/u,
-            (_, flags: string) => `-${flags.replace(/[^h]/gu, "x").replaceAll("h", "w")}`,
-          );
-    if (projected === arg || !/watch|w/u.test(projected)) {
-      continue;
-    }
-    controls.push(projected);
-    const value = args[index + 1];
-    if (value && !value.startsWith("-")) {
-      controls.push(value);
-    }
-  }
-  return Boolean(
-    parseCLI(["vitest", "run", ...controls], { allowUnknownOptions: true }).options.watch,
-  );
-}
-
-/** Own file artifacts only; callers retain admission, retry, environment and process ownership. */
+/** Own file artifacts only; callers retain admission, environment and process ownership. */
 export async function createVitestReportOwner(invocations: Invocation[], cwd: string) {
   if (
     invocations.length < 2 ||
@@ -110,32 +88,11 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
     return null;
   }
   const { parseCLI } = await import("vitest/node");
-  // Both schedulers emit named `run`: unlike `--run --version`, `run --version`
-  // executes tests. Help was classified without output; native errors stay in the child.
-  let parsed: ReturnType<typeof parseCLI>[];
-  try {
-    if (invocations.some(({ args }) => nativeHelpRequested(args, parseCLI))) {
-      return null;
-    }
-    parsed = invocations.map(({ args }) => parseCLI(["vitest", ...args]));
-  } catch {
-    // Repeated help is truthy in CAC but watch rejects repeated scalar values.
-    // That and all native parse errors must be handled by the actual child.
+  const parsed = invocations.map(({ args }) => parseVitestExecutionArgs(args, parseCLI));
+  if (parsed.some((entry) => !entry || entry.options.watch)) {
     return null;
   }
-  if (
-    parsed.some(
-      ({ options, filter }) =>
-        options.watch ||
-        options.listTags ||
-        options.clearCache ||
-        options.mergeReports ||
-        (options.standalone && !filter.length),
-    )
-  ) {
-    return null;
-  }
-  const runOptions = parsed.map(({ options }) => options);
+  const runOptions = parsed.map((entry) => entry!.options);
   const requests = runOptions.map((option) => {
     // Native CLI's singular alias is distinct from config-defined reporters.
     const reporters = (option as typeof option & { reporter?: string[] }).reporter ?? [];
@@ -153,7 +110,11 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
     "JSON destinations differ across invocations",
   );
   assert(
-    requests.every((entry) => entry!.reporters.every((name) => consoleReporters.has(name))),
+    requests.every((entry) =>
+      entry!.reporters.every(
+        (name) => consoleReporters.has(name) || name === "json" || name === "github-actions",
+      ),
+    ),
     "Multi-invocation JSON supports native JSON plus console reporters. Run other file/custom reporters separately with unique destinations.",
   );
   const { readJsonFile, validateVitestJsonReport } = await import("../test-report-utils.mts");
@@ -233,6 +194,11 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
       runMerge: (args: string[]) => Promise<VitestReportOutcome>,
       incompleteReason?: string,
     ) {
+      let exitCode: number;
+      const recordFailure = (error: unknown) => {
+        index.error = String(error);
+        console.error(`[test] report publication failed; retained ${directory}: ${index.error}`);
+      };
       try {
         if (incompleteReason) {
           throw new Error(incompleteReason);
@@ -302,8 +268,12 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
           ).values(),
         ].map((project) => {
           assert(typeof project.config === "string", "Missing native project configuration");
-          // Native file-project loading otherwise forces the config's directory as root.
-          return { extends: project.config, root: project.root };
+          assert(typeof project.namePrefix === "string", "Missing native project name prefix");
+          return {
+            config: project.config,
+            root: project.root,
+            namePrefix: project.namePrefix,
+          };
         });
         const blobs = path.join(directory, "accepted-blobs");
         fs.mkdirSync(blobs);
@@ -314,21 +284,25 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
         const config = path.join(directory, "vitest.merge.config.mjs");
         fs.writeFileSync(
           config,
-          `export default ${JSON.stringify({
-            root: cwd,
-            test: {
-              projects: projectConfigs,
-              coverage: { enabled: false },
-              passWithNoTests: captures.every((capture) => capture.passWithNoTests),
-              dangerouslyIgnoreUnhandledErrors: captures.every(
-                (capture) => capture.ignoreUnhandledErrors || capture.ended!.unhandledErrors === 0,
-              ),
-              reporters: [
-                ["json", {}],
-                [captureReporter, { expected: captures }],
-              ],
+          `import { createRedactingReporterPlugin } from ${JSON.stringify(reporterConfigModule)};\nconst config = ${JSON.stringify(
+            {
+              root: cwd,
+              test: {
+                // An omitted list lets native Vitest host a wholly empty blob replay.
+                projects: projectConfigs.length ? projectConfigs : undefined,
+                coverage: { enabled: false },
+                passWithNoTests: captures.every((capture) => capture.passWithNoTests),
+                dangerouslyIgnoreUnhandledErrors: captures.every(
+                  (capture) =>
+                    capture.ignoreUnhandledErrors || capture.ended!.unhandledErrors === 0,
+                ),
+                reporters: [
+                  ["json", {}],
+                  [captureReporter, { expected: captures }],
+                ],
+              },
             },
-          })};\n`,
+          )};\nexport default { ...config, plugins: [createRedactingReporterPlugin()] };\n`,
         );
         const mergeArgs = [
           "run",
@@ -337,6 +311,9 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
           "--config",
           config,
           "--configLoader=runner",
+          // Replay loads project configs but needs no transformed test modules.
+          // A CLI override also prevents their caches invalidating the root cache.
+          "--fsModuleCache=false",
           `--outputFile.json=${staged}`,
         ];
         if (typeof runOptions[0]?.pool === "string") {
@@ -387,14 +364,20 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
         console.error(
           `[test] native JSON aggregate: ${destination}; originals: ${directory}. Native merge omits snapshot summaries and JSON coverageMap; startTime is merge time. Use index.json for process outcomes.`,
         );
-        return index.merge.code;
+        exitCode = index.merge.code;
       } catch (error) {
-        index.error = String(error);
-        console.error(`[test] report publication failed; retained ${directory}: ${index.error}`);
-        return 1;
-      } finally {
-        save();
+        recordFailure(error);
+        exitCode = vitestInfrastructureExitCode(index.merge?.code);
       }
+      // The final index is part of publication, including after an assertion-red merge.
+      // A failure here must return infrastructure status, never escape as Node exit 1.
+      try {
+        save();
+      } catch (error) {
+        recordFailure(error);
+        exitCode = vitestInfrastructureExitCode(exitCode);
+      }
+      return exitCode;
     },
   };
 }

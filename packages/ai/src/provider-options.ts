@@ -3,10 +3,14 @@ import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
 
-export type OpenAIResponsesCompactionRejection = {
+/** Identity of a provider compaction checkpoint the server rejected on replay. */
+export type CompactionReplayRejection = {
   data: string;
   id?: string;
 };
+
+/** @deprecated Use CompactionReplayRejection. */
+export type OpenAIResponsesCompactionRejection = CompactionReplayRejection;
 
 export type CodeModeToolSurfaceObservation = {
   beforeToolIdentities: readonly string[];
@@ -68,8 +72,16 @@ export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
+export type AnthropicContextManagementOptions = {
+  anthropicServerCompaction?: boolean;
+  anthropicCompactThreshold?: number;
+  cacheTtlPruning?: { tools?: { allow?: string[]; deny?: string[] } };
+  /** Internal owner notification after Anthropic rejects a replayed compaction checkpoint. */
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
+};
+
 /** Provider options shared by the Anthropic provider and canonical transport. */
-export interface AnthropicOptions extends StreamOptions {
+export interface AnthropicOptions extends StreamOptions, AnthropicContextManagementOptions {
   /**
    * Enable extended thinking.
    * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
@@ -121,7 +133,7 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
   /** Internal owner notification after a server rejects a persisted compaction checkpoint. */
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
   frequencyPenalty?: number;
@@ -131,7 +143,8 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
 
 /** Superset retained under the provider's published compatibility type name. */
 export type OpenAICompletionsOptions = BaseOpenAIStreamOptions & {
+  streaming?: boolean;
   toolChoice?: OpenAICompletionsToolChoice;
-  reasoning?: OpenAIReasoningEffort;
-  reasoningEffort?: OpenAIReasoningEffort;
+  reasoning?: OpenAIReasoningEffort | "off";
+  reasoningEffort?: OpenAIReasoningEffort | "off";
 };

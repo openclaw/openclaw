@@ -9,7 +9,8 @@ describe("computer screenshot dimensions", () => {
     [1080, 1920, 1280, 720, 1280],
     [1200, 1243, 1200, 1158, 1200],
     [1, 3, 1, 1, 1],
-  ])(
+    [32, 16, 1200, 32, 16],
+  ] as const)(
     "reports %dx%d at cap %d as the delivered %dx%d image",
     async (width, height, referenceWidth, deliveredWidth, deliveredHeight) => {
       const { result } = await projectScreenshotResult({
@@ -17,10 +18,8 @@ describe("computer screenshot dimensions", () => {
           base64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
           mimeType: "image/png",
           displayFrameId: "display-frame",
-          width,
-          height,
         },
-        target: { nodeId: "desktop-node", screenIndex: 0 },
+        target: { host: "node", nodeId: "desktop-node", screenIndex: 0 },
         action: "screenshot",
         noteLines: [],
         referenceWidth,

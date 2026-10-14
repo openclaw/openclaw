@@ -8,7 +8,11 @@ import {
   type MockGatewayControls,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "active turn recovery",
@@ -97,6 +101,7 @@ function activeRunSnapshot(
       hasActiveRun: true,
       key: "agent:main:main",
       kind: "direct",
+      sessionId: "active-turn-recovery-session",
       status: "running",
       updatedAt: 1_000,
     },
@@ -155,7 +160,7 @@ async function installActiveRunSnapshot(
   const snapshot = activeRunSnapshot(runId, prompt, streamText, opts);
   await gateway.setMethodResponse("chat.startup", snapshot);
   await gateway.setMethodResponse("chat.history", snapshot);
-  await gateway.setMethodResponse("sessions.list", {
+  await gateway.setSessionsListResponse({
     count: 1,
     defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
     path: "",
@@ -193,16 +198,9 @@ async function readWorkingStartedAts(page: Page): Promise<number[]> {
 
 async function waitForGatewayConnected(page: Page): Promise<void> {
   await expect
-    .poll(
-      () =>
-        page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-          };
-          return app.runtime?.context.gateway.snapshot.phase;
-        }),
-      { timeout: 15_000 },
-    )
+    .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase), {
+      timeout: 15_000,
+    })
     .toBe("connected");
 }
 
@@ -235,11 +233,7 @@ async function finishRecoveredTurn(
 }
 
 async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1] = {}) {
-  const context = await suite.newBrowserContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
   const page = await context.newPage();
   const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -249,7 +243,13 @@ async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1]
 
 async function assertSteeredRecoveryOrder(
   page: Page,
-  texts: { original: string; beforeSteer: string; steer: string; afterSteer: string },
+  texts: {
+    original: string;
+    beforeSteer: string;
+    steer: string;
+    afterSteer: string;
+    latest: string;
+  },
 ): Promise<void> {
   const thread = page.locator(".chat-thread");
   await assertActiveTurnVisible(page, texts.afterSteer);
@@ -257,6 +257,9 @@ async function assertSteeredRecoveryOrder(
     await expect(thread.getByText(text, { exact: true })).toHaveCount(1, { timeout: 10_000 });
   }
   await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
+  await expect(thread.locator(".chat-text").filter({ hasText: texts.latest })).toHaveText(
+    texts.latest,
+  );
 
   const order = await thread.evaluate((element, expected) => {
     const visibleText = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
@@ -267,6 +270,7 @@ async function assertSteeredRecoveryOrder(
     const steer = bubbleWithText(expected.steer);
     const tool = element.querySelector<HTMLElement>(".chat-tool-row--running");
     const afterSteer = bubbleWithText(expected.afterSteer);
+    const latest = bubbleWithText(expected.latest);
     const precedes = (upper: Element | undefined | null, lower: Element | undefined | null) =>
       Boolean(
         upper && lower && upper.compareDocumentPosition(lower) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -276,6 +280,8 @@ async function assertSteeredRecoveryOrder(
       commentaryBeforeSteer: precedes(beforeSteer, steer),
       steerBeforeTool: precedes(steer, tool),
       toolBeforeLaterCommentary: precedes(tool, afterSteer),
+      laterCommentaryBeforeLatest: precedes(afterSteer, latest),
+      steerBeforeLatest: precedes(steer, latest),
     };
   }, texts);
   expect(order).toEqual({
@@ -283,6 +289,8 @@ async function assertSteeredRecoveryOrder(
     commentaryBeforeSteer: true,
     steerBeforeTool: true,
     toolBeforeLaterCommentary: true,
+    laterCommentaryBeforeLatest: true,
+    steerBeforeLatest: true,
   });
 }
 
@@ -299,14 +307,12 @@ suite.define(() => {
 
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-        .click();
+      await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
       await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
-      await sidebar.getByRole("link", { name: "Home" }).click();
+      await openHomeFullPage(page);
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
       await assertActiveTurnVisible(page, streamText);
-      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await expect.poll(() => readWorkingStartedAts(page)).toContain(startedAt);
       await expect(
         page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),
       ).not.toHaveCount(0);
@@ -349,7 +355,11 @@ suite.define(() => {
   it.each([true, false])(
     "keeps an owned reconnect prompt before a durable reply while history recovery is pending (active=%s)",
     async (active) => {
-      const { context, page, gateway } = await openActiveTurn();
+      const { context, page, gateway } = await openActiveTurn({
+        deferredMethods: ["chat.send"],
+        // Terminal events can request ordinary history alongside outbox recovery.
+        heldMethods: ["chat.history"],
+      });
       const readPane = () =>
         page.locator("openclaw-chat-pane").evaluate((element) => {
           const state = (element as HTMLElement & { state: ChatPageHost }).state;
@@ -378,6 +388,8 @@ suite.define(() => {
         if (typeof runId !== "string") {
           throw new Error("chat.send did not carry its generated run ID");
         }
+        // This scenario commits the user below while disconnected, after acceptance.
+        await gateway.resolveDeferred("chat.send", { runId, status: "started" });
         await expect.poll(readPane).toMatchObject({
           runId,
           sending: false,
@@ -431,7 +443,7 @@ suite.define(() => {
         });
         await gateway.setMethodResponse("chat.startup", history);
         await gateway.setMethodResponse("chat.history", history);
-        await gateway.setMethodResponse("sessions.list", {
+        await gateway.setSessionsListResponse({
           count: 1,
           sessions: [sessionInfo],
           defaults: {},
@@ -441,7 +453,6 @@ suite.define(() => {
         const historyCount = (await gateway.getRequests("chat.history")).length;
         const subscriptionCount = (await gateway.getRequests("sessions.messages.subscribe")).length;
         await gateway.deferNext("chat.startup", { sessionKey });
-        await gateway.deferNext("chat.history", { sessionKey, limit: 1000 });
         await gateway.setOnline(true);
         await waitForGatewayConnected(page);
         await gateway.waitForRequest("sessions.messages.subscribe", { after: subscriptionCount });
@@ -490,7 +501,7 @@ suite.define(() => {
         await gateway.setHistoryMessages(completeHistory.messages);
         await gateway.setMethodResponse("chat.startup", completeHistory);
         await gateway.setMethodResponse("chat.history", completeHistory);
-        await gateway.setMethodResponse("sessions.list", {
+        await gateway.setSessionsListResponse({
           count: 1,
           sessions: [replySessionInfo],
           defaults: {},
@@ -587,13 +598,14 @@ suite.define(() => {
     }
   });
 
-  it("preserves pre-steer commentary order through a full reload", async () => {
+  it("preserves accepted steer order through a full reload", async () => {
     const runId = "run-steer-refresh";
     const texts = {
       original: "Review the fixture.",
       beforeSteer: "The first recovery note is visible.",
       steer: "Please include the verification pass.",
       afterSteer: "The second recovery note is visible.",
+      latest: "Verifying the remaining work.",
     };
     const fixtureNow = Date.now();
     const snapshot = activeRunSnapshot(runId, texts.original, "", {
@@ -614,6 +626,7 @@ suite.define(() => {
             id: "fixture-steering-user",
             idempotencyKey: "fixture-steer:user",
             seq: 2,
+            steerTargetRunId: runId,
           },
           content: [{ text: texts.steer, type: "text" }],
           role: "user",
@@ -656,6 +669,18 @@ suite.define(() => {
             kind: "preamble",
             itemId: "fixture-preamble-after-steer",
             progressText: texts.afterSteer,
+          },
+        },
+        {
+          runId,
+          seq: 4,
+          stream: "item",
+          ts: fixtureNow + 5_000,
+          sessionKey: "agent:main:main",
+          data: {
+            kind: "preamble",
+            itemId: "fixture-latest-preamble",
+            progressText: texts.latest,
           },
         },
       ],

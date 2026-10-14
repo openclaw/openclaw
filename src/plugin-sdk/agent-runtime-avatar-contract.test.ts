@@ -7,7 +7,7 @@ const legacyLocalResolution: AgentAvatarResolution = {
   filePath: "/workspace/avatar.png",
   source: "avatar.png",
 };
-const internalFileHelperIsPrivate: "openLocalAgentAvatarFile" extends keyof typeof import("./agent-runtime.js")
+const internalFileHelperIsPrivate: "prepareLocalAgentAvatarFile" extends keyof typeof import("./agent-runtime.js")
   ? true
   : false = false;
 

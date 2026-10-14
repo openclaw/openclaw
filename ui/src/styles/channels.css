@@ -2,18 +2,10 @@
    detail overlay, and the guided setup wizard dialog. Everything else uses the
    shared settings design language. */
 
-/* Compact refresh actions should not retain the spacing and top alignment
-   reserved for settings headers with full-size controls. */
+/* Compact refresh actions should not retain the spacing reserved for settings
+   headers with full-size controls. */
 .settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
   gap: var(--space-2);
-}
-
-@media not all and (max-width: 640px) {
-  .settings-section__header:not(:has(.settings-section__desc)):has(
-    .settings-section__actions .btn--xs.btn--icon
-  ) {
-    align-items: center;
-  }
 }
 
 .channels-empty {
@@ -31,7 +23,6 @@
   text-align: left;
 }
 
-/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
 .channels-tile {
   display: grid;
   width: var(--channels-art-size, 44px);
@@ -44,7 +35,8 @@
   background: var(--bg-elevated);
 }
 
-.channels-tile img {
+.channels-tile img,
+.channels-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -60,7 +52,6 @@
   text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
 }
 
-/* Wide cover art used by the detail overlay header. */
 .channels-cover {
   display: grid;
   width: 100%;
@@ -70,10 +61,10 @@
   background: var(--bg-elevated);
 }
 
-.channels-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.channels-cover--icon img {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--radius-lg);
 }
 
 .channels-cover--fallback {
@@ -85,18 +76,20 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 }
 
-/* ---------- detail overlay ---------- */
-
-.channels-detail {
+.channels-detail,
+.channels-wizard {
   display: flex;
   flex-direction: column;
-  width: min(680px, calc(100vw - 48px));
-  max-height: min(85dvh, 860px);
   overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background: var(--popover);
   box-shadow: var(--shadow-xl);
+}
+
+.channels-detail {
+  width: min(680px, calc(100vw - 48px));
+  max-height: min(85dvh, 860px);
 }
 
 .channels-detail__header {
@@ -125,13 +118,15 @@
   padding: 7px;
 }
 
+.channels-detail__close svg {
+  stroke-width: 2;
+}
+
 .channels-detail__body {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
-
-/* ---------- DM sender access requests ---------- */
 
 .channels-pairing-filters {
   display: flex;
@@ -147,10 +142,6 @@
   gap: var(--space-1);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.channels-pairing-filters select {
-  width: 100%;
 }
 
 .channels-pairing-feedback {
@@ -240,18 +231,9 @@
   }
 }
 
-/* ---------- setup wizard dialog ---------- */
-
 .channels-wizard {
-  display: flex;
-  flex-direction: column;
   width: min(540px, calc(100vw - 48px));
   max-height: min(85dvh, 760px);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
 }
 
 .channels-wizard__header {
@@ -292,29 +274,20 @@
   padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
-.channels-wizard__note {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.5;
-}
-
-.channels-wizard__note--code {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-}
-
+.channels-wizard__note,
 .channels-wizard__output {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
+}
+
+.channels-wizard__note {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg-elevated);
 }
 
 .channels-wizard__output--code {
@@ -326,20 +299,6 @@
   color: var(--text-strong);
   font-weight: 620;
   line-height: 1.4;
-}
-
-.channels-wizard__text,
-.channels-wizard__secret {
-  width: 100%;
-  margin-top: 10px;
-}
-
-.channels-wizard__text {
-  display: flex;
-}
-
-.channels-wizard__text > .input {
-  min-height: 44px;
 }
 
 .channels-wizard__options {
@@ -381,7 +340,8 @@
   font-weight: 620;
 }
 
-.channels-wizard__option-hint {
+.channels-wizard__option-hint,
+.channels-wizard__spinner {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -390,11 +350,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.channels-wizard__link,
-.channels-wizard__link:hover {
-  text-decoration: none;
 }
 
 .channels-wizard__footer {
@@ -426,11 +381,6 @@
   border-radius: var(--radius-md);
   background: var(--brand-logo-chip-bg);
   padding: var(--space-2);
-}
-
-.channels-wizard__spinner {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 /* Text/tile area of an available row doubles as the detail opener. */

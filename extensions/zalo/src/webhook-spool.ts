@@ -1,4 +1,3 @@
-// Zalo plugin owns raw webhook durable admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressError,
@@ -7,11 +6,15 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
-import { z } from "zod";
 import { ZaloApiError, type ZaloUpdate } from "./api.js";
+import {
+  webhookAdmissionSchema,
+  webhookEnvelopeSchema,
+  webhookUpdateSchema,
+} from "./message-schema.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import { getZaloRuntime } from "./runtime.js";
 
@@ -31,71 +34,6 @@ export type ZaloWebhookIngressLifecycle = ReturnType<
 export const ZaloWebhookPayloadError = createChannelIngressError("ZaloWebhookPayloadError");
 export type ZaloWebhookPayloadError = InstanceType<typeof ZaloWebhookPayloadError>;
 
-type ZaloWebhookIngress = {
-  accept: (rawEvent: string) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
-const nonEmptyWebhookStringSchema = z
-  .string()
-  .transform((value) => nonEmptyString(value))
-  .pipe(z.string());
-const optionalWebhookStringSchema = z.string().optional().catch(undefined);
-const webhookEnvelopeSchema = z
-  .looseObject({
-    ok: z.unknown().optional(),
-    result: z.looseObject({}).optional().catch(undefined),
-  })
-  .transform((envelope) => (envelope.ok === true && envelope.result ? envelope.result : envelope));
-const webhookAdmissionSchema = z.looseObject({
-  message: z.looseObject({
-    message_id: nonEmptyWebhookStringSchema,
-    chat: z.looseObject({ id: nonEmptyWebhookStringSchema }),
-  }),
-});
-const webhookSenderSchema = z.object({
-  id: nonEmptyWebhookStringSchema,
-  name: optionalWebhookStringSchema,
-  display_name: optionalWebhookStringSchema,
-  avatar: optionalWebhookStringSchema,
-  is_bot: z.boolean().optional().catch(undefined),
-});
-const webhookChatSchema = z.object({
-  id: nonEmptyWebhookStringSchema,
-  chat_type: z.enum(["PRIVATE", "GROUP"]),
-});
-const webhookMessageSchema = z.object({
-  message_id: nonEmptyWebhookStringSchema,
-  from: webhookSenderSchema,
-  chat: webhookChatSchema,
-  date: z.number().finite(),
-  text: optionalWebhookStringSchema,
-  photo_url: optionalWebhookStringSchema,
-  caption: optionalWebhookStringSchema,
-  sticker: optionalWebhookStringSchema,
-  message_type: optionalWebhookStringSchema,
-});
-const webhookUpdateSchema = z
-  .object({
-    event_name: z.enum([
-      "message.text.received",
-      "message.image.received",
-      "message.sticker.received",
-      "message.unsupported.received",
-    ]),
-    message: webhookMessageSchema,
-  })
-  .superRefine((update, context) => {
-    if (update.event_name === "message.text.received" && update.message.text === undefined) {
-      context.addIssue({
-        code: "custom",
-        path: ["message", "text"],
-        message: "text event requires message.text",
-      });
-    }
-  });
-
 function parseRawRecord(rawEvent: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -110,11 +48,7 @@ function parseRawRecord(rawEvent: string): Record<string, unknown> {
   return envelope.data;
 }
 
-function inspectZaloWebhookEvent(rawEvent: string): {
-  eventId: string;
-  laneKey: string;
-  update: Record<string, unknown>;
-} {
+function inspectZaloWebhookEvent(rawEvent: string) {
   const update = parseRawRecord(rawEvent);
   const admission = webhookAdmissionSchema.safeParse(update);
   if (!admission.success) {
@@ -187,19 +121,14 @@ function parseClaimedUpdate(payload: ZaloWebhookSpoolPayload, claimedId: string)
 }
 
 function isZaloAuthenticationFailure(error: unknown): boolean {
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    const candidate = current as {
-      cause?: unknown;
-      errorCode?: unknown;
-      status?: unknown;
-      statusCode?: unknown;
-    };
+  for (const current of collectErrorGraphCandidates(error, (candidate) => [candidate.cause])) {
+    const candidate = asOptionalObjectRecord(current);
+    if (!candidate) {
+      continue;
+    }
     if (
-      (current instanceof ZaloApiError &&
-        (current.errorCode === 401 || current.errorCode === 403)) ||
+      (candidate instanceof ZaloApiError &&
+        (candidate.errorCode === 401 || candidate.errorCode === 403)) ||
       candidate.status === 401 ||
       candidate.status === 403 ||
       candidate.statusCode === 401 ||
@@ -207,7 +136,6 @@ function isZaloAuthenticationFailure(error: unknown): boolean {
     ) {
       return true;
     }
-    current = candidate.cause;
   }
   return false;
 }
@@ -217,7 +145,7 @@ function createZaloWebhookIngress(options: {
   runtime: Pick<ZaloRuntimeEnv, "error" | "log">;
   deliver: (update: ZaloUpdate, lifecycle: ZaloWebhookIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<ZaloWebhookSpoolPayload>;
-}): ZaloWebhookIngress {
+}) {
   const queue =
     options.queue ??
     getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
@@ -277,7 +205,7 @@ function createZaloWebhookIngress(options: {
   });
 
   return {
-    accept: async (rawEvent) => {
+    accept: async (rawEvent: string) => {
       await monitor.admit(rawEvent);
     },
     start: monitor.start,

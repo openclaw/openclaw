@@ -1,5 +1,6 @@
-import { splitAnsiSegments } from "./ansi-sequences.js";
-import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { iterateAnsiSegments } from "./ansi-sequences.js";
+import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
 
@@ -43,10 +44,7 @@ function resolveDefaultBorder(
 }
 
 function repeat(ch: string, n: number): string {
-  if (n <= 0) {
-    return "";
-  }
-  return ch.repeat(n);
+  return ch.repeat(Math.max(0, n));
 }
 
 function padCell(text: string, width: number, align: Align): string {
@@ -60,22 +58,16 @@ function padCell(text: string, width: number, align: Align): string {
     return content;
   }
   const pad = width - w;
-  if (align === "right") {
-    return `${repeat(" ", pad)}${content}`;
-  }
-  if (align === "center") {
-    const left = Math.floor(pad / 2);
-    const right = pad - left;
-    return `${repeat(" ", left)}${content}${repeat(" ", right)}`;
-  }
-  return `${content}${repeat(" ", pad)}`;
+  const left = align === "right" ? pad : align === "center" ? Math.floor(pad / 2) : 0;
+  return `${repeat(" ", left)}${content}${repeat(" ", pad - left)}`;
 }
 
 const ESC = "\u001b";
 const C1_CSI = "\u009b";
-const C1_OSC = "\u009d";
-const C1_ST = "\u009c";
 const BEL = "\u0007";
+const SGR_CONTROL_CHARS_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
+// oxlint-disable-next-line eslint/no-control-regex -- OSC 8 delimiters are terminal control characters.
+const OSC8_SEQUENCE_RE = /^(?:\u001b\]|\u009d)8;([^;]*);([\s\S]*)(?:\u001b\\|\u0007|\u009c)$/u;
 
 type AnsiToken = { kind: "ansi" | "char"; value: string; width: number };
 
@@ -135,16 +127,9 @@ function parseSgrSequence(value: string): { introducer: string; parameters: stri
   } else {
     return undefined;
   }
-  const parameters = Array.from(value.slice(introducer.length, -1))
-    .filter((character) => {
-      const code = character.charCodeAt(0);
-      return code > 0x1f && code !== 0x7f;
-    })
-    .join("");
-  const hasOnlySgrParameters = Array.from(parameters).every(
-    (character) => (character >= "0" && character <= "9") || character === ";" || character === ":",
-  );
-  if (!hasOnlySgrParameters) {
+  // C0 and DEL execute separately inside CSI; exclude them only from stored SGR parameters.
+  const parameters = value.slice(introducer.length, -1).replace(SGR_CONTROL_CHARS_REGEX, "");
+  if (/[^0-9;:]/u.test(parameters)) {
     return undefined;
   }
   return { introducer, parameters };
@@ -207,229 +192,177 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
   }
 }
 
-type ActiveSgr = { close: string; open: string };
-
-function activeSgrAfter(tokens: readonly AnsiToken[]): ActiveSgr[] {
-  const active = new Map<SgrCategory, string>();
-  for (const token of tokens) {
-    if (token.kind === "ansi") {
-      applySgrSequence(active, token.value);
-    }
-  }
-  return SGR_CATEGORIES.flatMap(({ category, reset }) => {
-    const open = active.get(category);
-    const parsed = open ? parseSgrSequence(open) : undefined;
-    return open && parsed ? [{ close: sgrSequence(parsed.introducer, String(reset)), open }] : [];
-  });
-}
-
 type Osc8Link = { params: string; uri: string };
 
 function parseOsc8Sequence(value: string): Osc8Link | undefined {
-  let payloadStart: number;
-  if (value.startsWith(`${ESC}]`)) {
-    payloadStart = 2;
-  } else if (value.startsWith(C1_OSC)) {
-    payloadStart = 1;
-  } else {
-    return undefined;
-  }
-
-  let terminatorLength: number;
-  if (value.endsWith(`${ESC}\\`)) {
-    terminatorLength = 2;
-  } else if (value.endsWith(BEL) || value.endsWith(C1_ST)) {
-    terminatorLength = 1;
-  } else {
-    return undefined;
-  }
-
-  const payload = value.slice(payloadStart, -terminatorLength);
-  if (!payload.startsWith("8;")) {
-    return undefined;
-  }
-  const uriSeparator = payload.indexOf(";", 2);
-  if (uriSeparator < 0) {
-    return undefined;
-  }
-  return {
-    params: payload.slice(2, uriSeparator),
-    uri: payload.slice(uriSeparator + 1),
-  };
-}
-
-function activeOsc8After(tokens: readonly AnsiToken[]): Osc8Link | undefined {
-  let active: Osc8Link | undefined;
-  for (const token of tokens) {
-    if (token.kind !== "ansi") {
-      continue;
-    }
-    const link = parseOsc8Sequence(token.value);
-    if (link) {
-      active = link.uri === "" ? undefined : link;
-    }
-  }
-  return active;
+  const match = OSC8_SEQUENCE_RE.exec(value);
+  return match ? { params: match[1] ?? "", uri: match[2] ?? "" } : undefined;
 }
 
 function wrapLine(text: string, width: number): string[] {
-  if (width <= 0) {
-    return [text];
-  }
   // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
   // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
   if (text.length <= width && /^[!-~](?:[ -~]*[!-~])?$/u.test(text)) {
     return [text];
   }
 
-  // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
-  // Table cells are padded and bordered per physical line, so wrapped lines
-  // must not leak styling into padding while the next continuation keeps it.
-  const tokens: AnsiToken[] = [];
-  for (const segment of splitAnsiSegments(text)) {
-    if (segment.kind === "ansi") {
-      tokens.push({
-        kind: "ansi",
-        value: segment.value,
-        width: visibleWidth(segment.controls.join("")),
-      });
-      continue;
-    }
-    for (const grapheme of splitGraphemes(segment.value)) {
-      tokens.push({ kind: "char", value: grapheme, width: 0 });
-    }
-  }
-
-  if (!tokens.some((token) => token.kind === "char")) {
-    return [text];
-  }
-
   const lines: string[] = [];
   const isBreakChar = (ch: string) =>
-    ch === " " || ch === "\t" || ch === "/" || ch === "-" || ch === "_" || ch === ".";
-  const isSpaceChar = (ch: string) => ch === " " || ch === "\t";
+    ch === " " || ch === "/" || ch === "-" || ch === "_" || ch === ".";
   let skipNextLf = false;
+  let hasChar = false;
+  let logicalLineHasOutput = false;
 
   const buf: AnsiToken[] = [];
   let bufVisible = 0;
   let lastBreakIndex: number | null = null;
 
-  const bufToString = (slice?: AnsiToken[]) => (slice ?? buf).map((t) => t.value).join("");
-
-  const bufVisibleWidth = (slice: AnsiToken[]) =>
-    slice.reduce((acc, token) => acc + token.width, 0);
-
-  const pushLine = (value: string) => {
-    const cleaned = value.replace(/\s+$/, "");
-    if (visibleWidth(cleaned) === 0) {
-      return;
-    }
-    lines.push(cleaned);
-  };
-
+  // A soft wrap can empty the buffer before a newline without creating a blank logical line.
   const flushAt = (breakAt: number | null) => {
-    if (buf.length === 0) {
-      return;
+    // Keep the suffix in its buffer: long zero-width runs can exceed the argument
+    // limit of a spread-based copy even when their visible width is small.
+    const keepsSuffix = breakAt != null && breakAt > 0;
+    const left = keepsSuffix ? buf.splice(0, breakAt) : buf;
+    // Only the emitted prefix determines continuation state; the buffered suffix
+    // belongs to the next line.
+    const content: string[] = [];
+    const sgr = new Map<SgrCategory, string>();
+    let activeOsc8: Osc8Link | undefined;
+    for (const token of left) {
+      content.push(token.value);
+      if (token.kind !== "ansi") {
+        continue;
+      }
+      applySgrSequence(sgr, token.value);
+      const link = parseOsc8Sequence(token.value);
+      if (link) {
+        activeOsc8 = link.uri === "" ? undefined : link;
+      }
     }
-    const left = breakAt == null || breakAt <= 0 ? buf : buf.slice(0, breakAt);
-    const activeSgr = activeSgrAfter(left);
-    const activeOsc8 = activeOsc8After(left);
+    const activeSgr = SGR_CATEGORIES.flatMap(({ category, reset }) => {
+      const open = sgr.get(category);
+      const parsed = open ? parseSgrSequence(open) : undefined;
+      return open && parsed ? [{ close: sgrSequence(parsed.introducer, String(reset)), open }] : [];
+    });
     const closeOsc8 = activeOsc8 ? `${ESC}]8;;${BEL}` : "";
     const openOsc8 = activeOsc8 ? `${ESC}]8;${activeOsc8.params};${activeOsc8.uri}${BEL}` : "";
     const closeSgr = activeSgr.map((state) => state.close).join("");
 
-    if (breakAt == null || breakAt <= 0) {
-      pushLine(`${bufToString()}${closeOsc8}${closeSgr}`);
-      buf.length = 0;
-      if (openOsc8) {
-        buf.push({ kind: "ansi", value: openOsc8, width: 0 });
-      }
-      for (const state of activeSgr) {
-        buf.push({ kind: "ansi", value: state.open, width: 0 });
-      }
-      bufVisible = 0;
-      lastBreakIndex = null;
-      return;
+    if (bufVisible > 0 || !logicalLineHasOutput) {
+      lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
+      logicalLineHasOutput = true;
     }
-
-    // breakAt follows the latest break character (including spaces/tabs), or is buf.length.
-    // The retained suffix therefore has no leading space tokens to trim.
-    const rest = buf.slice(breakAt);
-    pushLine(`${bufToString(left)}${closeOsc8}${closeSgr}`);
+    const continuation: AnsiToken[] = activeSgr.map((state) => ({
+      kind: "ansi",
+      value: state.open,
+      width: 0,
+    }));
     if (openOsc8) {
-      rest.unshift({ kind: "ansi", value: openOsc8, width: 0 });
+      const link: AnsiToken = { kind: "ansi", value: openOsc8, width: 0 };
+      if (keepsSuffix) {
+        continuation.push(link);
+      } else {
+        continuation.unshift(link);
+      }
     }
-    if (activeSgr.length > 0) {
-      rest.unshift(
-        ...activeSgr.map((state) => ({
-          kind: "ansi" as const,
-          value: state.open,
-          width: 0,
-        })),
-      );
+    if (!keepsSuffix) {
+      buf.length = 0;
     }
+    buf.unshift(...continuation);
 
-    buf.length = 0;
-    buf.push(...rest);
-    bufVisible = bufVisibleWidth(buf);
+    bufVisible = buf.reduce((acc, token) => acc + token.width, 0);
     lastBreakIndex = null;
   };
 
-  const makeRoomFor = (tokenWidth: number) => {
-    if (bufVisible + tokenWidth <= width || bufVisible === 0) {
+  const acceptToken = (token: AnsiToken) => {
+    if (token.kind === "char") {
+      hasChar = true;
+      // Emit the one-cell space used by layout instead of following terminal tab stops.
+      token.value = token.value.replaceAll("\t", " ");
+      const ch = token.value;
+      if (skipNextLf && ch === "\n") {
+        skipNextLf = false;
+        return;
+      }
+      // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
+      if (ch === "\n" || ch === "\r" || ch === "\r\n") {
+        skipNextLf = ch === "\r";
+        flushAt(buf.length);
+        logicalLineHasOutput = false;
+        return;
+      }
+      // Soft-wrap remainders reuse the width measured when each token entered the buffer.
+      token.width = visibleWidth(ch);
+    }
+    if (bufVisible + token.width > width && bufVisible > 0) {
+      flushAt(lastBreakIndex);
+      if (bufVisible + token.width > width && bufVisible > 0) {
+        flushAt(null);
+      }
+    }
+    if (token.kind === "char" && bufVisible === 0 && token.value === " ") {
       return;
-    }
-    flushAt(lastBreakIndex);
-    if (bufVisible + tokenWidth > width && bufVisible > 0) {
-      flushAt(null);
-    }
-  };
-
-  for (const token of tokens) {
-    if (token.kind === "ansi") {
-      makeRoomFor(token.width);
-      buf.push(token);
-      bufVisible += token.width;
-      continue;
-    }
-
-    const ch = token.value;
-    if (skipNextLf && ch === "\n") {
-      skipNextLf = false;
-      continue;
-    }
-    // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
-    skipNextLf = ch === "\r";
-    if (ch === "\n" || ch === "\r" || ch === "\r\n") {
-      flushAt(buf.length);
-      continue;
-    }
-    // Soft-wrap remainders reuse the width measured when each token entered the buffer.
-    token.width = visibleWidth(ch);
-    makeRoomFor(token.width);
-    if (bufVisible === 0 && isSpaceChar(ch)) {
-      continue;
     }
 
     buf.push(token);
     bufVisible += token.width;
-    if (isBreakChar(ch)) {
-      lastBreakIndex = buf.length;
+    if (token.kind === "char") {
+      // Discarded leading spacing must not interrupt a separated CR/LF pair.
+      skipNextLf = false;
+      if (isBreakChar(token.value)) {
+        lastBreakIndex = buf.length;
+      }
+    }
+  };
+
+  // Consume tokens as they arrive; only the current wrap buffer owns them.
+  // SGR/OSC-8 remain atomic and close before padding, then reopen on continuation.
+  for (const segment of iterateAnsiSegments(text)) {
+    let value = segment.value;
+    if (segment.kind === "ansi") {
+      if (segment.controls.includes("\t")) {
+        // Reset with the CSI introducer before printable controls can enter pending escape parsing.
+        acceptToken({
+          kind: "ansi",
+          value: value.slice(0, value[0] === ESC ? 2 : 1) + "\x18",
+          width: 0,
+        });
+        const controls = new Set(segment.controls);
+        for (const control of segment.controls) {
+          acceptToken({ kind: control === "\t" ? "char" : "ansi", value: control, width: 0 });
+        }
+        value = Array.from(value)
+          .filter((character) => !controls.has(character))
+          .join("");
+      }
+      acceptToken({ kind: "ansi", value, width: 0 });
+      continue;
+    }
+    for (const grapheme of iterateGraphemes(value)) {
+      acceptToken({ kind: "char", value: grapheme, width: 0 });
     }
   }
 
-  flushAt(buf.length);
+  if (!hasChar) {
+    return [text];
+  }
+
+  // A trailing newline or reopened style is not another physical row.
+  if (bufVisible > 0) {
+    flushAt(buf.length);
+  }
   return lines.length > 0 ? lines : [""];
 }
 
-function normalizeWidth(n: number | undefined): number | undefined {
-  if (n == null) {
-    return undefined;
+function naturalCellWidth(text: string): number {
+  if (!text.includes("\n") && !text.includes("\r")) {
+    return visibleWidth(text);
   }
-  if (!Number.isFinite(n) || n <= 0) {
-    return undefined;
-  }
-  return Math.floor(n);
+  // Use the renderer's logical lines so newlines inside ANSI payloads stay atomic.
+  return wrapLine(text, Number.POSITIVE_INFINITY).reduce(
+    (max, line) => Math.max(max, visibleWidth(line)),
+    0,
+  );
 }
 
 export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): number {
@@ -473,8 +406,8 @@ export function renderTable(opts: RenderTableOptions): string {
   const columns = opts.columns;
 
   const metrics = columns.map((c) => {
-    const headerW = visibleWidth(c.header);
-    const cellW = rows.reduce((max, row) => Math.max(max, visibleWidth(row[c.key] ?? "")), 0);
+    const headerW = naturalCellWidth(c.header);
+    const cellW = rows.reduce((max, row) => Math.max(max, naturalCellWidth(row[c.key] ?? "")), 0);
     return { headerW, cellW };
   });
 
@@ -485,7 +418,7 @@ export function renderTable(opts: RenderTableOptions): string {
     return Math.max(c.minWidth ?? 3, capped);
   });
 
-  const maxWidth = normalizeWidth(opts.width);
+  const maxWidth = Math.floor(asPositiveFiniteNumber(opts.width) ?? 0);
   const sepCount = columns.length + 1;
   const total = widths.reduce((a, b) => a + b, 0) + sepCount;
 
@@ -535,8 +468,7 @@ export function renderTable(opts: RenderTableOptions): string {
   // If we have room and any flex columns, expand them to fill the available width.
   // This keeps tables from looking "clipped" and reduces wrapping in wide terminals.
   if (maxWidth) {
-    const sepCountLocal = columns.length + 1;
-    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCountLocal;
+    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCount;
     let extra = maxWidth - currentTotal;
     if (extra > 0) {
       let flexCols = columns.flatMap((column, i) => (column.flex ? [i] : []));
@@ -579,34 +511,10 @@ export function renderTable(opts: RenderTableOptions): string {
 
   const box =
     border === "ascii"
-      ? {
-          tl: "+",
-          tr: "+",
-          bl: "+",
-          br: "+",
-          h: "-",
-          v: "|",
-          t: "+",
-          ml: "+",
-          m: "+",
-          mr: "+",
-          b: "+",
-        }
-      : {
-          tl: "┌",
-          tr: "┐",
-          bl: "└",
-          br: "┘",
-          h: "─",
-          v: "│",
-          t: "┬",
-          ml: "├",
-          m: "┼",
-          mr: "┤",
-          b: "┴",
-        };
+      ? { top: "+++", middle: "+++", bottom: "+++", h: "-", v: "|" }
+      : { top: "┌┬┐", middle: "├┼┤", bottom: "└┴┘", h: "─", v: "│" };
 
-  const hLine = (left: string, mid: string, right: string) =>
+  const hLine = ([left, mid, right]: string) =>
     `${left}${widths.map((w) => repeat(box.h, w)).join(mid)}${right}`;
 
   const contentWidthFor = (i: number) => {
@@ -618,29 +526,27 @@ export function renderTable(opts: RenderTableOptions): string {
   };
   const padStr = repeat(" ", padding);
 
+  const lines: string[] = [];
   const renderRow = (record: Record<string, string>, isHeader = false) => {
     const cells = columns.map((c) => (isHeader ? c.header : (record[c.key] ?? "")));
     const wrapped = cells.map((cell, i) => wrapLine(cell, contentWidthFor(i)));
     const height = Math.max(...wrapped.map((w) => w.length));
-    const out: string[] = [];
     for (let li = 0; li < height; li += 1) {
-      const parts = wrapped.map((lines, i) => {
-        const raw = lines[li] ?? "";
+      const parts = wrapped.map((cellLines, i) => {
+        const raw = cellLines[li] ?? "";
         const aligned = padCell(raw, contentWidthFor(i), columns[i]?.align ?? "left");
         return `${padStr}${aligned}${padStr}`;
       });
-      out.push(`${box.v}${parts.join(box.v)}${box.v}`);
+      lines.push(`${box.v}${parts.join(box.v)}${box.v}`);
     }
-    return out;
   };
 
-  const lines: string[] = [];
-  lines.push(hLine(box.tl, box.t, box.tr));
-  lines.push(...renderRow({}, true));
-  lines.push(hLine(box.ml, box.m, box.mr));
+  lines.push(hLine(box.top));
+  renderRow({}, true);
+  lines.push(hLine(box.middle));
   for (const row of rows) {
-    lines.push(...renderRow(row, false));
+    renderRow(row, false);
   }
-  lines.push(hLine(box.bl, box.b, box.br));
+  lines.push(hLine(box.bottom));
   return `${lines.join("\n")}\n`;
 }

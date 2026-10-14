@@ -5,24 +5,6 @@ import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
 import "../../../styles/chat/attachments.css";
 
-type AttachmentFileIconFamily =
-  | "unknown"
-  | "pdf"
-  | "document"
-  | "spreadsheet"
-  | "image"
-  | "video"
-  | "audio"
-  | "archive"
-  | "text"
-  | "markdown"
-  | "code"
-  | "javascript"
-  | "json"
-  | "python"
-  | "svg"
-  | "yaml";
-
 export type AttachmentFileVisualMode = "preview-with-favicon" | "large-placeholder";
 
 type CompactFileIcon =
@@ -60,7 +42,7 @@ type FileIconFamilyDefinition = {
   compactByExtension?: Readonly<Record<string, CompactFileIcon>>;
 };
 
-const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
+const FILE_ICON_FAMILIES = [
   {
     family: "unknown",
     accent: "#929292",
@@ -218,12 +200,13 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   },
 ] as const;
 
-const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0]!;
+type AttachmentFileIconFamily = (typeof FILE_ICON_FAMILIES)[number]["family"];
+
+const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0];
 
 export type ResolvedAttachmentFileIcon = {
   family: AttachmentFileIconFamily;
   accent: string;
-  extension?: string;
   extensionLabel: string;
   compact?: CompactFileIcon;
 };
@@ -234,12 +217,16 @@ export function resolveAttachmentFileIcon(
 ): ResolvedAttachmentFileIcon {
   const extension = getMediaFileExtension(filename);
   const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
-  const definition =
+  const definition: FileIconFamilyDefinition =
     (extension
-      ? FILE_ICON_FAMILIES.find((candidate) => candidate.extensions.includes(extension))
+      ? FILE_ICON_FAMILIES.find((candidate: FileIconFamilyDefinition) =>
+          candidate.extensions.includes(extension),
+        )
       : undefined) ??
     (normalizedMimeType
-      ? FILE_ICON_FAMILIES.find((candidate) => candidate.mimeTypes.includes(normalizedMimeType))
+      ? FILE_ICON_FAMILIES.find((candidate: FileIconFamilyDefinition) =>
+          candidate.mimeTypes.includes(normalizedMimeType),
+        )
       : undefined) ??
     UNKNOWN_FILE_ICON;
   const compact = extension
@@ -252,7 +239,6 @@ export function resolveAttachmentFileIcon(
   return {
     family: definition.family,
     accent,
-    extension,
     extensionLabel:
       extension?.toUpperCase() ??
       (definition.family === "unknown" ? "FILE" : definition.family.toUpperCase()),
@@ -269,32 +255,31 @@ export function renderAttachmentFileIcon(options: {
   mimeType?: string;
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
+  loading?: boolean;
 }) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
   const large = options.mode === "large-placeholder";
   const size = large ? "44px" : "20px";
-  const light = large
-    ? fileIconAssetPath("large/shell-light")
-    : resolved.compact
-      ? fileIconAssetPath(`compact/light/${resolved.compact}`)
-      : fileIconAssetPath("compact/unknown-light");
-  const dark = large
-    ? fileIconAssetPath("large/shell-dark")
-    : resolved.compact
-      ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
-      : fileIconAssetPath("compact/unknown-dark");
+  const assetPath = (theme: "light" | "dark") =>
+    fileIconAssetPath(
+      large
+        ? `large/shell-${theme}`
+        : resolved.compact
+          ? `compact/${theme}/${resolved.compact}`
+          : `compact/unknown-${theme}`,
+    );
   return html`<span
-    class="chat-attachment-file-icon ${options.unavailable
-      ? "chat-attachment-file-icon--unavailable"
-      : ""}"
+    class="chat-attachment-file-icon ${
+      options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
+    } ${options.loading ? "skeleton" : ""}"
     data-family=${resolved.family}
     data-mode=${options.mode}
     aria-hidden="true"
     style=${styleMap({
       width: size,
       height: size,
-      "--chat-file-icon-light": `url("${light}")`,
-      "--chat-file-icon-dark": `url("${dark}")`,
+      "--chat-file-icon-light": `url("${assetPath("light")}")`,
+      "--chat-file-icon-dark": `url("${assetPath("dark")}")`,
       "--chat-file-icon-overlay": `url("${fileIconAssetPath(`overlays/${resolved.family}`)}")`,
       "--chat-file-icon-accent": resolved.accent,
     })}

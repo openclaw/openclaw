@@ -1,6 +1,3 @@
-// Media-understanding skip error used for non-fatal attachment omissions.
-
-/** Reason a media-understanding attachment was skipped. */
 type MediaUnderstandingSkipReason =
   | "maxBytes"
   | "timeout"
@@ -20,7 +17,6 @@ export class MediaUnderstandingSkipError extends Error {
   }
 }
 
-/** Narrow unknown errors to media-understanding skip errors. */
 export function isMediaUnderstandingSkipError(err: unknown): err is MediaUnderstandingSkipError {
   return err instanceof MediaUnderstandingSkipError;
 }

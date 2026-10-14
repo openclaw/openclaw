@@ -1,27 +1,65 @@
-/**
- * Shared media generation list/status actions.
- *
- * Builds provider list output, active-task status, and duplicate-guard responses for image/video/music tools.
- */
 import {
   listMediaGenerationProviderModels,
   synthesizeMediaGenerationCatalogEntries,
   type MediaGenerationCatalogKind,
 } from "../../../packages/media-generation-core/src/catalog.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
+import type { AnyAgentTool } from "./common.js";
+import { isCapabilityProviderConfiguredAsync, resolveGenerateAction } from "./media-tool-shared.js";
+import { prepareToolAuthProfileStore } from "./model-config.helpers.js";
 
-type MediaGenerateActionResult = {
+export type MediaGenerateActionResult = {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
 };
 
+type MediaGenerateProviderAuth = {
+  workspaceDir?: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
+};
+
+export function createMediaGenerateExecute(params: {
+  options?: Parameters<typeof prepareToolAuthProfileStore>[0] & {
+    workspaceDir?: string;
+    agentSessionKey?: string;
+    requesterAgentId?: string;
+  };
+  list: (
+    auth: MediaGenerateProviderAuth,
+  ) => MediaGenerateActionResult | Promise<MediaGenerateActionResult>;
+  status: (sessionKey?: string, agentId?: string) => Promise<MediaGenerateActionResult>;
+  generate: (
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => Promise<MediaGenerateActionResult>;
+}): AnyAgentTool["execute"] {
+  return async (_toolCallId, rawArgs: Record<string, unknown>, signal) => {
+    const args = rawArgs;
+    const action = resolveGenerateAction(args);
+    const options = params.options;
+    if (action === "list") {
+      const authStore = await prepareToolAuthProfileStore(options);
+      signal?.throwIfAborted();
+      return params.list({
+        workspaceDir: options?.workspaceDir,
+        agentDir: options?.agentDir,
+        authStore,
+      });
+    }
+    return action === "status"
+      ? params.status(options?.agentSessionKey, options?.requesterAgentId)
+      : params.generate(args, signal);
+  };
+}
+
 type TaskStatusTextBuilder<Task> = (task: Task, params?: { duplicateGuard?: boolean }) => string;
 type MediaGenerateTaskStatusParams<Task> = {
   inactiveText: string;
-  findActiveTask: (sessionKey?: string, agentId?: string) => Task | undefined;
+  findActiveTask: (sessionKey?: string, agentId?: string) => Promise<Task | undefined>;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
 };
@@ -34,18 +72,7 @@ type MediaGenerateProvider = {
   capabilities: unknown;
   catalogByModel?: Readonly<Record<string, { capabilities?: unknown; modes?: readonly string[] }>>;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
-};
-
-type MediaGenerateListProviderDetails<TProvider extends MediaGenerateProvider> = {
-  id: string;
-  label?: string;
-  defaultModel?: string;
-  models: string[];
-  modes: string[];
-  configured: boolean;
-  authEnvVars: string[];
-  capabilities: TProvider["capabilities"];
-  catalog: ReturnType<typeof synthesizeMediaGenerationCatalogEntries<TProvider["capabilities"]>>;
+  isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
 type MediaGenerateCapabilitySummaryOptions = {
@@ -53,11 +80,22 @@ type MediaGenerateCapabilitySummaryOptions = {
   includeModes?: boolean;
 };
 
-/** Common tool result shape for media generation list/status actions. */
-export type { MediaGenerateActionResult };
+export function createMediaGenerateProviderListAction<T extends MediaGenerateProvider>(
+  params: Pick<
+    Parameters<typeof createMediaGenerateProviderListActionResult<T>>[0],
+    "kind" | "emptyText" | "listModes" | "summarizeCapabilities"
+  > & { listProviders: (params: { config?: OpenClawConfig }) => T[] },
+) {
+  return (config?: OpenClawConfig, options?: MediaGenerateProviderAuth) =>
+    createMediaGenerateProviderListActionResult({
+      ...params,
+      ...options,
+      cfg: config,
+      providers: params.listProviders({ config }),
+    });
+}
 
-/** Builds a provider list result with config/auth status and synthetic catalog entries. */
-export function createMediaGenerateProviderListActionResult<
+export async function createMediaGenerateProviderListActionResult<
   TProvider extends MediaGenerateProvider,
 >(params: {
   kind: MediaGenerationCatalogKind;
@@ -67,13 +105,14 @@ export function createMediaGenerateProviderListActionResult<
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   listModes: (provider: TProvider) => string[];
   summarizeCapabilities: (
     provider: TProvider,
     options?: MediaGenerateCapabilitySummaryOptions,
   ) => string;
   formatAuthHint?: (provider: { id: string; authEnvVars: readonly string[] }) => string | undefined;
-}): MediaGenerateActionResult {
+}): Promise<MediaGenerateActionResult> {
   if (params.providers.length === 0) {
     return {
       content: [{ type: "text", text: params.emptyText }],
@@ -81,8 +120,8 @@ export function createMediaGenerateProviderListActionResult<
     };
   }
 
-  const providerDetails: Array<MediaGenerateListProviderDetails<TProvider>> = params.providers.map(
-    (provider) => {
+  const providerDetails = await Promise.all(
+    params.providers.map(async (provider) => {
       const modes = params.listModes(provider);
       const models = listMediaGenerationProviderModels(provider);
       return {
@@ -91,15 +130,16 @@ export function createMediaGenerateProviderListActionResult<
         ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
         models,
         modes,
-        configured: isCapabilityProviderConfigured({
+        configured: await isCapabilityProviderConfiguredAsync({
           providers: params.providers,
           provider,
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
+          authProfileStoreSource: params.authProfileStoreSource,
         }),
-        authEnvVars: getProviderEnvVars(provider.id),
+        authEnvVars: getProviderEnvVarsCore(provider.id),
         capabilities: provider.capabilities,
         // Catalog entries are generated for model browser/search without invoking provider code.
         catalog: synthesizeMediaGenerationCatalogEntries({
@@ -108,15 +148,12 @@ export function createMediaGenerateProviderListActionResult<
           modes,
         }),
       };
-    },
+    }),
   );
 
   const lines = providerDetails.flatMap((details, index) => {
-    const provider = params.providers.at(index);
-    if (!provider) {
-      return [];
-    }
-    const authHints = getProviderEnvVars(provider.id);
+    const provider = params.providers[index]!;
+    const authHints = details.authEnvVars;
     const capabilities = params.summarizeCapabilities(provider);
     const modelLine = details.models.length > 0 ? details.models.join(", ") : "unknown";
     const authHint =
@@ -129,7 +166,7 @@ export function createMediaGenerateProviderListActionResult<
       const modelProvider = {
         ...provider,
         capabilities: entry.capabilities ?? provider.capabilities,
-      } as TProvider;
+      };
       const modelCapabilities = params.summarizeCapabilities(modelProvider, {
         modes: entry.modes,
         includeModes: false,
@@ -158,41 +195,36 @@ export function createMediaGenerateProviderListActionResult<
   };
 }
 
-/** Creates status action helpers for a media generation task type. */
-export function createMediaGenerateTaskStatusActions<Task>(
-  params: MediaGenerateTaskStatusParams<Task>,
-) {
-  return {
-    createStatusActionResult(
-      this: void,
-      sessionKey?: string,
-      agentId?: string,
-    ): MediaGenerateActionResult {
-      const activeTask = params.findActiveTask(sessionKey, agentId);
-      return activeTask
-        ? {
-            content: [{ type: "text", text: params.buildStatusText(activeTask) }],
-            details: { action: "status", ...params.buildStatusDetails(activeTask) },
-          }
-        : {
-            content: [{ type: "text", text: params.inactiveText }],
-            details: { action: "status", active: false },
-          };
-    },
-  };
+export function createMediaGenerateTaskStatusResult<Task>(
+  params: Omit<MediaGenerateTaskStatusParams<Task>, "findActiveTask"> & { activeTask?: Task },
+): MediaGenerateActionResult {
+  const { activeTask } = params;
+  return activeTask
+    ? {
+        content: [{ type: "text", text: params.buildStatusText(activeTask) }],
+        details: { action: "status", ...params.buildStatusDetails(activeTask) },
+      }
+    : {
+        content: [{ type: "text", text: params.inactiveText }],
+        details: { action: "status", active: false },
+      };
 }
 
-/** Creates status and duplicate-guard actions from one media-task owner. */
 export function createMediaGenerateTaskActions<Task>(
   params: MediaGenerateTaskStatusParams<Task> & {
     findDuplicateTask: (
       sessionKey?: string,
       request?: { prompt?: string; requestKey?: string; agentId?: string },
-    ) => Task | undefined;
+    ) => Promise<Task | undefined>;
   },
 ) {
   return {
-    ...createMediaGenerateTaskStatusActions(params),
+    async createStatusActionResult(this: void, sessionKey?: string, agentId?: string) {
+      return createMediaGenerateTaskStatusResult({
+        ...params,
+        activeTask: await params.findActiveTask(sessionKey, agentId),
+      });
+    },
     createDuplicateGuardResult(
       this: void,
       sessionKey?: string,
@@ -203,8 +235,7 @@ export function createMediaGenerateTaskActions<Task>(
   };
 }
 
-/** Builds duplicate-guard status output for a media generation task type. */
-export function createMediaGenerateDuplicateGuardResult<Task>(params: {
+export async function createMediaGenerateDuplicateGuardResult<Task>(params: {
   sessionKey?: string;
   prompt?: string;
   requestKey?: string;
@@ -212,11 +243,11 @@ export function createMediaGenerateDuplicateGuardResult<Task>(params: {
   findDuplicateTask: (
     sessionKey?: string,
     params?: { prompt?: string; requestKey?: string; agentId?: string },
-  ) => Task | undefined;
+  ) => Promise<Task | undefined>;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
-}): MediaGenerateActionResult | undefined {
-  const blockingTask = params.findDuplicateTask(params.sessionKey, {
+}): Promise<MediaGenerateActionResult | undefined> {
+  const blockingTask = await params.findDuplicateTask(params.sessionKey, {
     prompt: params.prompt,
     requestKey: params.requestKey,
     agentId: params.agentId,

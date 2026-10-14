@@ -1,98 +1,69 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let target: string;
+const unhandledRejections: unknown[] = [];
+const onUnhandledRejection = (reason: unknown) => {
+  unhandledRejections.push(reason);
+};
+beforeEach(() => {
+  target = path.join(tempDirs.make("openclaw-raw-stream-test-"), "raw.jsonl");
+  vi.stubEnv("OPENCLAW_RAW_STREAM", "true");
+  vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", target);
+  process.on("unhandledRejection", onUnhandledRejection);
+});
+afterEach(() => {
+  process.off("unhandledRejection", onUnhandledRejection);
+  vi.unstubAllEnvs();
+  expect(unhandledRejections.splice(0)).toEqual([]);
+});
+
 describe("appendRawStream", () => {
-  let tmpDir: string;
-  const unhandledRejections: unknown[] = [];
-  const onUnhandledRejection = (reason: unknown) => {
-    unhandledRejections.push(reason);
-  };
-
-  beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-raw-stream-test-"));
-  });
-
-  beforeEach(() => {
-    vi.stubEnv("OPENCLAW_RAW_STREAM", "true");
-    process.on("unhandledRejection", onUnhandledRejection);
-  });
-
-  afterEach(() => {
-    process.off("unhandledRejection", onUnhandledRejection);
-    unhandledRejections.length = 0;
-    vi.unstubAllEnvs();
-  });
-
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  async function drainAsyncWrites(): Promise<void> {
+  it("contains a real rejected append without leaking an unhandled rejection", async () => {
+    fs.mkdirSync(target);
+    expect(() => appendRawStream(() => ({ event: "test", ts: 1 }), undefined)).not.toThrow();
     await Promise.resolve();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-  }
-
-  it("contains a real rejected append without leaking an unhandled rejection", async () => {
-    const directoryTarget = path.join(tmpDir, "directory-target");
-    fs.mkdirSync(directoryTarget);
-    vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", directoryTarget);
-
-    expect(() => appendRawStream(() => ({ event: "test", ts: 1 }))).not.toThrow();
-    await drainAsyncWrites();
-
-    expect(unhandledRejections).toHaveLength(0);
   });
 
-  it("snapshots the factory result before appending exact JSONL", async () => {
-    const rawStreamPath = path.join(tmpDir, "raw.jsonl");
-    vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
-
+  it("snapshots the factory result before appending exact JSONL", async ({ signal }) => {
+    const append = vi.spyOn(fsSafe, "appendRegularFile");
     const payload = { event: "test", ts: 1 };
-    appendRawStream(() => payload);
-    payload.ts = 2;
-    // The async writer creates the file before its append completes.
-    await vi.waitFor(() => {
-      expect(fs.readFileSync(rawStreamPath, "utf8")).toBe('{"event":"test","ts":1}\n');
-    });
-    expect(unhandledRejections).toHaveLength(0);
+    try {
+      appendRawStream(() => payload, undefined);
+      payload.ts = 2;
+      // The real append owns both the write and handle close; keep its completion promise.
+      await withinTest(append.mock.results[0]!.value, signal);
+      expect(fs.readFileSync(target, "utf8")).toBe('{"event":"test","ts":1}\n');
+    } finally {
+      append.mockRestore();
+    }
   });
 
-  it("does nothing when raw streaming is disabled", async () => {
-    const rawStreamPath = path.join(tmpDir, "disabled.jsonl");
-    vi.stubEnv("OPENCLAW_RAW_STREAM", "");
-    vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
-
-    let evaluated = false;
-    appendRawStream(() => {
-      evaluated = true;
-      return { event: "test", ts: 1 };
-    });
-    await drainAsyncWrites();
-
-    expect(evaluated).toBe(false);
-
-    expect(fs.existsSync(rawStreamPath)).toBe(false);
-    expect(unhandledRejections).toHaveLength(0);
+  it("does not evaluate Incognito stream content or create a log file", () => {
+    const createPayload = vi.fn(() => ({ rawText: "synthetic private reply" }));
+    appendRawStream(createPayload, "agent:main:internal-session-effects:incognito-private");
+    expect(createPayload).not.toHaveBeenCalled();
+    expect(fs.existsSync(target)).toBe(false);
   });
 
   it("contains synchronous factory and JSON serialization failures", () => {
-    const rawStreamPath = path.join(tmpDir, "cyclic.jsonl");
     const payload: Record<string, unknown> = {};
     payload.self = payload;
-    vi.stubEnv("OPENCLAW_RAW_STREAM_PATH", rawStreamPath);
-
-    expect(() => appendRawStream(() => payload)).not.toThrow();
+    expect(() => appendRawStream(() => payload, undefined)).not.toThrow();
     expect(() =>
       appendRawStream(() => {
         throw new Error("payload unavailable");
-      }),
+      }, undefined),
     ).not.toThrow();
-    expect(fs.existsSync(rawStreamPath)).toBe(false);
-    expect(unhandledRejections).toHaveLength(0);
+    expect(fs.existsSync(target)).toBe(false);
   });
 });

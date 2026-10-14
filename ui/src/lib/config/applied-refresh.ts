@@ -1,5 +1,7 @@
 const REFRESH_DELAYS_MS = [250, 750, 1_500, 3_000, 6_000, 30_000] as const;
 
+export type AppliedConfigRefresh = ReturnType<typeof createAppliedConfigRefreshController>;
+
 export function createAppliedConfigRefreshController(options: {
   shouldRefresh: () => boolean;
   refresh: (isCurrent: () => boolean) => Promise<unknown>;

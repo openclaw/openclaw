@@ -1,14 +1,10 @@
-// Line plugin module implements gateway behavior.
 import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { getLineRuntime } from "./runtime.js";
+import { describeLineWebhookDelivery } from "./status.js";
 import type { ResolvedLineAccount } from "./types.js";
-
-const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
-const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.runtime.js"));
 
 export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["gateway"]> = {
   startAccount: async (ctx) => {
@@ -33,22 +29,29 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     let lineBotLabel = "";
     try {
-      const probe = await (await loadLineProbeRuntime()).probeLineBot(token, 2500);
+      const probe = await (await import("./probe.runtime.js")).probeLineBot(token, 2500);
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
       if (displayName) {
         lineBotLabel = ` (${displayName})`;
       }
+      // Startup is where an operator is actually watching, and reaching the same
+      // report through status costs them a flag they have no reason to try when
+      // nothing looks wrong. The probe already has the answer here.
+      const delivery = describeLineWebhookDelivery({
+        webhook: probe.ok ? probe.webhook : undefined,
+      });
+      if (delivery) {
+        ctx.log?.warn(`[${account.accountId}] ${delivery.message} Fix: ${delivery.fix}.`);
+      }
     } catch (err) {
       if (getLineRuntime().logging.shouldLogVerbose()) {
-        ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+        ctx.log?.debug?.(`[${account.accountId}] bot check failed: ${String(err)}`);
       }
     }
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-    const monitorLineProvider =
-      getLineRuntime().channel.line?.monitorLineProvider ??
-      (await loadLineMonitorRuntime()).monitorLineProvider;
+    const { monitorLineProvider } = await import("./monitor.runtime.js");
 
     return await monitorLineProvider({
       channelAccessToken: token,

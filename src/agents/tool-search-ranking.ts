@@ -3,25 +3,34 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Collects property names and descriptions from a JSON-Schema-shaped value. */
 export function readParameterText(parameters: unknown, depth = 0): string {
-  if (depth > 4 || !isRecord(parameters)) {
-    return "";
-  }
   const parts: string[] = [];
+  collectParameterText(parameters, depth, parts);
+  return parts.join(" ");
+}
+
+function collectParameterText(parameters: unknown, depth: number, parts: string[]): void {
+  if (depth > 4 || !isRecord(parameters)) {
+    return;
+  }
   const description = parameters.description;
-  if (typeof description === "string") {
+  if (typeof description === "string" && description) {
     parts.push(description);
   }
   const properties = parameters.properties;
   if (isRecord(properties)) {
     for (const [name, child] of Object.entries(properties)) {
-      parts.push(name, readParameterText(child, depth + 1));
+      if (name) {
+        parts.push(name);
+      }
+      collectParameterText(child, depth + 1, parts);
     }
   }
-  const items = parameters.items;
-  if (items !== undefined) {
-    parts.push(readParameterText(items, depth + 1));
+  for (const keyword of ["items", "anyOf", "oneOf", "allOf"]) {
+    const schemas = parameters[keyword];
+    for (const child of Array.isArray(schemas) ? schemas : [schemas]) {
+      collectParameterText(child, depth + 1, parts);
+    }
   }
-  return parts.filter(Boolean).join(" ");
 }
 
 /** BM25 term-frequency saturation. Standard Okapi default. */
@@ -29,15 +38,7 @@ const BM25_K1 = 1.2;
 /** BM25 length normalization. Standard Okapi default. */
 const BM25_B = 0.75;
 
-/**
- * Terms carrying no discriminating signal in a tool catalog. IDF already damps
- * these; dropping them keeps a query like "read a file and post it" from
- * scoring on "a"/"it" when a tool description happens to repeat them.
- *
- * Capability verbs stay out of this list even when they look like filler:
- * "get" names real operations ("get_weather"), and discarding it would reduce
- * "get issue" to "issue" and let a shorter delete/update entry outrank it.
- */
+// Drop filler, but retain capability verbs such as "get" in "get_weather".
 const STOPWORDS = new Set([
   "a",
   "an",
@@ -100,15 +101,7 @@ const STOPWORDS = new Set([
   "your",
 ]);
 
-/**
- * Query vocabulary mapped to the capability words tool descriptions actually
- * use. This bridges intent to wording ("look up the price" -> "search"), which
- * pure lexical overlap cannot do.
- *
- * Values must stay generic capability terms. Never put plugin, vendor, or
- * product names here: those break silently when a plugin is renamed, and a
- * catalog is not required to contain any particular provider.
- */
+// Bridge intent to catalog wording using generic capabilities, never vendor or plugin names.
 const QUERY_EXPANSIONS: ReadonlyArray<{ terms: readonly string[]; add: readonly string[] }> = [
   { terms: ["look", "lookup", "google", "research"], add: ["search", "web", "find"] },
   {
@@ -131,12 +124,7 @@ const QUERY_EXPANSIONS: ReadonlyArray<{ terms: readonly string[]; add: readonly 
   { terms: ["directory", "folder", "path"], add: ["file", "list"] },
 ];
 
-/**
- * Light English suffix stripper. Not a full Porter stemmer: it exists so that
- * "scheduling" reaches a tool described as "Schedule a recurring task", which
- * exact-token matching misses entirely. Applied repeatedly so plural verb forms
- * ("reminders" -> "reminder" -> "remind") collapse to one root.
- */
+// Repeat suffix stripping so "reminders" -> "reminder" -> "remind".
 function stem(token: string): string {
   let current = token;
   for (let pass = 0; pass < 3; pass += 1) {
@@ -149,12 +137,7 @@ function stem(token: string): string {
   return current;
 }
 
-/**
- * Words ending in `s` that are not plurals. Stripping it changes the meaning and
- * collides with an unrelated root: "news" would become "new" and then literal-
- * match every "Create a new ..." tool, outranking the search tool the query
- * meant. Several are ordinary tool vocabulary here ("status", "canvas", "alias").
- */
+// Preserve non-plurals: stemming "news" to "new" would favor "Create a new ..." tools.
 const NON_PLURAL_S_WORDS = new Set([
   "news",
   "status",
@@ -178,12 +161,7 @@ const UNDOUBLING_SUFFIXES = new Set(["ing", "ed", "er"]);
 /** Doubles that belong to the root ("call", "process", "off", "buzz"). */
 const KEPT_DOUBLE_CONSONANTS = new Set(["l", "s", "f", "z"]);
 
-/**
- * "running" strips to "runn", which would never meet "run". English doubles the
- * final consonant before these suffixes, so undo that — otherwise the stemmer
- * makes common pairs (run/running, stop/stopping, log/logging) unreachable, a
- * regression the old substring scorer did not have.
- */
+// Undo inflection's doubled consonants so "running" and "run" share a stem.
 function undoubleFinalConsonant(token: string): string {
   const last = token.at(-1);
   if (
@@ -221,53 +199,81 @@ function stripOneSuffix(token: string): string {
   return token;
 }
 
-/**
- * Word parts inside a compound identifier, matched rather than split so an
- * acronym stays whole. Splitting on case transitions cuts "URLs" into "UR"/"Ls"
- * and makes the obvious query unable to reach the tool; the first alternative
- * keeps a run of capitals together, including a trailing plural `s`.
- */
-const WORD_PARTS = /\p{Lu}+s?(?![\p{Ll}])|\p{Lu}?\p{Ll}+|\p{N}+/gu;
+// Bound Unicode separator matches; unbounded runs can exhaust the RegExp stack.
+const WORD_SEPARATORS = /[^\p{L}\p{N}_]{1,1024}/u;
+const UPPERCASE_CHARACTER = /\p{Lu}/u;
+const LOWERCASE_CHARACTER = /\p{Ll}/u;
+const NUMBER_CHARACTER = /\p{N}/u;
 
-/**
- * Splits on anything that is not a word character, which keeps `_`-joined tool
- * names addressable as whole tokens while still emitting their parts, including
- * camelCase components that MCP catalogs commonly use.
- *
- * Unicode letters survive rather than being rejected: a catalog is allowed to
- * name or describe tools in another script, and dropping those would make them
- * permanently unreachable. What makes non-English queries fruitless in practice
- * is that catalogs are written in English, which is why `tool_search` asks the
- * model to query in English rather than this function refusing the input.
- */
+function characterAt(input: string, index: number): string {
+  const point = input.codePointAt(index);
+  return point === undefined ? "" : String.fromCodePoint(point);
+}
+
+function readCharacterRun(input: string, start: number, category: RegExp) {
+  let end = start;
+  let lastStart = start;
+  while (end < input.length) {
+    const character = characterAt(input, end);
+    if (!category.test(character)) {
+      break;
+    }
+    lastStart = end;
+    end += character.length;
+  }
+  return { end, lastStart };
+}
+
+function readWordParts(input: string): string[] {
+  const parts: string[] = [];
+  let index = 0;
+  while (index < input.length) {
+    const start = index;
+    const character = characterAt(input, index);
+    if (UPPERCASE_CHARACTER.test(character)) {
+      const uppercase = readCharacterRun(input, index, UPPERCASE_CHARACTER);
+      index = uppercase.end;
+      // Keep plural acronyms intact, but leave the last capital for a following word.
+      if (input[index] === "s" && !LOWERCASE_CHARACTER.test(characterAt(input, index + 1))) {
+        index += 1;
+      } else if (LOWERCASE_CHARACTER.test(characterAt(input, index))) {
+        index =
+          uppercase.lastStart > start
+            ? uppercase.lastStart
+            : readCharacterRun(input, index, LOWERCASE_CHARACTER).end;
+      }
+    } else if (LOWERCASE_CHARACTER.test(character)) {
+      index = readCharacterRun(input, index, LOWERCASE_CHARACTER).end;
+    } else if (NUMBER_CHARACTER.test(character)) {
+      index = readCharacterRun(input, index, NUMBER_CHARACTER).end;
+    } else {
+      index += character.length;
+      continue;
+    }
+    parts.push(input.slice(start, index));
+  }
+  return parts;
+}
+
+// Index whole identifiers plus underscore/camelCase parts; retain non-Latin words.
 function splitWords(input: string): string[] {
   const words: string[] = [];
-  for (const raw of input.split(/[^\p{L}\p{N}_]+/u)) {
+  for (const raw of input.split(WORD_SEPARATORS)) {
     if (!raw) {
       continue;
     }
     words.push(raw.toLowerCase());
-    const parts: string[] = [];
-    for (const underscorePart of raw.split("_")) {
-      for (const casePart of underscorePart.match(WORD_PARTS) ?? []) {
-        parts.push(casePart.toLowerCase());
+    const parts = readWordParts(raw);
+    if (parts.length >= 2) {
+      for (const part of parts) {
+        words.push(part.toLowerCase());
       }
-    }
-    if (parts.length < 2) {
-      continue;
-    }
-    for (const part of parts) {
-      words.push(part);
     }
   }
   return words;
 }
 
-/**
- * Stems for one word. `-ies` is ambiguous — "policies" is "policy" but "cookies"
- * is "cookie" — so both readings are emitted and whichever the catalog actually
- * uses will match. Every other word has a single stem.
- */
+// Emit both readings of ambiguous -ies plurals ("policies"/"cookies").
 function stemVariants(word: string): string[] {
   if (word.length > 4 && word.endsWith("ies")) {
     const base = word.slice(0, -3);
@@ -281,16 +287,10 @@ function stemVariants(word: string): string[] {
 export function tokenizeDocument(input: string): string[] {
   return splitWords(input)
     .filter((word) => !STOPWORDS.has(word))
-    .flatMap(stemVariants)
-    .filter(Boolean);
+    .flatMap(stemVariants);
 }
 
-/**
- * Triggers are matched on a singularized word rather than the document stemmer.
- * Full stemming collapses unrelated vocabulary — "news" becomes "new", so "open
- * a new issue" would silently acquire a web-search intent — and an expansion
- * that fires on the wrong word is worse than one that does not fire.
- */
+// Singularize triggers without full stemming, which can conflate unrelated intents.
 function normalizeTrigger(word: string): string {
   if (word.length > 4 && word.endsWith("ies")) {
     return `${word.slice(0, -3)}y`;
@@ -299,18 +299,14 @@ function normalizeTrigger(word: string): string {
 }
 
 const NORMALIZED_EXPANSIONS: ReadonlyArray<{
-  triggers: ReadonlySet<string>;
+  triggers: readonly string[];
   add: readonly string[];
 }> = QUERY_EXPANSIONS.map((group) => ({
-  triggers: new Set(group.terms.map(normalizeTrigger)),
+  triggers: group.terms.map(normalizeTrigger),
   add: group.add.map(stem),
 }));
 
-/**
- * Weight for a term the caller did not write. Expansions are a hint about what
- * the catalog might call this capability, so they must not let a merely related
- * tool outscore one that matches the words actually typed.
- */
+// Discount inferred terms relative to the caller's own words.
 const EXPANSION_WEIGHT = 0.35;
 
 type WeightedTerm = { term: string; weight: number };
@@ -319,12 +315,12 @@ type WeightedTerm = { term: string; weight: number };
 export function tokenizeQuery(input: string): WeightedTerm[] {
   const words = splitWords(input).filter((word) => !STOPWORDS.has(word));
   const weights = new Map<string, number>();
-  for (const term of words.flatMap(stemVariants).filter(Boolean)) {
+  for (const term of words.flatMap(stemVariants)) {
     weights.set(term, 1);
   }
   const triggers = new Set(words.map(normalizeTrigger));
   for (const group of NORMALIZED_EXPANSIONS) {
-    if (![...group.triggers].some((trigger) => triggers.has(trigger))) {
+    if (!group.triggers.some((trigger) => triggers.has(trigger))) {
       continue;
     }
     for (const addition of group.add) {
@@ -347,7 +343,9 @@ type LexicalIndex<T> = {
 
 export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>): LexicalIndex<T> {
   const postings = new Map<string, Map<IndexedDocument<T>, number>>();
-  const prepared = documents.map((document, position) => {
+  const documentCount = documents.length;
+  let totalLength = 0;
+  documents.forEach((document, position) => {
     const indexed = { value: document.value, length: document.terms.length, position };
     for (const term of document.terms) {
       let matches = postings.get(term);
@@ -357,28 +355,18 @@ export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>
       }
       matches.set(indexed, (matches.get(indexed) ?? 0) + 1);
     }
-    return indexed;
+    totalLength += indexed.length;
   });
-  const totalLength = prepared.reduce((sum, document) => sum + document.length, 0);
   return {
     postings,
-    documentCount: prepared.length,
-    averageLength: prepared.length > 0 ? totalLength / prepared.length : 0,
+    documentCount,
+    averageLength: documentCount > 0 ? totalLength / documentCount : 0,
   };
 }
 
 /**
- * Okapi BM25. Ranks by how well a document matches the query terms, damping
- * terms that appear across most of the catalog and normalizing for description
- * length so a verbose tool does not outrank a precise one.
- *
- * An empty query scores nothing on purpose: returning the whole catalog in
- * arbitrary order would look like a ranked answer without being one.
- *
- * `matchedLiteral` reports whether a hit shares any word the caller actually
- * typed. Callers rank on it first: discounting expansions is not sufficient on
- * its own, because BM25 sums per term and a common literal term carries little
- * IDF, so a short document collecting two rare expansions can still outscore it.
+ * Okapi BM25; empty queries return no hits. Callers rank literal matches first:
+ * rare expansions can still outscore a common literal despite their discount.
  */
 export function scoreLexical<T>(
   index: LexicalIndex<T>,

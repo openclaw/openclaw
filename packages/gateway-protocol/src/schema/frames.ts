@@ -1,26 +1,27 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
+import {
+  ControlUiLinkReaderDescriptorSchema,
+  ControlUiPluginTabSchema,
+  ControlUiPluginWidgetKindSchema,
+} from "./plugins.js";
+import {
+  GatewayClientIdSchema,
+  GatewayClientModeSchema,
+  NonEmptyString,
+  UserProfileIdSchema,
+} from "./primitives.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
 
-/**
- * Top-level gateway frame schemas.
- *
- * These are the WebSocket envelope contracts; method/event payload schemas live
- * in feature-specific modules and are referenced by runtime validators.
- */
-/** Periodic server heartbeat event payload. */
 export const TickEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
 });
 
-/** Server shutdown notice event payload. */
 export const ShutdownEventSchema = closedObject({
   reason: NonEmptyString,
   restartExpectedMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -53,6 +54,20 @@ export const ConnectParamsSchema = closedObject({
   pathEnv: Type.Optional(Type.String()),
   role: Type.Optional(NonEmptyString),
   scopes: Type.Optional(Type.Array(NonEmptyString)),
+  /** Initial catalog read scope; method authorization still owns access. */
+  modelCatalog: Type.Optional(
+    Type.Union([
+      closedObject({
+        agentId: Type.Optional(NonEmptyString),
+        sessionKey: Type.Optional(NonEmptyString),
+      }),
+      closedObject({
+        agentId: Type.Optional(NonEmptyString),
+        shortId: NonEmptyString,
+        slugHint: Type.Optional(NonEmptyString),
+      }),
+    ]),
+  ),
   device: Type.Optional(
     closedObject({
       id: NonEmptyString,
@@ -76,7 +91,6 @@ export const ConnectParamsSchema = closedObject({
   userAgent: Type.Optional(Type.String()),
 });
 
-/** Successful gateway hello response with the server protocol and initial state. */
 export const HelloOkSchema = closedObject({
   type: Type.Literal("hello-ok"),
   protocol: Type.Integer({ minimum: 1 }),
@@ -95,40 +109,39 @@ export const HelloOkSchema = closedObject({
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
   }),
   snapshot: SnapshotSchema,
+  // Public Control UI origin and mount path, independent of local SSH tunnels.
+  controlUiUrl: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
-  controlUiTabs: Type.Optional(
-    Type.Array(
-      closedObject({
-        pluginId: NonEmptyString,
-        id: NonEmptyString,
-        label: NonEmptyString,
-        description: Type.Optional(Type.String()),
-        icon: Type.Optional(Type.String()),
-        path: Type.Optional(Type.String()),
-        placement: Type.Optional(Type.String()),
-        requiresGatewayAuth: Type.Optional(Type.Boolean()),
-        group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
-        order: Type.Optional(Type.Number()),
-      }),
-    ),
-  ),
+  controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
   // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.
-  controlUiWidgetKinds: Type.Optional(
-    Type.Array(
-      closedObject({
-        pluginId: NonEmptyString,
-        kind: NonEmptyString,
-        label: NonEmptyString,
-      }),
-    ),
-  ),
+  controlUiWidgetKinds: Type.Optional(Type.Array(ControlUiPluginWidgetKindSchema)),
+  controlUiLinkReaders: Type.Optional(Type.Array(ControlUiLinkReaderDescriptorSchema)),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
   auth: closedObject({
+    method: Type.Optional(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("token"),
+        Type.Literal("password"),
+        Type.Literal("tailscale"),
+        Type.Literal("device-token"),
+        Type.Literal("bootstrap-token"),
+        Type.Literal("trusted-proxy"),
+      ]),
+    ),
     deviceToken: Type.Optional(NonEmptyString),
     recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
     recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
+    sessionCap: Type.Optional(
+      Type.Union([
+        Type.Literal("write"),
+        Type.Literal("suggest"),
+        Type.Literal("view"),
+        Type.Literal("none"),
+      ]),
+    ),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     deviceTokens: Type.Optional(
       Type.Array(
@@ -177,9 +190,9 @@ export const RequestFrameSchema = closedObject({
   method: NonEmptyString,
   params: Type.Optional(Type.Unknown()),
   traceparent: Type.Optional(Type.String({ maxLength: 128 })),
+  expectedProfileId: Type.Optional(UserProfileIdSchema),
 });
 
-/** Server response frame envelope paired with a prior request id. */
 export const ResponseFrameSchema = closedObject({
   type: Type.Literal("res"),
   id: NonEmptyString,
@@ -195,6 +208,7 @@ export const EventFrameSchema = closedObject({
   payload: Type.Optional(Type.Unknown()),
   seq: Type.Optional(Type.Integer({ minimum: 0 })),
   stateVersion: Type.Optional(StateVersionSchema),
+  recipientProfileId: Type.Optional(UserProfileIdSchema),
 });
 
 // Discriminated union of all top-level frames. Using a discriminator makes

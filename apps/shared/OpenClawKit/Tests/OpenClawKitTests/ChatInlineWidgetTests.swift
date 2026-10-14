@@ -343,6 +343,25 @@ struct ChatInlineWidgetTests {
         #expect(ChatInlineWidgetTLSPin.fingerprint(certificateData: Data("abc".utf8)) ==
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     }
+
+    @Test func `requires enforcing response CSP before delegating widget resources`() {
+        #expect(ChatInlineWidgetResourcePolicy.allowsStaticResources(
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; sandbox allow-scripts"))
+        #expect(ChatInlineWidgetResourcePolicy.allowsStaticResources(
+            contentSecurityPolicy: " SANDBOX\tallow-scripts ; DEFAULT-SRC 'none' "))
+        let legacyOrUnrestrictedPolicies: [String?] = [
+            nil,
+            "",
+            "sandbox allow-scripts",
+            "default-src 'none'",
+            "default-src *; sandbox allow-scripts",
+            "default-src 'none'; sandbox allow-scripts allow-same-origin",
+            "default-src *; default-src 'none'; sandbox allow-scripts",
+        ]
+        for policy in legacyOrUnrestrictedPolicies {
+            #expect(!ChatInlineWidgetResourcePolicy.allowsStaticResources(contentSecurityPolicy: policy))
+        }
+    }
     #endif
 }
 

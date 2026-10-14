@@ -1,12 +1,13 @@
-// Discord plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listThreadBindingsBySessionKey,
+  listThreadBindingsBySessionKeyAsync,
+  type ThreadBindingRecord,
   type ThreadBindingTargetKind,
-  unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
 
 type DiscordSubagentEndedEvent = {
@@ -38,63 +39,69 @@ type DiscordSubagentDeliveryTargetResult =
     }
   | undefined;
 
-function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "subagent" || normalized === "acp") {
-    return normalized;
-  }
-  return undefined;
-}
-
-export function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
-  unbindThreadBindingsBySessionKey({
+export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+  const targetKind = normalizeOptionalLowercaseString(event.targetKind);
+  await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
-    targetKind: normalizeThreadBindingTargetKind(event.targetKind),
+    targetKind: targetKind === "subagent" || targetKind === "acp" ? targetKind : undefined,
     reason: event.reason,
     sendFarewell: event.sendFarewell,
   });
 }
 
+function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTargetEvent): boolean {
+  return Boolean(
+    event.expectsCompletionMessage &&
+    normalizeOptionalLowercaseString(event.requesterOrigin?.channel) === "discord",
+  );
+}
+
+/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; removed in the next Plugin SDK major. */
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
-  if (!event.expectsCompletionMessage) {
+  if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }
-  const requesterChannel = normalizeOptionalLowercaseString(event.requesterOrigin?.channel);
-  if (requesterChannel !== "discord") {
+  return resolveDiscordDeliveryTarget(
+    event,
+    listThreadBindingsBySessionKey({
+      targetSessionKey: event.childSessionKey,
+      accountId: event.requesterOrigin?.accountId?.trim() || undefined,
+      targetKind: "subagent",
+    }),
+  );
+}
+
+export async function handleDiscordSubagentDeliveryTargetAsync(
+  event: DiscordSubagentDeliveryTargetEvent,
+): Promise<DiscordSubagentDeliveryTargetResult> {
+  if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }
-  const requesterAccountId = event.requesterOrigin?.accountId?.trim();
-  const requesterThreadId =
-    event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
-      ? (normalizeOptionalStringifiedId(event.requesterOrigin.threadId) ?? "")
-      : "";
-  const bindings = listThreadBindingsBySessionKey({
+  const bindings = await listThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.childSessionKey,
-    ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
+    accountId: event.requesterOrigin?.accountId?.trim() || undefined,
     targetKind: "subagent",
   });
-  if (bindings.length === 0) {
-    return undefined;
-  }
+  return resolveDiscordDeliveryTarget(event, bindings);
+}
 
-  let binding: (typeof bindings)[number] | undefined;
-  if (requesterThreadId) {
-    binding = bindings.find((entry) => {
-      if (entry.threadId !== requesterThreadId) {
-        return false;
-      }
-      if (requesterAccountId && entry.accountId !== requesterAccountId) {
-        return false;
-      }
-      return true;
-    });
-  }
-  if (!binding && bindings.length === 1) {
-    binding = bindings[0];
-  }
+function resolveDiscordDeliveryTarget(
+  event: DiscordSubagentDeliveryTargetEvent,
+  bindings: ThreadBindingRecord[],
+): DiscordSubagentDeliveryTargetResult {
+  const requesterAccountId = event.requesterOrigin?.accountId?.trim();
+  const requesterThreadId = normalizeOptionalStringifiedId(event.requesterOrigin?.threadId);
+  const binding =
+    (requesterThreadId
+      ? bindings.find(
+          (entry) =>
+            entry.threadId === requesterThreadId &&
+            (!requesterAccountId || entry.accountId === requesterAccountId),
+        )
+      : undefined) ?? (bindings.length === 1 ? bindings[0] : undefined);
   if (!binding) {
     return undefined;
   }

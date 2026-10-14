@@ -1,5 +1,4 @@
 import { err, ok, type Result } from "./result.js";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
 
 const DEFAULT_AGENT_ID = "main";
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -18,7 +17,7 @@ export function normalizeAgentIdStrict(
   value: string | undefined | null,
 ): Result<string, "unrepresentable"> {
   const trimmed = (value ?? "").trim();
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  const normalized = trimmed.toLowerCase();
   if (VALID_ID_RE.test(trimmed)) {
     return ok(normalized);
   }
