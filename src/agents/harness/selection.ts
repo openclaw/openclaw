@@ -1,4 +1,4 @@
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
 /**
@@ -273,7 +273,7 @@ export async function runAgentHarnessAttempt(
             // must still authorize native work after all asynchronous setup.
             const currentConsent = await assertAgentHarnessExecutionEnvironment(harness, {
               ...params,
-              config: getRuntimeConfigSnapshot() ?? params.config,
+              config: readRuntimeConfig(),
             });
             if (nativePermissionsConsented && !currentConsent) {
               throw new AgentHarnessPreflightError(
