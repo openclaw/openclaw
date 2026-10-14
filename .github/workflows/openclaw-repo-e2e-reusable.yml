@@ -83,11 +83,12 @@ jobs:
           path: .release-harness
           fetch-depth: 1
           persist-credentials: false
-          # The native artifact entrypoint imports the shared private-plugin policy.
+          # The native artifact entrypoint imports shared permission and private-plugin policy.
           sparse-checkout: |
             /.github/actions/setup-playwright-chromium/
             /package.json
             /scripts/
+            /src/shared/artifact-permissions.ts
             /src/shared/non-packaged-plugin-dirs.ts
           sparse-checkout-cone-mode: false
       - name: Setup Node environment

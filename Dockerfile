@@ -207,14 +207,6 @@ COPY --from=runtime-build-output /app/ ./
 RUN node scripts/postinstall-bundled-plugins.mjs && \
     OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
-    if [ -L /app/node_modules/@openclaw/ai ]; then \
-      ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
-      ai_runtime_tmp="$(mktemp -d)" && \
-      cp -a "$ai_runtime_target" "$ai_runtime_tmp/ai" && \
-      rm /app/node_modules/@openclaw/ai && \
-      mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai && \
-      rmdir "$ai_runtime_tmp"; \
-    fi && \
     rm -rf \
       /app/node_modules/openclaw \
       /app/node_modules/.bin/openclaw \
@@ -282,6 +274,9 @@ RUN chown node:node /app
 
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
+# Production workspace links retain their importer-relative targets. Some contracts
+# export source files, so compiled dist alone is not the complete runtime payload.
+COPY --from=runtime-assets --chown=node:node /app/packages ./packages
 COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .
 COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
@@ -437,6 +432,14 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
     stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755' && \
     stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'
 
+# Only the final COPY projection is public runtime payload. Normalize it after
+# every image writer, not the source checkout, private install settings, or the
+# operator-state directories under /home/node. The shared owner preflights links
+# and inodes and preserves executable intent without chmod through aliases.
+RUN --mount=from=build,source=/app/scripts/check-artifact-permissions.mts,target=/permission-proof/scripts/check-artifact-permissions.mts \
+    --mount=from=build,source=/app/src/shared/artifact-permissions.ts,target=/permission-proof/src/shared/artifact-permissions.ts \
+    node --input-type=module -e 'import { normalizeImageArtifactPermissions } from "/permission-proof/scripts/check-artifact-permissions.mts"; normalizeImageArtifactPermissions();'
+
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
@@ -446,6 +449,17 @@ USER node
 
 # Verify the shipped toolchain needs no privileged writes or first-run downloads.
 RUN COREPACK_ENABLE_NETWORK=0 PNPM_CONFIG_OFFLINE=true pnpm --version
+
+# Verify the final immutable application closure after every runtime copy/writer.
+# Mounted tooling is not shipped. An unrelated UID/GID proves actual reads;
+# mode inspection as root alone cannot establish arbitrary-UID usability.
+# Stay within ordinary rootless Podman/Docker subordinate-ID mappings.
+# Release acceptance separately exercises the controlled high-UID matrix.
+USER 65532:65531
+RUN --mount=from=build,source=/app/scripts/check-artifact-permissions.mts,target=/permission-proof/scripts/check-artifact-permissions.mts \
+    --mount=from=build,source=/app/src/shared/artifact-permissions.ts,target=/permission-proof/src/shared/artifact-permissions.ts \
+    node /permission-proof/scripts/check-artifact-permissions.mts --root /app --image --read-files
+USER node
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.

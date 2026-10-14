@@ -27,6 +27,10 @@ function installedCheckout() {
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("tsconfig.json", '{"compilerOptions":{"target":"ESNext","module":"ESNext"}}');
   fs.symlinkSync(path.join(process.cwd(), "scripts"), path.join(root, "scripts"), "junction");
+  write(
+    "src/shared/artifact-permissions.ts",
+    fs.readFileSync(path.join(process.cwd(), "src/shared/artifact-permissions.ts"), "utf8"),
+  );
   write("dist/extensions/demo/index.js", "export const current = true;\n");
   const serving = write("dist-runtime/extensions/demo/index.js", "previous serving generation\n");
   const ownerPath = path.join(root, ".artifacts/dist-artifacts.lock/owner.json");

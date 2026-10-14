@@ -454,6 +454,9 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
   }
 
   const inventory = [];
+  // Permission evidence is separate from the sealed v1 content inventory.
+  // Consumers must inspect archive modes, not umask-masked extracted files.
+  const permissionEntries = [];
   const seenPaths = new Set();
   const seenAliases = new Set();
   let packageManifestBytes;
@@ -495,6 +498,7 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
         : decodeConsumerTarPathField(header.subarray(345, 500), "tar entry prefix");
     const headerPath = headerPrefix ? `${headerPrefix}/${headerName}` : headerName;
     const headerSize = parseCanonicalTarNumber(header.subarray(124, 136), "tar entry size");
+    const mode = parseCanonicalTarNumber(header.subarray(100, 108), "tar entry mode");
     const typeFlag = String.fromCharCode(header[156] || 0x30);
     const linkPath = decodeTarString(header.subarray(157, 257), "tar entry link path");
     if (typeFlag === "x" || typeFlag === "g" || typeFlag === "L" || typeFlag === "K") {
@@ -530,6 +534,11 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
     }
     seenPaths.add(safePath);
     seenAliases.add(alias);
+    permissionEntries.push({
+      mode,
+      path: safePath,
+      type: typeFlag === "5" ? "directory" : "file",
+    });
     totalPathBytes += Buffer.byteLength(safePath, "utf8");
     if (totalPathBytes > limits.maxPathBytes) {
       throw new Error(`Plugin tarball paths exceed the ${limits.maxPathBytes} byte limit.`);
@@ -594,6 +603,7 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
   const pluginManifest = parsePackedJson(pluginManifestBytes, "Packed openclaw.plugin.json");
   return {
     inventory,
+    permissionEntries,
     packageManifest,
     packageManifestSha256: sha256(packageManifestBytes),
     pluginManifest,

@@ -1,6 +1,10 @@
 // Builds and validates static assets needed by package-local plugin runtime output.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  ensureGeneratedArtifactDirectory,
+  normalizeGeneratedArtifactTree,
+} from "../../src/shared/artifact-permissions.ts";
 import { runPluginAssetCommand } from "./plugin-asset-command.mts";
 import {
   resolvePackageStaticAssetEntries,
@@ -53,8 +57,13 @@ export async function preparePackageRuntimeAssets(plan: PluginRuntimeAssetPlan) 
   }
   const copiedStaticAssets = assets.map(({ srcPath, output }) => {
     const destination = path.join(plan.packageDir, "dist", output);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    ensureGeneratedArtifactDirectory(path.dirname(destination), plan.packageDir);
+    const previous = fs.lstatSync(destination, { throwIfNoEntry: false });
+    if (previous?.isSymbolicLink() || (previous?.isFile() && previous.nlink > 1)) {
+      fs.unlinkSync(destination);
+    }
     fs.copyFileSync(srcPath, destination);
+    normalizeGeneratedArtifactTree(destination);
     return path.posix.join("dist", output);
   });
   return {

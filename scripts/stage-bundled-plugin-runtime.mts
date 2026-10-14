@@ -3,6 +3,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  ensureGeneratedArtifactDirectory,
+  normalizeGeneratedArtifactTree,
+} from "../src/shared/artifact-permissions.ts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import type { PrepareBundledPluginRuntime } from "./lib/runtime-artifact-contract.js";
@@ -209,7 +213,11 @@ export function ensureOpenClawExtensionAlias(params: {
   const aliasDir = params.aliasDir ?? finalAliasDir;
   assertRealOutputRoot(aliasDir);
   const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
-  fs.mkdirSync(aliasDir, { recursive: true });
+  if (!params.aliasDir) {
+    ensureGeneratedArtifactDirectory(aliasDir, params.repoRoot);
+  } else {
+    fs.mkdirSync(aliasDir, { recursive: true });
+  }
   writeJsonFile(path.join(aliasDir, "package.json"), {
     name: "openclaw",
     type: "module",
@@ -383,8 +391,17 @@ export function stageBundledPluginRuntime(params: { cwd?: string; repoRoot?: str
   const runtimeRoot = path.join(repoRoot, "dist-runtime");
   assertRealOutputRoot(path.join(repoRoot, "dist"));
   assertRealOutputRoot(runtimeRoot);
+  ensureGeneratedArtifactDirectory(runtimeRoot, repoRoot);
   removePathIfExists(runtimeRoot);
   generateBundledPluginRuntime(repoRoot, runtimeRoot);
+  for (const outputRoot of [
+    runtimeRoot,
+    path.join(repoRoot, "dist/extensions/node_modules/openclaw"),
+  ]) {
+    if (fs.existsSync(outputRoot)) {
+      normalizeGeneratedArtifactTree(outputRoot, { allowLinksWithin: repoRoot });
+    }
+  }
 }
 
 function runtimeTreesEqual(expected: string, actual: string, finalPath = actual): boolean {
@@ -459,7 +476,11 @@ export const prepareBundledPluginRuntime: PrepareBundledPluginRuntime = (params)
   const roots: PreparedRuntimeRoot[] = [];
   let phase: "prepared" | "publishing" | "published" | "failed" | "cleaned" = "prepared";
   const stageRoot = (destination: string, parent: string) => {
-    const temporary = fs.mkdtempSync(path.join(fs.realpathSync(parent), ".openclaw-runtime-"));
+    const resolvedParent = fs.realpathSync(parent);
+    if (resolvedParent !== path.resolve(parent)) {
+      throw new Error(`Runtime staging parent is a symbolic link: ${parent}`);
+    }
+    const temporary = fs.mkdtempSync(path.join(resolvedParent, ".openclaw-runtime-"));
     const entry: PreparedRuntimeRoot = {
       destination,
       temporary,
@@ -507,6 +528,12 @@ export const prepareBundledPluginRuntime: PrepareBundledPluginRuntime = (params)
       });
     }
     for (const entry of roots) {
+      if (fs.existsSync(entry.candidate)) {
+        normalizeGeneratedArtifactTree(entry.candidate, {
+          allowLinksWithin: repoRoot,
+          publishedRoot: entry.destination,
+        });
+      }
       entry.changed = !runtimeTreesEqual(entry.candidate, entry.destination);
     }
   } catch (error) {
@@ -530,6 +557,9 @@ export const prepareBundledPluginRuntime: PrepareBundledPluginRuntime = (params)
         for (const entry of roots.filter((root) => root.changed)) {
           await assertCurrent();
           assertRealOutputRoot(entry.destination);
+          if (entry.destination !== runtimeRoot) {
+            ensureGeneratedArtifactDirectory(path.dirname(entry.destination), repoRoot);
+          }
           // A root swap stays synchronous so cancellation cannot strand its
           // original between saving it and publishing the replacement.
           if (fs.existsSync(entry.destination)) {
@@ -537,7 +567,6 @@ export const prepareBundledPluginRuntime: PrepareBundledPluginRuntime = (params)
             entry.savedOriginal = true;
           }
           if (fs.existsSync(entry.candidate)) {
-            fs.mkdirSync(path.dirname(entry.destination), { recursive: true });
             fs.renameSync(entry.candidate, entry.destination);
             entry.published = true;
           }

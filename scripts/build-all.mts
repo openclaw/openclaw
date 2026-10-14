@@ -685,10 +685,29 @@ export async function runBuildAllSteps(
   } else {
     exitCode = await runSteps(steps);
   }
-  logger.error(formatBuildAllTimingSummary(timings, now() - startedAt));
   if (exitCode === 0 && !params.runStep) {
     writeBuildCacheInputs(cwd);
+    params.signal?.throwIfAborted();
+    // Cache restores and metadata writers run after postbuild. Every native
+    // profile finalizes permissions while checkout artifact ownership is held.
+    const { normalizeBuildArtifactPermissions, assertBuiltArtifactPermissions } =
+      await import("./check-artifact-permissions.mts");
+    const artifactParams = {
+      rootDir: cwd,
+      requireUi: steps.some((step) => step.label === "ui:build"),
+      // Match postbuild's effective asset contract, including profile overrides.
+      env: runtimeEnv,
+    };
+    const permissionsStartedAt = now();
+    await normalizeBuildArtifactPermissions(artifactParams);
+    assertBuiltArtifactPermissions(artifactParams);
+    timings.push({
+      label: "artifact-permissions",
+      status: "ran",
+      durationMs: now() - permissionsStartedAt,
+    });
   }
+  logger.error(formatBuildAllTimingSummary(timings, now() - startedAt));
   return { exitCode, timings };
 }
 

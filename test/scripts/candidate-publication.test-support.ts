@@ -445,6 +445,7 @@ export function candidatePublicationFixture(
     imageTagSuffix: "",
     builtAt: time,
     includeBrowser: false,
+    artifactPlan: { sourceSha: q, state: "required" },
     artifactName,
     producer: {
       repository,
@@ -472,6 +473,11 @@ export function candidatePublicationFixture(
           indexDigest: "sha256:" + hash("index" + architecture),
           imageDigest: "sha256:" + hash("image" + architecture),
           configDigest: "sha256:" + hash("config" + architecture),
+          artifactPermissions: dockerArtifactPermissionProof(
+            "sha256:" + hash("config" + architecture),
+            false,
+            q,
+          ),
           manifests: [],
         },
       ],
@@ -558,5 +564,40 @@ export function candidatePublicationFixture(
     payloadBytes,
     readApi,
     runGh,
+  };
+}
+
+/** Synthetic release receipt for tests of publication admission, not runtime proof. */
+export function dockerArtifactPermissionProof(
+  configDigest: string,
+  browser = false,
+  sourceSha = "a".repeat(40),
+) {
+  return {
+    schemaVersion: 1,
+    configDigest,
+    cells: [
+      ["default", 1000, 1000],
+      ["arbitrary-uid-gid-zero", 1000950000, 0],
+      ["unrelated-uid-gid", 1000950000, 1000950001],
+    ].map(([name, uid, gid]) => ({
+      name,
+      uid,
+      gid,
+      artifact: { schemaVersion: 1, sourceSha, readFiles: true, files: 100, planState: "verified" },
+      runtime: {
+        schemaVersion: 1,
+        uid,
+        gid,
+        groups: [gid],
+        offlineToolchain: true,
+        browser,
+        anonymousCatalogDenied: true,
+        coreAssets: 2,
+        compressedAssets: 4,
+        pluginUiCount: 1,
+        pluginAssets: 2,
+      },
+    })),
   };
 }

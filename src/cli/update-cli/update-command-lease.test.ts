@@ -375,6 +375,10 @@ async function prepareIncompleteSourceRuntime() {
     process.platform === "win32" ? "junction" : "dir",
   );
   const files = {
+    "src/shared/artifact-permissions.ts": await fs.readFile(
+      new URL("../../shared/artifact-permissions.ts", import.meta.url),
+      "utf8",
+    ),
     "tsconfig.json": JSON.stringify({
       extends: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
     }),

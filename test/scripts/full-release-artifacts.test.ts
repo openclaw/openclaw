@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { dockerArtifactPermissionProof } from "./candidate-publication.test-support.js";
 
 const SCRIPT = resolve("scripts/full-release-artifacts.mjs");
 const REPOSITORY = "openclaw/openclaw";
@@ -270,7 +271,9 @@ globalThis.fetch = async (input) => {
   return { root, api, run, artifact, ...npm };
 }
 
-function publicationReuseFixture(changedReceipt = false) {
+function publicationReuseFixture(
+  options: { changedReceipt?: boolean; omitPermissionProof?: boolean } = {},
+) {
   const test = fixture();
   const workflowRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-123`;
   const currentRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-456`;
@@ -310,7 +313,7 @@ function publicationReuseFixture(changedReceipt = false) {
     outputs,
   });
   const qualifiedReceipt = structuredClone(test.qualified);
-  if (changedReceipt) {
+  if (options.changedReceipt) {
     qualifiedReceipt.manifestSha256 = "0".repeat(64);
   }
   test.artifact(
@@ -332,6 +335,9 @@ function publicationReuseFixture(changedReceipt = false) {
     imageTagSuffix: "",
     artifactName,
     includeBrowser: false,
+    ...(options.omitPermissionProof
+      ? {}
+      : { artifactPlan: { sourceSha: TOOLING_SHA, state: "required" } }),
     builtAt: "2026-08-01T00:00:00Z",
     producer: {
       runId: "91",
@@ -358,6 +364,15 @@ function publicationReuseFixture(changedReceipt = false) {
           indexDigest: `sha256:${"a".repeat(64)}`,
           imageDigest: `sha256:${"b".repeat(64)}`,
           configDigest: `sha256:${"c".repeat(64)}`,
+          ...(options.omitPermissionProof
+            ? {}
+            : {
+                artifactPermissions: dockerArtifactPermissionProof(
+                  `sha256:${"c".repeat(64)}`,
+                  false,
+                  TOOLING_SHA,
+                ),
+              }),
         },
       ],
     })),
@@ -497,8 +512,12 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     "wrong SDK attempt",
     "changed receipt",
     "changed digest",
+    "missing permission proof",
   ])("resolves original publication artifacts for %s without dispatching producers", (scenario) => {
-    const test = publicationReuseFixture(scenario === "changed receipt");
+    const test = publicationReuseFixture({
+      changedReceipt: scenario === "changed receipt",
+      omitPermissionProof: scenario === "missing permission proof",
+    });
     const payload = test.payloads[0];
     assert(payload, "expected Docker payload fixture");
     if (scenario === "expired payload") {
@@ -523,7 +542,12 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       test.sdk.name = "plugin-sdk-api-release-diff-81-2";
     }
     const result = test.run("reuse", test.env);
-    if (scenario === "changed receipt" || scenario === "changed digest") {
+    if (scenario === "missing permission proof") {
+      expectRejected(
+        result,
+        "Prepared Docker source artifact-plan qualification is missing or stale",
+      );
+    } else if (scenario === "changed receipt" || scenario === "changed digest") {
       expectRejected(
         result,
         scenario === "changed receipt" ? "npm receipts differ" : "immutable publication tuple",

@@ -61,6 +61,7 @@ function copyUiFixture(root: string): void {
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
     "src/shared/pid-alive.ts",
+    "src/shared/artifact-permissions.ts",
     "ui/package.json",
     "ui/src/build-info-normalizers.ts",
     "packages/normalization-core/src/record-coerce.ts",
@@ -698,6 +699,7 @@ require("node:module").syncBuiltinESMExports();
       }
       if (expectedExit === 0) {
         if (process.platform !== "win32") {
+          expect(fs.statSync(path.join(root, "dist")).mode & 0o777).toBe(0o755);
           const published = [
             output,
             ...fs

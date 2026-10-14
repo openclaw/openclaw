@@ -8,6 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
+import {
+  artifactPermissionError,
+  declaredArtifactExecutableFiles,
+} from "../src/shared/artifact-permissions.ts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { collectNpmPackInventory, compareNpmPackInventory } from "./lib/npm-pack-inventory.mts";
 import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
@@ -216,6 +220,7 @@ function runPhase<Result>(label: string, action: () => Result): Result {
 type MaterialTarEntry = {
   kind: "directory" | "file";
   path: string;
+  mode: number | undefined;
 };
 
 function isRegularTarEntry(entry: ReadEntry): boolean {
@@ -274,6 +279,7 @@ function portableExtractionPathKey(value: string): string {
 function scanTarball(archivePath: string): {
   entries: string[];
   files: string[];
+  modes: Map<string, number>;
 } {
   const errors: string[] = [];
   const materialEntries: MaterialTarEntry[] = [];
@@ -288,16 +294,20 @@ function scanTarball(archivePath: string): {
     if (!materialPath) {
       return;
     }
-    const mode = entry.mode;
-    const needsExec = entry.type === "Directory" || (mode !== undefined && (mode & 0o111) !== 0);
-    if (mode === undefined || (mode & 0o444) !== 0o444 || (needsExec && (mode & 0o111) !== 0o111)) {
+    // Extraction applies the caller's umask; permission proof must retain the
+    // actual archive header rather than inspect the subsequently extracted file.
+    const mode = entry.header.mode ?? entry.mode;
+    const permissionError =
+      mode === undefined ? "is missing permission bits" : artifactPermissionError(mode, !isFile);
+    if (permissionError) {
       errors.push(
-        `tar entry is not world-readable (${mode === undefined ? "<missing>" : `0${mode.toString(8)}`}): ${rawPath}`,
+        `tar entry ${permissionError} (${mode === undefined ? "<missing>" : `0${mode.toString(8)}`}): ${rawPath}`,
       );
     }
     materialEntries.push({
       kind: isFile ? "file" : "directory",
       path: materialPath,
+      mode,
     });
   };
 
@@ -388,6 +398,11 @@ function scanTarball(archivePath: string): {
     files: [...exactPaths.values()]
       .filter((entry) => entry.kind === "file")
       .map((entry) => entry.path.slice("package/".length)),
+    modes: new Map(
+      [...exactPaths.values()]
+        .filter((entry) => entry.kind === "file")
+        .map((entry) => [entry.path.slice("package/".length), entry.mode ?? 0]),
+    ),
   };
 }
 
@@ -396,13 +411,18 @@ const archiveSnapshot = path.join(archiveRoot, "candidate.tgz");
 const extractDir = path.join(archiveRoot, "extract");
 let normalized: string[];
 let tarFileEntries: string[];
+let tarFileModes: Map<string, number>;
 try {
   // Both passes consume one private byte snapshot, so path replacement cannot
   // make preflight approve different bytes than extraction materializes.
   fs.chmodSync(archiveRoot, 0o700);
   fs.copyFileSync(tarball, archiveSnapshot, fs.constants.COPYFILE_EXCL);
   fs.chmodSync(archiveSnapshot, 0o400);
-  ({ entries: normalized, files: tarFileEntries } = scanTarball(archiveSnapshot));
+  ({
+    entries: normalized,
+    files: tarFileEntries,
+    modes: tarFileModes,
+  } = scanTarball(archiveSnapshot));
   fs.mkdirSync(extractDir);
   runPhase("tar extract", () =>
     extractTar({
@@ -493,6 +513,21 @@ try {
   packageVersion = "";
 }
 if (packageJson) {
+  try {
+    for (const executable of declaredArtifactExecutableFiles(packageJson)) {
+      const mode = tarFileModes.get(executable);
+      if (mode === undefined) {
+        errors.push(`package.json declares missing tar executable ${executable}`);
+        continue;
+      }
+      const error = artifactPermissionError(mode, false, true);
+      if (error) {
+        errors.push(`declared tar executable ${error} (0${mode.toString(8)}): ${executable}`);
+      }
+    }
+  } catch (error) {
+    errors.push(`invalid package executable declarations: ${coerceErrorMessage(error)}`);
+  }
   errors.push(...collectMissingDeclaredPackageFileErrors(packageJson, new Set(tarFileEntries)));
   errors.push(...collectPackageExportErrors(packageJson, entrySet));
   try {

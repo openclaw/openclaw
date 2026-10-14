@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import {
+  ensureGeneratedArtifactDirectory,
+  normalizeGeneratedArtifactTree,
+} from "../../src/shared/artifact-permissions.ts";
 import { parseDockerSelectedPluginBuildIdFilter } from "./bundled-plugin-build-entries.mjs";
 import { collectTrackedBundledPluginSourceCandidates } from "./bundled-plugin-source-utils.mts";
 import { isRecord } from "./record-shared.mjs";
@@ -322,16 +326,20 @@ function copyStaticExtensionAssetFiles(params: StaticExtensionAssetParams, runti
         ? path.join(rootDir, dest)
         : path.join(runtimeRoot, normalizedDest.slice("dist/".length));
     if (fsImpl.existsSync(copySourcePath)) {
-      fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
-      // Staging links target the final location, so replace the link instead of
-      // following it into the live output while materializing a static asset.
-      if (
-        runtimeRoot !== undefined &&
-        fsImpl.lstatSync(destPath, { throwIfNoEntry: false })?.isSymbolicLink()
-      ) {
+      if (fsImpl === fs) {
+        ensureGeneratedArtifactDirectory(path.dirname(destPath), runtimeRoot ?? rootDir);
+      } else {
+        fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
+      }
+      // Replace staging links and shared inodes instead of overwriting their referents.
+      const previous = fsImpl.lstatSync(destPath, { throwIfNoEntry: false });
+      if (previous?.isSymbolicLink() || (previous?.isFile() && previous.nlink > 1)) {
         fsImpl.unlinkSync(destPath);
       }
       fsImpl.copyFileSync(copySourcePath, destPath);
+      if (fsImpl === fs) {
+        normalizeGeneratedArtifactTree(destPath);
+      }
     } else {
       warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
     }

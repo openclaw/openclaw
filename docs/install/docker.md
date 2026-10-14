@@ -20,6 +20,11 @@ Hosting mutually untrusted users? Run a separate Gateway for each trust boundary
 - Enough disk for images and logs
 - On a VPS/public host, review [Security hardening for network exposure](/gateway/security), especially the Docker `DOCKER-USER` firewall chain
 
+The image's shipped public runtime files are readable by an unrelated UID, with
+traversable directories and executable launchers. This does not make private
+state public or writable: bind mounts and state volumes still need ownership and
+permissions appropriate for the container's runtime user.
+
 ## Containerized Gateway
 
 <Steps>
