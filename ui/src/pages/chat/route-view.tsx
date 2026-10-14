@@ -1,19 +1,17 @@
 import type { RouteMatch } from "@openclaw/uirouter";
 import { For, Match, Switch } from "solid-js";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import { PanelErrorState } from "../../components/solid/lazy-view-error.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { ChatPageView } from "./chat-page.ts";
 import type { ChatRouteData } from "./route-loader.ts";
-
-const CHAT_PAGE_OWNER_KEY = "chat-page";
 
 function navigateTo(href: string) {
   window.history.pushState({}, "", href);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-function ChatRouteView(props: { data?: ChatRouteData; presented: boolean }) {
+export function ChatRouteView(props: SolidRouteProps<ChatRouteData>) {
   const ambiguous = () => (props.data?.kind === "ambiguous" ? props.data : undefined);
   const error = () => (props.data?.kind === "route-error" ? props.data : undefined);
   const missing = () => (props.data?.kind === "missing-session" ? props.data : undefined);
@@ -86,16 +84,11 @@ function ChatRouteView(props: { data?: ChatRouteData; presented: boolean }) {
   );
 }
 
-export function renderChatRoute(data: unknown, _loaderPending = false, presented = true) {
-  // SAFETY: This renderer receives only this route's colocated ChatRouteData loader result.
-  return solidContent(ChatRouteView, { data: data as ChatRouteData | undefined, presented });
-}
-
 export function sessionRenderOwnerKey(
   match: Pick<RouteMatch, "data">,
   settled: Pick<RouteMatch, "data"> | undefined,
 ): string | undefined {
   // SAFETY: Both matches carry only this route's colocated ChatRouteData loader result.
   const data = (match.data ?? settled?.data) as ChatRouteData | undefined;
-  return data?.kind === "session" ? CHAT_PAGE_OWNER_KEY : undefined;
+  return data?.kind === "session" ? "chat-page" : undefined;
 }
