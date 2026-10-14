@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -125,9 +129,8 @@ export function useManagedServiceHandoffLifecycleFixture() {
         child.stdout.destroy();
       }
       mockedChildren.clear();
-      closeOpenClawStateDatabaseForTest();
-      await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-      tempDirs.clear();
+      await closeStateDatabaseForTest();
+      await tempDirs.cleanup();
     }
   });
 
