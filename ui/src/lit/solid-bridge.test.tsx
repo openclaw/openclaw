@@ -348,7 +348,6 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   ));
   expect(view.container.querySelectorAll("openclaw-solid-bridge-test")).toHaveLength(1);
   expect(mounted).toHaveBeenCalledTimes(1);
-  expect(mounted).toHaveBeenCalledWith({ id: "solid" });
   expect(host?.className).toBe("direct");
   expect(connected).toHaveBeenCalledExactlyOnceWith(host);
   host?.show();

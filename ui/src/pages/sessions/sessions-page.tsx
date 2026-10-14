@@ -38,17 +38,9 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
     <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
       <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
         <div class="hub-page-header__title">
-          <div class="page-title">
-            {(() => {
-              locale.revision();
-              return titleForRoute("sessions");
-            })()}
-          </div>
+          <div class="page-title">{titleForRoute("sessions", t)}</div>
           <div class="page-subtitle">
-            {(() => {
-              locale.revision();
-              return subtitleForRoute("sessions");
-            })()}{" "}
+            {subtitleForRoute("sessions", t)}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/session" />
           </div>
         </div>

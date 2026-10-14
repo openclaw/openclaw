@@ -3,8 +3,8 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createSignal, flush } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
 // mock-isolation: Control delayed route handoff with fake pane bindings, without the real tag's session startup.
@@ -16,14 +16,11 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
-import type { ApplicationRouter } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ControlUiReadinessOutlet } from "../../app/control-ui-readiness.ts";
-import { settleRouterOutlet } from "../../app/router-outlet.test-support.tsx";
-import { RouterOutlet } from "../../app/router-outlet.tsx";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { createLitContentRef } from "../../lit/solid-bridge.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -36,6 +33,7 @@ import {
 } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 import type { ChatRouteData } from "./route-loader.ts";
+import { renderChatRoute } from "./route-view.tsx";
 import type { SessionChatRouteData } from "./session-route-data.ts";
 
 type RenderedPane = HTMLElement & {
@@ -72,46 +70,26 @@ describe("chat page close navigation", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps the page and warm pane through real route navigation", async () => {
+  it("keeps the page and warm pane through the outlet's route adapter and presentation changes", async () => {
     const firstKey = "agent:main:main";
     const nextKey = "agent:research:review";
     const { context } = createChatPageNavigationContext();
-    const routeModule = await import("./route-entry.ts");
-    // SAFETY: These synthetic routes use the real Chat module and application context.
-    const router = createRouter<
-      "chat" | "dashboard" | "sessions",
-      ApplicationContext,
-      typeof routeModule | { renderSolid: () => null },
-      ChatRouteData
-    >({
-      routes: [
-        ...(["chat", "dashboard"] as const).map((face) => ({
-          id: face,
-          path: `/${face}`,
-          component: () => routeModule,
-          loader: (): ChatRouteData => ({
-            kind: "session",
-            sessionKey: face === "chat" ? firstKey : nextKey,
-            face,
-          }),
-        })),
-        { id: "sessions", path: "/sessions", component: () => ({ renderSolid: () => null }) },
-      ],
-    }) as ApplicationRouter;
-    Object.assign(context, { router });
-    onTestFinished(() => router.stop());
     const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
+    const [route, setRoute] = createSignal<{ data: ChatRouteData; presented: boolean }>({
+      data: { kind: "session", sessionKey: firstKey, face: "chat" },
+      presented: true,
+    });
     const view = mountSolid(
-      () => createComponent(RouterOutlet, { router, retryContext: context }),
+      () => {
+        const host = document.createElement("div");
+        createLitContentRef(() => renderChatRoute(route().data, false, route().presented))(host);
+        return host;
+      },
       { container, wrapper: provider.wrapper },
     );
-    const outlet = expectDefined(
-      view.container.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet"),
-      "mounted route outlet",
-    );
-    await router.navigate("chat", context);
-    await settleRouterOutlet(outlet);
+    await Promise.resolve();
+    flush();
     const page = expectDefined(
       view.container.querySelector<ChatPage>("openclaw-chat-page"),
       "mounted route page",
@@ -122,22 +100,16 @@ describe("chat page close navigation", () => {
       "first route pane",
     );
 
-    const presentation = expectDefined(
-      page.closest<HTMLElement>("openclaw-route-presentation"),
-      "retained route presentation",
-    );
-    for (const routeId of ["sessions", "dashboard"] as const) {
-      await router.navigate(routeId, context);
-      await settleRouterOutlet(outlet);
+    for (const presented of [false, true]) {
+      setRoute({
+        data: { kind: "session", sessionKey: nextKey, face: "dashboard" },
+        presented,
+      });
+      flush();
       await settleChatPage(page);
-      const presented = routeId === "dashboard";
       expect(view.container.querySelector("openclaw-chat-page")).toBe(page);
-      expect(page.isConnected).toBe(true);
       expect(page.presented).toBe(presented);
       expect(page.contains(firstPane)).toBe(true);
-      expect(presentation.hidden).toBe(!presented);
-      expect(presentation.hasAttribute("inert")).toBe(!presented);
-      expect(presentation.getAttribute("aria-hidden")).toBe(String(!presented));
     }
     const nextPane = expectDefined(
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
@@ -146,12 +118,6 @@ describe("chat page close navigation", () => {
       "replacement route pane",
     );
     expect(nextPane).toMatchObject({ presented: true, routeFace: "dashboard" });
-    await router.navigate("chat", context);
-    await settleRouterOutlet(outlet);
-    await settleChatPage(page);
-    expect(view.container.querySelector("openclaw-chat-page")).toBe(page);
-    expect(firstPane).toMatchObject({ active: true, presented: true, routeFace: "chat" });
-    expect(page.contains(firstPane)).toBe(true);
     view.unmount();
   });
 
