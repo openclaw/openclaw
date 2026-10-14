@@ -360,6 +360,7 @@ src/infra/database-engine/open.ts
 src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
+src/infra/database-engine/postgres-schema.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
