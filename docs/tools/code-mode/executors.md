@@ -117,7 +117,8 @@ to engine minimums. That budget includes worker runtime allocations and
 excludes external buffers; it is not a per-context heap measurement or security
 boundary. Node stops an execution with `runtime_unavailable` when sustained
 major garbage collections leave the worker near its heap limit, then retires
-that worker. Output emitted before heap exhaustion or GC retirement remains
+that worker, even when individual collections are cheap. The same guard retires
+pressured suspended or warm workers. Output emitted before heap exhaustion or GC retirement remains
 available within the configured output limit. Synchronous code that prevents GC notifications remains bounded
 by the host execution deadline. Paginate or narrow large tool results and avoid
 retaining large arrays; inspect completed actions before retrying. Captured Node
