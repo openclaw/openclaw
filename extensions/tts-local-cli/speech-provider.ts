@@ -36,18 +36,6 @@ function resolveVoiceId(cfg: SpeechProviderConfig): string | undefined {
 }
 
 /**
- * Talk records carry the selection, not the executable. Dropping absent and
- * blank values keeps a Talk voice choice from clobbering base CLI settings.
- */
-function meaningfulOverrides(cfg: SpeechProviderConfig): SpeechProviderConfig {
-  return Object.fromEntries(
-    Object.entries(cfg).filter(
-      ([, value]) => value !== undefined && !(typeof value === "string" && value.trim() === ""),
-    ),
-  );
-}
-
-/**
  * The CLI selects by `voiceId` alone. Core speech normalization ranks
  * `speakerVoiceId` above `voiceId`, so an alias inherited from the base TTS
  * record would silently undo a Talk selection; drop the aliases and let core
@@ -385,14 +373,24 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
     },
 
     resolveTalkConfig({ baseTtsConfig, talkProviderConfig }): SpeechProviderConfig {
-      // A Talk-side `voices` list is ignored: the catalog stays with TTS.
-      const { voices: _talkCatalog, ...talk } = meaningfulOverrides(talkProviderConfig);
-      const merged = {
-        ...resolveCliProviderConfig(asOptionalRecord(baseTtsConfig) ?? {}),
-        ...talk,
-      };
+      const base = resolveCliProviderConfig(baseTtsConfig);
+      const talk = Object.fromEntries(
+        Object.entries(talkProviderConfig).filter(
+          ([key, value]) =>
+            key !== "voices" &&
+            value !== undefined &&
+            !(typeof value === "string" && value.trim() === ""),
+        ),
+      );
+      // An authored Talk command owns its execution settings and defaults;
+      // inheriting another executable's arguments, cwd, or env can break it.
+      // Selection-only records inherit TTS, while both keep its voice defaults.
+      const defaults =
+        typeof talk.command === "string" ? { voices: base.voices, voiceId: base.voiceId } : base;
       return Object.fromEntries(
-        Object.entries(merged).filter(([key]) => !SPEAKER_ALIAS_KEYS.has(key)),
+        Object.entries({ ...defaults, ...talk }).filter(
+          ([key, value]) => value !== undefined && !SPEAKER_ALIAS_KEYS.has(key),
+        ),
       );
     },
 

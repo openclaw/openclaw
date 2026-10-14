@@ -31,7 +31,10 @@ const EMPTY_ID3V2_HEADER = [...Buffer.from("ID3"), 0x04, 0x00, 0x00, 0x00, 0x00,
 const EMPTY_ID3V24_HEADER_WITH_FOOTER = EMPTY_ID3V2_HEADER.with(5, 0x10);
 const EMPTY_ID3V24_FOOTER = [...Buffer.from("3DI"), ...EMPTY_ID3V24_HEADER_WITH_FOOTER.slice(3)];
 
-function createCliFixture(audio?: readonly number[]): string {
+function createCliFixture(
+  audio?: readonly number[],
+  options: { format?: "wav" | "mp3"; captureContext?: boolean } = {},
+): string {
   const dir = tempDirs.make("openclaw-cli-tts-test-");
   const script = path.join(dir, "write-audio.mjs");
   writeFileSync(
@@ -50,10 +53,19 @@ const stdin = await new Promise((resolve) => {
   process.stdin.on("end", () => resolve(data));
 });
 const payload = Buffer.concat([
-  Buffer.from("RIFF"),
-  Buffer.alloc(4),
-  Buffer.from("WAVE"),
-  Buffer.from(JSON.stringify({ args: process.argv.slice(2), stdin, textArg })),
+  ${
+    options.format === "mp3"
+      ? `Buffer.from(${JSON.stringify(VALID_MPEG_FRAME_HEADER)})`
+      : 'Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVE")])'
+  },
+  Buffer.from(JSON.stringify({
+    args: process.argv.slice(2), stdin, textArg,
+    ${
+      options.captureContext
+        ? "cwd: process.cwd(), commandContext: process.env.OPENCLAW_TTS_TEST_COMMAND_CONTEXT ?? null,"
+        : ""
+    }
+  })),
 ]);
 const audio = ${audio ? `Buffer.from(${JSON.stringify(audio)})` : "payload"};
 if (outputPath) {
@@ -110,6 +122,8 @@ function parseAudioPayload(result: { audioBuffer: Buffer }) {
     args: string[];
     stdin?: string;
     textArg?: string;
+    cwd?: string;
+    commandContext?: string | null;
   };
 }
 
@@ -306,6 +320,47 @@ describe("buildCliSpeechProvider", () => {
       }),
     ).toEqual(talkProviderConfig);
   });
+
+  it.each(["wav", "mp3"] as const)(
+    "keeps an independent Talk command's arguments and context for %s output",
+    async (format) => {
+      const script = createCliFixture(undefined, { format, captureContext: true });
+      const ttsCwd = tempDirs.make("openclaw-tts-command-context-");
+      const providerConfig = buildCliSpeechProvider().resolveTalkConfig?.({
+        cfg: TEST_CFG,
+        baseTtsConfig: {
+          providers: {
+            "tts-local-cli": {
+              command: "unused-tts-command",
+              args: ["--text", "{{Text}}"],
+              outputFormat: "wav",
+              cwd: ttsCwd,
+              env: { OPENCLAW_TTS_TEST_COMMAND_CONTEXT: "tts-only" },
+              voices: ["af_jessica", "af_bella"],
+            },
+          },
+        },
+        talkProviderConfig: {
+          command: `"${process.execPath}" "${script}"`,
+          ...(format === "wav" ? { outputFormat: "wav" } : {}),
+        },
+        timeoutMs: 1000,
+      });
+
+      const result = await synthesize(providerConfig ?? {});
+
+      expect(result.outputFormat).toBe(format);
+      expect(parseAudioPayload(result)).toEqual({
+        args: [],
+        stdin: "hello world",
+        textArg: "",
+        cwd: process.cwd(),
+        commandContext: process.env.OPENCLAW_TTS_TEST_COMMAND_CONTEXT ?? null,
+      });
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+      expect(providerConfig).toMatchObject({ voices: ["af_jessica", "af_bella"] });
+    },
+  );
 
   it("lets a Talk selection beat a speaker alias inherited from the TTS default", async () => {
     const script = createCliFixture();
