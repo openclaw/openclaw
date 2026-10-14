@@ -23,8 +23,11 @@ import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
-import type { PluginServiceCronHost } from "./service-cron.js";
-import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
+import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
+import {
+  createPluginServiceDiagnostics,
+  type ObserveProviderUsage,
+} from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
 import type { OwnedPluginService, PluginServicesOwner } from "./service-lifecycle.types.js";
 import { createPluginServiceNodeInvoker } from "./service-nodes.js";
@@ -90,6 +93,7 @@ type StartPluginServicesParams = {
   startupTrace?: NonNullable<OpenClawPluginServiceContext["startupTrace"]>;
   broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
   getCronService?: () => PluginServiceCronHost | null | undefined;
+  observeProviderUsage?: ObserveProviderUsage;
   oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
   previous?: PluginServicesHandle | null;
   deferStartForPluginIds?: ReadonlySet<string>;
@@ -159,6 +163,7 @@ async function startPreparedPluginServices({
   startupTrace,
   broadcastPluginEvent,
   getCronService,
+  observeProviderUsage,
   oneShotStopTimeouts,
   deferStartForPluginIds,
   throwOnStartError,
@@ -504,7 +509,7 @@ async function startPreparedPluginServices({
           isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
         })
       : undefined;
-    const internalDiagnostics = createPluginServiceDiagnostics(entry, lease);
+    const internalDiagnostics = createPluginServiceDiagnostics(entry, lease, observeProviderUsage);
     const controlUiIngress = record
       ? createPluginServiceControlUiIngress({
           registry,

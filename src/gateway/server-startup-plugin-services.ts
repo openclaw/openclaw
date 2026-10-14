@@ -71,7 +71,9 @@ export async function startGatewayPluginServices(
     params.onPluginServices?.(pluginServicesOwner);
     await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
       try {
-        const { startPluginServices } = await import("../plugins/services.js");
+        const { startGatewayPluginServices: startPluginServices } = await import(
+          "./server-plugin-services.js"
+        );
         await params.pluginRuntimeClaim?.waitForUnblocked();
         if (
           pluginServicesStopRequested ||
