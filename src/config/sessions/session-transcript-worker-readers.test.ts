@@ -19,8 +19,8 @@ it("preserves the direct read request, signal, and projected result", async () =
   await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
 });
 
-it.each(["archives", "corpus", "targets"] as const)(
-  "serializes Windows storage environments for %s inventory",
+it.each(["archives", "corpus", "targets", "exact entries"] as const)(
+  "serializes Windows storage environments for %s requests",
   async (inventory) => {
     const stateDir = path.resolve("synthetic-state");
     const storePath = path.join(stateDir, "sessions.sqlite");
@@ -31,6 +31,7 @@ it.each(["archives", "corpus", "targets"] as const)(
         openclaw_state_dir: stateDir,
         OpenClaw_Supervisor_Mode: "external",
         UNRELATED_VALUE: "synthetic",
+        GITHUB_TOKEN: "synthetic-credential",
       });
       const readers = createSessionHistoryWorkerReaders(
         createSessionHistoryWorkerRequestStub(async (prepare) => {
@@ -41,6 +42,9 @@ it.each(["archives", "corpus", "targets"] as const)(
             OPENCLAW_SUPERVISOR_MODE: "external",
           };
           switch (request.kind) {
+            case "session-exact-entries":
+              expect(request.env).toEqual(expectedEnv);
+              return { kind: request.kind, entries: [], lifecycleTimestamps: {} };
             case "session-archive-inventory":
               expect(request.env).toEqual(expectedEnv);
               return { kind: request.kind, archives: [] };
@@ -56,25 +60,31 @@ it.each(["archives", "corpus", "targets"] as const)(
         }),
       );
       const result =
-        inventory === "archives"
-          ? readers.readArchiveInventory({ agentId: "main", storePath, env, sessionIds: ["one"] })
-          : inventory === "targets"
-            ? readers.readMemorySessionTargets({
-                params: { agentId: "main", storePath, env, sessionIds: ["one"] },
-              })
-            : readers.readCorpusInventory({
-                scope: {
-                  cfg: {},
-                  normalizedAgentId: "main",
-                  storePath,
-                  env,
-                  artifactDirs: [],
-                  isSharedFixedStore: false,
-                },
-                options: {},
-                artifacts: [],
-              });
-      await expect(result).resolves.toEqual([]);
+        inventory === "exact entries"
+          ? readers.readExactEntries({ env, sessionKeys: ["agent:main:main"] })
+          : inventory === "archives"
+            ? readers.readArchiveInventory({ agentId: "main", storePath, env, sessionIds: ["one"] })
+            : inventory === "targets"
+              ? readers.readMemorySessionTargets({
+                  params: { agentId: "main", storePath, env, sessionIds: ["one"] },
+                })
+              : readers.readCorpusInventory({
+                  scope: {
+                    cfg: {},
+                    normalizedAgentId: "main",
+                    storePath,
+                    env,
+                    artifactDirs: [],
+                    isSharedFixedStore: false,
+                  },
+                  options: {},
+                  artifacts: [],
+                });
+      await expect(result).resolves.toEqual(
+        inventory === "exact entries"
+          ? { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} }
+          : [],
+      );
     } finally {
       Object.defineProperty(process, "platform", { value: platform });
     }
@@ -146,3 +156,72 @@ it.each([
     );
   }
 });
+
+it.each(["utf-8", "utf-16le", "utf-16be"])(
+  "assembles split %s events across chunks and preserves exact correction JSON",
+  async (encoding) => {
+    const json = ' {"type":"message","text":"hello 🦞 café"} ';
+    const bytes = Buffer.from(json, encoding === "utf-8" ? "utf8" : "utf16le");
+    if (encoding === "utf-16be") {
+      bytes.swap16();
+    }
+    const version = { generation: "synthetic-generation", rawSeq: 9, updatedAt: 123 };
+    const signal = new AbortController().signal;
+    const readers = createSessionHistoryWorkerReaders(
+      createSessionHistoryWorkerRequestStub(async (_prepare, _inputBytes, _signal, onRequest) => {
+        if (!onRequest) {
+          throw new Error("Transcript reader did not provide its chunk receiver");
+        }
+        // One-byte, offset views split UTF-8 code points and UTF-16 code units.
+        for (let offset = 0; offset < bytes.length; offset++) {
+          await onRequest(
+            {
+              kind: "transcript-hydration-chunk",
+              encoding,
+              frames: [{ data: bytes.subarray(offset, offset + 1), endOfEvent: false }],
+            },
+            signal,
+          );
+        }
+        await onRequest(
+          {
+            kind: "transcript-hydration-chunk",
+            encoding,
+            frames: [{ data: new Uint8Array(), endOfEvent: true, seq: 7 }],
+          },
+          signal,
+        );
+        await onRequest(
+          {
+            kind: "transcript-hydration-chunk",
+            encoding,
+            frames: [{ data: bytes, endOfEvent: true, seq: 9 }],
+          },
+          signal,
+        );
+        return { kind: "full", version, eventCount: 2 };
+      }),
+    );
+    await expect(
+      readers.readTranscript(
+        {
+          target: { sessionId: "synthetic-session" },
+          resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
+          includeEventJson: true,
+        },
+        signal,
+      ),
+    ).resolves.toEqual({
+      kind: "full",
+      snapshot: {
+        events: [
+          { type: "message", text: "hello 🦞 café" },
+          { type: "message", text: "hello 🦞 café" },
+        ],
+        eventJson: [json, json],
+        eventSeqs: [7, 9],
+        version,
+      },
+    });
+  },
+);

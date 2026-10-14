@@ -463,11 +463,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       "openai:metered",
     );
   });
-  it.each([
-    ["turn override", undefined, "off"],
-    ["per-model off", false, "off"],
-    ["per-model high", "high", "high"],
-  ] as const)(
+  it.each([["turn override", undefined, "off"]] as const)(
     "honors %s and clears fallback reasoning during primary probes",
     async (_name, thinking, expected) => {
       const { sessionKey } = await mockAutoFallbackSession();

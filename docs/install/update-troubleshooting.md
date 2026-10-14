@@ -459,6 +459,17 @@ running in the installed updater. Version 2026.9.6 admits retained `import.meta`
 syntax. Current snapshot inventory also records unparseable entries as named
 plugin warnings instead of aborting the snapshot.
 
+### Snapshot cleanup could not be confirmed
+
+An update can stop with `Update snapshot cleanup could not be confirmed` (reason
+`candidate-snapshot-failed`) when plugin work started for the candidate snapshot
+does not finish in time. The installed updater runs this step, so retrying the
+same update repeats it, and `openclaw update repair` cannot finish a snapshot
+that never completed. Install the target once by hand with the Gateway stopped
+([manual npm, pnpm, or bun](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)),
+then run `openclaw doctor --fix` and start the Gateway. Include `openclaw update
+status --json` (with the nested `cause`) when you report it.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside

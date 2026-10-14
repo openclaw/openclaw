@@ -11,6 +11,7 @@ import {
 import { resolveToolDisplayIcon } from "../../lib/chat/tool-display-icon.ts";
 import { resolveAvatar } from "../../lib/identity-avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { SessionCreatedActor, SessionOwnerOption } from "../../lib/session-owner.ts";
 import {
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
@@ -21,7 +22,6 @@ import {
   sessionAttentionIconName,
   resolveSessionIdleBadge,
 } from "../session-attention-presentation.ts";
-import type { SessionCreatedActor, SessionOwnerOption } from "../session-owner-chip.ts";
 import {
   resolveSessionRowBadges,
   type SessionRowBadgesParams,

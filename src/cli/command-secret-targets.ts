@@ -487,9 +487,21 @@ export function getModelsCommandSecretTargetIds(): Set<string> {
   return new Set(STATIC_MODEL_TARGET_IDS);
 }
 
-/** Credential targets required by memory embedding flows. */
-export function getMemoryEmbeddingCommandSecretTargetIds(): Set<string> {
-  return new Set(STATIC_MEMORY_EMBEDDING_TARGET_IDS);
+function getSelectedMemoryProviderSecretTargetIds(config: OpenClawConfig): string[] {
+  return discoverConfigSecretTargetsByIds(config)
+    .filter(
+      ({ pathSegments }) =>
+        pathSegments[0] === "plugins" && pathSegments[2] === config.plugins?.slots?.memory,
+    )
+    .map(({ entry }) => entry.id);
+}
+
+/** Credential targets required by memory embeddings and the selected memory plugin. */
+export function getMemoryEmbeddingCommandSecretTargetIds(config?: OpenClawConfig): Set<string> {
+  return new Set([
+    ...STATIC_MEMORY_EMBEDDING_TARGET_IDS,
+    ...(config?.plugins?.slots?.memory ? getSelectedMemoryProviderSecretTargetIds(config) : []),
+  ]);
 }
 
 /** Credential targets required by text-to-speech flows. */

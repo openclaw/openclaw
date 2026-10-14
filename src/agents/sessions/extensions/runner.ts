@@ -258,7 +258,7 @@ export class ExtensionRunner {
     bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
   }
 
-  /** @deprecated Use bindCoreAsync with ExtensionActionsV2; removal follows a stable deprecation period. */
+  /** @deprecated Use bindCoreAsync with ExtensionActionsV2. Supported through 2026-12-31. */
   bindCore(
     actions: ExtensionActions,
     contextActions: ExtensionContextActions,

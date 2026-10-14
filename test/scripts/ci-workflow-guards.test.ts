@@ -2448,7 +2448,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     for (const [jobName, task, expected] of [
       ["preflight", undefined, "blacksmith-4vcpu-ubuntu-2404"],
       ["security-fast", undefined, "ubuntu-24.04"],
-      ["checks-ui", undefined, "ubuntu-24.04"],
+      ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
       ["checks-ui-e2e", "control-ui", "blacksmith-16vcpu-ubuntu-2404"],
       ["checks-ui-e2e-real-gateway", undefined, "blacksmith-16vcpu-ubuntu-2404"],
@@ -2649,6 +2649,38 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).toBe(expected);
     }
   });
+
+  it.each(["hybrid", "runson"] as const)(
+    "keeps %s UI shards on Blacksmith with their existing timeout",
+    (runnerBackend) => {
+      const workflow = readCiWorkflow();
+      for (const offload of [false, true]) {
+        const context = {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          matrix: { task: "build-play" },
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend,
+          preflightOutputs: { hybrid_hosted_offload: String(offload) },
+        } as const;
+        expect(evaluateWorkflowExpression(workflow.jobs["checks-ui"]["runs-on"], context)).toBe(
+          "blacksmith-8vcpu-ubuntu-2404",
+        );
+        for (const [jobName, timeout] of [
+          ["build-artifacts", 20],
+          ["android", 20],
+          ["checks-ui-e2e-real-gateway", 20],
+          ["checks-ui", 20],
+        ] as const) {
+          expect(
+            evaluateWorkflowExpression(workflow.jobs[jobName]["timeout-minutes"], context),
+            `${jobName}: hosted offload ${offload}`,
+          ).toBe(timeout);
+        }
+      }
+    },
+  );
 
   it("resolves the pull request base and changed files from the shallow security checkout", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];

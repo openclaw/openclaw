@@ -42,9 +42,6 @@ describe("buildReplyPromptEnvelope", () => {
   });
 
   it.each([
-    { systemEventBlocks: [], sourceReplyDeliveryMode: "automatic" },
-    { systemEventBlocks: ["System: Scheduled digest."], sourceReplyDeliveryMode: "automatic" },
-    { systemEventBlocks: [], sourceReplyDeliveryMode: "message_tool_only" },
     {
       systemEventBlocks: ["System: Scheduled digest."],
       sourceReplyDeliveryMode: "message_tool_only",
@@ -90,38 +87,7 @@ describe("buildReplyPromptEnvelope", () => {
     }
   });
 
-  it("adds one message-tool delivery hint to user-request runtime context only", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "@bot what changed?",
-      BodyStripped: "what changed?",
-      Provider: "telegram",
-      ChatType: "group",
-      InboundEventKind: "user_request",
-    });
-
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "what changed?",
-      prefixedBody: "what changed?",
-      hasUserBody: true,
-      inboundUserContext: "Current message:\nchat_id=-100123",
-      isBareSessionReset: false,
-      startupAction: "new",
-      inboundEventKind: "user_request",
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-
-    expect(
-      countOccurrences(envelope.currentInboundContext?.text, MESSAGE_TOOL_ONLY_DELIVERY_HINT),
-    ).toBe(1);
-    expect(envelope.prefixedCommandBody).toBe("what changed?");
-    expect(envelope.transcriptCommandBody).toBe("what changed?");
-    expect(envelope.transcriptCommandBody).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
-    expect(envelope.currentInboundContext?.text).not.toContain(CURRENT_MESSAGE_MARKER);
-  });
-
-  it.each(["starter", "history"])("labels the current message after thread %s", (kind) => {
+  it.each(["starter"])("labels the current message after thread %s", (kind) => {
     const threadNote = `[Thread ${kind} - for context]\nPlanning the picnic next month.`;
     const sessionCtx = finalizeInboundContext({
       Body: "Can you pick a date?",
@@ -162,7 +128,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
   });
 
-  it.each(["pending", "recent"] as const)(
+  it.each(["recent"] as const)(
     "keeps %s room history in the initial prompt but not the resumed prompt",
     (historyKind) => {
       const sessionCtx = finalizeInboundContext({

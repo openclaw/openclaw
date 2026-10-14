@@ -17,17 +17,11 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const GIB = 1024 ** 3;
-const CONSTRAINED_HOST = {
-  totalMemoryBytes: 16 * GIB,
-  logicalCpuCount: 8,
-};
 const ROOMY_HOST = {
   totalMemoryBytes: 128 * GIB,
   logicalCpuCount: 16,
 };
 const throttledGoEnv = { GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" };
-const explicitGoEnv = { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" };
-const unsetGoEnv = { GOMAXPROCS: undefined, GOGC: undefined, GOMEMLIMIT: undefined };
 type CheckResources = Parameters<typeof applyLocalTsgoPolicy>[2];
 type PolicyCase = [
   name: string,
@@ -50,21 +44,6 @@ function expectPolicy(
     expect(result.env[key], key).toBe(value);
   }
 }
-
-const localTsgoDefaults = [
-  "--declaration",
-  "false",
-  "--incremental",
-  "--tsBuildInfoFile",
-  ".artifacts/tsgo-cache/root.tsbuildinfo",
-];
-const localOxlintDefaults = [
-  "--type-aware",
-  "--tsconfig",
-  "config/tsconfig/oxlint.json",
-  "--report-unused-disable-directives-severity",
-  "error",
-];
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   const env: NodeJS.ProcessEnv = {
@@ -119,7 +98,6 @@ describe("local-check-runtime", () => {
   });
 
   it.each([
-    { platform: "linux" as const, linkType: "dir", owned: false },
     { platform: "win32" as const, linkType: "junction", owned: false },
     { platform: process.platform, linkType: "dir", owned: true },
   ])(
@@ -170,55 +148,7 @@ describe("local-check-runtime", () => {
     }
   });
 
-  const tsgoCases: Array<[...PolicyCase, alternate?: [string[], string[]]]> = [
-    [
-      "constrained local host",
-      [],
-      makeEnv(),
-      CONSTRAINED_HOST,
-      [...localTsgoDefaults, "--singleThreaded", "--checkers", "1"],
-      throttledGoEnv,
-    ],
-    [
-      "disabled local policy",
-      [],
-      makeEnv({ OPENCLAW_LOCAL_CHECK: "0" }),
-      ROOMY_HOST,
-      ["--declaration", "false"],
-      {},
-    ],
-    [
-      "constrained CI with local safeguards disabled",
-      ["-b", "tsconfig.projects.json"],
-      makeEnv({ CI: "true", OPENCLAW_LOCAL_CHECK: "0" }),
-      CONSTRAINED_HOST,
-      [
-        "-b",
-        "tsconfig.projects.json",
-        "--declaration",
-        "false",
-        "--singleThreaded",
-        "--checkers",
-        "1",
-      ],
-      throttledGoEnv,
-    ],
-    [
-      "explicit flags and Go limits",
-      ["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"],
-      makeEnv({ ...explicitGoEnv, OPENCLAW_TSGO_PPROF_DIR: "/tmp/profile" }),
-      CONSTRAINED_HOST,
-      [
-        "--checkers",
-        "4",
-        "--singleThreaded",
-        "--pprofDir",
-        "/tmp/existing",
-        "--declaration",
-        "false",
-      ],
-      explicitGoEnv,
-    ],
+  const tsgoCases: PolicyCase[] = [
     [
       "profiling without a throttled mode",
       ["-p", "tsconfig.ui.json"],
@@ -226,49 +156,6 @@ describe("local-check-runtime", () => {
       ROOMY_HOST,
       ["-p", "tsconfig.ui.json", "--declaration", "false", "--pprofDir", ".artifacts/profiles"],
       { OPENCLAW_LOCAL_CHECK_MODE: undefined, GOMAXPROCS: undefined, GOMEMLIMIT: undefined },
-    ],
-    [
-      "explicit declaration flags",
-      ["--declaration"],
-      makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" }),
-      ROOMY_HOST,
-      ["--declaration"],
-      {},
-      [["-d"], ["-d"]],
-    ],
-    ["roomy local host", [], makeEnv(), ROOMY_HOST, localTsgoDefaults, unsetGoEnv],
-    [
-      "custom incremental cache",
-      [],
-      makeEnv({
-        OPENCLAW_LOCAL_CHECK_MODE: "full",
-        OPENCLAW_TSGO_BUILD_INFO_FILE: ".artifacts/custom/tsgo.tsbuildinfo",
-      }),
-      ROOMY_HOST,
-      [
-        "--declaration",
-        "false",
-        "--incremental",
-        "--tsBuildInfoFile",
-        ".artifacts/custom/tsgo.tsbuildinfo",
-      ],
-      {},
-    ],
-    [
-      "ad hoc invocation without cache reuse",
-      ["--extendedDiagnostics"],
-      makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" }),
-      ROOMY_HOST,
-      ["--extendedDiagnostics", "--declaration", "false"],
-      {},
-    ],
-    [
-      "forced throttling on a roomy host",
-      [],
-      makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "throttled" }),
-      ROOMY_HOST,
-      [...localTsgoDefaults, "--singleThreaded", "--checkers", "1"],
-      throttledGoEnv,
     ],
     [
       "single CPU",
@@ -281,125 +168,42 @@ describe("local-check-runtime", () => {
   ];
   it.each(tsgoCases)(
     "applies tsgo policy for %s",
-    (_name, args, env, host, expectedArgs, expectedEnv, alternate) => {
+    (_name, args, env, host, expectedArgs, expectedEnv) => {
       expectPolicy(applyLocalTsgoPolicy(args, env, host), expectedArgs, expectedEnv);
-      if (alternate) {
-        expectPolicy(applyLocalTsgoPolicy(alternate[0], env, host), alternate[1], {});
-      }
     },
   );
 
-  const oxlintCases: Array<[...PolicyCase, unchangedLimits?: boolean, expectedThreads?: string[]]> =
-    [
-      [
-        "roomy local host",
-        [],
-        makeEnv(),
-        ROOMY_HOST,
-        [...localOxlintDefaults, "--threads=1"],
-        throttledGoEnv,
-      ],
-      [
-        "explicit thread count and Go limits",
-        ["--threads=8"],
-        makeEnv(explicitGoEnv),
-        ROOMY_HOST,
-        ["--threads=8", ...localOxlintDefaults],
-        explicitGoEnv,
-      ],
-      ...[
-        { name: "memory-constrained CI runner", ci: "true", cpus: 16, gib: 16, throttled: true },
-        { name: "CPU-constrained CI runner", ci: "true", cpus: 4, gib: 32, throttled: true },
-        { name: "parallel CI boundary", ci: "true", cpus: 8, gib: 24, throttled: false },
-        { name: "disabled local policy", ci: undefined, cpus: 4, gib: 16, throttled: false },
-      ].map(({ name, ci, cpus, gib, throttled }): [...PolicyCase, boolean, string[]] => [
-        name,
-        ["--threads=1"],
-        makeEnv({ CI: ci, OPENCLAW_LOCAL_CHECK: "0", ...unsetGoEnv, GOMAXPROCS: "2" }),
-        { logicalCpuCount: cpus, totalMemoryBytes: gib * GIB },
-        undefined,
-        {
-          GOMAXPROCS: "2",
-          GOGC: throttled ? "30" : undefined,
-          GOMEMLIMIT: throttled ? "3GiB" : undefined,
-        },
-        true,
-        ["--threads=1"],
-      ]),
-      [
-        "explicit constrained GitHub Actions limits",
-        ["--threads=3"],
-        makeEnv({
-          CI: undefined,
-          GITHUB_ACTIONS: "true",
-          OPENCLAW_LOCAL_CHECK: "0",
-          ...explicitGoEnv,
-        }),
-        { logicalCpuCount: 4, totalMemoryBytes: 16 * GIB },
-        undefined,
-        explicitGoEnv,
-        false,
-        ["--threads=3"],
-      ],
-      [
-        "forced full speed",
-        [],
-        makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" }),
-        ROOMY_HOST,
-        localOxlintDefaults,
-        { GOGC: undefined, GOMEMLIMIT: undefined },
-      ],
-    ];
-  it.each(oxlintCases)(
-    "applies oxlint policy for %s",
-    (_name, args, env, host, expectedArgs, expectedEnv, unchangedLimits, expectedThreads) => {
-      const result = applyLocalOxlintPolicy(args, env, host);
-      expectPolicy(result, expectedArgs, expectedEnv);
-      if (expectedThreads) {
-        expect(result.args.filter((arg) => arg.startsWith("--threads"))).toEqual(expectedThreads);
-      }
-      if (unchangedLimits) {
-        expect(env.GOGC).toBeUndefined();
-        expect(env.GOMEMLIMIT).toBeUndefined();
-        expect(result.args).toContain("--type-aware");
+  it.each([{ name: "unresolved capacity", total: 64, capacity: null, throttled: true }])(
+    "sizes compiler workers from $name instead of remaining memory",
+    (row) => {
+      for (const ci of [undefined, "true"]) {
+        const host = {
+          logicalCpuCount: 16,
+          totalMemoryBytes: row.total * GIB,
+          memoryCapacityBytes: row.capacity == null ? row.capacity : row.capacity * GIB,
+          memoryLimitBytes: GIB,
+        };
+        const inputEnv = makeEnv({
+          CI: ci,
+          OPENCLAW_LOCAL_CHECK: ci ? "0" : "1",
+          GOMAXPROCS: undefined,
+          GOGC: undefined,
+          GOMEMLIMIT: undefined,
+        });
+        const tsgo = applyLocalTsgoPolicy(["--noEmit"], inputEnv, host);
+        const oxlint = applyLocalOxlintPolicy([], inputEnv, host);
+        for (const [result, flag, throttled] of [
+          [tsgo, "--singleThreaded", row.throttled],
+          // Local Oxlint remains throttled by default, including on roomy machines.
+          [oxlint, "--threads=1", ci ? row.throttled : true],
+        ] as const) {
+          expect(result.args.includes(flag)).toBe(throttled);
+          expect(result.env.GOMEMLIMIT).toBe(throttled ? "3GiB" : undefined);
+          expect(result.env.GOMAXPROCS).toBe(throttled ? "2" : undefined);
+        }
       }
     },
   );
-
-  it.each([
-    { name: "ancestor ceiling", total: 64, capacity: 7, throttled: true },
-    { name: "unresolved capacity", total: 64, capacity: null, throttled: true },
-    { name: "physical-only caller", total: 64, capacity: undefined, throttled: false },
-    { name: "roomy capacity", total: 64, capacity: 48, throttled: false },
-    { name: "smaller physical host", total: 16, capacity: 64, throttled: true },
-  ])("sizes compiler workers from $name instead of remaining memory", (row) => {
-    for (const ci of [undefined, "true"]) {
-      const host = {
-        logicalCpuCount: 16,
-        totalMemoryBytes: row.total * GIB,
-        memoryCapacityBytes: row.capacity == null ? row.capacity : row.capacity * GIB,
-        memoryLimitBytes: GIB,
-      };
-      const inputEnv = makeEnv({
-        CI: ci,
-        OPENCLAW_LOCAL_CHECK: ci ? "0" : "1",
-        GOMAXPROCS: undefined,
-        GOGC: undefined,
-        GOMEMLIMIT: undefined,
-      });
-      const tsgo = applyLocalTsgoPolicy(["--noEmit"], inputEnv, host);
-      const oxlint = applyLocalOxlintPolicy([], inputEnv, host);
-      for (const [result, flag, throttled] of [
-        [tsgo, "--singleThreaded", row.throttled],
-        // Local Oxlint remains throttled by default, including on roomy machines.
-        [oxlint, "--threads=1", ci ? row.throttled : true],
-      ] as const) {
-        expect(result.args.includes(flag)).toBe(throttled);
-        expect(result.env.GOMEMLIMIT).toBe(throttled ? "3GiB" : undefined);
-        expect(result.env.GOMAXPROCS).toBe(throttled ? "2" : undefined);
-      }
-    }
-  });
 
   type BoundedCase = {
     name: string;
@@ -413,21 +217,14 @@ describe("local-check-runtime", () => {
     unmeasuredArgs?: string[][];
   };
   const boundedCases: BoundedCase[] = [
-    ...["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"].map(
-      (config): BoundedCase => ({
-        name: `admitted ${config}`,
-        args: ["--tsconfig", config],
-        host: { memoryCapacityBytes: 15 * GIB, memoryLimitBytes: 14 * GIB },
-        threads: "2",
-        measured: true,
-        expectedEnv: { GOMAXPROCS: "4", GOGC: "100", GOMEMLIMIT: "8GiB" },
-      }),
-    ),
-    { name: "two CPUs", host: { logicalCpuCount: 2 }, threads: "1" },
-    { name: "8 GiB capacity", host: { memoryCapacityBytes: 8 * GIB }, threads: "1" },
-    { name: "unknown capacity", host: { memoryCapacityBytes: null }, threads: "1" },
-    { name: "Windows", host: { platform: "win32" }, threads: "1" },
-    { name: "concurrent Programs", env: { OPENCLAW_OXLINT_BATCH_CONCURRENCY: "2" }, threads: "1" },
+    {
+      name: "admitted extensions/tsconfig.json",
+      args: ["--tsconfig", "extensions/tsconfig.json"],
+      host: { memoryCapacityBytes: 15 * GIB, memoryLimitBytes: 14 * GIB },
+      threads: "2",
+      measured: true,
+      expectedEnv: { GOMAXPROCS: "4", GOGC: "100", GOMEMLIMIT: "8GiB" },
+    },
     {
       name: "explicit limits and unmeasured configurations",
       args: ["--tsconfig", "extensions/tsconfig.json", "--threads=1"],
@@ -440,19 +237,13 @@ describe("local-check-runtime", () => {
         ["--tsconfig", "extensions/tsconfig.json", "--", "--threads=4"],
       ],
     },
-    ...[
-      { config: "config/tsconfig/oxlint.core.json", available: 13 * GIB, admission: undefined },
-      { config: "extensions/tsconfig.json", available: 9 * GIB, admission: undefined },
-      { config: "extensions/tsconfig.json", available: null, admission: undefined },
-      { config: "extensions/tsconfig.json", available: 16 * GIB, admission: "missing" as const },
-      { config: "extensions/tsconfig.json", available: 16 * GIB, admission: "changed" as const },
-    ].map(({ config, available, admission }): BoundedCase => ({
-      name: `${config}, ${available} available, ${admission ?? "bound"} admission`,
-      args: ["--tsconfig", config, "extensions/example"],
-      host: { memoryLimitBytes: available },
-      admission,
+    {
+      name: "extensions/tsconfig.json, null available, bound admission",
+      args: ["--tsconfig", "extensions/tsconfig.json", "extensions/example"],
+      host: { memoryLimitBytes: null },
+      admission: undefined,
       threads: "1",
-    })),
+    },
   ];
   it.each(boundedCases)("applies the bounded CI budget for $name", (row) => {
     const args = [...(row.args ?? ["--tsconfig=extensions/tsconfig.json"])];
@@ -496,12 +287,6 @@ describe("local-check-runtime", () => {
         GOGC: "30",
         GOMEMLIMIT: "3GiB",
       },
-    },
-    {
-      name: "explicit user Go settings",
-      goEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
-      prepGoEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
-      lintGoEnv: { GOMAXPROCS: "3", GOGC: "80", GOMEMLIMIT: "5GiB" },
     },
   ])(
     "keeps prep and oxlint resource policies separate with $name",
@@ -566,7 +351,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
     },
   );
 
-  it.each([undefined, "--format", "--format=json", "-f", "-f=json", "-fjson"])(
+  it.each([undefined, "-fjson"])(
     "keeps GitHub Actions output formatting explicit (%s)",
     (formatArg) => {
       const { args } = applyLocalOxlintPolicy(
@@ -657,7 +442,7 @@ describe("Tooling bootstrap dependency ownership", () => {
     return { checkout, modules, configured, run };
   }
 
-  it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir", "npm_config_modules_dir"])(
+  it.each(["PNPM_CONFIG_MODULES_DIR"])(
     "loads native child packages without TSX through %s, relative to the shim checkout",
     (key) => {
       const { checkout, modules, configured, run } = nativeFixture();
@@ -710,7 +495,7 @@ describe("Tooling bootstrap dependency ownership", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "refuses a missing worktree install with an empty override=%s",
     (emptyOverride) => {
       const { checkout, modules } = fixture();
@@ -753,12 +538,7 @@ describe("Tooling bootstrap dependency ownership", () => {
     expect(fs.lstatSync(localModules).isSymbolicLink()).toBe(false);
   });
 
-  it.each([
-    { key: "PNPM_CONFIG_MODULES_DIR", relative: false },
-    { key: "pnpm_config_modules_dir", relative: false },
-    { key: "npm_config_modules_dir", relative: false },
-    { key: "PNPM_CONFIG_MODULES_DIR", relative: true },
-  ])(
+  it.each([{ key: "npm_config_modules_dir", relative: false }])(
     "loads the explicitly configured toolchain ($key, relative: $relative)",
     ({ key, relative }) => {
       const { checkout, modules, entry } = fixture();

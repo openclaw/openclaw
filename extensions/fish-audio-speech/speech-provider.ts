@@ -235,6 +235,8 @@ async function resolveSynthesisRequest(
 }
 
 export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey));
   return {
     id: "fish-audio",
     label: "Fish Audio",
@@ -296,8 +298,9 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       });
     },
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey)),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const params = await resolveSynthesisRequest(req);
       return {

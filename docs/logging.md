@@ -918,6 +918,16 @@ and scheduling delays; they do not establish lock contention. The separate
 errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
+Hold warnings label the callback as `callbackKind: "application-transaction"`:
+OpenClaw's transaction body, not a SQLite busy handler or SQL function.
+`phases.databaseAdmissionWaitMs` measures synchronous metadata exchanges with the
+host, separately from authority waits in `hostAdmissionWaitMs`. Metadata waits
+during COMMIT belong to this field and are excluded from the hold's `commitMs`.
+The legacy
+`sqlMs` field excludes both waits and commit time, but includes JavaScript between
+SQL statements. The default 1,000 ms logging threshold does not establish a
+one-second timeout.
+
 Older builds report `session.reclamation.commit-settlement` for a parent-side
 synchronous SQLite check after authorizing a reclamation or cold-storage commit.
 The parent now atomically accepts the commit after checking live authority and

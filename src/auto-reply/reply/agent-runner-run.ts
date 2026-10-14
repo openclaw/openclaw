@@ -33,7 +33,6 @@ import {
 } from "./agent-runner-core.js";
 import {
   continueStalledReplyTurn,
-  createReplyAgentRestartRecoveryController,
   executePreparedReplyAgentRun,
   prependCompactionNotices,
 } from "./agent-runner-execute.js";
@@ -44,6 +43,7 @@ import {
 } from "./agent-runner-helpers.js";
 import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
+import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import { commitQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
@@ -608,13 +608,15 @@ export async function runReplyAgent(
     // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
     // instead. The same sender's next queued request inherits the guidance; otherwise one
     // recovery run bound to this turn's route and authority is queued.
-    replyOperationRunState.continueStalledTurn = () =>
+    replyOperationRunState.continueStalledTurn = (guidance, owner = replyOperation) =>
+      owner === replyOperation &&
       continueStalledReplyTurn({
         followupRun,
         queueKey,
         resolvedQueue,
         replyOperation,
         runFollowupTurn,
+        guidance,
       });
   }
   const {
@@ -697,6 +699,7 @@ export async function runReplyAgent(
     );
     const result = await handleReplyAgentRunError(error, {
       resolveVisibleReplyDelivery,
+      userTurnAccepted: followupRun.userTurnTranscriptRecorder?.hasPersisted() === true,
       isHeartbeat,
       replyExpectation,
       isRestartRecoveryArmed,

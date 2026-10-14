@@ -26,7 +26,10 @@ export async function settleEmbeddedRun(input: {
     state: Pick<EmbeddedRunContextRecoveryState, "autoCompactionCount" | "currentContextSnapshot">;
     session: Pick<
       SessionPromptState,
-      "sessionId" | "committedCompactionSuccessor" | "sessionWriterFence"
+      | "sessionId"
+      | "committedCompactionSuccessor"
+      | "committedCompactionTransitions"
+      | "sessionWriterFence"
     >;
     originalTarget: NonNullable<SessionPromptState["sessionTarget"]>;
     durable: boolean;
@@ -63,6 +66,9 @@ export async function settleEmbeddedRun(input: {
             ? { previousSessionId: committed.previousSessionId }
             : {}),
           ...(committed ? { hostCompactionCommitted: true } : {}),
+          ...(compaction.session.committedCompactionTransitions.length
+            ? { admissionTransitions: compaction.session.committedCompactionTransitions }
+            : {}),
           target: {
             agentId: target.agentId,
             sessionId: committed?.entry.sessionId ?? target.sessionId,

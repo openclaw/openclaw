@@ -1,8 +1,10 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
@@ -100,12 +102,18 @@ export function ensureUserProfilesSchema(
   }
   runUserProfileWriteTransaction(
     ({ db }) => {
-      ensureUserProfileTables(db);
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "user_profiles");
+      } else {
+        ensureUserProfileTables(db);
+      }
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_id TEXT");
       ensureColumn(db, "user_profile_identities", "authorization_basis_json TEXT");
       // Legacy identity tables need the authorization column before its index.
-      ensureUserProfileIdentityIndexes(db);
+      if (!isPostgresSqlConnection(db)) {
+        ensureUserProfileIdentityIndexes(db);
+      }
       ensureColumn(db, "user_profiles", "primary_github_account_id INTEGER");
       ensureColumn(db, "user_profile_emails", "binding_id TEXT");
       const kysely = getNodeSqliteKysely<UserProfilesDatabase>(db);

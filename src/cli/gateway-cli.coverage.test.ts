@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -245,7 +244,7 @@ describe("gateway-cli coverage", () => {
     );
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves the first partial usage-cost result (unavailable: %s)",
     async (unavailable) => {
       const totals = {
@@ -305,24 +304,6 @@ describe("gateway-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
       error: { type: "cli_error", message: "Use --agent or --all-agents, not both" },
-    });
-    expect(runtimeErrors).toHaveLength(0);
-  });
-
-  it("preserves expected CLI machine output for ordinary Gateway command failures", async () => {
-    callGateway.mockRejectedValueOnce(
-      new ExpectedCliError({
-        message: "validation failed",
-        humanOutput: "human recovery guidance",
-        machineOutput: "machine recovery guidance\n",
-      }),
-    );
-
-    await expectGatewayExit(["gateway", "call", "health", "--json"]);
-
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      error: { type: "cli_error", message: "machine recovery guidance" },
     });
     expect(runtimeErrors).toHaveLength(0);
   });

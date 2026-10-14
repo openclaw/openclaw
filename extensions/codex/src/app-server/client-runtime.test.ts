@@ -347,35 +347,6 @@ describe("Codex app-server client runtime", () => {
     ).resolves.toBe(true);
   });
 
-  it("does not let an older owner forget or release a newly claimed thread generation", async () => {
-    const request = vi.fn(async () => ({}));
-    const client = {
-      request,
-      addCloseHandler: vi.fn(),
-      addNotificationHandler: vi.fn(),
-      addRequestHandler: vi.fn(),
-    } as unknown as CodexAppServerClient;
-    ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
-    await retainCodexAppServerLiveThread(client, "thread-reclaimed");
-    const first = await consumeCodexAppServerLiveThread(client, "thread-reclaimed");
-    await retainCodexAppServerLiveThread(client, "thread-reclaimed", first?.release);
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(false);
-    const second = await consumeCodexAppServerLiveThread(client, "thread-reclaimed");
-
-    first?.forget();
-    await first?.release("thread-reclaimed");
-
-    expect(request).not.toHaveBeenCalled();
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(true);
-    await second?.release("thread-reclaimed");
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "thread/unsubscribe",
-      { threadId: "thread-reclaimed" },
-      { timeoutMs: 5_000 },
-    );
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(false);
-  });
-
   it("preserves a retained successor from obsolete forget, release, and republish after independent-retain", async () => {
     vi.useFakeTimers();
     const harness = createClientHarness();

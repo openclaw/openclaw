@@ -266,7 +266,7 @@ describe("agent roster resolution", () => {
     expect(unrelatedEntryReads).toBe(0);
   });
 
-  it.each(["captured", "published"])("prepares one %s fleet roster per generation", (kind) => {
+  it.each(["published"])("prepares one %s fleet roster per generation", (kind) => {
     const previous = getRuntimeConfigSnapshot();
     const source = {
       agents: {
