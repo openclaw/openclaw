@@ -37,6 +37,7 @@ import {
   CODEX_RUNTIME_PLUGIN_ID,
   ensureModelSelectionRuntimePlugins,
 } from "../../runtime-plugin-install.js";
+import { removeSetupStagingRoot } from "./setup-staging-cleanup.js";
 
 /** Applies a plugin-defined auth choice, or returns undefined when it is not plugin-backed. */
 export async function applyNonInteractivePluginProviderChoice(
@@ -412,7 +413,7 @@ export async function applyNonInteractivePluginProviderChoice(
       await closeOpenClawStateDatabaseByPathAsync(
         resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stagingRoot }),
       );
-      await fs.rm(stagingRoot, { recursive: true, force: true });
+      await removeSetupStagingRoot(stagingRoot);
     }
     if (savedProfileId) {
       return reject(
