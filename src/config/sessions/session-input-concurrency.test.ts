@@ -191,7 +191,9 @@ it.each(["before", "after"] as const)(
             }),
           );
         } else {
-          await expect(staged).rejects.toThrow("lifecycle changed before its durable phase");
+          await expect(staged).rejects.toThrow(
+            /^Session actor (?:version changed before command admission|lifecycle changed before its durable phase)$/,
+          );
           expect(f.events()).toEqual([]);
         }
         expect(await listSessionPendingInputs(f.scope)).toEqual({ items: [], total: 0 });

@@ -186,7 +186,7 @@ suite.define(() => {
             await confirmation.getByRole("button", { name: /^Switch to /u }).click();
 
             await page.locator("#new-session-where-trigger").click();
-            const place = page.locator("wa-popover.new-session-page__where-popover");
+            const place = page.locator(".oc-popover.new-session-page__where-popover");
             const row = (deviceId: string) => place.locator(`[data-value="device:${deviceId}"]`);
             const disabledReason = async (deviceId: string) => tooltipTitleText(row(deviceId));
 

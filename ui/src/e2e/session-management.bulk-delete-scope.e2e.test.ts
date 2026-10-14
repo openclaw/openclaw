@@ -180,7 +180,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.delete", { match: { key: targets[0]!.key } });
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator(".sidebar-agent-menu")
         .getByRole("menuitem", { name: "Research", exact: true })
         .click();
       await rowFor(research[0]!.key).waitFor({ state: "visible" });

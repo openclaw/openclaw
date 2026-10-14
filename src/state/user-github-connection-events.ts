@@ -8,8 +8,8 @@ import { resolveGlobalSet } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 
-type ConnectionPublication = UserGitHubConnectionCommit & { databasePath: string };
-const authorityObservers = resolveGlobalSet<(publication: ConnectionPublication) => void>(
+type ConnectionAuthorityChange = { databasePath: string; changedOwners: readonly string[] };
+const authorityObservers = resolveGlobalSet<(publication: ConnectionAuthorityChange) => void>(
   Symbol.for("openclaw.userGitHubConnectionAuthority"),
   "close-and-restart",
 );
@@ -19,9 +19,19 @@ const retirementObservers = resolveGlobalSet<(profileIds: readonly string[]) => 
 );
 
 export function observeUserGitHubConnectionAuthority(
-  observer: (publication: ConnectionPublication) => void,
+  observer: (publication: ConnectionAuthorityChange) => void,
 ): () => void {
   return registerListener(authorityObservers, observer);
+}
+
+export function invalidateUserGitHubConnectionAuthority(
+  databasePath: string,
+  changedOwners: readonly string[],
+): void {
+  notifyListeners(authorityObservers, {
+    databasePath: normalizeDatabasePath(databasePath),
+    changedOwners,
+  });
 }
 
 export function observeUserGitHubProfileRetirement(

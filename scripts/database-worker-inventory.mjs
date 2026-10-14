@@ -579,7 +579,61 @@ const reviewedOperations = new Map([
           "markOpenClawAgentIntegrityClean",
         ],
         evidence:
-          "Integrity receipts belong to agent-database lease admission and final release: openclaw-agent-db-lease.ts consumes proof during claim, records completed admission, invalidates dead-owner proof, and certifies the last clean closer. openclaw-agent-db-lifecycle.ts revokes proof on failed disposal; openclaw-agent-schema-inspection.worker.ts also reads proof during boot inspection. These are startup/lock primitives, not ordinary quarantine-decision guards.",
+          "Integrity lease primitives: openclaw-agent-db-lease.ts reads during claim/reclaim, records admission, invalidates stale/unclean leases and marks final release. Failed native close invalidates before releasing its lease; schema-inspection.worker.ts also reads receipts. These are admission/release/repair exceptions, not ordinary Gateway queries.",
+      },
+    ],
+  ],
+  [
+    "src/state/agent-deletion-journal-history.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["hasPreJournalStateSchema"],
+        evidence:
+          "Missing-schema admission only: openclaw-state-db-schema-runtime.ts initialization, openclaw-state-db-repair.ts and readRetainedAgentDeletionsFromDatabase's pre-journal compatibility branch.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-agent-db-metadata-write.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["persistAgentSchemaMetadata"],
+        evidence:
+          "Only openclaw-agent-db-schema-helpers.ts and openclaw-agent-db-schema.ts call this schema admission/migration writer.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-state-db-maintenance.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["writeCurrentStateSchemaMetadata"],
+        evidence:
+          "Only openclaw-state-db-schema-runtime.ts schema initialization/admission writes the current schema marker.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-github-connections.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listUserGitHubConnectionsInDatabase"],
+        evidence: "Only user-github-connections.worker.ts dispatches the connection listing.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profile-mutation.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["runUserProfileWriteTransaction"],
+        evidence:
+          "Profile mutations run in user-profile-writes.worker.ts and user-profiles.worker.ts; native user-profiles-schema.ts uses this only for once-per-load schema initialization.",
       },
     ],
   ],
@@ -2495,17 +2549,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/secrets/store/secret-store-hidden-github.ts",
-    [
-      {
-        tier: "W",
-        operations: ["writePersonalGitHubSecret"],
-        evidence:
-          "Counted expression is null DELETE only: src/state/user-github-connections.kernel.ts:202 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:375,425,482. Other value callers pass JSON strings.",
-      },
-    ],
-  ],
-  [
     "src/state/agent-deletion-journal.read.ts",
     [
       {
@@ -2571,8 +2614,34 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/state/github-publication-session-lifecycles.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "insertGitHubPublicationSessionLifecycle",
+          "readGitHubPublicationSessionLifecycle",
+        ],
+        evidence:
+          "Native insert/read kernels run only in gateway/github-publication-store.worker.ts, gateway/github-personal-publication-store.worker.ts, state/github-publication.worker.ts and state/openclaw-state-read.worker.ts. Gateway callers use readGitHubPublicationSessionLifecycleInWorker; remaining native references are test fixtures.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-agent-canonical-validation-receipt.ts",
     [
+      {
+        tier: "T2",
+        operations: ["loadOpenClawAgentCanonicalValidationReceipt"],
+        evidence:
+          "setOpenClawAgentDatabaseValidation loads the receipt only during registry/schema admission; the other caller is openclaw-agent-db-readonly-open.ts under !isMainThread. Runtime hasPersistedOpenClawAgentCanonicalValidation consumes only the admitted cache.",
+      },
+      {
+        tier: "T2",
+        operations: ["clearPersistedOpenClawAgentCanonicalValidation"],
+        evidence:
+          "Invalidation is restricted to startup/Doctor main-key migration and allowStoredAlias import/repair branches; ordinary session writers do not enable those branches.",
+      },
       {
         tier: "W",
         operations: ["recordOpenClawAgentCanonicalValidation"],
@@ -2595,6 +2664,24 @@ const reviewedOperations = new Map([
   [
     "src/state/openclaw-agent-db-registry.ts",
     [
+      {
+        tier: "T2",
+        operations: ["registerOpenClawAgentDatabase"],
+        evidence:
+          "Database-open admission only: openclaw-agent-db.ts registers a newly admitted physical store; openclaw-agent-db-schema.ts registers after schema initialization. Runtime async opens perform admission in the agent executor; synchronous SDK/Doctor opens retain the admission exception.",
+      },
+      {
+        tier: "T2",
+        operations: ["resolveRegisteredAgentDatabaseStoredPath"],
+        evidence:
+          "Private locator query used only by database-open registration admission and unregisterOpenClawAgentDatabase; unregister runs in openclaw-agent-db-registry.worker.ts or offline state-migrations.media-persistence.ts.",
+      },
+      {
+        tier: "W",
+        operations: ["unregisterOpenClawAgentDatabase"],
+        evidence:
+          "Runtime removal is dispatched by openclaw-agent-db-registry.worker.ts; the only native production caller is offline Doctor migration state-migrations.media-persistence.ts. No Gateway native caller remains.",
+      },
       {
         tier: "T3",
         operations: ["unregisterOpenClawAgentDatabases"],

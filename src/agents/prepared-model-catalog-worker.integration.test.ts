@@ -41,7 +41,6 @@ import {
   EXTERNAL_AUTH_PATH_ENV,
   createCatalogFixture,
   expectCatalogAuth,
-  writeCodexAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
@@ -65,6 +64,7 @@ import {
   loadCompletedFullCatalog,
   readCatalogDiscoveryCaptures,
   usePreparedCatalogWorkerFixtures,
+  writeCodexAuth,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest, waitForWorkers, observeCatalogEntry } =

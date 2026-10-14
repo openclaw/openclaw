@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   formatDeferredPluginMigration,
-  readDeferredPluginMigrationCompletionsAsync,
   readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
@@ -17,6 +16,8 @@ import {
 } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerUpdateCli } from "../update-cli.js";
 // Register shared mocks before the tested runtime modules are imported.
@@ -64,9 +65,12 @@ describe("update completion ownership", () => {
       mocks.plugins.mockImplementationOnce(async () => {
         // The child completed the migration before its buffered warning reached the parent.
         expect(await readDeferredPluginMigrationsAsync()).toEqual([]);
-        expect(await readDeferredPluginMigrationCompletionsAsync()).toEqual([
-          expect.objectContaining({ pluginId: pending.pluginId }),
-        ]);
+        expect(
+          await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+            type: "plugins.deferredMigrations.completions.read",
+            input: undefined,
+          }),
+        ).toEqual([expect.objectContaining({ pluginId: pending.pluginId })]);
         if (pendingAgain) {
           await recordDeferredPluginMigrations({ pending: [pending] });
         }
@@ -169,9 +173,12 @@ describe("update completion ownership", () => {
       vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n"),
     ).toHaveBeenCalledOnce();
     expect(await readDeferredPluginMigrationsAsync()).toEqual([]);
-    expect(await readDeferredPluginMigrationCompletionsAsync()).toEqual([
-      expect.objectContaining({ pluginId }),
-    ]);
+    expect(
+      await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+        type: "plugins.deferredMigrations.completions.read",
+        input: undefined,
+      }),
+    ).toEqual([expect.objectContaining({ pluginId })]);
     expect(JSON.stringify(reportedResult("repair"))).not.toContain(
       "data/settings upgrade is unfinished",
     );

@@ -4,7 +4,7 @@ import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
-import { readPluginMetadataStateRowsInDatabase } from "../plugins/plugin-metadata-state.kernel.js";
+import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   closeRetainedOpenClawStateReadConnections,
@@ -67,10 +67,7 @@ serveOwnedWorkerTasks(
           const result = withOpenClawStateReadOnlyLocation(
             ({ db }) => {
               sourceAdmitted = true;
-              return {
-                type: command.type,
-                rows: readPluginMetadataStateRowsInDatabase(db, command.input.stateKeys),
-              };
+              return pluginMetadataReadOperations[command.type](command.input, db);
             },
             ...locationArgs,
           );

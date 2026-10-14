@@ -204,9 +204,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
 
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-    await sidebar
-      .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="agent:writer"]')
-      .click();
+    await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
     await waitForCronScope("writer");
     // The agent's cron refresh can precede the Chat route commit that closes Inbox.
     await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });

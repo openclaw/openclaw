@@ -299,3 +299,10 @@ The anchors from the single-page version still resolve here.
 <a id="runtime-tasks-flow" />
 
 For the removed Tasks and TaskFlow surfaces, see [Tasks and TaskFlow API removal](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed).
+
+The `agent-runtime` snapshot publisher now provides
+`replaceRuntimeAuthProfileStoreSnapshotsAsync`. Await it when publishing a default
+shared-owner snapshot; it resolves cold ownership through the database worker.
+The synchronous `replaceRuntimeAuthProfileStoreSnapshots` remains deprecated until
+a later stable release and retains native cold-owner admission for compatibility.
+Entries with explicit database paths or agent directories remain in-memory publications.

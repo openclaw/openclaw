@@ -487,7 +487,7 @@ export function copySessionNodeArtifactsForRepair(
         if (copiedParticipant) {
           // Publish the SQL merge before projection can reuse the actor's staged facts.
           if (participants) {
-            publishParticipants?.(participants);
+            publishParticipants?.publish(participants);
           }
           if (postimage) {
             postimage.entry = projectSqliteSessionParticipants(

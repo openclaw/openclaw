@@ -236,7 +236,6 @@ describe("secrets apply", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
-    await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
   it("preflights and applies one-way scrub without plaintext backups", async () => {

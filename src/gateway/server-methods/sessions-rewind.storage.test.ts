@@ -610,51 +610,54 @@ describe.each(["sessionMutationCommitGuard", "sessionMutationAuthorization"] as 
     it.each(mutationMethods)(
       "revalidates %s authority at the transaction boundary",
       async (method) => {
-        await withOpenClawTestState({ label: "message-cut-authority" }, async (testState) => {
-          await testState.writeConfig(cfg);
-          const scope = await seedMessageCutSource();
-          await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
-          const before = await readMutationStorage(scope);
-          const denied = new SessionMutationAuthorizationChangedError(
-            errorShape(ErrorCodes.FORBIDDEN, "admitted mutation authority was revoked"),
-          );
-          let current = true;
-          let workerCommitGrant = false;
-          let rejectedAtWriteEdge = false;
-          const assertCurrent = () => {
-            if (!current) {
-              rejectedAtWriteEdge ||= workerCommitGrant;
-              throw denied;
-            }
-          };
-          const guards =
-            guardKind === "sessionMutationCommitGuard"
-              ? { sessionMutationCommitGuard: assertCurrent }
-              : {
-                  sessionMutationAuthorization: {
-                    assertCurrent,
-                    assertTargetCurrent: vi.fn(),
-                  },
-                };
-          probe.admission(workerAdmission, (request, grant, callback) => {
-            workerCommitGrant = request.stage === "commit";
-            if (workerCommitGrant) {
-              current = false;
-            }
-            try {
-              callback(request, grant);
-            } finally {
-              workerCommitGrant = false;
-            }
-          });
-          const mutation = invokeMessageCut(method, scope, guards);
-          await mutation.error;
+        await withOpenClawTestState(
+          { label: "message-cut-authority", prepareProfileCatalog: true },
+          async (testState) => {
+            await testState.writeConfig(cfg);
+            const scope = await seedMessageCutSource();
+            await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
+            const before = await readMutationStorage(scope);
+            const denied = new SessionMutationAuthorizationChangedError(
+              errorShape(ErrorCodes.FORBIDDEN, "admitted mutation authority was revoked"),
+            );
+            let current = true;
+            let workerCommitGrant = false;
+            let rejectedAtWriteEdge = false;
+            const assertCurrent = () => {
+              if (!current) {
+                rejectedAtWriteEdge ||= workerCommitGrant;
+                throw denied;
+              }
+            };
+            const guards =
+              guardKind === "sessionMutationCommitGuard"
+                ? { sessionMutationCommitGuard: assertCurrent }
+                : {
+                    sessionMutationAuthorization: {
+                      assertCurrent,
+                      assertTargetCurrent: vi.fn(),
+                    },
+                  };
+            probe.admission(workerAdmission, (request, grant, callback) => {
+              workerCommitGrant = request.stage === "commit";
+              if (workerCommitGrant) {
+                current = false;
+              }
+              try {
+                callback(request, grant);
+              } finally {
+                workerCommitGrant = false;
+              }
+            });
+            const mutation = invokeMessageCut(method, scope, guards);
+            await mutation.error;
 
-          expect.soft(await readMutationStorage(scope)).toEqual(before);
-          expect.soft(rejectedAtWriteEdge).toBe(true);
-          expect(await mutation.error).toBe(denied);
-          expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
-        });
+            expect.soft(await readMutationStorage(scope)).toEqual(before);
+            expect.soft(rejectedAtWriteEdge).toBe(true);
+            expect(await mutation.error).toBe(denied);
+            expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+          },
+        );
       },
     );
   },
@@ -663,86 +666,89 @@ describe.each(["sessionMutationCommitGuard", "sessionMutationAuthorization"] as 
 it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as const)(
   "sessions.fork revalidates source participation after %s",
   async (revocation) => {
-    await withOpenClawTestState({ label: "message-fork-participation" }, async (testState) => {
-      await testState.writeConfig(cfg);
-      // Both variants use native fixture reads; admit their handle before asynchronous writers.
-      openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = await seedMessageCutSource();
-      await addSessionMember(scope, {
-        identityId: "member",
-        addedBy: "owner",
-        expectedSessionId: scope.sessionId,
-      });
-      const client = {
-        authenticatedUserId: "member@example.com",
-        authenticatedUserProfile: {
-          profileId: "member",
-          displayName: "Member",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: { role: "operator", scopes: ["operator.write"] },
-      } as GatewayClient;
-      const requestContext = context();
-      await initializeSessionReadContext(requestContext);
-      const admission = await resolveSessionMutationAuthorizationAsync({
-        client,
-        method: "sessions.fork",
-        requestParams: mutationParams("sessions.fork", scope.sessionKey),
-        context: requestContext,
-      });
-      expect(admission.error).toBeNull();
-      const authorization = expectDefined(
-        admission.authorization,
-        "source participation authority",
-      );
-      const invoke = () => {
-        expect(() => authorization.assertCurrent()).not.toThrow();
-        return invokeMessageCut("sessions.fork", scope, {
-          client,
-          context: requestContext,
-          sessionMutationAuthorization: authorization,
+    await withOpenClawTestState(
+      { label: "message-fork-participation", prepareProfileCatalog: true },
+      async (testState) => {
+        await testState.writeConfig(cfg);
+        // Both variants use native fixture reads; admit their handle before asynchronous writers.
+        openOpenClawAgentDatabase({ agentId: "main" });
+        const scope = await seedMessageCutSource();
+        await addSessionMember(scope, {
+          identityId: "member",
+          addedBy: "owner",
+          expectedSessionId: scope.sessionId,
         });
-      };
-      try {
-        const before = await readMutationStorage(scope);
-        const mutation =
-          revocation === "public lifecycle predecessor"
-            ? await revokeWithPublicLifecyclePredecessor(scope, requestContext, invoke)
-            : await revokeDuringWriterWait(scope, invoke, () => {
-                expect(
-                  removeSessionMember(scope, "member", undefined, scope.sessionId),
-                ).not.toBeNull();
-                expect(loadSessionEntryReadOnly(scope)).toEqual(before.source);
-              });
-
-        expect(
-          (
-            await resolveSessionMutationAuthorizationAsync({
-              client,
-              method: "sessions.fork",
-              requestParams: mutationParams("sessions.fork", scope.sessionKey),
-              context: requestContext,
-            })
-          ).error,
-        ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-        expect.soft(await readMutationStorage(scope)).toEqual(before);
-        expect(await mutation.error).toBeInstanceOf(SessionMutationAuthorizationChangedError);
-        expect(await mutation.error).toMatchObject({
-          error: {
-            details: {
-              code:
-                revocation === "public lifecycle predecessor"
-                  ? "SESSION_MUTATION_AUTHORIZATION_CHANGED"
-                  : "SESSION_PARTICIPATION_REQUIRED",
-            },
+        const client = {
+          authenticatedUserId: "member@example.com",
+          authenticatedUserProfile: {
+            profileId: "member",
+            displayName: "Member",
+            hasAvatar: false,
+            updatedAt: 1,
           },
+          connect: { role: "operator", scopes: ["operator.write"] },
+        } as GatewayClient;
+        const requestContext = context();
+        await initializeSessionReadContext(requestContext);
+        const admission = await resolveSessionMutationAuthorizationAsync({
+          client,
+          method: "sessions.fork",
+          requestParams: mutationParams("sessions.fork", scope.sessionKey),
+          context: requestContext,
         });
-        expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
-      } finally {
-        authorization.release?.();
-      }
-    });
+        expect(admission.error).toBeNull();
+        const authorization = expectDefined(
+          admission.authorization,
+          "source participation authority",
+        );
+        const invoke = () => {
+          expect(() => authorization.assertCurrent()).not.toThrow();
+          return invokeMessageCut("sessions.fork", scope, {
+            client,
+            context: requestContext,
+            sessionMutationAuthorization: authorization,
+          });
+        };
+        try {
+          const before = await readMutationStorage(scope);
+          const mutation =
+            revocation === "public lifecycle predecessor"
+              ? await revokeWithPublicLifecyclePredecessor(scope, requestContext, invoke)
+              : await revokeDuringWriterWait(scope, invoke, () => {
+                  expect(
+                    removeSessionMember(scope, "member", undefined, scope.sessionId),
+                  ).not.toBeNull();
+                  expect(loadSessionEntryReadOnly(scope)).toEqual(before.source);
+                });
+
+          expect(
+            (
+              await resolveSessionMutationAuthorizationAsync({
+                client,
+                method: "sessions.fork",
+                requestParams: mutationParams("sessions.fork", scope.sessionKey),
+                context: requestContext,
+              })
+            ).error,
+          ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+          expect.soft(await readMutationStorage(scope)).toEqual(before);
+          expect(await mutation.error).toBeInstanceOf(SessionMutationAuthorizationChangedError);
+          expect(await mutation.error).toMatchObject({
+            error: {
+              details: {
+                code:
+                  revocation === "public lifecycle predecessor"
+                    ? "SESSION_MUTATION_AUTHORIZATION_CHANGED"
+                    : "SESSION_PARTICIPATION_REQUIRED",
+              },
+            },
+          });
+          expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+        } finally {
+          authorization.release?.();
+        }
+      },
+    );
   },
 );
 
