@@ -48,7 +48,8 @@ function coerceSchedule(schedule: UnknownRecord) {
     rawKind === "every" ||
     rawKind === "cron" ||
     rawKind === "on-exit" ||
-    rawKind === "stream"
+    rawKind === "stream" ||
+    rawKind === "event"
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
@@ -142,7 +143,7 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
-  } else if (next.kind === "on-exit" || next.kind === "stream") {
+  } else if (next.kind === "on-exit" || next.kind === "stream" || next.kind === "event") {
     delete next.at;
     delete next.everyMs;
     delete next.anchorMs;
@@ -162,6 +163,10 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.maxBatchBytes;
   }
 
+  if (next.kind !== "event") {
+    delete next.source;
+    delete next.options;
+  }
   return { ...next };
 }
 

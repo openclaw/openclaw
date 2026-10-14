@@ -1,17 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
-import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type {
   SessionTranscriptContextVersion,
@@ -74,8 +69,9 @@ import {
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
 import {
-  createSessionWorkerOperationContext,
+  bindSessionWorkerBackend,
   transferSessionEntryWorkerCandidate,
+  type SessionWorkerDatabaseBinding,
 } from "./session-entry-patch.worker.js";
 import {
   compactManualTranscript,
@@ -149,29 +145,13 @@ export type SessionMessageRewriteOperations = {
 /** Borrow the canonical executor connection without extending the released command union. */
 export function bindSqliteWorkerBackend(
   input: { agentId: string },
-  bound: {
-    database: DatabaseSync;
-    databasePath: string;
-    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
-  },
+  bound: SessionWorkerDatabaseBinding,
 ): SqliteWorkerBackend<SessionMessageRewriteOperations> {
-  const options = {
-    agentId: input.agentId,
-    path: bound.databasePath,
-    env: getSqliteWorkerStateContext().environment,
-  };
-  const database = getOpenClawAgentDatabaseIfOpen(options);
-  if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
-    throw new Error("Transcript rewrite lost its canonical database owner");
-  }
-  const context = createSessionWorkerOperationContext(
-    database,
-    options,
+  return bindSessionWorkerBackend<SessionMessageRewriteOperations>(
+    input,
     bound,
     "Transcript rewrite",
-  );
-  return {
-    execute(command) {
+    (context, database) => (command) => {
       switch (command.type) {
         case "session.transcript.lock.cold":
           return { archive: readSessionColdTranscript(database.db, command.input.scope.sessionId) };
@@ -198,14 +178,7 @@ export function bindSqliteWorkerBackend(
       }
       throw new Error("Unknown transcript rewrite domain operation");
     },
-    assertSettled() {
-      assertTransactionUsable(bound.database);
-      if (bound.database.isTransaction) {
-        throw new Error("Transcript rewrite transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  );
 }
 
 type LockedTranscriptTarget = {

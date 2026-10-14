@@ -230,13 +230,15 @@ function UpdateFailureReportNoticeView(props: { notice: UpdateFailureReportNotic
         error: "updates.page.reportError",
       }[result().status],
     );
-  const url = () => {
+  const links = () => {
     const value = result();
-    return "url" in value && value.url ? value.url : null;
-  };
-  const fallbackUrl = () => {
-    const value = result();
-    return "fallbackUrl" in value && value.fallbackUrl ? value.fallbackUrl : null;
+    return [
+      { href: "url" in value ? value.url : null, labelKey: "updates.page.openIssue" },
+      {
+        href: "fallbackUrl" in value ? value.fallbackUrl : null,
+        labelKey: "updates.page.openPrefilledIssue",
+      },
+    ];
   };
   const message = () => {
     const value = result();
@@ -249,24 +251,19 @@ function UpdateFailureReportNoticeView(props: { notice: UpdateFailureReportNotic
       control={
         <div class="updates-attempt-details" role="status">
           <div>{label()}</div>
-          <Show when={url()}>
-            {(href) => (
-              <div>
-                <a href={href()} target="_blank" rel="noreferrer">
-                  {t("updates.page.openIssue")}
-                </a>
-              </div>
+          <For each={links()} keyed={(link) => link.labelKey}>
+            {(link) => (
+              <Show when={link().href}>
+                {(href) => (
+                  <div>
+                    <a href={href()} target="_blank" rel="noreferrer">
+                      {t(link().labelKey)}
+                    </a>
+                  </div>
+                )}
+              </Show>
             )}
-          </Show>
-          <Show when={fallbackUrl()}>
-            {(href) => (
-              <div>
-                <a href={href()} target="_blank" rel="noreferrer">
-                  {t("updates.page.openPrefilledIssue")}
-                </a>
-              </div>
-            )}
-          </Show>
+          </For>
           <Show when={message()}>{(text) => <div>{text()}</div>}</Show>
         </div>
       }
