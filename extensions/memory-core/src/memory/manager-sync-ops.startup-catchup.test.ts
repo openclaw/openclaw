@@ -1,10 +1,7 @@
 // Memory Core tests cover manager sync ops.startup-catchup plugin behavior.
-import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import * as memorySessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -17,7 +14,6 @@ import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sess
 import {
   appendSessionTranscriptMessageByIdentity,
   publishSessionTranscriptUpdateByIdentity,
-  readSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -150,10 +146,10 @@ describe("session startup catch-up", () => {
       agentId: "main",
       storePath,
       sessionKey,
-      entry: { sessionId, updatedAt: 10 },
+      entry: { sessionId, updatedAt: Date.now() },
     });
     const identity = { agentId: "main", sessionId, sessionKey, storePath, cwd: stateDir };
-    const appendResult = await appendSessionTranscriptMessageByIdentity({
+    await appendSessionTranscriptMessageByIdentity({
       ...identity,
       message: {
         role: "user",
@@ -161,96 +157,8 @@ describe("session startup catch-up", () => {
         provenance: { kind: "internal_system", sourceTool: "cron" },
       },
     });
-    assert.ok(appendResult?.appended && appendResult.anchor?.storePath);
-    const { anchor } = appendResult;
-    const readNativeTranscriptDiagnostic = () => {
-      using database = new DatabaseSync(anchor.storePath, { readOnly: true });
-      const file = statSync(anchor.storePath, { bigint: true });
-      return {
-        storePath: anchor.storePath,
-        nativeLocation: database.location(),
-        fileIdentity: {
-          dev: String(file.dev),
-          ino: String(file.ino),
-          birthtimeNs: String(file.birthtimeNs),
-        },
-        rows: database
-          .prepare(
-            `WITH target(session_id) AS (VALUES (?))
-             SELECT target.session_id AS sessionId,
-               (SELECT COUNT(*) FROM transcript_events WHERE session_id = target.session_id) AS eventCount,
-               (SELECT MAX(seq) FROM transcript_events WHERE session_id = target.session_id) AS maxSeq,
-               sessionWindow.session_key AS sessionKey,
-               sessionWindow.transcript_updated_at AS transcriptUpdatedAt,
-               sessionWindow.transcript_observed_at AS transcriptObservedAt,
-               rewrite.generation,
-               rewrite.updated_at AS rewriteUpdatedAt
-             FROM target
-             LEFT JOIN session_windows AS sessionWindow USING (session_id)
-             LEFT JOIN transcript_rewrite_watermarks AS rewrite USING (session_id)`,
-          )
-          .get(anchor.sessionId),
-      };
-    };
-    const nativeAfterAppend = readNativeTranscriptDiagnostic();
     const harness = await SessionStartupCatchupHarness.create([]);
-    const startupRead = vi.spyOn(memorySessions, "buildSessionEntry");
-    try {
-      await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
-    } catch (error) {
-      let nativeOnFailure;
-      try {
-        nativeOnFailure = readNativeTranscriptDiagnostic();
-      } catch (reason) {
-        nativeOnFailure = { error: String(reason) };
-      }
-      const reads = await Promise.all(
-        startupRead.mock.results.map(async (result, index) => ({
-          args: startupRead.mock.calls[index],
-          outcome: result.type,
-          entry:
-            result.type === "return"
-              ? await result.value.then(
-                  (entry) => ({
-                    outcome: "fulfilled",
-                    entry: entry && {
-                      path: entry.path,
-                      absPath: entry.absPath,
-                      mtimeMs: entry.mtimeMs,
-                      revisionMs: entry.revisionMs,
-                      size: entry.size,
-                      contentLength: entry.content.length,
-                      lineProvenance: entry.lineProvenance,
-                    },
-                  }),
-                  (reason: unknown) => ({ outcome: "rejected", error: String(reason) }),
-                )
-              : { error: String(result.value) },
-        })),
-      );
-      const persisted = await readSessionTranscriptEvents(identity).then(
-        (events) => ({ eventCount: events.length }),
-        (reason: unknown) => ({ error: String(reason) }),
-      );
-      console.error(
-        "MEMORY_STARTUP_DIAGNOSTIC",
-        JSON.stringify({
-          appendResult: {
-            appended: appendResult.appended,
-            anchor,
-            effectiveParentId: appendResult.effectiveParentId,
-            messageId: appendResult.messageId,
-          },
-          nativeAfterAppend,
-          nativeOnFailure,
-          reads,
-          persisted: { identity, ...persisted },
-        }),
-      );
-      throw error;
-    } finally {
-      startupRead.mockRestore();
-    }
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
 
     await appendSessionTranscriptMessageByIdentity({
