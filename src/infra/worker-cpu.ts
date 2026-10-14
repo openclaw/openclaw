@@ -29,6 +29,7 @@ type WorkerCpuHandle = {
 type WorkerSource = {
   script: string;
   internalMessages?: true;
+  lifecycleMessages?: boolean;
   poolId?: number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
@@ -94,7 +95,12 @@ export function trackNativeWorkerForCpu(
 ): void {
   // Register explicitly on Bun; Node may already have reported the Worker during construction.
   trackWorker(worker);
-  trackedWorkers.workers.get(worker)!.script = workerScriptName(filename, evalSource);
+  const source = trackedWorkers.workers.get(worker)!;
+  source.script = workerScriptName(filename, evalSource);
+  // Heartbeat verification shares SQLite's id/ok reply shape; its owner identifies the protocol.
+  source.lifecycleMessages =
+    source.script === "openclaw-state-lease-heartbeat.worker.js" ||
+    source.script === "gateway-state-owner-heartbeat.worker.js";
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -217,7 +223,9 @@ function trackWorker(worker: WorkerCpuHandle): void {
       const bytes = source.internalMessages ? workerMessagePayloadBytes(value) : undefined;
       // oxlint-disable-next-line typescript/unbound-method -- Preserve later prototype instrumentation and the receiver.
       (postMessage ?? Worker.prototype.postMessage).call(this, value, transferList);
-      if (source.internalMessages) {
+      if (source.lifecycleMessages) {
+        recordWorkerMessage("lifecycle", "to_worker", bytes);
+      } else if (source.internalMessages) {
         observeWorkerMessage(value, "to_worker", "other", bytes ?? null);
       } else {
         // Dependency payloads can have getters/proxies. Only native cloning may inspect them.
@@ -228,7 +236,9 @@ function trackWorker(worker: WorkerCpuHandle): void {
     const emit = !nativePrototype || Object.hasOwn(worker, "emit") ? worker.emit : undefined;
     worker.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
       if (event === "message") {
-        if (source.internalMessages) {
+        if (source.lifecycleMessages) {
+          recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
+        } else if (source.internalMessages) {
           observeWorkerMessage(args[0], "from_worker");
         } else {
           recordWorkerMessage("other", "from_worker");

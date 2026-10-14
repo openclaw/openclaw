@@ -39,6 +39,41 @@ async function createWorker(filename?: URL) {
 }
 
 describe("worker CPU lifecycle", () => {
+  it.each([
+    {
+      script: "openclaw-state-lease-heartbeat.worker.js",
+      request: { id: 1, operation: "verify" },
+      response: { id: 1, ok: true, expiresAt: 123 },
+    },
+    { script: "gateway-state-owner-heartbeat.worker.js", request: "stop", response: null },
+  ])(
+    "attributes $script by its heartbeat transport identity",
+    async ({ script, request, response }) => {
+      const file = join(tempDirs.make("worker-heartbeat-metrics-"), script);
+      await writeFile(
+        file,
+        `const { parentPort } = require("node:worker_threads"); parentPort.on("message", () => parentPort.postMessage(${JSON.stringify(response)}));`,
+      );
+      const worker = await createWorker(pathToFileURL(file));
+      const before = getWorkerMessageMetrics();
+      const reply = once(worker, "message");
+      worker.postMessage(request, []);
+      expect(await reply).toEqual([response]);
+      const after = getWorkerMessageMetrics();
+      for (const direction of ["to_worker", "from_worker"] as const) {
+        const previous = before.find(
+          (row) => row.kind === "lifecycle" && row.direction === direction,
+        );
+        expect(
+          after.find((row) => row.kind === "lifecycle" && row.direction === direction)?.messages,
+        ).toBe((previous?.messages ?? 0) + 1);
+      }
+      expect(after.filter((row) => row.kind === "sqlite_reply")).toEqual(
+        before.filter((row) => row.kind === "sqlite_reply"),
+      );
+    },
+  );
+
   it("attributes dedicated reclamation requests and replies once at the native boundary", async () => {
     const before = getWorkerMessageMetrics();
     const worker = createCpuTrackedWorker(
