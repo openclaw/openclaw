@@ -187,6 +187,8 @@ export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
   /** Gateway first-run policy; never inherited by the manual picker. */
   automaticSetup?: true;
+  /** Enable and verify access without changing the agent's selected model. */
+  selectModel?: boolean;
   /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
   modelTarget?: "utility";
   /** Configured agent that owns the route being tested and persisted. */
