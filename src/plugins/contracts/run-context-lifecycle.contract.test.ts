@@ -437,7 +437,7 @@ describe("plugin run context lifecycle", () => {
   it.each(["end", "error"])(
     "cleans up a filtered terminal %s event after pending handlers settle",
     async (phase) => {
-      const pending = createDeferredCore<void>();
+      const pending = createDeferredCore();
       const handle = vi.fn<
         Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0]["handle"]
       >(async (_event, ctx) => {
