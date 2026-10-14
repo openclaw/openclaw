@@ -1030,7 +1030,8 @@ describe("grouped chat rendering", () => {
     expect(renderTimestamp(oldTimestamp)).toBe(
       new Date(oldTimestamp).toLocaleDateString([], { month: "short", day: "numeric" }),
     );
-    expect(renderTimestamp(now + 30_000)).toBe("just now");
+    expect(renderTimestamp(now + 30_000)).toBe("Just now");
+    expect(renderTimestamp(now - 10_000)).toBe("Just now");
 
     const nextYear = Date.UTC(2027, 3, 24, 18, 30);
     expect(renderTimestamp(nextYear)).toBe(
