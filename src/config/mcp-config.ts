@@ -29,12 +29,11 @@ type ConfigMcpSuccess = {
   config: OpenClawConfig;
   mcpServers: ConfigMcpServers;
 };
-type ConfigMcpReadSuccess = ConfigMcpSuccess & {
-  runtimeConfig: Awaited<ReturnType<typeof readSourceConfigSnapshot>>["runtimeConfig"];
-  sourceConfigBeforeMigrations?: Awaited<
-    ReturnType<typeof readSourceConfigSnapshot>
-  >["sourceConfigBeforeMigrations"];
-};
+type ConfigMcpReadSuccess = ConfigMcpSuccess &
+  Pick<
+    Awaited<ReturnType<typeof readSourceConfigSnapshot>>,
+    "authoredConfig" | "runtimeConfig" | "sourceConfigBeforeMigrations"
+  >;
 type ConfigMcpFailure = { ok: false; path: string; error: string };
 type ConfigMcpReadResult =
   | (ConfigMcpReadSuccess & { ok: true; baseHash?: string })
@@ -120,10 +119,9 @@ function resolveConfiguredMcpServers(
     path: snapshot.path,
     config: structuredClone(sourceConfig),
     mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
+    authoredConfig: snapshot.authoredConfig,
     runtimeConfig: snapshot.runtimeConfig,
-    ...(snapshot.sourceConfigBeforeMigrations
-      ? { sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations }
-      : {}),
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
     baseHash: snapshot.hash,
   };
 }
