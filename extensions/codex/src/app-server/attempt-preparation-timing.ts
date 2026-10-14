@@ -13,7 +13,7 @@ export function createCodexAttemptPreparationTiming(
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
   const totalWarnMs = profilerEnabled ? 1_000 : 10_000;
   const stageWarnMs = profilerEnabled ? 500 : 5_000;
-  const log = (stage: string, outcome: "completed" | "error" | "ready") => {
+  const log = (stage: string, outcome: "completed" | "error" | "ready" | "pending") => {
     const summary = tracker.snapshot();
     const lastStage = summary.stages.at(-1);
     const slowTotal = outcome !== "completed" && summary.totalMs >= totalWarnMs;
@@ -37,11 +37,16 @@ export function createCodexAttemptPreparationTiming(
   return {
     async measure<T>(stage: string, run: () => Promise<T> | T): Promise<T> {
       let outcome: "completed" | "error" = "error";
+      // A hung await never reaches the completion summary. Emit its owned stage
+      // once while still pending, without treating silence as authority to abort.
+      const pendingWarning = setTimeout(() => log(stage, "pending"), 30_000);
+      pendingWarning.unref();
       try {
         const result = await run();
         outcome = "completed";
         return result;
       } finally {
+        clearTimeout(pendingWarning);
         tracker.mark(stage);
         // Emit completed slow stages immediately: a later stalled stage must
         // not erase the work already spent before the native turn starts.

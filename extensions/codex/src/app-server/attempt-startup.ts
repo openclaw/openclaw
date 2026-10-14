@@ -18,7 +18,11 @@ import {
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
-import { CodexAppServerStartupError, withCodexStartupTimeout } from "./attempt-timeouts.js";
+import {
+  CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS,
+  CodexAppServerStartupError,
+  withCodexStartupTimeout,
+} from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
@@ -79,8 +83,6 @@ import {
 import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
-
-const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
@@ -497,6 +499,7 @@ export async function startCodexAttemptThread(params: {
                 signal,
                 pluginThreadConfig: pluginThreadConfigRequired
                   ? createCodexPluginThreadConfigStartupProvider({
+                      diagnosticContext: attemptParams,
                       inputFingerprint: pluginThreadConfigInputFingerprint,
                       enabledPluginConfigKeys,
                       policy: resolvedPluginPolicy,

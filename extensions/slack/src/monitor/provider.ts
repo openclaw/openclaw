@@ -22,7 +22,7 @@ import {
   resolveSlackMonitorDispatchers,
   resolveSlackWebClientOptions,
 } from "../client-options.js";
-import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
+import { createSlackWebClient } from "../client.js";
 import { formatSlackError } from "../errors.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { registerSlackInstallationState } from "../installation-identity-state.js";
@@ -295,7 +295,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
   });
   const monitorContextRef: { current?: SlackMonitorContext } = {};
-  const { app, receiver, socketModeLogger } = createSlackBoltApp({
+  const { app, receiver, socketModeLogger, readAuthIdentity } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
     token,
@@ -387,7 +387,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
-    const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
+    const auth = await readAuthIdentity();
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
     const resolvedIdentity = resolveSlackRuntimeIdentity({
       identity: account.identity,
@@ -619,7 +619,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     }
     const recovery = (async () => {
       try {
-        const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
+        const auth = await readAuthIdentity(true);
         const recoveredInstallationIdentity = resolveSlackInstallationIdentity({
           auth,
           transportApiAppId: expectedApiAppIdFromAppToken,

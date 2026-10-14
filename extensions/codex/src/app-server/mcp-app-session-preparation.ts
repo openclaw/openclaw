@@ -157,6 +157,7 @@ export async function prepareCodexMcpAppSession(params: {
         });
         const pluginThreadConfig = pluginPolicy.pluginThreadConfigRequired
           ? createCodexPluginThreadConfigStartupProvider({
+              diagnosticContext: input,
               inputFingerprint: buildCodexPluginThreadConfigInputFingerprint({
                 pluginConfig: pluginPolicy.pluginThreadConfigPluginConfig,
                 appCacheKey,

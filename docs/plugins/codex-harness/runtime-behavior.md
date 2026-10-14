@@ -165,7 +165,13 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
-Failed app-server startup waits for child shutdown before returning its error.
+Client/thread acquisition has a separate total startup budget: the greater of
+five minutes and three times the app-server control-request timeout. A shorter
+attempt budget still wins. Retries and backoff share this startup budget; it does
+not shorten native turn execution. Preparation stages still pending after 30
+seconds emit a diagnostic with the run, session, and stage, even if the wait never
+returns. Failed app-server startup waits for child shutdown before returning its
+error.
 If startup times out or is canceled during process registration, cleanup joins
 that registration and closes any late child. Cleanup can extend beyond the
 startup deadline. A canceled caller leaves startup running when another caller

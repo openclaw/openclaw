@@ -560,6 +560,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const startupTimeoutMs = resolveCodexStartupTimeoutMs({
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
+    requestTimeoutMs: appServer.requestTimeoutMs,
   });
   const requesterChannel = params.messageChannel ?? params.messageProvider;
   const requester = buildCodexHookRequester(params);

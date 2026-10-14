@@ -380,7 +380,7 @@ describe("user identity provider transport", () => {
     replyMock.mockResolvedValue({ text: "acknowledged" });
     const monitor = await startWithoutBotToken(config);
     expect(getSlackTestState().appConstructorArgs).toMatchObject({
-      token: "test-user-token",
+      authorize: expect.any(Function),
       tokenVerificationEnabled: false,
     });
     expect(getSlackTestState().createSlackStartupAuthClientMock).toHaveBeenCalledWith(

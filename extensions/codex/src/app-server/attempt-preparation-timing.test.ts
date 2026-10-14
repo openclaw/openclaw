@@ -2,9 +2,49 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("Codex attempt preparation timing", () => {
+  it("reports an in-flight preparation stage before its await returns", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    const preparation = createCodexAttemptPreparationTiming({
+      runId: "run-1",
+      sessionId: "session-1",
+    });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = preparation.measure("runtime-start", () => pending);
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          runId: "run-1",
+          sessionId: "session-1",
+          stage: "runtime-start",
+          outcome: "pending",
+        }),
+      );
+      const count = warn.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(warn).toHaveBeenCalledTimes(count);
+    } finally {
+      release();
+      await run;
+    }
+    const count = warn.mock.calls.length;
+    await preparation.measure("tools", async () => undefined);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(warn).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([
     { flags: [], stageMs: 5_000, totalMs: 11_000 },
     { flags: ["codex.profiler"], stageMs: 500, totalMs: 1_100 },

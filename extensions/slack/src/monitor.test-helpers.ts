@@ -526,6 +526,8 @@ vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
   return {
     ...actual,
+    createSlackWebClient: (...args: Parameters<typeof actual.createSlackWebClient>) =>
+      args[1]?.teamId ? actual.createSlackWebClient(...args) : ensureSlackTestRuntime().client,
     createSlackStartupAuthClient: (...args: Parameters<SlackStartupAuthClientFactory>) =>
       slackTestState.createSlackStartupAuthClientMock(...args),
   };

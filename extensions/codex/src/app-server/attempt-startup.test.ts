@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
 import {
@@ -22,7 +23,7 @@ import {
   waitForThreadStart,
   type AttemptClientHarness as ClientHarness,
 } from "./attempt-startup.test-support.js";
-import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import { isCodexAppServerStartupError, resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { CodexAppServerClient, isCodexAppServerRequestTimeoutError } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import {
@@ -848,6 +849,55 @@ describe("startCodexAttemptThread", () => {
     expect(
       readHarnessMessages(harness.writes).some((entry) => entry.method === "thread/start"),
     ).toBe(false);
+  });
+
+  it("bounds a stalled client acquisition independently of a 48-hour turn budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const controller = new AbortController();
+    const factoryEntered = createDeferred<void>();
+    const factoryRelease = createDeferred<void>();
+    const factoryDone = createDeferred<void>();
+    let abandonSignal: AbortSignal | undefined;
+    let settled = false;
+    const { harness, run } = startThreadWithHarness(
+      resolveCodexStartupTimeoutMs({ timeoutMs: 48 * 60 * 60_000 }),
+      controller.signal,
+      {
+        attemptClientFactory: (factoryHarness) => async (options) => {
+          abandonSignal = options?.abandonSignal;
+          factoryEntered.resolve();
+          await factoryRelease.promise;
+          options?.onStartedClient?.(factoryHarness.client);
+          factoryDone.resolve();
+          return factoryHarness.client;
+        },
+      },
+    );
+    const outcome = run.then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    await factoryEntered.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(settled).toBe(true);
+      expect(isCodexAppServerStartupError(await outcome, "timed_out")).toBe(true);
+      expect(abandonSignal?.aborted).toBe(true);
+    } finally {
+      controller.abort();
+      await outcome;
+      factoryRelease.resolve();
+      await factoryDone.promise;
+      await harness.client.closeAndWait();
+    }
+    expect(readHarnessRequestMethods(harness)).not.toContain("thread/start");
+    expect(readHarnessRequestMethods(harness)).not.toContain("turn/start");
   });
 
   it("closes a startup client that arrives after startup timeout", async () => {

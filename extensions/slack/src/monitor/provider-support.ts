@@ -4,9 +4,11 @@ import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createSlackWebClient } from "../client.js";
 import { formatSlackError } from "../errors.js";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
+import { createSlackBoltAuthorization } from "./bolt-authorization.js";
 import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 import { installSlackSocketModeEnvelopeGuard } from "./socket-mode-envelope.js";
@@ -386,16 +388,23 @@ export function createSlackBoltApp(params: {
     receiver = createSlackRelayReceiver();
   }
   const appReceiver = params.wrapReceiver ? params.wrapReceiver(receiver) : receiver;
+  const { authorize, readAuthIdentity } = createSlackBoltAuthorization(
+    params.token,
+    params.clientOptions,
+  );
   const app = new params.interop.App({
-    token: params.token,
+    authorize,
     clientOptions: params.clientOptions,
     ignoreSelf: false,
-    // Bolt eagerly starts an auth.test promise in the constructor when token
-    // verification is enabled. Invalid tokens can reject before any listener
-    // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
+    // Keep authorization lazy: Bolt's eager token verification can reject
+    // before a listener is attached. Its lazy single-token path does not cache
+    // auth.test, so the explicit authorize owner above handles reuse/recovery.
     tokenVerificationEnabled: false,
     receiver: appReceiver,
   });
+  // Bolt rejects token + authorize together. Preserve the public account client
+  // for monitor calls outside listeners; listener clients use authorize's token.
+  app.client = createSlackWebClient(params.token, params.clientOptions);
   app.use(async (args) => {
     await params.onContextIdentity?.({
       ...args.context,
@@ -406,7 +415,7 @@ export function createSlackBoltApp(params: {
     }
     await args.next();
   });
-  return { app, receiver, socketModeLogger };
+  return { app, receiver, socketModeLogger, readAuthIdentity };
 }
 
 export async function startSlackSocketAndWaitForDisconnect(params: {

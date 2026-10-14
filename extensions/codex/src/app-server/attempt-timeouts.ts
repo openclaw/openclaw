@@ -1,7 +1,13 @@
-import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  addTimerTimeoutGraceMs,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_APP_SERVER_STARTUP_TIMEOUT_MS = 5 * 60_000;
+export const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
 // Native terminal receipt must still reach local settlement; a blocked
 // projection must not retain the session lane indefinitely.
 export const TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
@@ -96,13 +102,22 @@ export async function withCodexStartupTimeout<T>(params: {
 export function resolveCodexStartupTimeoutMs(params: {
   timeoutMs: number;
   timeoutFloorMs?: number;
+  requestTimeoutMs?: number;
 }): number {
   const timeoutFloorMs = resolveTimerTimeoutMs(
     params.timeoutFloorMs,
     CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
   );
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, timeoutFloorMs);
-  return Math.max(timeoutFloorMs, timeoutMs);
+  // The execution budget (48 hours by default) must not also be the budget for
+  // acquiring a client/thread. Allow larger configured control-request budgets,
+  // but keep this a total startup deadline, including retries and backoff.
+  const requestTimeoutMs = resolveTimerTimeoutMs(params.requestTimeoutMs, 0, 0);
+  const startupBudgetMs = Math.max(
+    CODEX_APP_SERVER_STARTUP_TIMEOUT_MS,
+    Math.min(MAX_TIMER_TIMEOUT_MS, requestTimeoutMs * CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS),
+  );
+  return Math.max(timeoutFloorMs, Math.min(timeoutMs, startupBudgetMs));
 }
 
 export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {

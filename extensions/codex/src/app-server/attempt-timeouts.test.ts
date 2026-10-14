@@ -25,9 +25,7 @@ describe("Codex app-server attempt timeouts", () => {
       CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
     );
     expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500, timeoutFloorMs: Number.NaN })).toBe(500);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.MAX_SAFE_INTEGER })).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.MAX_SAFE_INTEGER })).toBe(5 * 60_000);
     expect(
       resolveCodexStartupTimeoutMs({
         timeoutMs: Number.MAX_SAFE_INTEGER,
@@ -40,6 +38,21 @@ describe("Codex app-server attempt timeouts", () => {
         timeoutFloorMs: Number.NaN,
       }),
     ).toBe(CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS);
+  });
+
+  it("keeps explicit control-request budgets within a separate startup budget", () => {
+    expect(
+      resolveCodexStartupTimeoutMs({ timeoutMs: 48 * 60 * 60_000, requestTimeoutMs: 240_000 }),
+    ).toBe(720_000);
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 1_000, requestTimeoutMs: 240_000 })).toBe(
+      1_000,
+    );
+    expect(
+      resolveCodexStartupTimeoutMs({
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        requestTimeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("caps gateway timeout grace", () => {
