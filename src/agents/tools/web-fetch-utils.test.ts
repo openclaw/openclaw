@@ -252,4 +252,31 @@ describe("web-fetch-utils", () => {
       "Install steps:\n\nDownload\nRun",
     );
   });
+
+  it("keeps table cells and rows separated", () => {
+    expect(
+      htmlToMarkdown(
+        "<table><tr><th>Region</th><th>Units</th><th>Change</th></tr><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC<td>98<td>7</table><p>After</p>",
+      ).text,
+    ).toBe("Region | Units | Change\nEMEA | 120 | 15\nAPAC | 98 | 7\nAfter");
+  });
+
+  it("preserves preformatted whitespace in a fenced block", () => {
+    expect(
+      htmlToMarkdown(
+        "<p>Code:</p><pre><code>def f(x):\n    if x:\n        <span>return</span>  1</code></pre><p>Done</p>",
+      ).text,
+    ).toBe("Code:\n\n```\ndef f(x):\n    if x:\n        return  1\n```\nDone");
+    expect(htmlToMarkdown("<p>a\u0000b</p><pre>  x\u0000y</pre>").text).toBe(
+      "a\u0000b\n\n```\n  x\u0000y\n```",
+    );
+  });
+
+  it("separates description list, quote, and figure blocks", () => {
+    expect(
+      htmlToMarkdown(
+        "<dl><dt>Term</dt><dd>Definition</dd></dl><blockquote>Quote</blockquote><figure><figcaption>Caption</figcaption></figure>Tail",
+      ).text,
+    ).toBe("Term\nDefinition\n\nQuote\nCaption\n\nTail");
+  });
 });
