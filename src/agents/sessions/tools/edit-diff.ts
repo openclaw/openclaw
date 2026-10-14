@@ -32,14 +32,6 @@ function foldFuzzyCharacters(text: string): string {
     .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ");
 }
 
-/**
- * Normalize text for fuzzy matching. Applies progressive transformations:
- * - Strip trailing whitespace from each line
- * - Normalize smart quotes to ASCII equivalents
- * - Normalize Unicode dashes/hyphens to ASCII hyphen
- * - Normalize special Unicode spaces to regular space
- *
- */
 function normalizeForFuzzyMatch(text: string): string {
   return foldFuzzyCharacters(
     text
@@ -323,16 +315,19 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string) {
       matchIndex = searchContent.indexOf(searchText);
     }
 
-    const occurrences = searchText ? searchContent.split(searchText).length - 1 : 0;
+    if (!searchText) {
+      throw getUnsafeFuzzyBoundaryError(path, i, normalizedEdits.length);
+    }
+    let occurrences = 0;
+    for (let at = matchIndex; at !== -1; at = searchContent.indexOf(searchText, at + 1)) {
+      occurrences++;
+    }
     if (occurrences > 1) {
       throw new Error(
         normalizedEdits.length === 1
           ? `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`
           : `Found ${occurrences} occurrences of edits[${i}] in ${path}. Each oldText must be unique. Please provide more context to make it unique.`,
       );
-    }
-    if (!searchText) {
-      throw getUnsafeFuzzyBoundaryError(path, i, normalizedEdits.length);
     }
     if (matchIndex === -1) {
       const prefix =

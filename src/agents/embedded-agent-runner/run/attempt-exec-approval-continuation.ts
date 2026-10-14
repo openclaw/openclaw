@@ -16,7 +16,8 @@ export function prepareExecApprovalContinuationForAttempt(params: {
   modelMaxTokens?: number;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 }): { prompt: string; transcriptPrompt?: string } {
-  if (!params.promptRange) {
+  const promptRange = params.promptRange;
+  if (!promptRange) {
     return { prompt: params.prompt, transcriptPrompt: params.transcriptPrompt };
   }
   const contextWindowTokens = Math.max(
@@ -29,19 +30,13 @@ export function prepareExecApprovalContinuationForAttempt(params: {
     ),
   );
   const maxOutputUtf16Units = resolveLiveToolResultMaxChars({ contextWindowTokens });
-  const prompt = resizeExecApprovalContinuationPrompt({
-    prompt: params.prompt,
-    range: params.promptRange,
-    maxOutputUtf16Units,
-  });
+  const resize = (prompt: string, range = promptRange) =>
+    resizeExecApprovalContinuationPrompt({ prompt, range, maxOutputUtf16Units });
+  const prompt = resize(params.prompt);
   const transcriptPrompt =
     params.transcriptPrompt === undefined
       ? undefined
-      : resizeExecApprovalContinuationPrompt({
-          prompt: params.transcriptPrompt,
-          range: params.transcriptPromptRange ?? params.promptRange,
-          maxOutputUtf16Units,
-        });
+      : resize(params.transcriptPrompt, params.transcriptPromptRange ?? promptRange);
   params.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.(transcriptPrompt ?? prompt);
   return { prompt, transcriptPrompt };
 }

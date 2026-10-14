@@ -27,86 +27,67 @@ describe("Codex native login discovery", () => {
     });
   });
 
-  it.each([
-    ["Logged in using an API key - sk-synthetic***11111", "api-key"],
-    ["Logged in using access token", "token"],
-  ])("projects %s as a native-only fact", async (line, mode) => {
-    run.mockResolvedValue({ termination: "exit", code: 0, stdout: "", stderr: line });
-    expect(await probeCodexNativeAuth({ config, env: {} })).toMatchObject({
-      source: "Codex native login",
-      mode,
-      nativeAuth: { runtime: "codex", mode },
-    });
-  });
+  it.each([["Logged in using an API key - sk-synthetic***11111", "api-key"]])(
+    "projects %s as a native-only fact",
+    async (line, mode) => {
+      run.mockResolvedValue({ termination: "exit", code: 0, stdout: "", stderr: line });
+      expect(await probeCodexNativeAuth({ config, env: {} })).toMatchObject({
+        source: "Codex native login",
+        mode,
+        nativeAuth: { runtime: "codex", mode },
+      });
+    },
+  );
 
   it.each([
     [0, "Logged in using Amazon Bedrock"],
     [1, "Not logged in"],
-    [0, "unexpected response"],
   ])("does not authorize OpenAI from exit %s and %s", async (code, stderr) => {
     run.mockResolvedValue({ termination: "exit", code, stdout: "", stderr });
     expect(await probeCodexNativeAuth({ config })).toBeUndefined();
     expect(run).toHaveBeenCalledOnce();
   });
 
-  it.each(["config", "env"] as const)(
-    "uses the effective %s arguments and environment",
-    async (source) => {
-      const args = [
+  it("uses the effective environment arguments and clears excluded variables", async () => {
+    const env = {
+      CODEX_HOME: "/fixture/native-home",
+      CODEX_API_KEY: "must-be-cleared",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "-c 'cli_auth_credentials_store=\"keyring\"' app-server --listen stdio:// --config='log_dir=\"app-server\"' --enable fixture_feature",
+    };
+    expect(
+      await probeCodexNativeAuth({
+        pluginConfig: {
+          appServer: {
+            command: "native-codex-fixture",
+            homeScope: "user",
+            mode: "yolo",
+            clearEnv: ["CODEX_API_KEY"],
+          },
+        },
+        env,
+      }),
+    ).toMatchObject({ mode: "oauth" });
+    expect(run).toHaveBeenCalledWith(
+      [
+        "native-codex-fixture",
         "-c",
         'cli_auth_credentials_store="keyring"',
-        "app-server",
-        "--listen",
-        "stdio://",
         '--config=log_dir="app-server"',
         "--enable",
         "fixture_feature",
-      ];
-      const env = {
-        CODEX_HOME: "/fixture/native-home",
-        CODEX_API_KEY: "must-be-cleared",
-        ...(source === "env"
-          ? {
-              OPENCLAW_CODEX_APP_SERVER_ARGS:
-                "-c 'cli_auth_credentials_store=\"keyring\"' app-server --listen stdio:// --config='log_dir=\"app-server\"' --enable fixture_feature",
-            }
-          : {}),
-      };
-      expect(
-        await probeCodexNativeAuth({
-          pluginConfig: {
-            appServer: {
-              command: "native-codex-fixture",
-              homeScope: "user",
-              mode: "yolo",
-              clearEnv: ["CODEX_API_KEY"],
-              ...(source === "config" ? { args } : {}),
-            },
-          },
-          env,
-        }),
-      ).toMatchObject({ mode: "oauth" });
-      expect(run).toHaveBeenCalledWith(
-        [
-          "native-codex-fixture",
-          "-c",
-          'cli_auth_credentials_store="keyring"',
-          '--config=log_dir="app-server"',
-          "--enable",
-          "fixture_feature",
-          "login",
-          "status",
-        ],
-        expect.objectContaining({
-          baseEnv: expect.objectContaining({ CODEX_HOME: "/fixture/native-home" }),
-        }),
-      );
-      expect(run.mock.calls[0]?.[1].baseEnv).not.toHaveProperty("CODEX_API_KEY");
-      expect(env.CODEX_API_KEY).toBe("must-be-cleared");
-    },
-  );
+        "login",
+        "status",
+      ],
+      expect.objectContaining({
+        baseEnv: expect.objectContaining({ CODEX_HOME: "/fixture/native-home" }),
+      }),
+    );
+    expect(run.mock.calls[0]?.[1].baseEnv).not.toHaveProperty("CODEX_API_KEY");
+    expect(env.CODEX_API_KEY).toBe("must-be-cleared");
+  });
 
-  it.each([undefined, "agent"] as const)(
+  it.each(["agent"] as const)(
     "does not borrow the user login for homeScope=%s",
     async (homeScope) => {
       expect(

@@ -17,6 +17,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -69,7 +70,7 @@ suite.define(() => {
         JSON.stringify(params),
         "--json",
       ]);
-      expect(result.code, result.stderr).toBe(0);
+      expect(result.code, result.stderr || result.stdout).toBe(0);
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
     const projectRoot = owner.state.path("project");
@@ -100,6 +101,7 @@ suite.define(() => {
       agentId: "main",
       projectId: project.id,
       worktree: true,
+      worktreeBaseRef: "main",
       worktreeName: "image-preview-proof",
       permissionMode: "workspace",
       label: "Synthetic image preview proof",
@@ -163,7 +165,8 @@ suite.define(() => {
           }
         };
         const open = async () => {
-          expect((await page.goto(url.toString()))?.status()).toBe(200);
+          expect((await page.goto(url.toString()))?.status()).toBe(404);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           await page
             .getByText(

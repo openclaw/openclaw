@@ -8,6 +8,10 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { formatMessageCliText } from "../../commands/message-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
@@ -106,15 +110,18 @@ function cancellationGate(sentBeforeError?: true) {
 }
 
 describe("broadcast send outcomes through native actions", () => {
+  const messageToolConfig: OpenClawConfig = {};
   let tempHome: TempHomeEnv;
   beforeAll(async () => {
     tempHome = await createTempHomeEnv("openclaw-broadcast-outcomes-");
+    setRuntimeConfigSnapshot(messageToolConfig);
   });
   afterEach(() => {
     resetPluginRuntimeStateForTest();
   });
   afterAll(async () => {
     await tempHome.restore();
+    clearRuntimeConfigSnapshot();
   });
 
   it.each([
@@ -380,7 +387,7 @@ describe("broadcast send outcomes through native actions", () => {
         ...identity,
         agentSessionKey: identity.sessionKey,
         messageActionTurnCapability: capability,
-        config: {},
+        config: messageToolConfig,
       });
       const pending = tool.execute("broadcast-cancel-call", {
         action: "broadcast",
@@ -519,6 +526,48 @@ describe("broadcast send outcomes through native actions", () => {
         expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
       },
     );
+
+    it("reports a route-less message-tool-only reply as a transcript record", async () => {
+      const result = await runMessageAction({
+        ...sourceInput,
+        sessionKey: "agent:main:main",
+        sourceReplyTranscriptOnly: true,
+        toolContext: { currentChannelProvider: "webchat" },
+      });
+
+      if (result.kind !== "send") {
+        throw new Error("Expected send result");
+      }
+      expect(result).toMatchObject({ handledBy: "internal-source", to: "current-run" });
+      expect(result.toolResult?.content).toEqual([
+        {
+          type: "text",
+          text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
+        },
+      ]);
+    });
+
+    it("sends an explicit target from a route-less run through the channel", async () => {
+      const result = await runMessageAction({
+        cfg: {
+          ...workspaceConfig,
+          tools: { message: { crossContext: { allowAcrossProviders: true } } },
+        },
+        action: "send",
+        params: { channel: "workspace", target: "#C12345678", message: "hello from codex" },
+        toolContext: { currentChannelProvider: "webchat" },
+        sessionKey: "agent:main:main",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyTranscriptOnly: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "send",
+        channel: "workspace",
+        handledBy: "core",
+        dryRun: false,
+      });
+    });
 
     it.each([
       {

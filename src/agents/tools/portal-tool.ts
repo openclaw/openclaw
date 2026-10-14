@@ -90,20 +90,18 @@ export function createAvailablePortalTools(
             ? { environmentId }
             : {};
         if (action === "list") {
-          if (target) {
-            const result = await callGateway<PortalListResult>("portal.session.list", environment);
-            target.assertCurrent();
-            return formatPortalResult({ action: "list", result });
-          }
           // portal.list redacts the bearer URL for read-scope callers. Least-privilege
           // resolution would make every list call read-scope, hiding the URL from a
           // caller that can mint the same portal through action=open; ask with the
           // write authority this tool already requires so the listing stays usable.
-          const result = await callGatewayRequest<PortalListResult>({
-            method: "portal.list",
-            params: environment,
-            scopes: [PORTAL_URL_SCOPE],
-          });
+          const result = target
+            ? await callGateway<PortalListResult>("portal.session.list", environment)
+            : await callGatewayRequest<PortalListResult>({
+                method: "portal.list",
+                params: environment,
+                scopes: [PORTAL_URL_SCOPE],
+              });
+          target?.assertCurrent();
           return formatPortalResult({ action: "list", result });
         }
         if (action === "close") {

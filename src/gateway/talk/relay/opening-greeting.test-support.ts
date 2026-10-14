@@ -1,20 +1,30 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
-import {
-  makeRelayTransport,
-  type createTrackedTalkRealtimeRelaySession,
-} from "./index.test-support.js";
+import { makeRelayTransport } from "./index.test-support.js";
 import {
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
 } from "./operations.js";
+import type {
+  CreateTalkRealtimeRelaySessionParams,
+  TalkRealtimeRelaySessionResult,
+} from "./state.js";
 import { relaySessions } from "./state.js";
 
 /** Reuses the persistent relay suite to prove Answer readiness and initial output ownership. */
 export function defineRelayOpeningGreetingTests(
   createTalkRealtimeRelaySession: (
-    params: Parameters<typeof createTrackedTalkRealtimeRelaySession>[1],
-  ) => ReturnType<typeof createTrackedTalkRealtimeRelaySession>,
+    params: Omit<
+      CreateTalkRealtimeRelaySessionParams,
+      "sessionTarget" | "controlSource" | "connId" | "providerConfig" | "instructions" | "tools"
+    > &
+      Partial<
+        Pick<
+          CreateTalkRealtimeRelaySessionParams,
+          "connId" | "providerConfig" | "instructions" | "tools"
+        >
+      > & { sessionKey?: string },
+  ) => Promise<TalkRealtimeRelaySessionResult>,
 ) {
   it.each([
     { interruptedForMs: 10_000, readinessDelayMs: 0, seconds: undefined },
@@ -28,7 +38,7 @@ export function defineRelayOpeningGreetingTests(
       let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
       const speak = vi.fn();
       const authority = vi.fn();
-      const session = createTalkRealtimeRelaySession({
+      const session = await createTalkRealtimeRelaySession({
         context: { broadcastToConnIds: vi.fn() } as never,
         connId: "conn-recovery",
         provider: {
@@ -86,7 +96,7 @@ export function defineRelayOpeningGreetingTests(
       const bridge = makeRelayTransport(
         method === "greeting" ? { triggerGreeting: speak } : { sendUserMessage: speak },
       );
-      const session = createTalkRealtimeRelaySession({
+      const session = await createTalkRealtimeRelaySession({
         context: { broadcastToConnIds: vi.fn() } as never,
         connId: "conn-accepted-call",
         provider: {
@@ -136,7 +146,7 @@ export function defineRelayOpeningGreetingTests(
       let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
       const speak = vi.fn();
       const bridge = makeRelayTransport({ triggerGreeting: speak });
-      const session = createTalkRealtimeRelaySession({
+      const session = await createTalkRealtimeRelaySession({
         context: { broadcastToConnIds: vi.fn(), logGateway: { warn: vi.fn() } } as never,
         connId: "conn-greeting-guard",
         provider: {
@@ -183,14 +193,16 @@ export function defineRelayOpeningGreetingTests(
   );
 
   it.each(["continuous", "response"] as const)(
-    "handles %s provider audio before client microphone input according to its output contract",
-    (outputAudioMode) => {
+    "routes %s opening audio after silent client readiness",
+    async (outputAudioMode) => {
       let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
       const broadcastToConnIds = vi.fn();
-      const bridge = makeRelayTransport({ outputAudioMode });
-      const session = createTalkRealtimeRelaySession({
+      const requestOpening = vi.fn();
+      const bridge = makeRelayTransport({ outputAudioMode, triggerGreeting: requestOpening });
+      const session = await createTalkRealtimeRelaySession({
         context: { broadcastToConnIds, logGateway: { warn: vi.fn() } } as never,
         connId: "conn-stream",
+        greeting: "Fixture opening",
         provider: {
           id: "relay-test",
           label: "Relay Test",
@@ -205,19 +217,21 @@ export function defineRelayOpeningGreetingTests(
         tools: [],
       });
       bridgeRequest?.onReady?.();
+      expect(requestOpening).not.toHaveBeenCalled();
+      // Playout adoption is synthetic silence, not recorded microphone input.
+      await sendTalkRealtimeRelayAudio({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-stream",
+        audioBase64: Buffer.alloc(960).toString("base64"),
+      });
+      expect(requestOpening).toHaveBeenCalledOnce();
       bridgeRequest?.onAudio(Buffer.alloc(960));
       const payloads = broadcastToConnIds.mock.calls.map(
         (call) => call[1] as Record<string, unknown>,
       );
-      if (outputAudioMode === "continuous") {
-        expect(payloads.some((payload) => payload.type === "audio")).toBe(true);
-        expect(payloads.some((payload) => payload.type === "error")).toBe(false);
-        expect(relaySessions.has(session.relaySessionId)).toBe(true);
-      } else {
-        expect(payloads.some((payload) => payload.type === "audio")).toBe(false);
-        expect(payloads.some((payload) => payload.type === "error")).toBe(true);
-        expect(relaySessions.has(session.relaySessionId)).toBe(false);
-      }
+      expect(payloads.some((payload) => payload.type === "audio")).toBe(true);
+      expect(payloads.some((payload) => payload.type === "error")).toBe(false);
+      expect(relaySessions.has(session.relaySessionId)).toBe(true);
     },
   );
 }

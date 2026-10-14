@@ -1,30 +1,15 @@
 // Gateway cron lazy loader.
 // Defers scheduler startup until cron is touched by runtime or API handlers.
-import type { CliDeps } from "../cli/deps.types.js";
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-
-type LazyGatewayCronParams = {
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  env?: NodeJS.ProcessEnv;
-  scheduler: GatewayScheduler;
-  /**
-   * Resolves the live Gateway request context for scheduler-triggered runs.
-   * RPC-triggered runs inherit one from the caller; timer-triggered runs have
-   * no request of their own, so trusted built-in tools would otherwise see none.
-   */
-  resolveGatewayContext?: () => GatewayRequestContext | undefined;
-};
+import type {
+  buildGatewayCronService,
+  GatewayCronExitWatcherHandoff,
+  GatewayCronState,
+} from "./server-cron.js";
 
 type LoadedGatewayCronState = {
   state: GatewayCronState;
@@ -36,11 +21,13 @@ type LoadedGatewayCronState = {
 };
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
-export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
+export function createLazyGatewayCronState(
+  params: Parameters<typeof buildGatewayCronService>[0],
+): GatewayCronState {
   const spawnBroker = getSpawnBroker();
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
+  const storePath = params.storePath;
   const cronEnabled =
     env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
   let loaded: LoadedGatewayCronState | null = null;
@@ -96,6 +83,14 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     return await cronStateLoader.load();
   };
   const bindCron = createLazyRuntimeMethodBinder(load);
+  const bindStartedCron = createLazyRuntimeMethodBinder(async () => {
+    const resolved = await load();
+    // Startup recovery must finish before a new receipt can become running.
+    if (!stopped) {
+      await cron.start();
+    }
+    return resolved;
+  });
 
   const stopResolvedCron = async (resolved: LoadedGatewayCronState): Promise<void> => {
     resolved.phase = "stopped";
@@ -273,8 +268,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);
     },
     quiesceJobs: bindCron(({ state }) => state.cron.quiesceJobs.bind(state.cron)),
-    run: bindCron(({ state }) => state.cron.run.bind(state.cron)),
-    enqueueRun: bindCron(({ state }) => state.cron.enqueueRun.bind(state.cron)),
+    run: bindStartedCron(({ state }) => state.cron.run.bind(state.cron)),
+    enqueueRun: bindStartedCron(({ state }) => state.cron.enqueueRun.bind(state.cron)),
     waitForManualRun: bindCron(({ state }) => state.cron.waitForManualRun.bind(state.cron)),
     getJob(id) {
       return loaded?.state.cron.getJob(id);
@@ -293,7 +288,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async prepareWake() {
       await load();
     },
-    wake(opts) {
+    async wake(opts) {
       if (!loaded) {
         // A wake should kick off lazy loading but cannot claim success before
         // cron exists and knows whether the target job is wakeable.

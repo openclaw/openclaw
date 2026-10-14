@@ -144,8 +144,10 @@ Its exact npm/OCI descriptors must belong to that SHA and satisfy the selected
 release profile's required gates. No second commit or validation run is needed
 solely to name a Release SHA.
 
-If notes change after Code qualification, use `$openclaw-changelog-update`
-with current main for the canonical PR history and commit the selected
+If notes change after Code qualification, including the single refresh that
+credits validation-recovery backports once the final Code SHA is green, use
+`$openclaw-changelog-update` with current main for the canonical PR history and
+commit the selected
 `CHANGELOG/YYYY.M.PATCH.md`, with any matching record and root index updates.
 The complete Code-to-Release delta must include that entry and only those
 paths, without renames or deletions, to optionally use
@@ -218,16 +220,34 @@ moving it or silently changing qualification identity.
 Omit `--plugin-sdk-api-acknowledgement` when no API change exists. The helper
 completes package/install proof and prints the selected route's next command; do not dispatch
 another equivalent validation. Its `npm-beta-v1` Telegram package result is
-`deferred-postpublish`, never passed. Other policies retain their check.
-Parallels and Telegram package proof belong to postpublish confidence on every
-track. A final version never records `npm-beta-v1`, so the helper runs both
-for stable unless you pass `--skip-parallels --skip-telegram`; use
-`--run-parallels` only on explicit operator direction. Optional
+`deferred-postpublish`, never passed. Stable `npm-stable-v1` and admitted stable/full
+coverage reuse authenticated mock-provider package Telegram proof for the exact
+FRV-qualified tarball, without a Telegram waiver. Separately packed historical
+tarballs and explicit live-provider checks require supplemental Telegram proof
+from the retained, verified `release-ci/*` ref at Q=C with `harness_ref` pinned
+to C; missing or moved transport refs require newly bound candidate evidence,
+never main's harness. Keep supplemental run IDs in candidate evidence; do not
+forward them as the publisher's optional postpublish diagnostic input.
+Stable Parallels runs use the candidate checkout's harness and dependency graph;
+beta still defers Parallels unless explicitly selected. Use `--run-parallels`
+only on explicit operator direction. Optional
 `--windows-node-tag <exact-source-tag>` records its approved installer digest
 map; stable candidates do not require Windows asset publication. Stable
 candidates require stable/full evidence with soak and blocking performance.
 The embedded preflight enforces these requirements; no publication waiver can
 bypass them.
+
+Planning flags can change while saved checklist state is still `validated` with
+no run IDs and no retained `frv-request.json`. The P tooling pin is not part of
+that identity: a repaired P resumes the same `--output-dir` at any phase, keeps
+bound FRV/npm runs, and gets its own publication tag; the helper reuses a saved
+tag only for the same P SHA. Once qualification is bound, keep the original
+flags and request; do not delete dispatch state to force a retry. Use a separate
+`--output-dir` only for a deliberately new request.
+If FRV was admitted without Windows, omit `--windows-node-tag` when consuming it
+and attach Windows afterward with `windows-node-release.yml`, or obtain new FRV
+evidence with Windows selected. A fresh checklist launch already admits the
+selected Windows tag and installer digests through FRV.
 
 For a prepare-only request, stop with the candidate, evidence, limitations, and
 printed next command. Do not create/push the final tag or publish/announce.
@@ -348,14 +368,17 @@ If its summary reports the token unavailable,
 dispatch the sync by hand before the verify runs. For manual work, poll the
 registry yourself before the sync or verification. Run postpublish
 verification from a checkout of the Release SHA (a newer tooling checkout
-reports main-only bundled plugin files as missing), with the tooling identity
-exported, or it fails `SHA-pinned release-publish ref does not match`:
+reports main-only bundled plugin files as missing):
 
 ```bash
-OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
-OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>
 ```
+
+Without `OPENCLAW_NPM_EXPECTED_WORKFLOW_REF`/`_SHA`, the verifier derives the
+publish tooling from the attested `release-publish/*` tag and accepts it only
+when GitHub still has that exact lightweight tag at the attested commit and the
+commit is reachable from `main` (requires `gh` auth). Set both variables only to
+pin an explicit identity; a partial override is rejected.
 
 If `Complete publish workflows` fails after core publication, inspect the
 original child and registry evidence before recovery. Core and every published

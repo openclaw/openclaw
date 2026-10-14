@@ -1,5 +1,4 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
-/** Resolves thinking and reasoning together when a command or model turn consumes them. */
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { normalizeThinkLevel, type ReasoningLevel, type ThinkLevel } from "../thinking.js";

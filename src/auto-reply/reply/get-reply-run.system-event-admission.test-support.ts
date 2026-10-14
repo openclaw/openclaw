@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../../infra/system-events.js";
-import type { runReplyAgent } from "./agent-runner.runtime.js";
+import type { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";

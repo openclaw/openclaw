@@ -1,3 +1,5 @@
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -23,10 +25,14 @@ type CacheAdmissionOwner = {
 export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
   return {
     initialize(database: OpenClawStateDatabase) {
-      admitSqliteSchema(database.db);
-      return runSqliteReadOperationSync(database.db, () => {
-        assertSupportedStateSchemaVersion(database.db, database.path);
-        return getAdmittedSqliteSchemaFacts(database.db);
+      const db = database.db;
+      if (isPostgresSqlConnection(db)) {
+        requireNativeDatabaseFile("postgres", "repair");
+      }
+      admitSqliteSchema(db);
+      return runSqliteReadOperationSync(db, () => {
+        assertSupportedStateSchemaVersion(db, database.path);
+        return getAdmittedSqliteSchemaFacts(db);
       });
     },
     closeTerminalFailure(pathname: string, error: Error): void {
@@ -48,21 +54,38 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
       }
       throwSqliteLifecycleErrors(errors, "Terminal shared-state failure cleanup failed");
     },
-    refresh(database: CachedOpenClawStateDatabase): boolean {
+    read<T>(pathname: string, operation: (database: OpenClawStateDatabase) => T): T | undefined {
+      const database = owner.cachedDatabases.get(pathname);
+      if (!database) {
+        return undefined;
+      }
+      if (!database.db.isOpen) {
+        return operation(database);
+      }
+      const db = database.db;
+      if (isPostgresSqlConnection(db)) {
+        requireNativeDatabaseFile("postgres", "repair");
+      }
+      let admitted = false;
       try {
-        runSqliteReadOperationSync(database.db, () => {
-          const facts = getAdmittedSqliteSchemaFacts(database.db);
+        return runSqliteReadOperationSync(db, () => {
+          const facts = getAdmittedSqliteSchemaFacts(db);
           if (!facts || facts !== database.schemaFacts) {
-            assertSupportedStateSchemaVersion(database.db, database.path);
+            assertSupportedStateSchemaVersion(db, database.path);
             database.schemaFacts = facts;
           }
+          admitted = true;
+          return operation(database);
         });
-        return true;
       } catch (error) {
+        // Only freshness failures belong to admission; the consuming owner handles its read.
+        if (admitted) {
+          throw error;
+        }
         const failure = error instanceof Error ? error : new Error(String(error));
         if (isSqliteCorruptionError(failure)) {
           owner.evict(database);
-          return false;
+          return undefined;
         }
         if (isSqliteSchemaVersionError(failure)) {
           owner.recordSchemaFailure(database.path, failure);

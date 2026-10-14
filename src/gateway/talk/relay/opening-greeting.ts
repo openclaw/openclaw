@@ -43,6 +43,7 @@ export function createRelayOpeningGreeting(
         "Do not restart the opening, automatically replay speech, or assume the caller heard audio during the interruption.";
     }
     try {
+      active.runAuthority?.assertCurrent();
       params.assertGreetingAllowed?.();
       if (getActiveRelay() !== active || active.closing) {
         return;

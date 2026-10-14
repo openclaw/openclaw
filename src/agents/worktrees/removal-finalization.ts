@@ -37,22 +37,19 @@ export async function finalizeManagedWorktreeRemoval(params: {
   const { record, env, git, options, snapshotRef, snapshotError, recoveryPath } = params;
   options.beforeRun();
   const removedAt = params.now();
+  const update = (patch: Parameters<typeof updateRegistryWorktree>[2]) =>
+    updateRegistryWorktree(env, record.id, patch, {
+      assertCurrent: options.beforeRun,
+      removalToken: params.claimToken,
+      workerAuthority: params.workerAuthority,
+    });
   // A failed housekeeping command must not make a deleted checkout appear live.
   const publish = () =>
-    updateRegistryWorktree(
-      env,
-      record.id,
-      {
-        removedAt,
-        snapshotRef,
-        ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
-      },
-      {
-        assertCurrent: options.beforeRun,
-        removalToken: params.claimToken,
-        workerAuthority: params.workerAuthority,
-      },
-    );
+    update({
+      removedAt,
+      snapshotRef,
+      ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
+    });
   await (params.withOwnerMutation
     ? params.withOwnerMutation(publish, { settle: true })
     : publish());
@@ -89,22 +86,13 @@ export async function finalizeManagedWorktreeRemoval(params: {
     }
     if (params.runEndCleanup) {
       try {
-        await updateRegistryWorktree(
-          env,
-          record.id,
-          {
-            runEndCleanup: {
-              outcome: "failed",
-              at: params.now(),
-              reason: truncateUtf16Safe(formatErrorMessage(error), 500),
-            },
+        await update({
+          runEndCleanup: {
+            outcome: "failed",
+            at: params.now(),
+            reason: truncateUtf16Safe(formatErrorMessage(error), 500),
           },
-          {
-            assertCurrent: options.beforeRun,
-            removalToken: params.claimToken,
-            workerAuthority: params.workerAuthority,
-          },
-        );
+        });
       } catch (outcomeError) {
         if (hasSqliteWorkerOutcomeUnknown(outcomeError)) {
           throw outcomeError;

@@ -1,8 +1,10 @@
 /** Tests Codex CLI bundle-MCP config override generation. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import { resolveCliSessionReuse } from "../cli-session.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
@@ -10,6 +12,7 @@ import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
+  prepareBundleProbeCliConfig,
   setupCliBundleMcpTestHarness,
   writeCliMcpPolicyProbeServer,
 } from "./bundle-mcp.test-support.js";
@@ -153,25 +156,6 @@ describe("prepareCliBundleMcpConfig codex", () => {
     expect(override).not.toContain("delete_*");
   });
 
-  it("hides non-model MCP tools from Codex without an explicit policy", async () => {
-    const serverPath = await writeCliMcpPolicyProbeServer();
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
-      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
-    };
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "codex-config-overrides",
-      backend: { command: "codex", args: ["exec"] },
-      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
-      config,
-      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "codex-default-hidden"),
-    });
-    const override = prepared.backend.args?.find((arg) => arg.startsWith("mcp_servers="));
-    expect(override).toContain('enabled_tools = ["delete_docs", "read_docs"]');
-    expect(override).toContain('disabled_tools = ["app_docs", "task_docs"]');
-  });
-
   it("injects codex MCP config overrides with env-backed loopback headers", async () => {
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
@@ -214,5 +198,112 @@ describe("prepareCliBundleMcpConfig codex", () => {
       'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-cli-capture-key = "OPENCLAW_MCP_CLI_CAPTURE_KEY" } } }',
     ]);
     expect(prepared.cleanup).toBeUndefined();
+  });
+});
+
+function prepareLoopbackConfig(url: string) {
+  return prepareBundleProbeCliConfig({
+    additionalConfig: {
+      mcpServers: {
+        openclaw: {
+          type: "http",
+          url,
+          headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+        },
+      },
+    },
+  });
+}
+
+describe("prepareCliBundleMcpConfig resume hash", () => {
+  it("stabilizes the resume hash when only the OpenClaw loopback port changes", async () => {
+    const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
+    const second = await prepareLoopbackConfig("http://127.0.0.1:24567/mcp");
+
+    expect(first.mcpConfigHash).not.toBe(second.mcpConfigHash);
+    expect(first.mcpResumeHash).toBe(second.mcpResumeHash);
+
+    await first.cleanup?.();
+    await second.cleanup?.();
+  });
+
+  it("changes the resume hash when stable MCP semantics change", async () => {
+    const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
+    const second = await prepareLoopbackConfig("http://127.0.0.1:23119/other");
+
+    expect(first.mcpResumeHash).not.toBe(second.mcpResumeHash);
+
+    await first.cleanup?.();
+    await second.cleanup?.();
+  });
+
+  it("keeps OpenClaw approval state out of the resume identity", async () => {
+    const prepare = async (options: Parameters<typeof buildSystemAgentToolsMcpServerConfig>[0]) =>
+      await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: { command: "node", args: ["./fake-claude.mjs"] },
+        workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+        exclusiveConfig: buildSystemAgentToolsMcpServerConfig(options),
+      });
+    const proposed = "proposal-sha256";
+    const first = await prepare({ surface: "cli", proposalRef: {} });
+    const approval = await prepare({
+      surface: "cli",
+      approvalArmed: true,
+      proposalRef: { current: proposed },
+    });
+    const otherSurface = await prepare({
+      surface: "gateway",
+      approvalArmed: true,
+      proposalRef: { current: proposed },
+    });
+
+    expect(first.mcpConfigHash).not.toBe(approval.mcpConfigHash);
+    expect(first.mcpResumeHash).toBe(approval.mcpResumeHash);
+    expect(approval.mcpResumeHash).not.toBe(otherSurface.mcpResumeHash);
+    const delegated = await prepare({
+      surface: "cli",
+      operatorApprovalOnly: true,
+      approvalArmed: true,
+      proposalRef: { current: proposed },
+    });
+    expect(delegated.mcpConfigHash).not.toBe(approval.mcpConfigHash);
+    expect(delegated.mcpResumeHash).toBe(approval.mcpResumeHash);
+    const binding = {
+      sessionId: "native-cli-session",
+      authProfileId: "claude-cli:ops",
+      authEpoch: "auth-epoch",
+      authEpochVersion: 1,
+      cwdHash: "cwd-hash",
+      mcpConfigHash: first.mcpConfigHash,
+      mcpResumeHash: first.mcpResumeHash,
+    };
+    const reuseParams = {
+      binding,
+      authProfileId: binding.authProfileId,
+      authEpoch: binding.authEpoch,
+      authEpochVersion: binding.authEpochVersion,
+      cwdHash: binding.cwdHash,
+      mcpConfigHash: approval.mcpConfigHash,
+      mcpResumeHash: approval.mcpResumeHash,
+    };
+    expect(resolveCliSessionReuse(reuseParams)).toEqual({
+      mode: "reuse",
+      sessionId: binding.sessionId,
+    });
+    expect(resolveCliSessionReuse({ ...reuseParams, authEpoch: "rotated-auth-epoch" })).toEqual({
+      mode: "invalidate",
+      invalidatedReason: "auth-epoch",
+    });
+    expect(resolveCliSessionReuse({ ...reuseParams, cwdHash: "other-cwd" })).toEqual({
+      mode: "invalidate",
+      invalidatedReason: "cwd",
+    });
+
+    await first.cleanup?.();
+    await approval.cleanup?.();
+    await otherSurface.cleanup?.();
+    await delegated.cleanup?.();
   });
 });

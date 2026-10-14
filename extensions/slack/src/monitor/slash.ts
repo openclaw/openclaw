@@ -5,21 +5,15 @@ import type {
   SlackCommandMiddlewareArgs,
   SlackOptionsMiddlewareArgs,
 } from "@slack/bolt";
-import {
-  loadPreparedModelCatalog,
-  resolveAgentDir,
-  resolveDefaultModelForAgent,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   parseCommandArgs,
-  resolveCommandArgMenu,
-  resolveEffectiveAgentRuntime,
-  resolveStoredModelOverride,
+  resolveCommandArgMenuAsync,
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -40,13 +34,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { resolveSlackAccount, type ResolvedSlackAccount } from "../accounts.js";
+import { buildSlackCompleteBlocksFallbackText } from "../blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { requireSlackPostMessageTimestamp } from "../client-delivery.js";
 import { formatSlackError } from "../errors.js";
@@ -61,7 +52,7 @@ import {
 } from "./context.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
-import { resolveSlackListenerEventScope } from "./event-scope.js";
+import { resolveSlackMonitorEventScope } from "./event-scope.js";
 import {
   createSlackExternalArgMenuStore,
   SLACK_EXTERNAL_ARG_MENU_PREFIX,
@@ -76,6 +67,7 @@ import {
 } from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 import { captureSlackSessionTargetGuard } from "./session-run-targets.js";
+import { resolveSlackCommandMenuModelContext } from "./slash-menu-model-context.js";
 import type { SlackCommandInvocation } from "./types.js";
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
@@ -111,58 +103,6 @@ const loadSlashDispatchRuntime = createLazyRuntimeModule(
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
 );
-
-function resolveSlackCommandMenuModelContext(params: {
-  cfg: SlackMonitorContext["cfg"];
-  agentId: string;
-  sessionKey: string;
-}): { provider?: string; model?: string; agentRuntime?: string } {
-  if (!params.sessionKey.trim()) {
-    return {};
-  }
-  try {
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
-    let provider: string | undefined;
-    let model: string | undefined;
-    if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      provider = defaultModel.provider;
-      model = defaultModel.model;
-    } else {
-      const override = resolveStoredModelOverride({
-        sessionEntry: entry,
-        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
-        sessionKey: params.sessionKey,
-        defaultProvider: defaultModel.provider,
-      });
-      provider = override?.model
-        ? override.provider || defaultModel.provider
-        : (normalizeOptionalString(entry?.providerOverride) ??
-          normalizeOptionalString(entry?.modelProvider));
-      model = override?.model
-        ? override.model
-        : (normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model));
-    }
-    return {
-      ...(provider ? { provider } : {}),
-      ...(model ? { model } : {}),
-      agentRuntime: resolveEffectiveAgentRuntime({
-        cfg: params.cfg,
-        provider: provider ?? defaultModel.provider,
-        modelId: model ?? defaultModel.model,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        sessionEntry: entry,
-      }),
-    };
-  } catch {
-    return {};
-  }
-}
 
 const slackExternalArgMenuStore = createSlackExternalArgMenuStore();
 
@@ -392,6 +332,7 @@ export function createSlackCommandHandler(params: {
     const respond = responseBudget.respond;
     const respondEphemeral = (text: string) => respond({ text, response_type: "ephemeral" });
     let cfg = monitor.cfg;
+    let releaseSessionTarget: (() => void) | undefined;
     try {
       if (monitor.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();
@@ -526,7 +467,12 @@ export function createSlackCommandHandler(params: {
       });
       const routingTeamId = (eventScope?.teamId ?? ctx.teamId) || undefined;
       let resolvedSlashRoute: ResolvedAgentRoute | undefined;
-      let isCurrentSession = p.isSessionTargetCurrent;
+      const sessionTarget: {
+        isCurrent:
+          | typeof p.isSessionTargetCurrent
+          | Awaited<ReturnType<typeof captureSlackSessionTargetGuard>>["isCurrent"];
+        source?: Awaited<ReturnType<typeof captureSlackSessionTargetGuard>>["source"];
+      } = { isCurrent: p.isSessionTargetCurrent };
       const resolveSlashRoute = async () => {
         if (resolvedSlashRoute) {
           return resolvedSlashRoute;
@@ -534,11 +480,14 @@ export function createSlackCommandHandler(params: {
         if (p.threadTs) {
           if (p.sessionTarget) {
             resolvedSlashRoute = p.sessionTarget;
-            isCurrentSession = captureSlackSessionTargetGuard(
+            const current = await captureSlackSessionTargetGuard(
               ctx,
               p.sessionTarget,
               p.isSessionTargetCurrent,
             );
+            sessionTarget.isCurrent = current.isCurrent;
+            sessionTarget.source = current.source;
+            releaseSessionTarget = current.release;
             return resolvedSlashRoute;
           }
           const routing = await resolveSlackSessionEventRoutingContext({
@@ -557,7 +506,9 @@ export function createSlackCommandHandler(params: {
             eventScope,
           });
           resolvedSlashRoute = routing.route;
-          isCurrentSession = routing.isCurrentSession;
+          sessionTarget.isCurrent = routing.isCurrentSession;
+          sessionTarget.source = routing.sessionSource;
+          releaseSessionTarget = routing.release;
           return resolvedSlashRoute;
         }
         const { resolveAgentRoute } = await loadSlashDispatchRuntime();
@@ -586,7 +537,7 @@ export function createSlackCommandHandler(params: {
             : undefined;
         const menuModelContext =
           menuNeedsModelContext && menuRoute
-            ? resolveSlackCommandMenuModelContext({
+            ? await resolveSlackCommandMenuModelContext({
                 cfg,
                 agentId: menuRoute.agentId,
                 sessionKey: menuRoute.sessionKey,
@@ -606,7 +557,7 @@ export function createSlackCommandHandler(params: {
                 readOnly: true,
               })
             : undefined;
-        const menu = resolveCommandArgMenu({
+        const menu = await resolveCommandArgMenuAsync({
           command: commandDefinition,
           args: commandArgs,
           cfg,
@@ -615,6 +566,7 @@ export function createSlackCommandHandler(params: {
           catalog: menuModelCatalog,
         });
         if (menu) {
+          const route = menuRoute ?? (await resolveSlashRoute());
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;
           const title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
           const blocks = buildSlackCommandArgMenuBlocks({
@@ -632,6 +584,23 @@ export function createSlackCommandHandler(params: {
             blocks,
             response_type: "ephemeral",
           });
+          const commandId = p.eventTs ?? command.trigger_id;
+          if (commandId) {
+            const { recordDeliveredCommandExchange } = await loadSlashDispatchRuntime();
+            await recordDeliveredCommandExchange({
+              config: cfg,
+              agentId: route.agentId,
+              sessionKey: route.sessionKey,
+              assertCurrent: sessionTarget.source,
+              commandText: prompt,
+              commandId: `slack:${account.accountId}:${routeTarget.peerId}:${commandId}`,
+              replyId: "argument-menu",
+              replyText: buildSlackCompleteBlocksFallbackText(blocks, {
+                includeSelectOptions: true,
+                nativeDataFormat: "plain",
+              }),
+            });
+          }
           return false;
         }
       }
@@ -760,7 +729,7 @@ export function createSlackCommandHandler(params: {
           }
         : undefined;
       if (commandAuthorized) {
-        if (isCurrentSession?.() === false || p.onAdmitted?.() === false) {
+        if ((await sessionTarget.isCurrent?.()) === false || p.onAdmitted?.() === false) {
           await respondEphemeral("The selected run has already finished.");
           return false;
         }
@@ -784,16 +753,14 @@ export function createSlackCommandHandler(params: {
               return;
             }
             const pending = pendingSlashReplies.splice(0);
-            const settled = new Set<number>();
             try {
               await deliverSlashPayloads(
                 pending.map((entry) => entry.payload),
                 ({ replyIndex, visibleReplySent, error }) => {
                   const entry = pending[replyIndex];
-                  if (!entry || settled.has(replyIndex)) {
+                  if (!entry) {
                     return;
                   }
-                  settled.add(replyIndex);
                   if (error !== undefined) {
                     entry.finalization.reject(error);
                     return;
@@ -805,10 +772,9 @@ export function createSlackCommandHandler(params: {
               const unsettledError = isChannelPartialDeliveryError(error)
                 ? (error.cause ?? error)
                 : error;
-              for (const [replyIndex, entry] of pending.entries()) {
-                if (!settled.has(replyIndex)) {
-                  entry.finalization.reject(unsettledError);
-                }
+              // Settled promises retain their outcome; reject the undispatched tail too.
+              for (const entry of pending) {
+                entry.finalization.reject(unsettledError);
               }
               throw error;
             }
@@ -841,7 +807,7 @@ export function createSlackCommandHandler(params: {
           },
         },
         replyOptions: {
-          isCommandTargetCurrent: isCurrentSession,
+          isCommandTargetCurrent: sessionTarget.isCurrent,
           skillFilter: channelConfig?.skills,
           ...pluginCommandReplyOptions,
           ...builtInDispatch,
@@ -853,6 +819,8 @@ export function createSlackCommandHandler(params: {
       if (!(err instanceof SlackResponseAlreadyReportedError) && responseBudget.remaining() !== 0) {
         await respondEphemeral("Sorry, something went wrong handling that command.");
       }
+    } finally {
+      releaseSessionTarget?.();
     }
     return false;
   };
@@ -866,20 +834,14 @@ export async function registerSlackMonitorSlashCommands(params: {
   const { ctx, account, trackEvent } = params;
   const startupCfg = ctx.cfg;
   const runtime = ctx.runtime;
-  const resolveEventScope = (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }) =>
-    resolveSlackListenerEventScope({
-      identity: ctx.installationIdentity,
-      body: args.body,
-      context: args.context,
-      client: args.client,
-      clientOptions: ctx.app.webClientOptions,
+  const resolveEventScope = (
+    args: { body: unknown } & Pick<AllMiddlewareArgs, "context" | "client">,
+  ) =>
+    resolveSlackMonitorEventScope({
+      ...args,
+      ctx,
       onDrop: (reason) => runtime.log?.(`slack: drop slash payload (${reason})`),
     });
-
   const supportsInteractiveArgMenus = typeof ctx.app.action === "function";
   let supportsExternalArgMenus = typeof ctx.app.options === "function";
 
@@ -949,7 +911,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       providerSetting: account.config.commands?.nativeSkills,
       globalSetting: startupCfg.commands?.nativeSkills,
     })
-      ? listSkillCommandsForAgents({ cfg: startupCfg })
+      ? await prepareSkillCommandsForAgents({ cfg: startupCfg })
       : [];
     nativeCommands = listNativeCommandSpecsForConfig(startupCfg, {
       skillCommands,

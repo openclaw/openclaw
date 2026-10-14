@@ -1,9 +1,4 @@
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
-/**
- * Runtime context resolver for OpenClaw plugin tools.
- *
- * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertMemoryAudienceCurrent,
@@ -15,7 +10,6 @@ import { modelKey } from "./model-ref-shared.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-/** Options provided by agent runtime callers when invoking OpenClaw plugin tools. */
 export type OpenClawPluginToolOptions = Pick<
   OpenClawToolsOptions,
   | "agentSessionKey"
@@ -53,7 +47,6 @@ export type OpenClawPluginToolOptions = Pick<
   | "toolBindings"
 > & { activeProjectKeys?: readonly string[] };
 
-/** Resolves plugin-tool context inputs from runtime options and config state. */
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
   resolvedConfig?: OpenClawConfig;

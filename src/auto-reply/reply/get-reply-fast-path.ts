@@ -1,4 +1,3 @@
-// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -52,13 +51,13 @@ export function resolveGetReplyConfig(params: {
   if (configOverride == null) {
     return params.getRuntimeConfig();
   }
-  if (params.isFastTestEnv && !isCompleteReplyConfig(configOverride) && !isSlowReplyTestAllowed()) {
+  if (isCompleteReplyConfig(configOverride)) {
+    return configOverride;
+  }
+  if (params.isFastTestEnv && !isSlowReplyTestAllowed()) {
     throw new Error(
       "Fast reply tests must pass with withFastReplyConfig()/markCompleteReplyConfig(); set OPENCLAW_ALLOW_SLOW_REPLY_TESTS=1 to opt out.",
     );
-  }
-  if (isCompleteReplyConfig(configOverride)) {
-    return configOverride;
   }
   return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
 }
@@ -135,6 +134,9 @@ export async function initFastReplySessionState(params: {
   const resetPreservedSelection = resetTriggered
     ? resolveResetPreservedSelection({ entry: existingEntry })
     : {};
+  const channel = normalizeOptionalString(ctx.Provider);
+  const subject = normalizeOptionalString(ctx.GroupSubject);
+  const groupChannel = normalizeOptionalString(ctx.GroupChannel);
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -174,15 +176,9 @@ export async function initFastReplySessionState(params: {
     ttsAuto: existingEntry?.ttsAuto,
     responseUsage: existingEntry?.responseUsage,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
-    ...(normalizeOptionalString(ctx.Provider)
-      ? { channel: normalizeOptionalString(ctx.Provider) }
-      : {}),
-    ...(normalizeOptionalString(ctx.GroupSubject)
-      ? { subject: normalizeOptionalString(ctx.GroupSubject) }
-      : {}),
-    ...(normalizeOptionalString(ctx.GroupChannel)
-      ? { groupChannel: normalizeOptionalString(ctx.GroupChannel) }
-      : {}),
+    ...(channel ? { channel } : {}),
+    ...(subject ? { subject } : {}),
+    ...(groupChannel ? { groupChannel } : {}),
     topicName: normalizeOptionalString(ctx.TopicName) ?? existingEntry?.topicName,
   };
   sessionStore[sessionKey] = sessionEntry;

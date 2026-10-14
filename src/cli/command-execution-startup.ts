@@ -1,4 +1,3 @@
-// CLI startup presentation and config-before-plugin bootstrap.
 import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";

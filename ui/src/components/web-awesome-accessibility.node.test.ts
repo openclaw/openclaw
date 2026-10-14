@@ -87,6 +87,27 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
       .map((node) => node.name?.value ?? "");
   }
 
+  async function removePopoverTrigger(page: Page) {
+    await page.locator("wa-popover").evaluate(async (element: WaPopover) => {
+      element.for = null;
+      await element.updateComplete;
+    });
+  }
+
+  async function movePopoverToNewTrigger(page: Page) {
+    await page.locator("wa-popover").evaluate(async (element: WaPopover) => {
+      await element.hide();
+      element.remove();
+      element.removeAttribute("aria-label");
+      const host = document.body.appendChild(document.createElement("div"));
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = '<button id="trigger" aria-label="New project choices">Choose</button>';
+      root.append(element);
+      await element.updateComplete;
+      await element.show();
+    });
+  }
+
   it("names initially open dialogs and removes stale host names", async () => {
     await withPopover(true, async (page, accessibility) => {
       expect(await dialogNames(accessibility)).toEqual(["Choose project"]);
@@ -97,10 +118,7 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
       expect(await dialogNames(accessibility)).toEqual(["Open choices"]);
       await page.locator("#trigger").evaluate((element) => element.removeAttribute("aria-label"));
       expect(await dialogNames(accessibility)).toEqual(["Choices"]);
-      await popover.evaluate(async (element: WaPopover) => {
-        element.for = null;
-        await element.updateComplete;
-      });
+      await removePopoverTrigger(page);
       expect(await dialogNames(accessibility)).toEqual([""]);
     });
   });
@@ -129,17 +147,7 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
 
   it("rebinds its name after moving to another shadow root", async () => {
     await withPopover(false, async (page, accessibility) => {
-      await page.locator("wa-popover").evaluate(async (element: WaPopover) => {
-        await element.hide();
-        element.remove();
-        element.removeAttribute("aria-label");
-        const host = document.body.appendChild(document.createElement("div"));
-        const root = host.attachShadow({ mode: "open" });
-        root.innerHTML = '<button id="trigger" aria-label="New project choices">Choose</button>';
-        root.append(element);
-        await element.updateComplete;
-        await element.show();
-      });
+      await movePopoverToNewTrigger(page);
       expect(await dialogNames(accessibility)).toEqual(["New project choices"]);
       await page.locator("wa-popover").evaluate((element) => {
         element.setAttribute("aria-label", "Renamed choices");
@@ -151,10 +159,10 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
   it("keeps panel actions outside the tablist in the accessibility tree", async () => {
     await withAccessibility(
       `
-        const { render } = await import(${JSON.stringify(new URL(`/@fs${new URL(import.meta.resolve("lit")).pathname}`, server.baseUrl).href)});
-        const { renderPanelTabStrip } = await import(${JSON.stringify(new URL("src/components/panel-tab-strip.ts", server.baseUrl).href)});
+        const { render, createComponent } = await import(${JSON.stringify(new URL(`/@fs${new URL("./web.js", import.meta.resolve("@solidjs/web")).pathname}`, server.baseUrl).href)});
+        const { PanelTabStrip } = await import(${JSON.stringify(new URL("src/components/panel-tab-strip-solid.tsx", server.baseUrl).href)});
         render(
-          renderPanelTabStrip({
+          () => createComponent(PanelTabStrip, {
             tabs: ["first", "second"].map((id) => ({
               id,
               domId: id + "-tab",
@@ -170,7 +178,6 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
           }),
           root,
         );
-        await root.querySelector("wa-tab-group").updateComplete;
       `,
       async (_page, accessibility) => {
         const { nodes } = await accessibility.send("Accessibility.getFullAXTree");

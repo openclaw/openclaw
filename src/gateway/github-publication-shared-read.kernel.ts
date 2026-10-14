@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type {
   GitHubPublicationRow,
@@ -15,16 +15,16 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   assertReadableSharedGitHubPublication,
   checkSharedWorktreeReceipt,
-  githubPublicationDatabase,
-} from "./github-publication-store.js";
+} from "./github-publication-receipt.js";
+import { githubPublicationDatabase } from "./github-publication-store.worker.js";
 import { checkRepositoryGitHubPublication as checked } from "./github-repository-publication.kernel.js";
 
 const table = "github_repository_publication_requests";
-const repositoryQuery = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const repositoryQuery = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
 /** Execution resolvers open mutable stores. Observation uses their recorded owners on this reader. */
 function readSharedGitHubPublicationWorkspace(
-  db: DatabaseSync,
+  db: EngineConnection,
   session: SharedGitHubPublicationReadInput["session"],
   entry: SharedGitHubPublicationReadInput["entry"],
 ) {
@@ -103,7 +103,7 @@ function readSharedGitHubPublicationWorkspace(
 
 /** Shared observation never initializes schema, prepares identity, or resumes publication. */
 export function readSharedGitHubPublicationRequestInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   session: SharedGitHubPublicationReadInput["session"],
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],
@@ -190,7 +190,7 @@ export function readSharedGitHubPublicationRequestInDatabase(
 
 /** Filter the mixed table before decoding; a private request ID never grants shared access. */
 export function readSharedRepositoryGitHubPublicationInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   session: SharedGitHubPublicationReadInput["session"],
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],

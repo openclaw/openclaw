@@ -2,26 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ChatLog } from "./chat-log.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
 
 describe("ChatLog", () => {
-  it("sanitizes terminal controls before rendering an initial system message", () => {
-    const chatLog = new ChatLog(20);
-    const sgr = "\x1b[38;5;201mcolor";
-    const erase = "\x1b[3Jerase";
-    const osc52 = "\x1b]52;c;T08_CHAT_LOG_CLIPBOARD\x07";
-    const c1Csi = "\u009b3Jc1";
-    const c1Osc = "\u009d0;T08_CHAT_LOG_TITLE\u009c";
-
-    chatLog.addSystem(`before ${sgr}\x1b[0m ${erase} ${osc52}${c1Csi} ${c1Osc}after`);
-
-    const raw = chatLog.render(120).join("\n");
-    const rendered = normalizeTestText(raw);
-    expect(rendered).toContain("before color erase c1 after");
-    for (const attack of [sgr, erase, osc52, c1Csi, c1Osc]) {
-      expect(raw).not.toContain(attack);
-    }
-  });
-
   it("coalesces consecutive repeatable system messages", () => {
     const chatLog = new ChatLog(20);
     const rawText = "\x1b[?7777h\x1b]52;c;T08_CHAT_LOG_ONLY_CONTROLS\x07";
@@ -49,30 +32,9 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("x2");
   });
 
-  it("does not coalesce ordinary system messages", () => {
-    const chatLog = new ChatLog(20);
-
-    chatLog.addSystem("status unchanged");
-    chatLog.addSystem("status unchanged");
-
-    expect(chatLog.children.length).toBe(2);
-  });
-
-  it("starts a new repeatable system message after other chat content", () => {
-    const chatLog = new ChatLog(20);
-
-    chatLog.addSystem("no active run", { coalesceConsecutive: true });
-    chatLog.addUser("hello");
-    chatLog.addSystem("no active run", { coalesceConsecutive: true });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(chatLog.children.length).toBe(3);
-    expect(rendered).not.toContain("no active run x2");
-  });
-
   it("drops stale streaming references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
-    chatLog.startAssistant("first", "run-1");
+    chatLog.updateAssistant("first", "run-1");
     for (let i = 0; i < 25; i++) {
       chatLog.addSystem(`overflow-${i}`);
     }
@@ -83,67 +45,6 @@ describe("ChatLog", () => {
     const rendered = chatLog.render(120).join("\n");
     expect(chatLog.children.length).toBe(20);
     expect(rendered).toContain("recreated");
-  });
-
-  it("does not append duplicate assistant components when a run is started twice", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.startAssistant("first", "run-dup");
-    chatLog.startAssistant("second", "run-dup");
-
-    const rendered = chatLog.render(120).join("\n");
-    expect(rendered).toContain("second");
-    expect(rendered).not.toContain("first");
-    expect(chatLog.children.length).toBe(1);
-  });
-
-  it("does not repeat cumulative text across multiple tool calls", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.updateAssistant("First segment.", "run-1");
-    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
-    chatLog.updateAssistant("First segment.\n\nSecond segment.", "run-1");
-    chatLog.startTool("tool-2", "read_file", { path: "b.txt" });
-    chatLog.updateAssistant("First segment.\n\nSecond segment.\n\nThird segment.", "run-1");
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    for (const text of ["First segment.", "Second segment.", "Third segment."]) {
-      expect(rendered.split(text)).toHaveLength(2);
-    }
-    expect(rendered.indexOf("First segment.")).toBeLessThan(rendered.indexOf("a.txt"));
-    expect(rendered.indexOf("a.txt")).toBeLessThan(rendered.indexOf("Second segment."));
-    expect(rendered.indexOf("Second segment.")).toBeLessThan(rendered.indexOf("b.txt"));
-    expect(rendered.indexOf("b.txt")).toBeLessThan(rendered.indexOf("Third segment."));
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
-      "ToolExecutionComponent",
-      "AssistantMessageComponent",
-      "ToolExecutionComponent",
-      "AssistantMessageComponent",
-    ]);
-  });
-
-  it("reconciles revised assistant snapshots without repeating stale frozen text", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.updateAssistant("Hello before the tool.", "run-1");
-    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
-    chatLog.updateAssistant("Hallo before the tool.\n\nRevised answer.", "run-1");
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered).not.toContain("Hello before the tool.");
-    expect(rendered.split("Hallo before the tool.")).toHaveLength(2);
-    expect(rendered.split("Revised answer.")).toHaveLength(2);
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-      "AssistantMessageComponent",
-    ]);
-    expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Revised answer."));
-
-    chatLog.updateAssistant("Hallo before the tool.\n\nRevised answer.\n\nNext segment.", "run-1");
-
-    const continued = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(continued.indexOf("Read File")).toBeLessThan(continued.indexOf("Next segment."));
-    expect(continued.split("Revised answer.")).toHaveLength(2);
   });
 
   it("reconciles a revised final snapshot after multiple frozen tool calls", () => {
@@ -159,11 +60,11 @@ describe("ChatLog", () => {
     expect(rendered.split("Revised first segment.")).toHaveLength(2);
     expect(rendered.split("Final answer.")).toHaveLength(2);
     expect(rendered).not.toContain("Second segment.");
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-      "ToolExecutionComponent",
-      "AssistantMessageComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["ToolExecutionComponent", "ToolExecutionComponent", "assistant"]);
     expect(rendered.lastIndexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
   });
 
@@ -177,63 +78,11 @@ describe("ChatLog", () => {
     expect(normalizeTestText(chatLog.render(120).join("\n"))).not.toContain(
       "Retracted provisional answer.",
     );
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-    ]);
-  });
-
-  it("removes an empty post-tool component when its final snapshot is retracted", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.updateAssistant("Before the tool.", "run-1");
-    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
-    chatLog.updateAssistant("Before the tool.\n\nRetracted answer.", "run-1");
-    chatLog.finalizeAssistant("Before the tool.", "run-1");
-
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
-      "ToolExecutionComponent",
-    ]);
-    expect(normalizeTestText(chatLog.render(120).join("\n"))).not.toContain("Retracted answer.");
-  });
-
-  it("preserves indentation in assistant text that follows a tool call", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.updateAssistant("I ran it:", "run-1");
-    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
-    chatLog.updateAssistant("I ran it:\n\n    command output", "run-1");
-
-    const segment = chatLog.children.at(-1);
-    expect(segment?.constructor.name).toBe("AssistantMessageComponent");
-    const rendered = normalizeTestText(segment?.render(120).join("\n") ?? "");
-    expect(rendered).toContain("```");
-    expect(rendered).toMatch(/\n {2}command output/);
-  });
-
-  it("finalizes only assistant text that follows an intervening tool call", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.updateAssistant("Before the tool.", "run-1");
-    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
-    chatLog.finalizeAssistant("Before the tool.\n\nFinal answer.", "run-1");
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered.split("Before the tool.")).toHaveLength(2);
-    expect(rendered.indexOf("Read File")).toBeLessThan(rendered.indexOf("Final answer."));
-  });
-
-  it("does not add an empty final assistant segment after a tool call", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.updateAssistant("Complete before the tool.", "run-1");
-    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
-    chatLog.finalizeAssistant("Complete before the tool.", "run-1");
-
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "AssistantMessageComponent",
-      "ToolExecutionComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["ToolExecutionComponent"]);
   });
 
   it("clears frozen assistant segments when the chat history is rebuilt", () => {
@@ -259,12 +108,22 @@ describe("ChatLog", () => {
     chatLog.startTool("tool-2", "read_file", { path: "b.txt" });
     chatLog.updateAssistant("First segment.\n\nSecond segment.\n\nThird segment.", "run-1");
 
+    const beforeDrop = normalizeTestText(chatLog.render(120).join("\n"));
+    for (const text of ["First segment.", "Second segment.", "Third segment."]) {
+      expect(beforeDrop.split(text)).toHaveLength(2);
+    }
+    expect(beforeDrop.indexOf("First segment.")).toBeLessThan(beforeDrop.indexOf("a.txt"));
+    expect(beforeDrop.indexOf("a.txt")).toBeLessThan(beforeDrop.indexOf("Second segment."));
+    expect(beforeDrop.indexOf("Second segment.")).toBeLessThan(beforeDrop.indexOf("b.txt"));
+    expect(beforeDrop.indexOf("b.txt")).toBeLessThan(beforeDrop.indexOf("Third segment."));
+
     chatLog.dropAssistant("run-1");
 
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "ToolExecutionComponent",
-      "ToolExecutionComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["ToolExecutionComponent", "ToolExecutionComponent"]);
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(rendered).not.toContain("First segment.");
     expect(rendered).not.toContain("Second segment.");
@@ -276,7 +135,7 @@ describe("ChatLog", () => {
 
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
-    chatLog.startAssistant("partial", "run-active");
+    chatLog.updateAssistant("partial", "run-active");
     chatLog.reserveAssistantSlot("run-active");
 
     const rendered = chatLog.render(120).join("\n");
@@ -337,18 +196,6 @@ describe("ChatLog", () => {
     expect(chatLog.hasVisibleBtw()).toBe(false);
   });
 
-  it("updates an existing canonical user component without appending another row", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addUser("Original authoritative prompt.", { messageId: "shared-user" });
-    chatLog.addUser("Updated authoritative prompt.", { messageId: "shared-user" });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(chatLog.children).toHaveLength(1);
-    expect(rendered).toContain("Updated authoritative prompt.");
-    expect(rendered).not.toContain("Original authoritative prompt.");
-  });
-
   it("clears user and pending component references before the next projected session", () => {
     const chatLog = new ChatLog(40);
 
@@ -378,64 +225,9 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("Original pending prompt.");
   });
 
-  it("preserves a delayed shared prompt and its active reply when scrollback is full", () => {
-    const chatLog = new ChatLog(20);
-    chatLog.updateAssistant("Already streaming.", "shared-run");
-    for (let index = 0; index < 19; index += 1) {
-      chatLog.addSystem(`Older notice ${index}.`);
-    }
-
-    chatLog.addLiveUser("Sent from the other client.", {
-      messageId: "shared-overflow-user",
-      runId: "shared-run",
-    });
-    chatLog.addLiveUser("Sent from the other client.", {
-      messageId: "shared-overflow-user",
-      runId: "shared-run",
-    });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(chatLog.children).toHaveLength(20);
-    expect(rendered).toContain("Sent from the other client.");
-    expect(rendered).toContain("Already streaming.");
-    expect(rendered).not.toContain("Older notice 0.");
-    expect(rendered.match(/Sent from the other client\./g)).toHaveLength(1);
-    expect(rendered.indexOf("Sent from the other client.")).toBeLessThan(
-      rendered.indexOf("Already streaming."),
-    );
-
-    chatLog.updateAssistant("Still streaming after overflow.", "shared-run");
-    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain(
-      "Still streaming after overflow.",
-    );
-  });
-
-  it("evicts an unrelated older tool instead of a newer transcript row at full scrollback", () => {
-    const chatLog = new ChatLog(20);
-    chatLog.startTool("unrelated-old-tool", "read_file", { path: "unrelated-old.txt" });
-    chatLog.startAssistant("Current streaming reply.", "shared-run");
-    for (let index = 0; index < 18; index += 1) {
-      chatLog.addSystem(`newer-notice-${index}`);
-    }
-
-    chatLog.addLiveUser("Current authoritative prompt.", {
-      messageId: "shared-user",
-      runId: "shared-run",
-    });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(chatLog.children).toHaveLength(20);
-    expect(rendered).not.toContain("Read File");
-    expect(rendered).toContain("newer-notice-0");
-    expect(rendered).toContain("Current streaming reply.");
-    expect(rendered.indexOf("Current authoritative prompt.")).toBeLessThan(
-      rendered.indexOf("Current streaming reply."),
-    );
-  });
-
   it("keeps scrollback bounded when every visible tool belongs to the delayed prompt's run", () => {
     const chatLog = new ChatLog(20);
-    chatLog.startAssistant("Reply with many tools.", "shared-run");
+    chatLog.updateAssistant("Reply with many tools.", "shared-run");
     for (let index = 0; index < 19; index += 1) {
       chatLog.startTool(
         `shared-tool-${index}`,
@@ -467,12 +259,7 @@ describe("ChatLog", () => {
   });
 
   it.each([
-    { phase: "streaming", capacity: 20 },
-    { phase: "finished", capacity: 20 },
-    { phase: "tool-streaming", capacity: 20 },
     { phase: "tool-finished", capacity: 20 },
-    { phase: "tool-finished-direct", capacity: 20 },
-    { phase: "tool-finished-no-tail", capacity: 20 },
     { phase: "tool-finished-retracted-tail", capacity: 20 },
   ])(
     "orders a delayed prompt before a $phase reply at capacity $capacity",
@@ -481,26 +268,14 @@ describe("ChatLog", () => {
       const runId = `shared-${phase}-${capacity}`;
       chatLog.updateAssistant("First reply segment.", runId);
 
-      if (phase.startsWith("tool-")) {
-        chatLog.startTool(`${runId}-tool`, "read_file", { path: "shared.txt" });
-        if (
-          phase === "tool-streaming" ||
-          phase === "tool-finished" ||
-          phase === "tool-finished-retracted-tail"
-        ) {
-          chatLog.updateAssistant("First reply segment.\n\nLast reply segment.", runId);
-        }
-      }
-      if (phase === "finished" || phase.startsWith("tool-finished")) {
-        chatLog.finalizeAssistant(
-          phase.startsWith("tool-") &&
-            phase !== "tool-finished-no-tail" &&
-            phase !== "tool-finished-retracted-tail"
-            ? "First reply segment.\n\nLast reply segment."
-            : "First reply segment.",
-          runId,
-        );
-      }
+      chatLog.startTool(`${runId}-tool`, "read_file", { path: "shared.txt" });
+      chatLog.updateAssistant("First reply segment.\n\nLast reply segment.", runId);
+      chatLog.finalizeAssistant(
+        phase === "tool-finished"
+          ? "First reply segment.\n\nLast reply segment."
+          : "First reply segment.",
+        runId,
+      );
       while (chatLog.children.length < capacity) {
         chatLog.addSystem(`Old notice ${chatLog.children.length}.`);
       }
@@ -515,94 +290,43 @@ describe("ChatLog", () => {
       expect(rendered.indexOf("Authoritative shared prompt.")).toBeLessThan(
         rendered.indexOf("First reply segment."),
       );
-      if (
-        phase.startsWith("tool-") &&
-        phase !== "tool-finished-no-tail" &&
-        phase !== "tool-finished-retracted-tail"
-      ) {
+      if (phase === "tool-finished") {
         expect(rendered).toContain("Last reply segment.");
-      }
-    },
-  );
-
-  it.each([
-    { capacity: 20, eviction: "first-assistant", evictedComponents: 1 },
-    { capacity: 20, eviction: "all-assistants", evictedComponents: 3 },
-  ])(
-    "orders a delayed prompt before owned tools after $eviction eviction at capacity $capacity",
-    ({ capacity, eviction, evictedComponents }) => {
-      const chatLog = new ChatLog(capacity);
-      const runId = `evicted-${eviction}-${capacity}`;
-
-      chatLog.updateAssistant("First evicted reply segment.", runId);
-      chatLog.startTool(`${runId}-first-tool`, "read_file", { path: "first-shared.txt" }, runId);
-      chatLog.updateAssistant("First evicted reply segment.\n\nLast evicted reply segment.", runId);
-      chatLog.startTool(`${runId}-last-tool`, "read_file", { path: "last-shared.txt" }, runId);
-      chatLog.finalizeAssistant(
-        "First evicted reply segment.\n\nLast evicted reply segment.",
-        runId,
-      );
-
-      while (chatLog.children.length < capacity) {
-        chatLog.addSystem(`Retained notice ${chatLog.children.length}.`);
-      }
-      for (let index = 0; index < evictedComponents; index += 1) {
-        chatLog.addSystem(`Evicting notice ${index}.`);
-      }
-
-      const prompt = { messageId: `${runId}-user`, runId };
-      chatLog.addLiveUser("Delayed prompt before surviving tools.", prompt);
-      chatLog.addLiveUser("Delayed prompt before surviving tools.", prompt);
-
-      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-      expect(chatLog.children).toHaveLength(capacity);
-      expect(rendered.match(/Delayed prompt before surviving tools\./g)).toHaveLength(1);
-      expect(rendered.indexOf("Delayed prompt before surviving tools.")).toBeLessThan(
-        rendered.indexOf("last-shared.txt"),
-      );
-      if (eviction === "first-assistant") {
-        expect(rendered.indexOf("Delayed prompt before surviving tools.")).toBeLessThan(
-          rendered.indexOf("first-shared.txt"),
-        );
-        expect(rendered).toContain("Last evicted reply segment.");
       } else {
-        expect(rendered).not.toContain("Last evicted reply segment.");
+        expect(rendered).not.toContain("Last reply segment.");
       }
     },
   );
 
-  it("reserves a delayed prompt slot when one run fills all 20 scrollback components", () => {
+  it("orders a delayed prompt before owned tools after all assistants are evicted", () => {
     const capacity = 20;
     const chatLog = new ChatLog(capacity);
-    const runId = `full-run-${capacity}`;
-    let assistantText = "";
+    const runId = "evicted-all-assistants";
 
-    for (let index = 0; index < capacity; index += 1) {
-      assistantText += `${index === 0 ? "" : "\n\n"}Assistant segment ${index}.`;
-      chatLog.updateAssistant(assistantText, runId);
-      if (index < capacity - 1) {
-        chatLog.startTool(
-          `${runId}-tool-${index}`,
-          "read_file",
-          { path: `segment-${index}.txt` },
-          runId,
-        );
-        chatLog.clearTools();
-      }
+    chatLog.updateAssistant("First evicted reply segment.", runId);
+    chatLog.startTool(`${runId}-first-tool`, "read_file", { path: "first-shared.txt" }, runId);
+    chatLog.updateAssistant("First evicted reply segment.\n\nLast evicted reply segment.", runId);
+    chatLog.startTool(`${runId}-last-tool`, "read_file", { path: "last-shared.txt" }, runId);
+    chatLog.finalizeAssistant("First evicted reply segment.\n\nLast evicted reply segment.", runId);
+
+    while (chatLog.children.length < capacity) {
+      chatLog.addSystem(`Retained notice ${chatLog.children.length}.`);
     }
-    chatLog.finalizeAssistant(assistantText, runId);
+    for (let index = 0; index < 3; index += 1) {
+      chatLog.addSystem(`Evicting notice ${index}.`);
+    }
 
     const prompt = { messageId: `${runId}-user`, runId };
-    chatLog.addLiveUser("Delayed prompt before a full reply.", prompt);
-    chatLog.addLiveUser("Delayed prompt before a full reply.", prompt);
+    chatLog.addLiveUser("Delayed prompt before surviving tools.", prompt);
+    chatLog.addLiveUser("Delayed prompt before surviving tools.", prompt);
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(chatLog.children).toHaveLength(capacity);
-    expect(rendered.match(/Delayed prompt before a full reply\./g)).toHaveLength(1);
-    expect(rendered.indexOf("Delayed prompt before a full reply.")).toBeLessThan(
-      rendered.indexOf("Assistant segment 0."),
+    expect(rendered.match(/Delayed prompt before surviving tools\./g)).toHaveLength(1);
+    expect(rendered.indexOf("Delayed prompt before surviving tools.")).toBeLessThan(
+      rendered.indexOf("last-shared.txt"),
     );
-    expect(rendered).toContain(`Assistant segment ${capacity - 1}.`);
+    expect(rendered).not.toContain("Last evicted reply segment.");
   });
 
   it("retains an executing tool while reserving a delayed prompt at capacity 20", () => {

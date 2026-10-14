@@ -86,7 +86,7 @@ export type OpenClawDatabasePreflightOptions = {
   supportedVersions?: OpenClawSchemaVersions;
   verifyCurrentSchemaShape?: boolean;
   requireStartupMigrationReadiness?: boolean;
-  /** Consume this startup owner's unchanged compatibility headers once, never readiness proof. */
+  /** Consume this startup owner's compatibility headers once, never readiness proof. */
   reuseStartupSchemaPreparation?: boolean;
   configuredAgentDatabaseTargets?:
     | readonly { agentId: string; path: string }[]

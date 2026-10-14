@@ -64,12 +64,82 @@ the Gateway already runs inside a managed Google Cloud environment.
     </Tip>
 
     With a configured API key, OpenClaw refreshes Google AI Studio's text-model
-    catalog from the Gemini `models.list` API. Newly released Gemini 3 Pro, Flash,
-    and Flash-Lite variants therefore appear in
+    catalog from the Gemini `models.list` API. Supported Gemini text models therefore appear in
     `openclaw models list --provider google` without waiting for an OpenClaw
     release. Failed refreshes report the failure and retain the last successful
     inventory, or bundled models before the first success. A successful empty
     response clears discovered models. Vertex uses its separate static catalog.
+
+  </Tab>
+
+  <Tab title="Vertex AI (ADC)">
+    **Recommended for:** Gateway instances running inside Google Cloud (GCE,
+    GKE, Cloud Run) or workstations already authenticated through gcloud
+    Application Default Credentials.
+
+    <Steps>
+      <Step title="Authenticate with gcloud ADC">
+        On a workstation, run:
+
+        ```bash
+        gcloud auth application-default login
+        ```
+
+        On a Google Cloud VM with an attached service account, the metadata
+        server already provides credentials and no file is needed.
+      </Step>
+      <Step title="Set project and location">
+        Both are required in the gateway service environment:
+
+        ```bash
+        export GOOGLE_CLOUD_PROJECT="my-project"
+        export GOOGLE_CLOUD_LOCATION="us-central1"
+        ```
+
+        `GCLOUD_PROJECT` is also accepted for the project. Without a project,
+        runs fail with `Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.`
+        Without a location, the error is `Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.`
+      </Step>
+      <Step title="Credential: automatic discovery or manual sentinel">
+        With a recognized ADC file (created by
+        `gcloud auth application-default login`) **and** the project and
+        location variables set, OpenClaw discovers `google-vertex`
+        automatically — nothing needs to be stored.
+
+        Manual storage is only needed for metadata-only credentials (for
+        example a GCE VM with an attached service account and no ADC file on
+        disk) or to select the ADC path explicitly. The ADC path is selected
+        by a sentinel value, not a real key — store exactly
+        `gcp-vertex-credentials`:
+
+        ```bash
+        openclaw models auth paste-api-key --provider google-vertex
+        # paste exactly: gcp-vertex-credentials
+        ```
+
+        <Warning>
+        Other stored values are sent in the `x-goog-api-key` header, not as
+        ADC credentials. Do not paste an OAuth access token from
+        `gcloud auth print-access-token`: it is not an API key and can cause
+        an authentication error such as `401 UNAUTHENTICATED`.
+        </Warning>
+      </Step>
+      <Step title="List the Vertex catalog">
+        ```bash
+        openclaw models list --refresh --all --provider google-vertex
+        ```
+
+        `--all` includes models you have not configured. `--refresh` populates
+        the local catalog when it has not been loaded yet; it does not query
+        a live Vertex model inventory or verify that ADC can obtain a token.
+      </Step>
+    </Steps>
+
+    <Tip>
+    Vertex uses a separate static model catalog; new Gemini variants appear
+    there per OpenClaw release rather than through the live refresh used by the
+    AI Studio key path.
+    </Tip>
 
   </Tab>
 
@@ -147,6 +217,17 @@ the Gateway already runs inside a managed Google Cloud environment.
 `google/gemini-3-pro-preview` was retired on 2026-03-09; use `google/gemini-3.1-pro-preview` instead. Re-running Gemini API key setup (`openclaw onboard --auth-choice gemini-api-key` or `openclaw models auth login --provider google`) rewrites a stale configured default to the current model.
 </Note>
 
+## Gemini 4 Argon
+
+`google/gemini-4-argon` is available in the bundled catalog, with a 1,048,576-token
+context window and up to 65,536 output tokens. `google/gemini-4` is its shorthand;
+the same model ID and shorthand are available for `google-vertex`.
+
+Gemini 4 Argon supports text, image, audio, video, and PDF inputs, function
+calling, structured outputs, and search grounding. It uses implicit context
+caching only: explicit `cachedContents` handles and the Live API are not
+supported. See [Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon).
+
 ## Capabilities
 
 | Capability             | Supported                     |
@@ -162,6 +243,11 @@ the Gateway already runs inside a managed Google Cloud environment.
 | Web search (Grounding) | Yes                           |
 | Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
 | Gemma 4 models         | Yes                           |
+
+Responses marked `MAX_TOKENS` or `CONTINUATION` reached a generation limit.
+OpenClaw preserves their partial content and reports a length-limited result.
+Function calls in that partial response remain incomplete instead of becoming
+an executable tool-use turn.
 
 ## Web search
 
@@ -194,15 +280,18 @@ Gemini web search reuses `models.providers.google.baseUrl`. See
 [Gemini search](/tools/gemini-search) for the provider-specific tool behavior.
 
 <Tip>
-Gemini 3 models use `thinkingLevel` rather than `thinkingBudget`. OpenClaw maps
-Gemini 3, Gemini 3.1, and `gemini-*-latest` alias reasoning controls to
+Gemini 3 and Gemini 4 models use `thinkingLevel` rather than `thinkingBudget`.
+OpenClaw maps these models and `gemini-*-latest` alias reasoning controls to
 `thinkingLevel` so default/low-latency runs do not send disabled
 `thinkingBudget` values.
 
 `/think adaptive` keeps Google's dynamic thinking semantics instead of choosing
-a fixed OpenClaw level. Gemini 3 and Gemini 3.1 omit a fixed `thinkingLevel` so
+a fixed OpenClaw level. Gemini 3 and Gemini 4 omit a fixed `thinkingLevel` so
 Google can choose the level; Gemini 2.5 sends Google's dynamic sentinel
 `thinkingBudget: -1`.
+
+Gemini 4 Argon supports `low`, `medium`, and `high`. OpenClaw maps `minimal` and
+`off` to `low`, because thinking cannot be fully disabled on this model.
 
 Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw
 rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4.
@@ -559,7 +648,9 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
   <Accordion title="Direct Gemini cache reuse">
     For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw
-    passes a configured `cachedContent` handle through to Gemini requests.
+    passes a configured `cachedContent` handle through to supported Gemini models.
+    Gemini 4 Argon supports implicit caching only; do not configure an explicit
+    cache handle for it.
 
     - Configure per-model or global params with either
       `cachedContent` or legacy `cached_content`

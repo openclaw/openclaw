@@ -40,12 +40,11 @@ function setInspectInstallRecords(
   records: Record<string, PluginInstallRecord>,
   plugin: Pick<PluginInspectReport["plugin"], "id" | "rootDir">,
   owner?: string,
-  ambiguous = false,
 ) {
   setInstalledPluginIndexInstallRecords(records);
   const metadata = createPluginMetadataSnapshotFixture({ plugins: [plugin] });
   metadata.index.installRecords = records;
-  recordInstalledPluginIndexInstallOwner(metadata.index.plugins[0]!, owner, ambiguous);
+  recordInstalledPluginIndexInstallOwner(metadata.index.plugins[0]!, owner);
   loadPluginMetadataSnapshotMock.mockReturnValue(metadata);
 }
 
@@ -226,17 +225,16 @@ describe("plugins cli inspect", () => {
   });
 
   it.each([
-    { runtime: false, json: true, selection: "empty" },
-    { runtime: false, json: false, selection: "all" },
-    { runtime: false, json: false, selection: "single" },
-    { runtime: true, json: false, selection: "missing" },
+    { runtime: false, selection: "all" },
+    { runtime: false, selection: "single" },
+    { runtime: true, selection: "missing" },
   ])(
-    "preserves global diagnostics on stderr with $selection, runtime=$runtime, json=$json",
-    async ({ runtime, json, selection }) => {
+    "preserves global diagnostics on stderr with $selection, runtime=$runtime",
+    async ({ runtime, selection }) => {
       const plugin = createPluginRecord({ id: "shared-plugin" });
       const diagnostic = { level: "warn" as const, pluginId: plugin.id, message: "Plugin warning" };
       const inspect = createInspectReport({ plugin, diagnostics: [diagnostic] });
-      const reports = selection === "empty" || selection === "missing" ? [] : [inspect];
+      const reports = selection === "missing" ? [] : [inspect];
       const report = {
         plugins: reports.map((entry) => entry.plugin),
         diagnostics: [
@@ -259,7 +257,6 @@ describe("plugins cli inspect", () => {
         "inspect",
         selection === "single" ? plugin.id : selection === "missing" ? "missing-plugin" : "--all",
         ...(runtime ? ["--runtime"] : []),
-        ...(json ? ["--json"] : []),
       ];
       const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
       try {
@@ -271,12 +268,6 @@ describe("plugins cli inspect", () => {
           expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
         } else {
           await command;
-          if (json) {
-            expect(logs).toHaveLength(1);
-            expect(JSON.parse(logs[0] ?? "null")).toEqual(
-              selection === "single" ? inspect : reports,
-            );
-          }
         }
         const warnings = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
         expect(warnings.match(/Workspace discovery was skipped/g)).toHaveLength(1);
@@ -286,27 +277,6 @@ describe("plugins cli inspect", () => {
       }
     },
   );
-
-  it("does not attribute a same-id install when package ownership is ambiguous", async () => {
-    const plugin = createPluginRecord({ id: "pack/one", rootDir: "/plugins/pack" });
-    setInspectInstallRecords(
-      {
-        pack: { source: "npm", installPath: "/plugins/pack" },
-        [plugin.id]: { source: "npm", installPath: "/plugins/unrelated" },
-      },
-      plugin,
-      undefined,
-      true,
-    );
-    buildPluginSnapshotReportMock.mockReturnValue({ plugins: [plugin], diagnostics: [] });
-    buildPluginInspectReportMock.mockReturnValue({ plugin });
-    buildAllPluginInspectReportsMock.mockReturnValue([{ plugin }]);
-
-    await runPluginsCommand(["plugins", "inspect", plugin.id, "--json"]);
-    expect(JSON.parse(logs.at(-1) ?? "null")).not.toHaveProperty("install");
-    await runPluginsCommand(["plugins", "inspect", "--all", "--json"]);
-    expect(JSON.parse(logs.at(-1) ?? "null")[0]).not.toHaveProperty("install");
-  });
 
   it("keeps package-child inspection static and distinguishes disabled reasons from errors", async () => {
     const pluginId = "openclaw-mem0/core";

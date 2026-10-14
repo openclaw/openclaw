@@ -17,7 +17,10 @@ import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
-import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
+import {
+  createEmbeddedAttemptIdleInterruption,
+  createEmbeddedAttemptRunAbort,
+} from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -60,7 +63,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { onModelRequest, onModelUsage, getPromptCacheObservation } =
+  const { onModelRequest, onModelUsage, getPromptCacheObservation, isModelCallActive } =
     installEmbeddedAttemptStreamGuards(input, {
       onRejectedProviderReplayRepaired: () => {
         repairedRejectedProviderReplay = true;
@@ -98,18 +101,13 @@ export async function runEmbeddedAttemptExecutionPhase(
     state: input.state,
   });
   input.externalAbortController.setRunAbort(abortRun);
-  idleTimeoutTriggerRef.current = (error) => {
-    // Caller cancellation owns the terminal outcome when it beats a late watchdog callback.
-    if (input.runAbortController.signal.aborted) {
-      return;
-    }
-    mergeTerminal({
-      kind: "timeout",
-      phase: activeSession.isCompacting ? "compaction" : "prompt",
-      source: "idle",
-    });
-    abortRun(true, error);
-  };
+  const interruptIdleRequest = createEmbeddedAttemptIdleInterruption({
+    runAbortController: input.runAbortController,
+    activeSession,
+    state,
+    abortRun,
+  });
+  idleTimeoutTriggerRef.current = interruptIdleRequest;
   const abortable = <T>(promise: Promise<T>): Promise<T> =>
     abortableWithSignal(input.runAbortController.signal, promise);
   const promptActiveSession = (
@@ -131,18 +129,14 @@ export async function runEmbeddedAttemptExecutionPhase(
         ),
       );
     });
-  const onBlockReply = attempt.onBlockReply
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReply,
-      )
-    : undefined;
-  const onBlockReplyFlush = attempt.onBlockReplyFlush
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReplyFlush,
-      )
-    : undefined;
+  const bindTranscriptCallback = <TArgs extends unknown[], TResult>(
+    callback: ((...args: TArgs) => TResult) | undefined,
+  ) =>
+    callback
+      ? bindOwnedSessionTranscriptWrites(input.sessionLock.ownedTranscriptWriteContext, callback)
+      : undefined;
+  const onBlockReply = bindTranscriptCallback(attempt.onBlockReply);
+  const onBlockReplyFlush = bindTranscriptCallback(attempt.onBlockReplyFlush);
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
@@ -151,6 +145,11 @@ export async function runEmbeddedAttemptExecutionPhase(
     runAbortController: input.runAbortController,
     abortRun,
     markExternalAbort: () => mergeTerminal({ kind: "aborted", source: "external" }),
+    recoverStalledModelCall: () =>
+      isModelCallActive() &&
+      interruptIdleRequest(
+        new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+      ),
     getRunState: () => {
       const terminal = projectAgentRunAttemptTerminal(state.terminal);
       return {

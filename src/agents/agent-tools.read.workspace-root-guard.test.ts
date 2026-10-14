@@ -173,7 +173,6 @@ describe("read path normalization", () => {
       undefined,
     );
   });
-
   it("rejects paths emptied by suffix stripping without reading", async () => {
     const { tool, execute } = createToolHarness();
     await expect(

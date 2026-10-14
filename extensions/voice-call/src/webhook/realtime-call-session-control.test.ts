@@ -3,6 +3,7 @@ import type {
   RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CallRecord } from "../types.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import {
   buildVerbatimGreetingInstructions,
@@ -13,6 +14,32 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("realtime call activity pause", () => {
+  it("does not time speech idle while the opening hold is active", () => {
+    vi.useFakeTimers();
+    try {
+      let paused = true;
+      const onIdle = vi.fn();
+      const activity = createRealtimeCallActivityController({
+        idleHangupMs: 1_000,
+        isPaused: () => paused,
+        onIdle,
+        onMediaWarning: () => {},
+        onMediaTimeout: () => {},
+      });
+      activity.start();
+      vi.advanceTimersByTime(5_000);
+      expect(onIdle).not.toHaveBeenCalled();
+      paused = false;
+      activity.noteSpeech();
+      vi.advanceTimersByTime(1_000);
+      expect(onIdle).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("realtime call session control", () => {
@@ -93,6 +120,88 @@ describe("realtime call session control", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     expect(triggerGreeting).toHaveBeenCalledOnce();
     expect(triggerGreeting).toHaveBeenCalledWith("Exact greeting");
+  });
+
+  it.each(["human", "unknown", "timeout", "machine_start", "machine_end_other"])(
+    "holds the realtime opening and audio until AMD returns %s",
+    async (classification) => {
+      vi.useFakeTimers();
+      const call: Pick<CallRecord, "direction" | "metadata"> = {
+        direction: "outbound",
+        metadata: { voicemailManagedByHost: true, mode: "conversation" },
+      };
+      const triggerGreeting = vi.fn();
+      const controller = createOutboundGreetingController({
+        enabled: true,
+        instructions: "Exact opening",
+        call,
+      });
+      controller.onReady({ triggerGreeting } as unknown as RealtimeVoiceBridgeSession);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(triggerGreeting).not.toHaveBeenCalled();
+      expect(controller.claim()).toBe(false);
+      if (classification === "timeout") {
+        await vi.advanceTimersByTimeAsync(26_999);
+        expect(controller.isBlocked()).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);
+      } else {
+        call.metadata = { ...call.metadata, answeredBy: classification };
+      }
+      const machine = classification.startsWith("machine_");
+      expect(controller.isBlocked()).toBe(machine);
+      await vi.advanceTimersByTimeAsync(40_000);
+      if (machine) {
+        expect(triggerGreeting).not.toHaveBeenCalled();
+        expect(controller.claim()).toBe(false);
+        call.metadata = { ...call.metadata, answeredBy: "unknown" };
+        expect(controller.isBlocked()).toBe(true);
+      } else {
+        expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith("Exact opening");
+        call.metadata = { ...call.metadata, answeredBy: "machine_end_other" };
+        expect(controller.isBlocked()).toBe(true);
+        expect(controller.claim()).toBe(false);
+      }
+      controller.close();
+    },
+  );
+
+  it("uses the operator's AMD hold cap when no classification arrives", async () => {
+    vi.useFakeTimers();
+    const triggerGreeting = vi.fn();
+    const controller = createOutboundGreetingController({
+      enabled: true,
+      instructions: "Exact opening",
+      holdOpeningMaxMs: 45_000,
+      call: {
+        direction: "outbound",
+        metadata: { voicemailManagedByHost: true, mode: "conversation" },
+      },
+    });
+    controller.onReady({ triggerGreeting } as unknown as RealtimeVoiceBridgeSession);
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(controller.isBlocked()).toBe(true);
+    expect(triggerGreeting).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controller.isBlocked()).toBe(false);
+    expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith("Exact opening");
+    controller.close();
+  });
+
+  it("cancels a pending AMD opening when the bridge closes", async () => {
+    vi.useFakeTimers();
+    const triggerGreeting = vi.fn();
+    const controller = createOutboundGreetingController({
+      enabled: true,
+      instructions: "Exact opening",
+      call: {
+        direction: "outbound",
+        metadata: { voicemailManagedByHost: true, mode: "conversation" },
+      },
+    });
+    controller.onReady({ triggerGreeting } as unknown as RealtimeVoiceBridgeSession);
+    controller.close();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(triggerGreeting).not.toHaveBeenCalled();
   });
 
   it("starts idle monitoring on media activation and pauses it during consults", async () => {

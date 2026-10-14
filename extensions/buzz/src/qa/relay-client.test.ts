@@ -59,12 +59,12 @@ vi.mock("nostr-tools", async (importOriginal) => {
               ["p", getPublicKey(Uint8Array.from(Buffer.from("02".repeat(32), "hex"))), "", "bot"],
             ],
           });
-          handlers.oneose?.();
+          queueMicrotask(() => handlers.oneose?.());
         } else {
           if (relayMocks.replayedMessage) {
             handlers.onevent?.(relayMocks.replayedMessage);
           }
-          handlers.oneose?.();
+          queueMicrotask(() => handlers.oneose?.());
         }
         return { id: `sub:${relayMocks.subscriptions.length}`, close: vi.fn() };
       }

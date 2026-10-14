@@ -1,5 +1,5 @@
 /** Immutable execution identity context storage and run-admission projection. */
-import type { DatabaseSync } from "node:sqlite";
+
 import type { Selectable } from "kysely";
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
 import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -19,7 +20,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema-ensure.js";
 import { clearAuditIdentityKeyCacheForDatabase } from "./audit-identity.js";
 import { hasExecutionDecisionFactsForRunInDatabase } from "./execution-decision-facts.js";
 import {
@@ -57,6 +58,7 @@ const EXECUTION_IDENTITY_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64
 
 const ensureExecutionIdentityContextSchema = createOpenClawStateSchemaEnsurer({
   table: "execution_identity_contexts",
+  indexes: ["execution_identity_contexts_run_created_idx"],
   endMarker: "  ON execution_identity_contexts (run_id, created_at, execution_id);\n",
   operationLabel: "audit.execution-identity.schema.ensure",
 });
@@ -83,7 +85,7 @@ type ExecutionIdentityContextReadResult =
   | { status: "missing" }
   | { status: "corrupt"; runId: string; reasonCode: "identity_context_corrupt" };
 
-function executionIdentityDb(db: DatabaseSync) {
+function executionIdentityDb(db: EngineConnection) {
   return getNodeSqliteKysely<ExecutionIdentityDatabase>(db);
 }
 
@@ -115,7 +117,7 @@ function parseExecutionIdentityRow(row: ExecutionIdentityRow): ExecutionIdentity
 }
 
 function readRowByExecutionId(
-  db: DatabaseSync,
+  db: EngineConnection,
   executionId: string,
 ): ExecutionIdentityRow | undefined {
   return executeSqliteQueryTakeFirstSync(
@@ -128,7 +130,7 @@ function readRowByExecutionId(
 }
 
 function readRowsByRunId(
-  db: DatabaseSync,
+  db: EngineConnection,
   runId: string,
   now: number,
   offset: number,
@@ -148,7 +150,7 @@ function readRowsByRunId(
   ).rows;
 }
 
-function deleteExpiredExecutionIdentityContexts(db: DatabaseSync, now: number, limit: number) {
+function deleteExpiredExecutionIdentityContexts(db: EngineConnection, now: number, limit: number) {
   const kysely = executionIdentityDb(db);
   const expiredIds = kysely
     .selectFrom("execution_identity_contexts")
@@ -164,7 +166,7 @@ function deleteExpiredExecutionIdentityContexts(db: DatabaseSync, now: number, l
 }
 
 function pruneExecutionIdentityContextsAfterInsert(
-  db: DatabaseSync,
+  db: EngineConnection,
   now: number,
   limits: { maxRows: number; pruneBatchRows: number },
 ): void {
@@ -239,7 +241,7 @@ function persistExecutionIdentityAdmissionEnvelope(
     createdAt: envelope.createdAt,
   });
   const plannedContextJson = JSON.stringify(plannedContext);
-  let transactionDatabase: DatabaseSync | undefined;
+  let transactionDatabase: EngineConnection | undefined;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -328,7 +330,7 @@ export function processExecutionIdentityAdmissionWorkInDatabase(
 
 /** Read one exact execution while turning malformed rows into typed diagnostics. */
 function readExecutionIdentityContextByExecutionId(
-  db: DatabaseSync,
+  db: EngineConnection,
   executionId: string,
   now: number,
   schema: ExecutionIdentityInspectionSchemaFacts,
@@ -439,7 +441,7 @@ function missingInspectionResult(
 }
 
 function inspectExactExecution(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: Extract<ExecutionIdentityInspectionQuery, { executionId: string }>,
   schema: ExecutionIdentityInspectionSchemaFacts,
 ): InternalAuditRunInspectResult {
@@ -489,7 +491,7 @@ function inspectExactExecution(
   return missingInspectionResult(selector);
 }
 
-function hasAnyRunContext(db: DatabaseSync, runId: string): boolean {
+function hasAnyRunContext(db: EngineConnection, runId: string): boolean {
   return Boolean(
     executeSqliteQueryTakeFirstSync(
       db,
@@ -503,7 +505,7 @@ function hasAnyRunContext(db: DatabaseSync, runId: string): boolean {
 }
 
 function hasRetainedAuditRun(
-  db: DatabaseSync,
+  db: EngineConnection,
   runId: string,
   now: number,
   schema: ExecutionIdentityInspectionSchemaFacts,
@@ -526,7 +528,7 @@ function hasRetainedAuditRun(
 }
 
 function inspectRunSelector(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: Extract<ExecutionIdentityInspectionQuery, { runId: string }>,
   schema: ExecutionIdentityInspectionSchemaFacts,
 ): InternalAuditRunInspectResult {
@@ -649,7 +651,7 @@ function inspectRunSelector(
 
 /** Query only the fixed-read worker's admitted connection. */
 export function inspectExecutionIdentityRunInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: ExecutionIdentityInspectionQuery,
   schema: ExecutionIdentityInspectionSchemaFacts,
 ): InternalAuditRunInspectResult {

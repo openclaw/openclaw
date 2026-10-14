@@ -200,17 +200,14 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     trusted: boolean | null;
     matchesDecryptionKey: boolean | null;
   }> {
-    let serverVersion = fallbackVersion;
-    let trusted: boolean | null = null;
-    let matchesDecryptionKey: boolean | null = null;
     const info = await crypto.getKeyBackupInfo().catch(() => null);
-    serverVersion = normalizeNullableString(info?.version) ?? serverVersion;
-    if (info) {
-      const trustInfo = await crypto.isKeyBackupTrusted(info).catch(() => null);
-      trusted = trustInfo?.trusted ?? null;
-      matchesDecryptionKey = trustInfo?.matchesDecryptionKey ?? null;
-    }
-    return { serverVersion, trusted, matchesDecryptionKey };
+    const serverVersion = normalizeNullableString(info?.version) ?? fallbackVersion;
+    const trustInfo = info ? await crypto.isKeyBackupTrusted(info).catch(() => null) : null;
+    return {
+      serverVersion,
+      trusted: trustInfo?.trusted ?? null,
+      matchesDecryptionKey: trustInfo?.matchesDecryptionKey ?? null,
+    };
   }
 
   protected async resolveDefaultSecretStorageKeyId(

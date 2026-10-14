@@ -99,11 +99,12 @@ function pluginProfile(
 export function resolveGatewayOperatorAccessAuthority(
   profileId: string,
   config: OpenClawConfig,
+  options: { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
-  if (!hasGatewayOperatorAccessPolicies(config)) {
+  if (!options.requireLivePolicySet && !hasGatewayOperatorAccessPolicies(config)) {
     return null;
   }
   const resident = captureResidentUserProfileAccess(profileId);
@@ -144,6 +145,7 @@ export function resolveGatewayOperatorAccessAuthority(
       },
     },
     config,
+    options,
   );
 }
 
@@ -158,12 +160,17 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     isCurrent: () => boolean;
   }>,
   config: OpenClawConfig,
+  options: { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profile.profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
   const policies = currentAccessPolicies();
-  if (policies.length === 0 && !hasGatewayOperatorAccessPolicies(config)) {
+  if (
+    !options.requireLivePolicySet &&
+    policies.length === 0 &&
+    !hasGatewayOperatorAccessPolicies(config)
+  ) {
     return null;
   }
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
@@ -216,7 +223,11 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     if (!requiredPolicyConfirmed) {
       throw new GatewayOperatorAccessDeniedError();
     }
-    if (authorities.length === 0 && !usesGitHubRoleAssignments(config, profile.role)) {
+    if (
+      !options.requireLivePolicySet &&
+      authorities.length === 0 &&
+      !usesGitHubRoleAssignments(config, profile.role)
+    ) {
       releaseProfiles();
       return null;
     }
@@ -227,6 +238,15 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     const assertCurrent = () => {
       try {
         assertProfileCurrent();
+        if (options.requireLivePolicySet) {
+          const current = currentAccessPolicies();
+          if (
+            current.length !== policies.length ||
+            current.some((entry, index) => entry !== policies[index])
+          ) {
+            throw new GatewayOperatorAccessDeniedError();
+          }
+        }
         for (const { authority } of authorities) {
           authority.assertCurrent();
         }
@@ -255,12 +275,12 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   }
 }
 
-/** The caller supplies current profile facts and rechecks its retained authority after callbacks. */
+/** Recheck current facts, returning the original grant's live authority for retained work. */
 export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
-): void {
+): PluginGatewayAccessAuthority | undefined {
   const policies = currentAccessPolicies();
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
     profile.profileId,
@@ -276,6 +296,7 @@ export function resumeGatewayOperatorAccessGrant(
     config,
     profile: pluginProfile(profile, profile.assignedRole),
   };
+  let resumed: PluginGatewayAccessAuthority | undefined;
   if (grant) {
     const policy = policies.find(({ pluginId }) => pluginId === grant.pluginId)?.policy;
     if (!policy?.resume) {
@@ -297,6 +318,7 @@ export function resumeGatewayOperatorAccessGrant(
     if (!authority || authority.grantId !== grant.grantId) {
       throw new GatewayOperatorAccessDeniedError();
     }
+    resumed = authority;
   }
   for (const { pluginId, policy } of policies) {
     if (pluginId === grant?.pluginId) {
@@ -313,6 +335,7 @@ export function resumeGatewayOperatorAccessGrant(
       throw new GatewayOperatorAccessDeniedError();
     }
   }
+  return resumed;
 }
 
 export function hasCurrentGatewayOperatorAccess(

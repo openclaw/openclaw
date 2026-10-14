@@ -1,19 +1,61 @@
 /** Integration tests for the public Bash/process tool factories. */
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
-import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import * as gatewayWork from "../process/gateway-work-admission.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { getBashShellConfig } from "./shell-utils.js";
+
+// mock-isolation: Hold normal follow-up admission so factory tests can inspect exact queued routing.
+vi.mock("../auto-reply/dispatch.js", () => ({
+  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
+    typeof dispatchInboundMessageWithRoutedChannelDispatcher
+  >(async ({ replyOptions }) => {
+    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
+    const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
+    lifecycle.onDeferred?.();
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      try {
+        lifecycle.onAbandoned?.();
+      } finally {
+        lifecycle.onSettled?.();
+      }
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+    return {
+      deferredToActiveRun: "followup",
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    };
+  }),
+}));
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -185,8 +227,6 @@ const notifyTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
     sessionKey,
     ...defaults,
   });
-const hasEvent = (id: string) =>
-  peekSystemEventEntries(sessionKey).some((event) => event.contextKey === `exec:${id}`);
 
 beforeEach(() => {
   callId = 0;
@@ -285,13 +325,6 @@ it("does not default to elevated when not allowed", async () => {
   expect(text(await execute(tool, shellEcho("hi")))).toContain("hi");
 });
 
-it("treats non-zero exits as completed and appends the exit code", async () => {
-  const result = await execute(createTool(), `${shellEcho("nope")}; exit 1`);
-  expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-  expect(text(result)).toContain("nope");
-  expect(text(result)).toContain("Command exited with code 1");
-});
-
 it.each([
   { name: "default tail", options: {}, first: "line-2", tailNote: true },
   { name: "unbounded offset", options: { offset: 30 }, first: "line-31", tailNote: false },
@@ -335,99 +368,84 @@ it("isolates process lists and polling by scopeKey", async () => {
 });
 
 describe("background completion notifications", () => {
-  async function drainWakes() {
-    const dispose = setHeartbeatWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
-    try {
-      await expect(
-        requestHeartbeatAndWait(
-          {
-            source: "other",
-            intent: "immediate",
-            reason: "test-cleanup",
-            coalesceMs: 0,
-          },
-          { abortSignal: AbortSignal.timeout(isWin ? 12_000 : 5_000) },
-        ),
-      ).resolves.toEqual({ status: "ran", durationMs: 0 });
-    } finally {
-      dispose();
-    }
-  }
-  beforeEach(drainWakes);
-  afterEach(drainWakes);
-
-  it("routes a completion event and heartbeat wake to the originating session", async () => {
-    const wake = vi.fn<NonNullable<Parameters<typeof setHeartbeatWakeHandler>[0]>>(async () => ({
-      status: "skipped",
-      reason: "disabled",
-    }));
-    const dispose = setHeartbeatWakeHandler(wake);
-    try {
-      const id = await startBackground(
-        notifyTool({
-          messageProvider: "telegram",
-          currentChannelId: "telegram:-100123:topic:47",
-          currentThreadTs: "47",
-        }),
-        shellEcho("notify"),
-      );
-      await waitForExecScope(scopeKey);
-      expect(getFinishedSession(id)).toMatchObject({
-        id,
-        terminalStatus: "completed",
-        exitCode: 0,
-      });
-      expect(peekSystemEventEntries(sessionKey)).toContainEqual(
-        expect.objectContaining({
-          contextKey: `exec:${id}`,
-          deliveryContext: {
-            channel: "telegram",
-            to: "telegram:-100123:topic:47",
-            threadId: "47",
-            accountId: undefined,
-          },
-        }),
-      );
-      await expect
-        .poll(() => wake.mock.calls.at(0)?.[0], {
-          timeout: isWin ? 12_000 : 5_000,
-          interval: isWin ? 15 : 2,
-        })
-        .toEqual({
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          sessionKey,
-        });
-      expect(
-        await drainFormattedSystemEvents({
-          cfg: {},
-          agentId: "main",
-          sessionKey,
-          isMainSession: false,
-          isNewSession: false,
-        }),
-      ).toBeUndefined();
-    } finally {
-      dispose();
-    }
+  let state: OpenClawTestState;
+  let continuation: MockInstance<typeof gatewayWork.runWithGatewayDetachedWorkContinuation>;
+  let receipts: SessionEventReceipt[];
+  beforeEach(async () => {
+    receipts = [];
+    continuation = vi.spyOn(gatewayWork, "runWithGatewayDetachedWorkContinuation");
+    const enqueue = sessionEvents.enqueueSessionEventForHost;
+    vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation(
+      (eventText, options) => {
+        const receipt = enqueue(eventText, options);
+        receipts.push(receipt);
+        return receipt;
+      },
+    );
+    state = await createOpenClawTestState({ layout: "state-only", prefix: "bash-notify-route-" });
+    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+    openOpenClawStateDatabase({ env: state.env });
+    writeSessionEntry(openOpenClawAgentDatabase({ agentId: "main", env: state.env }), sessionKey, {
+      sessionId: "bash-origin",
+      lifecycleRevision: "original-revision",
+      updatedAt: Date.now(),
+    });
+  });
+  afterEach(async () => {
+    resetSystemEventsForTest();
+    await Promise.allSettled(receipts.map((receipt) => receipt.settled));
+    await Promise.allSettled(
+      continuation.mock.results.flatMap((result) =>
+        result.type === "return" ? [result.value] : [],
+      ),
+    );
+    clearRuntimeConfigSnapshot();
+    await state.cleanup();
   });
 
-  it("consumes only the acknowledged poll's completion event", async () => {
-    const tool = notifyTool();
-    const unpolled = await startBackground(tool, shellEcho("unpolled"));
+  it("routes an ordinary completion event to the originating session", async () => {
+    const id = await startBackground(
+      notifyTool({
+        messageProvider: "telegram",
+        currentChannelId: "telegram:-100123:topic:47",
+        currentThreadTs: "47",
+      }),
+      shellEcho("notify"),
+    );
     await waitForExecScope(scopeKey);
-    const polled = await startBackground(tool, shellEcho("polled"));
-    await waitForExecScope(scopeKey);
-    expect(hasEvent(unpolled)).toBe(true);
-    expect(hasEvent(polled)).toBe(true);
-    const queued = peekSystemEventEntries(sessionKey);
-    const poll = await processAction({ action: "poll", sessionId: polled });
-    expect(poll.details).toMatchObject({ status: "completed" });
-    expect(peekSystemEventEntries(sessionKey)).toEqual(queued);
-    acknowledgeInternalToolResult(poll);
-    expect(hasEvent(polled)).toBe(false);
-    expect(hasEvent(unpolled)).toBe(true);
+    const receipt = expectDefined(receipts[0], "completion receipt");
+    await expect(receipt.accepted).resolves.toEqual({ ok: true });
+    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
+    expect(sessionEvents.enqueueSessionEventForHost).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("notify"),
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey,
+        source: "exec",
+        expectedTarget: expect.objectContaining({ sessionId: "bash-origin", sessionKey }),
+      }),
+    );
+    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+      expect.objectContaining({
+        id: receipt.id,
+        contextKey: `exec:${id}`,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-100123:topic:47",
+          threadId: "47",
+          accountId: undefined,
+        },
+      }),
+    );
+    expect(
+      await drainFormattedSystemEvents({
+        cfg: {},
+        agentId: "main",
+        sessionKey,
+        isMainSession: false,
+        isNewSession: false,
+      }),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -444,6 +462,12 @@ describe("background completion notifications", () => {
     );
     await waitForExecScope(scopeKey);
     expect(getFinishedSession(id)?.terminalStatus).toBe("completed");
+    expect(receipts).toHaveLength(emits ? 1 : 0);
+    if (emits) {
+      await expect(expectDefined(receipts[0], "completion receipt").accepted).resolves.toEqual({
+        ok: true,
+      });
+    }
     expect(peekSystemEvents(sessionKey)).toEqual(
       emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],
     );

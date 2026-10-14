@@ -3,17 +3,15 @@ import { html, nothing, render } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import {
   handleMarkdownCodeBlockClick,
   readMarkdownCodeBlockCopyText,
 } from "../../../components/markdown-code-blocks.ts";
+import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import {
-  enhanceMarkdownTables,
-  releaseMarkdownTables,
-} from "../../../components/markdown-tables.ts";
+import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import {
   prepareMarkdownMedia,
   renderMarkdownMedia,
@@ -22,10 +20,11 @@ import {
 import { renderMessageMarkdown } from "./chat-message-text.ts";
 
 let container: HTMLDivElement;
+let blocks: ReturnType<typeof renderSolidRef>;
 
 beforeEach(() => {
   container = document.createElement("div");
-  document.body.append(container);
+  blocks = renderSolidRef(() => markdownBlocksRef(() => true), { targetElement: container });
   container.addEventListener("click", handleMarkdownCodeBlockClick);
 });
 
@@ -33,6 +32,7 @@ afterEach(() => {
   releaseMarkdownTables(container);
   container.removeEventListener("click", handleMarkdownCodeBlockClick);
   render(nothing, container);
+  blocks.unmount();
   container.remove();
 });
 
@@ -51,7 +51,7 @@ function draw(
   } = {},
 ) {
   return render(
-    html`<section ${markdownBlocks()}>
+    html`<section>
       ${renderMessageMarkdown(
         source,
         key,
@@ -177,7 +177,7 @@ describe("streaming Markdown DOM", () => {
     container.className = "chat-text";
     const initial = "| Name | Value |\n| --- | --- |\n| First | Growing";
     draw(initial);
-    enhanceMarkdownTables(container);
+    await new Promise<void>(queueMicrotask);
     const table = container.querySelector("table");
     const icon = container.querySelector(".markdown-table__copy svg");
     expect(icon).not.toBeNull();
@@ -232,7 +232,8 @@ describe("streaming Markdown DOM", () => {
       vi.useFakeTimers();
       try {
         draw(initial);
-        await Promise.resolve();
+        // Native refs deliver mutations before the queued enhancement scan.
+        await new Promise<void>(queueMicrotask);
         const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
         const copy = wrapper.querySelector<HTMLButtonElement>(".code-block-copy")!;
         const wrap = wrapper.querySelector<HTMLButtonElement>(".code-block-wrap")!;
@@ -251,7 +252,7 @@ describe("streaming Markdown DOM", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(copy.classList.contains("copied")).toBe(settlement === "completed");
         draw(initial + suffix);
-        await Promise.resolve();
+        await new Promise<void>(queueMicrotask);
         const expand = wrapper.querySelector<HTMLButtonElement>(".code-block-expand")!;
         expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
         expect(wrapper.querySelector(".code-block-copy")).toBe(copy);

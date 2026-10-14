@@ -837,7 +837,7 @@ export const zh_TW = {
       delegatedAuthTitle: "MS Teams delegated auth",
       delegatedOAuthProgress: "MSTeams Delegated OAuth",
       enterAtLeastOneUser: "至少輸入一個使用者。",
-      envPrompt: "偵測到 MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID。使用環境變數？",
+      envPrompt: "偵測到 Microsoft Teams 環境憑證。使用環境變數？",
       examples: "範例：",
       graphLookupUnavailable: "Graph 查找不可用。請只使用使用者 ID。",
       helpAzureBot: "1) Azure Bot registration -> 取得 App ID + Tenant ID",

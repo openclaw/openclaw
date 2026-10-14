@@ -23,7 +23,7 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts")
   WorkerTaskError: class extends Error {},
   createOwnedWorkerTaskPool: () => ({
     startTask: () => ({
-      ...startAwaitedReadMock(async () => ({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] })),
+      ...startAwaitedReadMock(async () => ({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] })),
       release: () => startAwaitedReadMock(async () => {}),
     }),
     close: readPool.close,
@@ -33,7 +33,7 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts")
 import { captureOpenClawStateReadSource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-worker.ts"))};
 import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 async function useReadPool() {
-  const transport = captureOpenClawStateReadSource().createTransport({ type: "fleet.list" });
+  const transport = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
   const authority = { signal: new AbortController().signal, assertCurrent() {} };
   try {
     expect(await transport.startRead({
@@ -47,7 +47,7 @@ async function useReadPool() {
       },
       location: "/synthetic/state.sqlite",
       checkFreshAdmission: false,
-    }, authority).result).toMatchObject({ value: { ok: true, type: "fleet.list" } });
+    }, authority).result).toMatchObject({ value: { ok: true, type: "backup.runs" } });
   } finally {
     await transport.startClose().result;
   }
@@ -443,7 +443,7 @@ edge.create.mockImplementation(() => ({
       ...startAwaitedReadMock(async () => generation === "c" ? {
         ok: true, type: "workspace.snapshot", sourceAdmitted: true,
         snapshot: { identity: createWorkspaceStateIdentity("/fixture/workspace"), setupExists: false, setup: { version: 1 } },
-      } : { ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] }),
+      } : { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
       release: () => startAwaitedReadMock(async () => {}),
     };
   },
@@ -462,7 +462,7 @@ it("rebinds the shared read pool to generation " + generation, async () => {
     expect(probe.reads).toEqual(["a", "b", "c"]);
     expect(probe.closes).toEqual(["a", "b"]);
   } else {
-    await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).resolves.toMatchObject({ type: "fleet.list" });
+    await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).resolves.toMatchObject({ type: "backup.runs" });
   }
   expect(edge.create).toHaveBeenCalledOnce();
   expect(edge.close).not.toHaveBeenCalled();
@@ -487,12 +487,18 @@ import { expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 import { captureOpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.ts"))};
 import { getOpenClawStateWorkerOwner } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-owner.ts"))};
+import { measureSessionPhysicalDiskUsage } from ${JSON.stringify(import.meta.resolve("../src/config/sessions/disk-budget-runtime.ts"))};
 
 const generation = ${JSON.stringify(generation)};
 const probeKey = Symbol.for("fixture.sharedStateOwnerGenerations");
 const probe = Reflect.get(globalThis, probeKey) ?? { closes: [] as string[] };
 Reflect.set(globalThis, probeKey, probe);
-const edge = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(async () => {}) }));
+const edge = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(async () => {}), worker: vi.fn() }));
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-cpu.ts"))}, async (importOriginal) => ({
+  ...await importOriginal<typeof import(${JSON.stringify(import.meta.resolve("../src/infra/worker-cpu.ts"))})>(),
+  createCpuTrackedWorker: edge.worker,
+}));
+edge.worker.mockImplementation(() => { throw new Error("Disk worker generation " + generation); });
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
   openSharedStateSqliteWorkerStore: edge.open,
   closeUnclaimedSharedStateSqliteWorkers: async () => {},
@@ -518,6 +524,9 @@ it("binds shared-state retirement to the current file's database lifecycle " + g
   const owner = getOpenClawStateWorkerOwner();
   try {
     expect(await owner.open(context)).toBeDefined();
+    await expect(measureSessionPhysicalDiskUsage(pathname)).rejects.toThrow(
+      "Disk worker generation " + generation,
+    );
     if (generation === "a") {
       expect(probe.closes).toEqual([]);
       // The file drain retires this resource before the next file is evaluated.

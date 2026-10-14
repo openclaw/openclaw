@@ -17,7 +17,6 @@ import {
 import type { SqliteWorkerBackend } from "./sqlite-worker-contract.js";
 
 export type MessageToolRunOutcomeWorkerOperations = {
-  prepare: { input: undefined; output: Result<void, OpenClawStateWorkerErrorPayload> };
   record: {
     input: MessageToolRunOutcomeInsert;
     output: Result<void, OpenClawStateWorkerErrorPayload>;
@@ -36,15 +35,11 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       try {
-        if (command.type === "prepare") {
-          // First-use schema admission commits before recording, as on the native owner.
-          ensureMessageToolRunOutcomeSchema(db, (stage) => context.admit(stage));
-          return { ok: true, value: undefined };
-        }
         runSqliteImmediateTransactionSync(
           db,
           () => {
             context.admit("transaction");
+            ensureMessageToolRunOutcomeSchema(db);
             recordMessageToolRunOutcomeInDatabase(db, command.input);
           },
           {

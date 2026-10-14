@@ -7,13 +7,6 @@ import {
   validateSessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareShellPathFromLoginShell } from "../../infra/shell-env.js";
-import {
-  capturePluginLifecycleAuthority,
-  capturePluginRegistryLifecycleEpoch,
-  capturePluginRegistryLifecycleSignal,
-} from "../../plugins/registry-lifecycle.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -74,23 +67,18 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     return;
   }
   const catalogRegistrations = catalogRegistrationSnapshot();
-  let selected: SessionCatalogProvider[];
-  if (request.catalogId) {
-    const provider = catalogRegistrations.providers.find(
-      (candidate) => candidate.id === request.catalogId,
+  const requestedProvider = request.catalogId
+    ? catalogRegistrations.providers.find((candidate) => candidate.id === request.catalogId)
+    : undefined;
+  if (request.catalogId && !requestedProvider) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
     );
-    if (!provider) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
-      );
-      return;
-    }
-    selected = [provider];
-  } else {
-    selected = catalogRegistrations.providers;
+    return;
   }
+  const selected = requestedProvider ? [requestedProvider] : catalogRegistrations.providers;
   if (request.metadataOnly) {
     const metadataConfig = context.getRuntimeConfig();
     const metadataAgent = resolveAgentIdOrRespondError({
@@ -124,9 +112,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
   const diagnostics = startSessionCatalogRequestDiagnostics();
   let finishInitialProjection: (() => void) | undefined;
   try {
-    while (projection.needsSelectionPreparation()) {
+    while (projection.needsSelectionPreparation({ metadataOnly: true })) {
       finishInitialProjection ??= diagnostics?.startWait("projection_initial");
-      await projection.prepareSelection();
+      await projection.prepareSelection({ metadataOnly: true });
     }
   } finally {
     finishInitialProjection?.();
@@ -231,7 +219,10 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
         subscriber,
         isProgressCurrent,
         client?.connectionSignal ?? signal,
-        () => (projection.needsSelectionPreparation() ? projection.prepareSelection() : undefined),
+        () =>
+          projection.needsSelectionPreparation({ metadataOnly: true })
+            ? projection.prepareSelection({ metadataOnly: true })
+            : undefined,
       );
     }
   };
@@ -263,9 +254,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     }
     let finishFinalProjection: (() => void) | undefined;
     try {
-      while (projection.needsSelectionPreparation()) {
+      while (projection.needsSelectionPreparation({ metadataOnly: true })) {
         finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.prepareSelection();
+        await projection.prepareSelection({ metadataOnly: true });
       }
     } finally {
       finishFinalProjection?.();
@@ -273,26 +264,12 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     respondWithCatalog(result);
     return;
   }
-  const registry = catalogRegistrations.registry;
-  const scopedRuntime = getPluginRuntimeGatewayRequestScope()?.pluginRegistry === registry;
-  const epoch = registry ? capturePluginRegistryLifecycleEpoch(registry) : undefined;
-  const registryAuthority = registry
-    ? capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime })
-    : undefined;
-  const registrySignal = registry
-    ? capturePluginRegistryLifecycleSignal(registry, epoch, { scopedRuntime })
-    : undefined;
-  const resolveGatewayContext = context.resolveGatewayContext;
+  // An in-flight list may finish with its original registry after a hot reload.
+  // Delivery still applies current caller visibility; the next request refreshes registrations.
   const progress = new SessionCatalogListLifetime(
-    () =>
-      (!resolveGatewayContext || resolveGatewayContext() === context) &&
-      (!registry ||
-        (registryAuthority?.() === true &&
-          registry.sessionCatalogs === catalogRegistrations.source)),
     [
       getGatewayRestartDrainSignal(),
       context.requestEntryLifetime?.signal,
-      registrySignal,
       operations.retirement.signal,
       signal,
     ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
@@ -412,9 +389,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     const result = await operation;
     let finishFinalProjection: (() => void) | undefined;
     try {
-      while (projection.needsSelectionPreparation()) {
+      while (projection.needsSelectionPreparation({ metadataOnly: true })) {
         finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.prepareSelection();
+        await projection.prepareSelection({ metadataOnly: true });
       }
     } finally {
       finishFinalProjection?.();

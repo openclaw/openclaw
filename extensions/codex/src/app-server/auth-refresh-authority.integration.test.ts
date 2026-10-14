@@ -22,7 +22,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { withEnvAsync, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";
@@ -189,7 +189,7 @@ async function withAuthRefreshHarness(
           setActivePluginRegistry(registration.registry, undefined, "default", stateDir);
 
           const agentDir = path.join(stateDir, "agents", "main", "agent");
-          upsertAuthProfile({
+          await upsertAuthProfileAsync({
             agentDir,
             profileId: PROFILE_ID,
             credential: {
@@ -332,40 +332,44 @@ describe("Codex app-server auth refresh authority", () => {
       accountId: "account-b",
     }));
 
-    await withAuthRefreshHarness(refreshOAuth, async ({ harness }) => {
-      harness.send({
-        id: "refresh-rejected",
-        method: "account/chatgptAuthTokens/refresh",
-        params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-      });
-      const rejected = await waitForResponse(harness, "refresh-rejected");
-      expect(rejected).toMatchObject({
-        error: { code: -32603, message: expect.stringMatching(/different OAuth account/i) },
-      });
-      expect(rejected.result).toBeUndefined();
+    await withAuthRefreshHarness(
+      refreshOAuth,
+      async ({ harness }) => {
+        harness.send({
+          id: "refresh-rejected",
+          method: "account/chatgptAuthTokens/refresh",
+          params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
+        });
+        const rejected = await waitForResponse(harness, "refresh-rejected");
+        expect(rejected).toMatchObject({
+          error: { code: -32603, message: expect.stringMatching(/different OAuth account/i) },
+        });
+        expect(rejected.result).toBeUndefined();
 
-      harness.send({
-        id: "refresh-after-fence",
-        method: "account/chatgptAuthTokens/refresh",
-        params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
-      });
-      const afterFence = await waitForResponse(harness, "refresh-after-fence");
-      expect(afterFence).toMatchObject({
-        error: {
-          code: -32603,
-          message: expect.stringContaining(
-            `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
-          ),
-        },
-      });
-      expect(afterFence.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
-      expect(afterFence.result).toBeUndefined();
-      expect(refreshOAuth).toHaveBeenCalledTimes(1);
+        harness.send({
+          id: "refresh-after-fence",
+          method: "account/chatgptAuthTokens/refresh",
+          params: { reason: "unauthorized", previousAccountId: ACCOUNT_ID },
+        });
+        const afterFence = await waitForResponse(harness, "refresh-after-fence");
+        expect(afterFence).toMatchObject({
+          error: {
+            code: -32603,
+            message: expect.stringContaining(
+              `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
+            ),
+          },
+        });
+        expect(afterFence.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
+        expect(afterFence.result).toBeUndefined();
+        expect(refreshOAuth).toHaveBeenCalledTimes(1);
 
-      const responses = JSON.stringify([rejected, afterFence]);
-      expect(responses).not.toContain(INITIAL_ACCESS);
-      expect(responses).not.toContain("other-account-access");
-    });
+        const responses = JSON.stringify([rejected, afterFence]);
+        expect(responses).not.toContain(INITIAL_ACCESS);
+        expect(responses).not.toContain("other-account-access");
+      },
+      createStdioAuthRefreshHarness,
+    );
   });
 
   it("returns and persists a retained stdio refresh after its first-turn scope closes", async () => {

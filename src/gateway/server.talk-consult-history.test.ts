@@ -32,15 +32,16 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
-import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
@@ -57,6 +58,7 @@ import {
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
+import { prepareTalkSessionTarget } from "./talk/session-target.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -99,6 +101,7 @@ let publicationErrors: unknown[] = [];
 let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
+let expectedRevokedWriters: Map<string, () => boolean>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -109,15 +112,32 @@ afterAll(async () => {
 beforeEach(async () => {
   requestExecution = await observeGatewayRunExecution();
   lifecycleWrites = createPreparedLifecycleWriteTracker();
+  expectedRevokedWriters = new Map();
   const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   lifecyclePersistence = vi
     .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
-    .mockImplementation((params) => lifecycleWrites.track(prepareLifecycle(params)));
+    .mockImplementation((params) => {
+      const persist = prepareLifecycle(params);
+      return lifecycleWrites.track(async () => {
+        try {
+          await persist();
+        } catch (error) {
+          const isCurrent = params.event.runId
+            ? expectedRevokedWriters.get(params.event.runId)
+            : undefined;
+          if (!isCurrent || isCurrent()) {
+            throw error;
+          }
+          expect(error).toBeInstanceOf(Error);
+          expect(error).toHaveProperty("message", "Terminal write owner changed before commit");
+        }
+      });
+    });
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
   // Voice transcripts use the canonical agent store, not a custom chat-store locator.
-  storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   testState.sessionStorePath = storePath;
   await writeSessionStore({
     entries: { main: { sessionId, updatedAt: Date.now(), status: "done" } },
@@ -184,12 +204,13 @@ beforeEach(async () => {
       return;
     }
     publications.push(
-      publish(update).catch((error: unknown) => {
-        publicationErrors.push(error);
-      }),
+      // Match production subscription ownership: committed broadcasts outlive the producer.
+      runOutsideAsyncWorkScope(() => runWithRetainedGatewayRootWork(() => publish(update))).catch(
+        (error: unknown) => void publicationErrors.push(error),
+      ),
     );
   });
-  voiceSessionId = createOrResumeClientVoiceSession({
+  voiceSessionId = await createOrResumeClientVoiceSession({
     agentId: "main",
     sessionKey,
     origin: "client",
@@ -223,7 +244,6 @@ afterEach(async () => {
       unsubscribe = undefined;
       voiceSessionId = undefined;
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       testState.sessionStorePath = undefined;
       gatewayReplyMock.mockReset();
       runEmbeddedAgent.mockReset();
@@ -232,9 +252,7 @@ afterEach(async () => {
   }
 });
 
-function scope() {
-  return { agentId, sessionKey: canonicalKey, sessionId, storePath };
-}
+const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
 async function rpc(method: string, params: Record<string, unknown>) {
   const respond = vi.fn<RespondFn>();
   await handleGatewayRequest({
@@ -251,6 +269,10 @@ async function rpc(method: string, params: Record<string, unknown>) {
 }
 async function waitForDispatchEnd() {
   await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
+  // Admission release does not join the producer's remaining terminal writes.
+  // Settle them before the next parity cell revokes its source or replaces its row.
+  await requestExecution.waitForCompletion();
+  await lifecycleWrites.drain();
   expect(context.chatAbortControllers.size).toBe(0);
 }
 async function drainPublications() {
@@ -366,7 +388,11 @@ describe("Browser Talk consult target handoff", () => {
           session: entry.global ? { scope: "global" } : {},
         },
       });
-      voiceSessionId = createOrResumeClientVoiceSession({ agentId, sessionKey, origin: "client" });
+      voiceSessionId = await createOrResumeClientVoiceSession({
+        agentId,
+        sessionKey,
+        origin: "client",
+      });
       if (!entry.fresh) {
         await rpc("talk.client.transcript", {
           sessionKey,
@@ -685,7 +711,7 @@ describe("Direct Talk consult history after call closure", () => {
       const runner = createTalkClientAgentConsultRunner({
         config: getRuntimeConfig(),
         context,
-        sessionTarget: { agentId, sessionKey, canonicalKey, storePath },
+        sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
         ownerConnId: connectionId,
         getVoiceSessionId: () => callId,
         initialItems: [],
@@ -764,3 +790,116 @@ describe("Direct Talk consult history after call closure", () => {
     },
   );
 });
+
+describe("Gateway-relay Talk consult history after call closure", () => {
+  it.each([
+    [undefined, false, false, false, undefined],
+    ["abort", false, false, false, undefined],
+    ["detach", false, false, false, undefined],
+    ["detach", true, false, false, undefined],
+    ["detach", true, true, false, undefined],
+    ["detach", true, false, true, undefined],
+    ["detach", true, true, true, undefined],
+    ["detach", true, false, false, "before"],
+    ["detach", true, false, false, "after"],
+  ] as const)(
+    "settles close disposition %s (after final: %s; spoken transcript: %s; second consult: %s; unknown append: %s)",
+    async (disposition, afterFinal, spokenReplacement, pendingFollowUp, unknownAppendOutcome) => {
+      const { runTalkRelayCloseHistory } =
+        await import("./server.talk-relay-history.test-support.js");
+      await runTalkRelayCloseHistory({
+        disposition,
+        afterFinal,
+        spokenReplacement,
+        pendingFollowUp,
+        unknownAppendOutcome,
+        scope,
+        sessionKey,
+        connectionId,
+        context,
+        runEmbeddedAgent,
+        rpc,
+        waitForDispatchEnd,
+        drainPublications,
+        historyMessages,
+        liveMessages,
+        answer,
+        args,
+      });
+    },
+  );
+});
+
+// Fixed model action through the real text and both Talk admission paths.
+it("dispatches permitted native actions once per logical request across text and Talk", async () => {
+  const { runTalkNativeActionParity } = await import("./server.talk-native-action.test-support.js");
+  await runTalkNativeActionParity({
+    context,
+    client,
+    agentId,
+    sessionKey,
+    canonicalKey,
+    sessionId,
+    storePath,
+    voiceSessionId,
+    connectionId,
+    runEmbeddedAgent,
+    rpc,
+    consult,
+    waitForDispatchEnd,
+  });
+});
+
+it("preserves the original operator source through chat-backed capability adaptation", async () => {
+  const { runTalkOperatorSourceParity } =
+    await import("./server.talk-permission-parity.test-support.js");
+  await runTalkOperatorSourceParity({
+    context,
+    client,
+    sessionKey,
+    voiceSessionId,
+    runEmbeddedAgent,
+    waitForDispatchEnd,
+  });
+});
+
+// The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
+it.runIf(process.platform === "linux").each([false, true])(
+  "keeps host-authenticated node approval cancellation (public callback: %s)",
+  async (publicOnly) => {
+    const { runTalkNodePermissionParity } =
+      await import("./server.talk-permission-parity.test-support.js");
+    await runTalkNodePermissionParity({
+      publicOnly,
+      harness,
+      client,
+      context,
+      agentId,
+      sessionKey,
+      canonicalKey,
+      sessionId,
+      storePath,
+      voiceSessionId,
+      connectionId,
+      runEmbeddedAgent,
+      rpc,
+      waitForDispatchEnd,
+      expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
+    });
+  },
+);
+
+it.runIf(process.platform === "linux")(
+  "isolates registered Talk replay across authenticated callers",
+  async () => {
+    const { runTalkCallerReplay } = await import("./server.talk-caller-replay.test-support.js");
+    await runTalkCallerReplay({
+      harness,
+      runEmbeddedAgent,
+      sessionId,
+      sessionKey,
+      storePath,
+      voiceSessionId: expectDefined(voiceSessionId, "shared voice identity"),
+    });
+  },
+);

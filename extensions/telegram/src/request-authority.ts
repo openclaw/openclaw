@@ -10,12 +10,9 @@ type RequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
 /** Distinguish a local rejection from a network error wrapped by grammY. */
 class TelegramRequestAuthorityError extends Error {
-  readonly originalError: unknown;
-
-  constructor(error: unknown) {
+  // Network classifiers must not treat the owner's rejection as a transport cause.
+  constructor(readonly originalError: unknown) {
     super("Telegram request authority rejected");
-    // Network classifiers must not treat the owner's rejection as a transport cause.
-    this.originalError = error;
   }
 }
 

@@ -6,6 +6,8 @@ import {
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { adoptExecRequestSession } from "../../../infra/exec-request-context.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CustomMessage } from "../../sessions/messages.js";
 import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
@@ -17,6 +19,7 @@ import {
   buildContextEngineCompactionSessionTarget,
   prepareInitialSessionWriter,
 } from "./session-bootstrap.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const CONTINUATION_PROMPT =
   "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
@@ -38,7 +41,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let activeSessionId = params.sessionId;
   let activeSessionFile = params.sessionFile;
   let activeSessionTarget: ContextEngineSessionTarget | undefined =
-    buildContextEngineCompactionSessionTarget({
+    await buildContextEngineCompactionSessionTarget({
       agentId: params.agentId ?? sessionAgentId,
       config: params.config,
       sessionFile: activeSessionFile,
@@ -67,6 +70,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let settleOwnedTranscriptProjection = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let basePromptOverride: string | undefined;
+  let continuation: EmbeddedRunAttemptParams["continuation"];
   let compactionContinuationInstruction: string | undefined;
   const activePrompt: ActivePrompt = {
     get override() {
@@ -79,9 +83,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
     internal: false,
   };
 
-  const notifySessionIdChanged = () => {
+  const notifySessionIdChanged = (previousSessionId: string) => {
     // Update host provenance before callbacks can close the exact run owner.
     registerAgentRunContext(params.runId, { sessionId: activeSessionId, lifecycleGeneration });
+    adoptExecRequestSession({ runId: params.runId, previousSessionId, sessionId: activeSessionId });
     params.replyOperation?.updateSessionId(activeSessionId);
     params.onSessionIdChanged?.(activeSessionId);
   };
@@ -89,8 +94,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
     if (!nextSessionId || nextSessionId === activeSessionId) {
       return;
     }
+    const previousSessionId = activeSessionId;
     activeSessionId = nextSessionId;
-    notifySessionIdChanged();
+    notifySessionIdChanged(previousSessionId);
   };
   const capturePreparedCompactionTarget = (
     target: Pick<AcceptedCompactionSuccessor, "sessionId" | "sessionFile" | "sessionTarget">,
@@ -108,7 +114,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
   const notifyCompactionSessionAdopted = (previousSessionId: string | undefined) => {
     if (previousSessionId && previousSessionId !== activeSessionId) {
-      notifySessionIdChanged();
+      notifySessionIdChanged(previousSessionId);
     }
   };
   // Internal control prompts are model-only context, never operator-authored transcript turns.
@@ -117,7 +123,14 @@ export async function createEmbeddedRunSessionPromptState(input: {
     Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
-  if (params.pluginRuntimeRefreshContinuation) {
+  // An outer model fallback starts a fresh invocation, but its retry instructions
+  // cannot recapture the original user projection after that turn has dispatched.
+  const dispatchedFallback =
+    params.modelRoutingProvenance?.stage === "fallback" &&
+    params.userTurnTranscriptRecorder !== undefined &&
+    getUserTurnTranscriptAdmissionOwner(params.userTurnTranscriptRecorder)?.sentToProvider() ===
+      true;
+  if (params.pluginRuntimeRefreshContinuation || dispatchedFallback) {
     activateInternalPrompt(params.prompt);
   }
   const activateCompactionContinuation = (instruction: string) => {
@@ -213,8 +226,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
         role: "custom",
         customType: "incomplete-tool-call",
         content:
-          `Runtime notice: The tool call${toolCallId ? ` ${JSON.stringify(toolCallId.slice(0, 200))}` : ""} was cut off at the provider's output limit (max_output_tokens) and was not executed. ` +
-          "Split the remaining work into smaller tool calls with shorter arguments. Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
+          (toolCallId
+            ? `Runtime notice: The tool call ${JSON.stringify(toolCallId.slice(0, 200))} was cut off at the provider's output limit (max_output_tokens) and was not executed. Split the remaining work into smaller tool calls with shorter arguments. `
+            : "Runtime notice: The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls. ") +
+          "Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
         display: false,
         details: { reason: "max_output_tokens", ...(toolCallId ? { toolCallId } : {}) },
         timestamp: Date.now(),
@@ -242,6 +257,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
     },
     get activePrompt() {
       return activePrompt;
+    },
+    get continuation() {
+      return continuation;
     },
     get suppressNextUserMessagePersistence() {
       return suppressNextUserMessagePersistence;
@@ -273,10 +291,19 @@ export async function createEmbeddedRunSessionPromptState(input: {
         await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
       }
     },
-    continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
+    continueFromCurrentTranscript: (options?: {
+      includeToolFailureInstruction?: boolean;
+      messages?: NonNullable<EmbeddedRunAttemptParams["continuation"]>["messages"];
+    }) => {
       // Raw model runs load no transcript history; the original prompt is their only task context.
       if (params.modelRun === true || params.promptMode === "none") {
         return;
+      }
+      if (options?.messages) {
+        continuation = {
+          prompt: params.prompt,
+          messages: [...(continuation?.messages ?? []), ...options.messages],
+        };
       }
       const prompt = options?.includeToolFailureInstruction
         ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`

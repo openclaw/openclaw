@@ -84,9 +84,10 @@ export function ensureValidConfigSnapshotForCli(
 }
 
 export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
-  const prepared = await readConfigFileSnapshotForWrite();
+  // Preparation can finish as a preview or no-op without recording state health.
+  const prepared = await readConfigFileSnapshotForWrite({ observe: false });
   ensureValidConfigSnapshotForCli(prepared.snapshot, runtime);
-  return prepared;
+  return { ...prepared, writeOptions: { ...prepared.writeOptions, observe: false } };
 }
 
 export { formatInvalidConfigRepairHint };
@@ -348,6 +349,9 @@ export async function validateConfigMutation(params: {
     nextConfig: config,
     pending: params.deferredPluginMigrations ?? [],
     editedPaths: operations.map((operation) => operation.setPath),
+    unsetPaths: operations
+      .filter((operation) => operation.mutation === "delete")
+      .map((operation) => operation.setPath),
   });
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
     normalizeRoot: true,

@@ -1,5 +1,4 @@
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
@@ -15,11 +14,6 @@ export type SlackQaFetchFunction = NonNullable<
 type WebClient = SlackQaWebClient;
 
 export type SlackQaRuntimeEnv = z.infer<typeof slackQaCredentialPayloadSchema>;
-
-export type SlackChannelStatus = Pick<
-  ChannelAccountSnapshot,
-  "connected" | "lastConnectedAt" | "lastDisconnect" | "lastError" | "restartPending" | "running"
->;
 
 export type SlackChannelReadinessMode = "connected" | "started";
 

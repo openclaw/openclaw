@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 describe("Claude CLI instruction isolation", () => {
-  it.each([false, true])("isolates declared exact-tool execution (resume=%s)", (useResume) => {
+  it.each([false, true])("isolates exact-tool execution (resume=%s)", (useResume) => {
     const backend = buildAnthropicCliBackend();
-    expect(backend.isolatesInstructionsWithExactTools).toBe(true);
     expect(
       backend.resolveExecutionArgs?.({
         workspaceDir: "/tmp",

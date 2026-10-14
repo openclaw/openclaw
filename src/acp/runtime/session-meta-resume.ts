@@ -1,5 +1,6 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { normalizeOptionalAgentId } from "../../routing/session-key.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { acpSessionRowMatchesEntry } from "./session-meta-keys.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
@@ -11,10 +12,16 @@ export async function readAcpResumeSessionOwner(
     agentId: string;
     backendId?: string;
     resumeSessionId: string;
+    runtimeAgentId: string;
+    onCandidate?: (sessionKey: string) => void;
   },
 ) {
   const { agentId, backendId, resumeSessionId } = params;
+  const runtimeAgentId = normalizeOptionalAgentId(params.runtimeAgentId);
   const { cfg, env, databasePath, assertCurrent } = await captureAcpSessionReadContext(params);
+  if (!runtimeAgentId) {
+    return undefined;
+  }
   const lookup = async (sessionKey?: string) => {
     const result = await executeExistingOpenClawStateRead(
       { env, path: databasePath },
@@ -36,6 +43,10 @@ export async function readAcpResumeSessionOwner(
     env,
   });
   for (const row of rows) {
+    if (normalizeOptionalAgentId(row.agent) !== runtimeAgentId) {
+      continue;
+    }
+    params.onCandidate?.(row.sessionKey);
     const owner = await withSessionEntryReadOnlyInWorker(
       { agentId, storePath, sessionKey: row.sessionKey, env, clone: false },
       assertCurrent,
@@ -46,9 +57,11 @@ export async function readAcpResumeSessionOwner(
         if (!read.value || !acpSessionRowMatchesEntry(row, read.value)) {
           return undefined;
         }
-        // The entry read yielded; recheck the ID and lifecycle before consuming ownership.
+        // Recheck ID, lifecycle, and indexed runtime identity before consuming ownership.
         const [current] = await lookup(row.sessionKey);
-        return current && acpSessionRowMatchesEntry(current, read.value)
+        return current &&
+          acpSessionRowMatchesEntry(current, read.value) &&
+          normalizeOptionalAgentId(current.agent) === runtimeAgentId
           ? { sessionKey: row.sessionKey, entry: read.value }
           : undefined;
       },

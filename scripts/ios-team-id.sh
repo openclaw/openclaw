@@ -10,7 +10,7 @@ Prints an Apple Developer Team ID for iOS signing.
 
 Default behavior:
 - return IOS_DEVELOPMENT_TEAM when set
-- prefer the canonical OpenClaw iOS team when available in Xcode
+- prefer the official OpenClaw iOS team when available in Xcode
 - otherwise fall back to a local Xcode team for local development builds
 
 Options:
@@ -38,12 +38,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-canonical_team="${canonical_team//$'\r'/}"
-
 if [[ -n "${IOS_DEVELOPMENT_TEAM:-}" ]]; then
   explicit_team="${IOS_DEVELOPMENT_TEAM//$'\r'/}"
   if [[ "$require_canonical" == "1" && "$explicit_team" != "$canonical_team" ]]; then
-    echo "Resolved iOS Team ID '${explicit_team}' is not the canonical OpenClaw iOS team '${canonical_team}'." >&2
+    echo "Resolved iOS Team ID '${explicit_team}' is not the official OpenClaw iOS team '${canonical_team}'." >&2
     exit 1
   fi
   printf '%s\n' "$explicit_team"
@@ -60,7 +58,6 @@ preferred_team_name="${preferred_team_name//$'\r'/}"
 declare -a team_ids=()
 declare -a team_is_free=()
 declare -a team_names=()
-python_cmd=""
 
 detect_python() {
   local candidate
@@ -136,11 +133,6 @@ for teams in data.values():
   )
 }
 
-load_teams_from_xcode_preferences() {
-  load_teams_from_xcode_team_key IDEProvisioningTeamByIdentifier
-  load_teams_from_xcode_team_key IDEProvisioningTeams
-}
-
 load_teams_from_legacy_defaults_key() {
   while IFS= read -r team; do
     [[ -z "$team" ]] && continue
@@ -187,7 +179,8 @@ has_xcode_account() {
   [[ -n "$accts" ]] && [[ "$accts" != *"does not exist"* ]] && grep -q 'identifier' <<< "$accts"
 }
 
-load_teams_from_xcode_preferences
+load_teams_from_xcode_team_key IDEProvisioningTeamByIdentifier
+load_teams_from_xcode_team_key IDEProvisioningTeams
 load_teams_from_legacy_defaults_key
 
 if [[ ${#team_ids[@]} -eq 0 ]]; then
@@ -207,8 +200,8 @@ fi
 
 if [[ ${#team_ids[@]} -eq 0 ]]; then
   if [[ "$require_canonical" == "1" ]]; then
-    echo "Canonical OpenClaw iOS Team ID '${canonical_team}' is not available in Xcode on this machine." >&2
-    echo "Sign into the Apple Developer account that owns the canonical team, or set IOS_DEVELOPMENT_TEAM=${canonical_team}." >&2
+    echo "Official OpenClaw iOS Team ID '${canonical_team}' is not available in Xcode on this machine." >&2
+    echo "Sign into the Apple Developer account that owns the official team, or set IOS_DEVELOPMENT_TEAM=${canonical_team}." >&2
     exit 1
   fi
 
@@ -241,8 +234,8 @@ for i in "${!team_ids[@]}"; do
 done
 
 if [[ "$require_canonical" == "1" ]]; then
-  echo "Canonical OpenClaw iOS Team ID '${canonical_team}' is not available in Xcode on this machine." >&2
-  echo "Sign into the Apple Developer account that owns the canonical team, or set IOS_DEVELOPMENT_TEAM=${canonical_team}." >&2
+  echo "Official OpenClaw iOS Team ID '${canonical_team}' is not available in Xcode on this machine." >&2
+  echo "Sign into the Apple Developer account that owns the official team, or set IOS_DEVELOPMENT_TEAM=${canonical_team}." >&2
   exit 1
 fi
 

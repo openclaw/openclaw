@@ -1,25 +1,36 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type {
   SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
+  SessionEntryCohortRequest,
+  SessionEntryCohortResult,
+  SessionExactEntriesWorkerRequest,
 } from "./session-entry-read.types.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type SessionStoreWorkerReadScope = {
   agentId: string;
   storePath: string;
   env?: NodeJS.ProcessEnv;
+  /** Borrow physical selection from its live owner; rows still come from a fresh read. */
+  preparedSource?: CapturedSessionEntryReadSource & {
+    databaseIdentity: string;
+    assertCurrent: () => void;
+  };
 };
 
 export type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
   SessionExactEntriesWorkerSelection & {
     lifecycleSessionKey?: string;
     snapshotFields?: readonly SessionEntrySnapshotField[];
-    projection?: "full" | "sharing" | "list" | "exact";
+    projection?: "full" | "sharing" | "list" | "exact" | "worktree";
     includeMembers?: boolean;
     includeParticipantRecords?: boolean;
     includeAuthorization?: boolean;
+    transcript?: SessionExactEntriesWorkerRequest["transcript"];
   };
 
 export type SessionStoreWorkerReadInput = Omit<SessionStoreWorkerReadScope, "agentId"> & {
@@ -38,3 +49,22 @@ export type SessionEntryReadSourcePreparation = (
   database: PreparedSessionEntryWorkerRead["database"],
   identity: DatabasePathIdentity,
 ) => void;
+
+/** One admitted physical owner; each call prepares a fresh synchronous consumption phase. */
+export type SessionEntryCohortReader = {
+  readonly database: PreparedSessionEntryWorkerRead["database"];
+  readonly sessionKey: string;
+  readonly logicalAgentId: string;
+  readonly storePaths: readonly string[];
+  assertCurrent(): void;
+  /** Return committed data without retaining writer admission for a consumer effect. */
+  readEntry(assertCallerCurrent: () => void): Promise<{
+    entry: InternalSessionEntry;
+    source: SessionEntryCohortResult["source"];
+  }>;
+  withRead<T>(
+    request: Omit<SessionEntryCohortRequest, "expected">,
+    assertCallerCurrent: () => void,
+    consume: (read: SessionEntryCohortResult, assertCurrent: () => void) => T,
+  ): Promise<T>;
+};

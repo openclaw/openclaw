@@ -25,7 +25,6 @@ export type SessionStateWorkerOperations = {
     input: {
       cursors: readonly SessionStateSweepAddress[];
       now: number;
-      sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
     };
     output: SessionStateNotice[];
   };

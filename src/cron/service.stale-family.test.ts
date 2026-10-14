@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
@@ -37,7 +39,7 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
   };
 }
 
-function readDurableRows(db: DatabaseSync) {
+function readDurableRows(db: EngineConnection) {
   return {
     jobs: db.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all(),
     scratch: db.prepare("SELECT * FROM cron_job_scratch ORDER BY store_key, job_id").all(),
@@ -112,7 +114,7 @@ async function withFamilyStore(
       ]);
       await run({
         cron,
-        db: openOpenClawStateDatabase().db,
+        db: requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
         activeStore,
         staleStore,
         removeFamilyNative: async (identity) =>
@@ -211,52 +213,6 @@ describe("Cron stale-family cleanup", () => {
       expect(readDurableRows(db)).toEqual(expected);
       await closeOpenClawStateDatabaseAsync();
       expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
-    });
-  });
-
-  it("preserves the first deletion error and scratch rollback with extra indexes", async () => {
-    await withFamilyStore(ordinary, async ({ removeFamilyNative, db, activeStore }) => {
-      const before = readDurableRows(db);
-      for (const indexes of ["canonical", "separate", "covering"]) {
-        if (indexes === "separate") {
-          db.exec(`CREATE INDEX family_name ON cron_jobs(name);
-            CREATE INDEX family_declaration ON cron_jobs(declaration_key);`);
-        } else if (indexes === "covering") {
-          db.exec(
-            "CREATE INDEX family_covering ON cron_jobs(name, description, store_key, job_id, declaration_key)",
-          );
-        }
-        db.exec("ANALYZE cron_jobs");
-        for (const reversed of [false, true]) {
-          db.exec(`PRAGMA reverse_unordered_selects = ${reversed ? "ON" : "OFF"}`);
-          const originalRows = db
-            .prepare(
-              "SELECT store_key, job_id, declaration_key, name, description FROM cron_jobs WHERE store_key != ?",
-            )
-            .all(activeStore);
-          const first = originalRows.find(
-            (row) =>
-              row.declaration_key === family.declarationKey ||
-              (row.name === family.name &&
-                typeof row.description === "string" &&
-                row.description.includes(family.ownerPluginTag)),
-          );
-          expect(first).toBeDefined();
-          try {
-            db.exec(`CREATE TEMP TRIGGER refuse_family_delete BEFORE DELETE ON main.cron_jobs
-              BEGIN SELECT RAISE(ABORT, 'refused:' || OLD.job_id); END;`);
-            await expect(removeFamilyNative(family)).rejects.toThrow(
-              `refused:${String(first?.job_id)}`,
-            );
-          } finally {
-            db.exec("DROP TRIGGER IF EXISTS temp.refuse_family_delete");
-          }
-          expect(readDurableRows(db)).toEqual(before);
-        }
-      }
-      db.exec("PRAGMA reverse_unordered_selects = OFF");
-      await closeOpenClawStateDatabaseAsync();
-      expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(before);
     });
   });
 

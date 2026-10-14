@@ -5,6 +5,7 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
   getGatewayServiceUpdateNativeCommand,
   withGatewayServiceUpdateAuthority,
@@ -250,3 +251,30 @@ it.each(["settled", "thrown", "returned"] as const)(
     }
   },
 );
+
+it("does not spend a native inspection queue's execution allowance on live custody", async () => {
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const native = vi.fn<GatewayServiceNativeCommand>(async (_argv, options) => {
+    expect(options.timeoutMs).toBe(100);
+    now += 10;
+    return result;
+  });
+  try {
+    await withServiceInspectionBudget(async (budget) => {
+      await withGatewayServiceUpdateAuthority(
+        () => {
+          now += 2_000;
+        },
+        async () => {
+          await execFileUtf8("busctl", [], { timeout: 100 });
+        },
+        { nativeCommand: native },
+      );
+      expect(budget.now()).toBe(10);
+    });
+    expect(native).toHaveBeenCalledOnce();
+  } finally {
+    clock.mockRestore();
+  }
+});

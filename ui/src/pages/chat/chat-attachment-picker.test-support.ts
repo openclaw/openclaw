@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render, type LitElement } from "lit";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import * as attachmentPayloadStore from "./attachment-payload-store.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import * as attachmentTextReader from "./components/chat-attachment-text-reader.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
@@ -34,10 +36,11 @@ export async function renderSettledPastedTextAttachment(
   const read = vi.spyOn(attachmentTextReader, "readAttachmentText");
   try {
     const container = renderChatView(overrides);
-    document.body.append(container);
-    const chip = expectDefined(
-      container.querySelector<LitElement>("openclaw-chat-pasted-text"),
-      "pasted text attachment",
+    const chip = await waitForSolid(() =>
+      expectDefined(
+        container.querySelector<LitElement>("openclaw-chat-pasted-text"),
+        "pasted text attachment",
+      ),
     );
     await chip.updateComplete;
     expect(read).toHaveBeenCalledOnce();
@@ -57,11 +60,16 @@ export async function renderSettledPastedTextAttachment(
 }
 
 export function selectFile(input: HTMLInputElement, file: File) {
+  const poster = vi.spyOn(attachmentPayloadStore, "getChatAttachmentVideoPosterUrl");
+  poster.mockReturnValue(null);
+  onTestFinished(() => poster.mockRestore());
   Object.defineProperty(input, "files", { configurable: true, value: [file] });
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 export function getAttachmentMenuOption(container: Element, label: string) {
+  container.querySelector(".agent-chat__attach-menu")?.dispatchEvent(new Event("wa-show"));
+  flush();
   return Array.from(
     container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
   ).find((button) => button.textContent?.trim() === label);

@@ -1,5 +1,6 @@
 /** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import {
   filterHeartbeatTranscriptArtifacts,
   isHeartbeatOkResponse,
@@ -12,7 +13,6 @@ import {
   INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
 function user(content: unknown) {
   return { role: "user", content };

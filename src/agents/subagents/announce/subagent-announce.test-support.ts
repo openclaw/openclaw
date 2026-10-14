@@ -3,7 +3,7 @@
  * session-store, queue, and hook behavior to caller-provided mocks.
  */
 import { isDeepStrictEqual } from "node:util";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway } from "../../../gateway/call.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
@@ -18,7 +18,6 @@ type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
   getRuntimeConfig: () => OpenClawConfig;
   loadSessionStore: (storePath: string) => unknown;
-  resolveAgentIdFromSessionKey: (sessionKey: string) => string;
   resolveMainSessionKey: (cfg: unknown) => string;
   resolveSessionStorePathCore: (store: unknown, options: unknown) => string;
   isEmbeddedAgentRunActive: (sessionId: string) => boolean;
@@ -62,8 +61,13 @@ function resolveQueueSettings(params: {
 }
 
 /** Create a mocked announce delivery runtime for focused subagent tests. */
-export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRuntimeMockOptions) {
+export async function createSubagentAnnounceDeliveryRuntimeMock(
+  options: DeliveryRuntimeMockOptions,
+) {
   return {
+    ...(await vi.importActual<typeof import("./subagent-announce-delivery.runtime.js")>(
+      "./subagent-announce-delivery.runtime.js",
+    )),
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>
       (await options.callGateway(request)) as T) as typeof callGateway,
     dispatchGatewayMethodInProcess: (async <T = Record<string, unknown>>(
@@ -83,7 +87,6 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
         scope.sessionKey
       ],
     loadSessionStore: options.loadSessionStore,
-    resolveAgentIdFromSessionKey: options.resolveAgentIdFromSessionKey,
     resolveMainSessionKey: options.resolveMainSessionKey,
     resolveSessionStorePathCore: options.resolveSessionStorePathCore,
     isEmbeddedAgentRunActive: options.isEmbeddedAgentRunActive,

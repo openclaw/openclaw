@@ -10,7 +10,7 @@ title: "Retry policy"
 
 - Retry per HTTP request, not per multi-step flow.
 - Preserve ordering by retrying only the current step.
-- Avoid duplicating non-idempotent operations.
+- Avoid repeating operations that could create duplicate effects.
 
 ## Defaults
 
@@ -33,21 +33,25 @@ off exponentially from 2000 ms to a 30000 ms cap, with no jitter.
 
 ### Model providers
 
-Agent runs automatically recover from temporary rate limits, overloads, and provider failures before showing a terminal error. Rate limits receive up to 10 total attempts; other transient failures allow eight retries within a 90-second retry window. A completed successful model response clears the outage window, so useful model and tool work between failures does not consume it. Partial streams, failed responses, and tool activity alone do not clear it. The retry count remains bounded across the whole run. Backoff starts around one second, increases exponentially, and adds jitter to spread concurrent retries. Provider pacing, including `retry-after`, `retry-after-ms`, and “Please try again in …” hints, sets the minimum wait even beyond the 30-second backoff cap. Cancellation and the run deadline still stop recovery.
+Agent runs automatically recover from temporary rate limits, overloads, and provider failures before showing a terminal error. Each consecutive outage allows up to 10 total attempts for rate limits; other transient failures allow eight retries within a 90-second retry window. A completed successful model response resets the retry count, backoff, and outage window, so useful model work between failures does not exhaust recovery for a later outage. Partial streams, failed responses, and tool activity alone do not reset these budgets. The outer recovery-loop guard also resets only after a completed successful model response; the existing per-attempt timeout and any independent outer deadline are unchanged. A progressing turn can exceed one attempt budget in aggregate. Backoff starts around one second, increases exponentially, and adds jitter to spread concurrent retries. Provider pacing, including `retry-after`, `retry-after-ms`, and “Please try again in …” hints, sets the minimum wait even beyond the 30-second backoff cap. User cancellation and independently imposed whole-run deadlines still stop recovery.
+
+On HTTP 429 responses, exhausted token, project-token, or request buckets also contribute their quota-reset wait. OpenClaw takes the longest applicable reset and explicit retry hint. Cloud workers preserve this timing separately from shortened error text; available quota and non-429 responses do not introduce a quota-reset wait. This does not change native harness transport or add shared quota admission.
 
 Recovery continues the existing transcript with an instruction to preserve completed work and inspect interrupted actions before deciding whether to repeat them. It can recover a throttle after tool activity or partial output without resubmitting the original user request. The run shows one transient retry indicator while waiting and remains cancellable. Recovered attempts do not leave persisted assistant errors; only terminal failure retains one error. Billing failures, authentication errors, and provider refusals do not use this transient retry budget.
 
-An empty error body does not make a deterministic HTTP client error retryable. Bodyless `400` and `422` responses surface without silent-error resubmission; client errors with recognized transient retry evidence still follow the existing recovery policy. Empty successful responses retain their separate response-repair retries.
+An empty error body does not make a permanent HTTP client error retryable. Bodyless `400` and `422` responses surface without silent-error resubmission; client errors with recognized transient retry evidence still follow the existing recovery policy. Empty successful responses retain their separate response-repair retries.
 
 In the embedded runtime, a model idle timeout after tool activity also uses this recovery when every tool in the latest batch has a recorded result and all tool execution has settled. The next attempt keeps tools available to finish the task, including handling a recorded tool failure. Pending approval, asynchronous tool activity, intentional tool termination, cancellation, and the run deadline still prevent this continuation. Completed actions are not resubmitted.
 
 A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream. A Gemini or Vertex AI stream that ends inside an event frame qualifies the same way; a whole frame of malformed JSON does not.
 
-If a Responses request reaches its output-token limit while generating a tool call, the embedded runner also continues automatically from recorded results after admitted tools settle. It keeps the same model and account, preserves completed actions, and never executes partial arguments. This continuation shares the retry-count budget and run deadline, but not the 90-second outage window: generating a full response can take longer than that. Cancellation, pending approval, active asynchronous work, and intentional tool termination still stop continuation. Provider refusals and unknown incomplete-response reasons do not qualify.
+Completed Responses replies are delivered immediately, even if the provider has not closed the HTTP response yet. OpenClaw discards up to 64 KiB of trailing bytes for at most 250 ms in the background so a finished connection can be reused. Trailing events never add output or tool calls. Cancellation and Gateway shutdown stop the drain.
+
+If a Responses request reaches its output-token limit while generating a tool call, the embedded runner also continues automatically from recorded results after admitted tools settle. It keeps the same model and account, preserves completed actions, and never executes partial arguments. This continuation shares the retry-count budget and existing timeout controls, but not the 90-second outage window: generating a full response can take longer than that. Its separate one-continuation limit applies to the whole run and is not reset by successful model responses. Cancellation, pending approval, active asynchronous work, and intentional tool termination still stop continuation. Provider refusals and unknown incomplete-response reasons do not qualify.
 
 Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A `Retry-After` value alone does not establish usage-window exhaustion: temporary throttles still honor the provider's minimum wait up to the saved `retry.provider.maxRetryDelayMs` (default 60 seconds). A rate-limit floor longer than that cap goes directly to fallback when one is configured, since the operator has already said how long a server-requested wait may hold the run; with no fallback configured the floor is honored in full, and `maxRetryDelayMs: 0` disables the cap.
 
-The [model failover controller](/concepts/model-failover#model-fallback) owns this recovery budget. Once it is exhausted, OpenClaw follows eligible auth-profile or model fallback paths, or surfaces the final failure. Native harnesses may retry individual requests internally before returning a terminal failure to OpenClaw; those internal retries are separate from OpenClaw's continuation budget.
+The [model failover controller](/concepts/model-failover#model-fallback) owns this recovery budget. Once it is exhausted, OpenClaw follows eligible auth-profile or model fallback paths, or surfaces the final failure. Terminal rate-limit errors explain how many automatic retries were exhausted without a completed model response rather than showing only the provider's last retry-delay hint. Native harnesses may retry individual requests internally before returning a terminal failure to OpenClaw; those internal retries are separate from OpenClaw's continuation budget.
 
 ChatGPT SSE errors preserve HTTP status and `Retry-After` together, so a transient HTTP response remains retryable even when its message or provider code is unfamiliar. The ChatGPT transport separately reconnects once for `websocket_connection_limit_reached` before streaming; this is not an SSE HTTP-response retry.
 
@@ -75,12 +79,14 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 - Retries on rate-limit errors (HTTP 429), request timeouts, HTTP 5xx responses, and transient transport failures such as DNS lookup failures, connection resets, socket closes, and fetch failures.
 - Uses Discord `retry_after` when available, otherwise exponential backoff.
+- If an error response body cannot be read, the received HTTP status and rate-limit headers still govern retries. Permanent `401`, `403`, and `404` refusals are not retried.
+- Message edit, delete, pin, and unpin retry the same way. A delete that finds the message already gone counts as done only after an earlier attempt failed with a lost response.
 
 ### Telegram
 
 - With the built-in transport, new text messages and rich-text messages use fresh HTTP connections, avoiding stale keep-alive sockets for initial previews, replies, and terminal errors. Polling, edits, and control requests retain connection pooling. This adds a connection handshake to each new text message.
-- These non-idempotent text sends retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
-- Idempotent operations, including preview edits, can retry transient network failures and HTTP 5xx responses without replacing the existing message.
+- These text sends could create duplicates, so they retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
+- Operations safe to repeat, including preview edits, can retry transient network failures and HTTP 5xx responses without replacing the existing message.
 - Uses `retry_after` when available, otherwise exponential backoff.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
 
@@ -88,7 +94,7 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 Discord and Telegram channel retry timings are built in and are not configurable in `openclaw.json`.
 
-The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget; `0` disables retries, and rate limits remain capped at 10 total attempts. This is an embedded session setting, not an `openclaw.json` key, and it does not configure native harness request retries. Automatic recovery requires no new configuration.
+The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget; `0` disables retries, and rate limits remain capped at 10 total attempts per consecutive outage. This is an embedded session setting, not an `openclaw.json` key, and it does not configure native harness request retries. Automatic recovery requires no new configuration.
 
 ## Notes
 
@@ -96,6 +102,11 @@ The embedded runtime's existing session setting `retry.provider.maxRetries` over
 - Composite flows do not retry completed steps.
 
 ### Durable outbound delivery
+
+The Gateway checks for unfinished outbound deliveries once at startup. New
+durable enqueues wake recovery after their database transaction commits. Recovery
+keeps retrying while unfinished deliveries remain and stops waking when the queue
+is empty; an idle Gateway does not poll an empty outbound queue.
 
 The durable outbound queue has a separate delivery-attempt budget. When a
 delivery uses a producer claim, reservation checks the exact owner and its lease

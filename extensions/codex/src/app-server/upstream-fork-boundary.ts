@@ -42,6 +42,9 @@ export type CodexUpstreamForkBoundaryResult =
     }
   | { ok: false; code: CodexUpstreamForkBoundaryFailureCode; message: string };
 
+const IN_PROGRESS_TURN_MESSAGE =
+  "This Codex turn is still in progress. Wait for it to finish, then try forking again.";
+
 const TURN_PAGE_LIMIT = 100;
 
 function failure(
@@ -141,10 +144,7 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
         );
       }
       if (turn.status === "inProgress") {
-        return failure(
-          "in-progress-turn",
-          "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-        );
+        return failure("in-progress-turn", IN_PROGRESS_TURN_MESSAGE);
       }
       // beforeTurnId at the first turn yields a valid empty-history fork upstream
       // (codex-rs thread_fork_inner has no minimum-turn guard), matching the empty
@@ -312,7 +312,7 @@ export async function resolveCodexUpstreamForkBoundary(params: {
                       currentThread.modelProvider !== thread.modelProvider ||
                       currentThread.status?.type === "active"
                     ) {
-                      throw new Error("The canonical Codex source changed during initialization");
+                      throw new Error("The Codex source thread changed during initialization");
                     }
                     const currentTurns = await listCodexUpstreamTurns(params.control, threadId);
                     const cut = turns.findIndex(
@@ -322,7 +322,7 @@ export async function resolveCodexUpstreamForkBoundary(params: {
                       !isDeepStrictEqual(currentTurns.slice(0, cut + 1), turns.slice(0, cut + 1))
                     ) {
                       throw new Error(
-                        "The canonical Codex fork boundary changed during initialization",
+                        "The selected Codex fork boundary changed during initialization",
                       );
                     }
                   },
@@ -351,10 +351,7 @@ export function precheckCodexUpstreamForkBoundary(params: {
     );
   }
   if (target.status === "inProgress") {
-    return failure(
-      "in-progress-turn",
-      "This Codex turn is still in progress. Wait for it to finish, then try forking again.",
-    );
+    return failure("in-progress-turn", IN_PROGRESS_TURN_MESSAGE);
   }
   return { ok: true, boundary: params.boundary };
 }

@@ -43,6 +43,7 @@ export function recordMemorySample(
     ["openclaw_worker_count", "workerCount"],
     ["openclaw_worker_heap_sampled_count", "workerHeapSampledCount"],
   ] as const) {
+    store.clearGauges(name);
     store.gauge(name, "Worker isolate counts.", {}, numericValue(memory[field]));
   }
   store.clearGauges("openclaw_heap_space_bytes");
@@ -62,20 +63,39 @@ export function recordMemorySample(
     }
   }
   // The resource owner supplies bounded script names and retires stale/exit samples.
-  const workerHeaps = new Map<string, number>();
+  const workers = new Map<
+    string,
+    { count: number; sampled: number; heapUsed: number | undefined }
+  >();
   for (const worker of memory.workerHeaps ?? []) {
+    const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
+    totals.count++;
+    totals.sampled++;
     const heapUsed = numericValue(worker.heapUsed);
     if (heapUsed !== undefined) {
-      workerHeaps.set(worker.script, (workerHeaps.get(worker.script) ?? 0) + heapUsed);
+      totals.heapUsed = (totals.heapUsed ?? 0) + heapUsed;
     }
+    workers.set(worker.script, totals);
+  }
+  for (const worker of memory.workerMemoryMissing ?? []) {
+    const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
+    totals.count++;
+    workers.set(worker.script, totals);
   }
   store.clearGauges("openclaw_worker_heap_used_bytes");
-  for (const [script, heapUsed] of workerHeaps) {
+  for (const [script, totals] of workers) {
+    store.gauge("openclaw_worker_count", "Worker isolate counts.", { script }, totals.count);
+    store.gauge(
+      "openclaw_worker_heap_sampled_count",
+      "Worker isolate counts.",
+      { script },
+      totals.sampled,
+    );
     store.gauge(
       "openclaw_worker_heap_used_bytes",
       "Latest live Worker heap usage by bounded script basename.",
       { script },
-      heapUsed,
+      totals.heapUsed,
     );
   }
   store.histogram(

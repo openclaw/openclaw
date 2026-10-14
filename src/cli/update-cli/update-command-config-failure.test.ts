@@ -57,7 +57,7 @@ describe("update config failure guidance", () => {
           "Preserve roster order, legacy markers, environment and secret references",
         );
         expect(failure.nextAction).toContain(
-          "split the canonical config back into includes and validate again",
+          "split the repaired config back into includes and validate again",
         );
         expect(failure.nextAction).toContain(
           "https://docs.openclaw.ai/gateway/doctor/config-migrations#agent-roster-migration",

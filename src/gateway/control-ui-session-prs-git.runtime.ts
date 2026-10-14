@@ -1,17 +1,22 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
-import { runGit } from "../agents/worktrees/git.js";
+import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
 import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   gitOutput,
+  isAncestor,
+  runPullRequestGit,
   readCheckoutHead,
   readRemoteRevisions,
   resolveBranchLanding,
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+
+const log = createSubsystemLogger("git/branch-facts");
 
 /** Observe only this checkout's refs; snapshot publication does not change PR facts. */
 export async function readCheckoutGitRevision({
@@ -214,9 +219,12 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
 }
 
 async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
-  const listing = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]).catch(
-    () => null,
-  );
+  const listing = await runPullRequestGit(root, [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ]);
   // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
   const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
   let additions = 0;
@@ -238,10 +246,47 @@ async function diffStatsAgainst(
   refreshIndex: boolean,
 ): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
   try {
+    // Git's shortstat prefetch scans every promisor pack on a missing blob, even
+    // with lazy fetching disabled. Admit only locally available diff inputs.
+    const inventory = await runPullRequestGit(root, [
+      "-c",
+      "diff.autoRefreshIndex=false",
+      "diff",
+      "--raw",
+      "--no-abbrev",
+      "--no-renames",
+      "--no-ext-diff",
+      "--no-textconv",
+      "-z",
+      base,
+      "--",
+    ]);
+    const objects = new Set<string>();
+    const fields = requireGitCommandOutput("git diff --raw", inventory).split("\0");
+    for (let i = 0; i < fields.length - 1; i += 2) {
+      const [oldMode, newMode, oldObject, newObject] = fields[i]!.slice(1).split(" ");
+      for (const [mode, object] of [
+        [oldMode, oldObject],
+        [newMode, newObject],
+      ]) {
+        if (mode !== "160000" && object && !/^0+$/u.test(object)) {
+          objects.add(object);
+        }
+      }
+    }
+    if (objects.size > 0) {
+      const input = `${[...objects].join("\n")}\n`;
+      const available = await runPullRequestGit(root, ["cat-file", "--batch-check=%(objectname)"], {
+        input,
+      });
+      if (requireGitCommandOutput("git cat-file", available) !== input) {
+        return null;
+      }
+    }
     // Checkout-configurable diff drivers must never execute in the Gateway
     // process (same guard as sessions-diff).
     // Managed checkouts own their index; user checkouts keep read-only stat data.
-    const result = await runGit(root, [
+    const result = await runPullRequestGit(root, [
       "-c",
       `diff.autoRefreshIndex=${refreshIndex}`,
       "diff",
@@ -261,56 +306,41 @@ async function diffStatsAgainst(
       deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
       changedFiles: Number(SHORTSTAT_FILES.exec(summary)?.[1] ?? 0) + untracked.files,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof GitCommandTimeoutError) {
+      throw error;
+    }
     return null;
   }
-}
-
-/**
- * GitHub's pull/new page only has something to offer once the pushed branch
- * carries commits the default branch lacks. Rename-only commits still count:
- * this gate keys on commits, not line counts.
- */
-async function branchHasCreatablePullRequest(
-  root: string,
-  defaultSha: string | null,
-  pushedSha: string | null,
-  defaultBranch: string | undefined,
-): Promise<boolean> {
-  // Fail closed when origin/HEAD is missing or the branch is not pushed.
-  if (!defaultBranch || !pushedSha) {
-    return false;
-  }
-  if (!defaultSha) {
-    return true;
-  }
-  const ahead = await gitOutput(root, ["rev-list", "--count", `${defaultSha}..${pushedSha}`]);
-  // A failed count keeps the row: rev-list errors must not hide a valid branch.
-  return ahead === null || Number(ahead) > 0;
 }
 
 export async function readPullRequestBranchFacts(
   input: GitReadOperations["pull-request.branch-facts"]["input"],
 ): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
-  const landing = await resolveBranchLanding(input.root, input);
-  const stats = landing.statsBase
-    ? await diffStatsAgainst(input.root, landing.statsBase, input.refreshIndex === true)
-    : null;
-  // The diff validates equal recorded tips without a separate ancestry probe.
-  // Missing objects must still retain the unknown-comparison fallback.
-  const noPushedChanges =
-    stats !== null &&
-    landing.defaultSha !== null &&
-    landing.defaultSha === landing.pushedSha &&
-    landing.statsBase === landing.defaultSha;
-  const creatable =
-    (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
-    !noPushedChanges &&
-    (await branchHasCreatablePullRequest(
-      input.root,
-      landing.defaultSha,
-      landing.pushedSha,
-      input.defaultBranch,
-    ));
-  return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
+  try {
+    const landing = await resolveBranchLanding(input.root, input);
+    const stats = landing.statsBase
+      ? await diffStatsAgainst(input.root, landing.statsBase, input.refreshIndex === true)
+      : null;
+    // The diff validates equal recorded tips without a separate ancestry probe.
+    // Missing objects must still retain the unknown-comparison fallback.
+    const noPushedChanges =
+      stats !== null &&
+      landing.defaultSha !== null &&
+      landing.defaultSha === landing.pushedSha &&
+      landing.statsBase === landing.defaultSha;
+    const creatable =
+      (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
+      !noPushedChanges &&
+      Boolean(input.defaultBranch) &&
+      landing.pushedSha !== null &&
+      (!landing.defaultSha ||
+        !(await isAncestor(input.root, landing.pushedSha, landing.defaultSha)));
+    return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
+  } catch {
+    log.warn(
+      "PR comparison unavailable; fetch repository history and retry. Dependent comparisons skipped.",
+    );
+    return { creatable: false, stats: null };
+  }
 }

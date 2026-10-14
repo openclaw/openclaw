@@ -33,9 +33,9 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/node-sqlite.js")>()),
   openNodeSqliteDatabase: mock.open,
 }));
-vi.mock("../fleet/registry.kernel.js", () => ({
-  listFleetCellsInDatabase: mock.query,
-  getFleetCellInDatabase: () => undefined,
+vi.mock("./backup-run-records.kernel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./backup-run-records.kernel.js")>()),
+  readBackupRunsInDatabase: mock.query,
 }));
 vi.mock("./openclaw-agent-db-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-agent-db-lease.js")>()),
@@ -95,7 +95,7 @@ function request(): OpenClawStateReadRequest {
     databasePath,
     location: databasePath,
     checkFreshAdmission: true,
-    command: { type: "fleet.list" },
+    command: { type: "backup.runs" },
   };
 }
 
@@ -104,7 +104,7 @@ function knownQuarantine(kind: "state" | "agent") {
   mock.read.mockImplementation((sql) =>
     sql === "PRAGMA user_version"
       ? { user_version: 2 }
-      : { kind, reason, quarantined_at: 1, verified_generation: null },
+      : { user_version: 2, kind, reason, quarantined_at: 1, verified_generation: null },
   );
   return reason;
 }
@@ -137,9 +137,9 @@ it.each([
       expect(reply).toMatchObject({ ok: false, message: expect.stringContaining(reason!) });
       expect(reply).not.toHaveProperty("sourceAdmitted", true);
     } else if (closeFails) {
-      expect(reply).toMatchObject({ ok: true, type: "fleet.list", cells: [] });
+      expect(reply).toMatchObject({ ok: true, type: "backup.runs", runs: [] });
     } else {
-      expect(reply).toEqual({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] });
+      expect(reply).toEqual({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] });
     }
     if (closeFails) {
       expect(reply.nativeCleanupFailure?.error?.nodes).toEqual(

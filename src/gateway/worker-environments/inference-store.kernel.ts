@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   type WorkerInferenceTerminalOutcome,
@@ -9,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type {
   DB as StateDatabase,
   WorkerInferenceTurns,
@@ -18,6 +18,7 @@ import type {
   WorkerInferenceTurnBeginResult,
   WorkerInferenceRetentionPolicy,
 } from "./inference-store.types.js";
+import { createWorkerLedgerInputValidation } from "./worker-ledger-validation.js";
 
 type InferenceDb = Pick<StateDatabase, "worker_inference_turns"> & {
   pragma_encoding: { encoding: string };
@@ -37,33 +38,16 @@ type ExistingTurnResult = Extract<
   { kind: "recover" | "replay" | "rejected" }
 >;
 
-const REQUEST_HASH_PATTERN = /^[a-f0-9]{64}$/u;
+const {
+  required,
+  integer: nonNegativeInteger,
+  requestHash: normalizeRequestHash,
+} = createWorkerLedgerInputValidation("Worker inference turn");
 const DEFAULT_RETENTION: WorkerInferenceRetentionPolicy = {
   maxAgeMs: 24 * 60 * 60 * 1_000,
   maxRows: 256,
   maxBytes: 64 * 1024 * 1024,
 };
-
-function required(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Worker inference turn ${field} must be a non-empty string`);
-  }
-  return value.trim();
-}
-
-function nonNegativeInteger(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`Worker inference turn ${field} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function normalizeRequestHash(value: unknown): string {
-  if (typeof value !== "string" || !REQUEST_HASH_PATTERN.test(value)) {
-    throw new Error("Worker inference turn request hash must be lowercase SHA-256 hex");
-  }
-  return value;
-}
 
 function normalizeInput(input: WorkerInferenceTurnInput, nowMs: number): NormalizedTurnInput {
   return {
@@ -103,13 +87,17 @@ function serializeTerminalOutcome(outcome: WorkerInferenceTerminalOutcome): stri
 
 /** The shared-state worker supplies the already-admitted transaction connection. */
 export function createWorkerInferenceStoreKernel(options: {
-  db: DatabaseSync;
+  db: EngineConnection;
   now: () => number;
   retention?: Partial<WorkerInferenceRetentionPolicy>;
 }) {
   const { db, now } = options;
   const query = getNodeSqliteKysely<InferenceDb>(db);
   const retention = { ...DEFAULT_RETENTION, ...options.retention };
+  const terminalUpdate = (terminalJson: string, nowMs: number) =>
+    query
+      .updateTable("worker_inference_turns")
+      .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs });
 
   const classifyTurn = (input: NormalizedTurnInput): ExistingTurnResult | undefined => {
     const row = executeSqliteQueryTakeFirstSync(
@@ -258,9 +246,7 @@ export function createWorkerInferenceStoreKernel(options: {
 
     const update = executeSqliteQuerySync(
       db,
-      query
-        .updateTable("worker_inference_turns")
-        .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: input.nowMs })
+      terminalUpdate(terminalJson, input.nowMs)
         .where("session_id", "=", input.sessionId)
         .where("run_epoch", "=", input.runEpoch)
         .where("run_id", "=", input.runId)
@@ -292,9 +278,7 @@ export function createWorkerInferenceStoreKernel(options: {
     };
     executeSqliteQuerySync(
       db,
-      query
-        .updateTable("worker_inference_turns")
-        .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
+      terminalUpdate(terminalJson, nowMs)
         .where("session_id", "=", identity.sessionId)
         .where("run_epoch", "=", identity.runEpoch)
         .where("run_id", "=", identity.runId)
@@ -308,13 +292,7 @@ export function createWorkerInferenceStoreKernel(options: {
   const recoverPending = (outcome: WorkerInferenceTerminalOutcome): void => {
     const nowMs = nonNegativeInteger(now(), "timestamp");
     const terminalJson = serializeTerminalOutcome(outcome);
-    executeSqliteQuerySync(
-      db,
-      query
-        .updateTable("worker_inference_turns")
-        .set({ state: "terminal", terminal_json: terminalJson, updated_at_ms: nowMs })
-        .where("state", "=", "pending"),
-    );
+    executeSqliteQuerySync(db, terminalUpdate(terminalJson, nowMs).where("state", "=", "pending"));
     pruneTerminalTurns(nowMs);
   };
 

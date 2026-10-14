@@ -3,22 +3,25 @@
 enum SpeechAudioBufferNormalizer {
     static func speechCompatibleBuffer(from buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
         let format = buffer.format
-        guard format.channelCount > 2, format.sampleRate > 0 else {
-            return buffer
-        }
-        return self.downmixFloatBuffer(buffer) ?? self.convertBuffer(buffer) ?? buffer
-    }
-
-    private static func downmixFloatBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        let format = buffer.format
-        guard format.commonFormat == .pcmFormatFloat32,
-              !format.isInterleaved,
-              let source = buffer.floatChannelData,
+        guard format.channelCount > 2, format.sampleRate > 0,
               let targetFormat = AVAudioFormat(
                   commonFormat: .pcmFormatFloat32,
                   sampleRate: format.sampleRate,
                   channels: 1,
-                  interleaved: false),
+                  interleaved: false)
+        else { return buffer }
+        return self.downmixFloatBuffer(buffer, to: targetFormat) ??
+            self.convertBuffer(buffer, to: targetFormat) ?? buffer
+    }
+
+    private static func downmixFloatBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        to targetFormat: AVAudioFormat) -> AVAudioPCMBuffer?
+    {
+        let format = buffer.format
+        guard format.commonFormat == .pcmFormatFloat32,
+              !format.isInterleaved,
+              let source = buffer.floatChannelData,
               let output = AVAudioPCMBuffer(
                   pcmFormat: targetFormat,
                   frameCapacity: buffer.frameCapacity),
@@ -41,13 +44,8 @@ enum SpeechAudioBufferNormalizer {
         return output
     }
 
-    private static func convertBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        guard let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: buffer.format.sampleRate,
-            channels: 1,
-            interleaved: false),
-            let converter = AVAudioConverter(from: buffer.format, to: targetFormat)
+    private static func convertBuffer(_ buffer: AVAudioPCMBuffer, to targetFormat: AVAudioFormat) -> AVAudioPCMBuffer? {
+        guard let converter = AVAudioConverter(from: buffer.format, to: targetFormat)
         else {
             return nil
         }

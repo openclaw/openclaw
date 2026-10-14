@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli gateway calls.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
@@ -13,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
+import type { CallBrief } from "./call-brief.js";
 import { writeCliJson } from "./cli-command-io.js";
 import type { VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
@@ -23,6 +23,7 @@ type VoiceCallGatewayMethod =
   | "voicecall.continue"
   | "voicecall.continue.start"
   | "voicecall.continue.result"
+  | "voicecall.steer"
   | "voicecall.speak"
   | "voicecall.dtmf"
   | "voicecall.end"
@@ -252,6 +253,7 @@ export async function initiateVoiceCall(params: {
   mode?: string;
   defaultMode?: "notify" | "conversation";
   failureMessage?: string;
+  brief?: CallBrief;
 }): Promise<string> {
   const mode =
     params.mode === "notify" || params.mode === "conversation" ? params.mode : params.defaultMode;
@@ -261,6 +263,7 @@ export async function initiateVoiceCall(params: {
       ...(params.to ? { to: params.to } : {}),
       ...(params.message ? { message: params.message } : {}),
       ...(mode ? { mode } : {}),
+      ...(params.brief ? { brief: params.brief } : {}),
     },
     {
       timeoutMs: resolveOperationTimeout(params.config),
@@ -277,6 +280,7 @@ export async function initiateVoiceCall(params: {
   }
   const result = await runtime.manager.initiateCall(to, undefined, {
     message: params.message,
+    brief: params.brief,
     mode,
   });
   if (!result.success) {

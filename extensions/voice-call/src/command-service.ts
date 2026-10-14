@@ -1,7 +1,8 @@
 // Voice Call command service owns operations shared by gateway and model-tool adapters.
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { CallBriefSchema } from "./call-brief.js";
 import type { VoiceCallRuntime } from "./runtime.js";
-import type { CallRecord, OutboundCallOptions } from "./types.js";
+import { TerminalStates, type CallRecord, type OutboundCallOptions } from "./types.js";
 
 export class VoiceCallCommandInputError extends Error {}
 
@@ -77,17 +78,24 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
     prepareContinue,
 
     async initiate(
-      params: OutboundCallOptions & {
+      params: Omit<OutboundCallOptions, "brief"> & {
         to?: string;
         sessionKey?: string;
+        /** Untrusted brief input; validated against the call brief schema below. */
+        brief?: unknown;
       },
       missingToMessage = "to required",
     ) {
       const rt = await ensureRuntime();
       const to = requireInput(params.to ?? rt.config.toNumber, missingToMessage);
+      const parsedBrief = CallBriefSchema.optional().safeParse(params.brief);
+      if (!parsedBrief.success) {
+        throw new VoiceCallCommandInputError(`Invalid brief: ${parsedBrief.error.message}`);
+      }
       const result = await rt.manager.initiateCall(to, params.sessionKey, {
         message: params.message,
         mode: params.mode,
+        brief: parsedBrief.data,
         dtmfSequence: params.dtmfSequence,
         ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
         ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -98,6 +106,61 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
 
     async continueCall(callId?: string, message?: string) {
       return await (await prepareContinue(callId, message)).run();
+    },
+
+    async steer(params: {
+      callId?: string;
+      message?: string;
+      mode?: "say" | "guidance";
+      requesterSessionKey?: string;
+      operator?: boolean;
+      assertCurrent?: () => void;
+    }) {
+      const callId = requireInput(params.callId, "callId and message required");
+      const message = requireInput(params.message?.trim(), "callId and message required");
+      if (message.length > 500) {
+        throw new VoiceCallCommandInputError("Steering message must be at most 500 characters");
+      }
+      const rt = await ensureRuntime();
+      params.assertCurrent?.();
+      const call = rt.manager.getCall(callId);
+      if (!call || TerminalStates.has(call.state)) {
+        throw new VoiceCallCommandInputError("Call is not active");
+      }
+      const requester = call.metadata?.requesterSessionKey;
+      if (
+        !params.operator &&
+        (!params.requesterSessionKey || requester !== params.requesterSessionKey)
+      ) {
+        throw new VoiceCallCommandInputError(
+          "Only the requester session or an operator may steer this call",
+        );
+      }
+      if (!rt.config.realtime.enabled) {
+        throw new VoiceCallCommandInputError("Steering requires an active realtime call");
+      }
+      await rt.manager.updateCallMetadata(
+        call,
+        (metadata) => ({
+          ...metadata,
+          ownerInstructions: [
+            ...(Array.isArray(metadata?.ownerInstructions) ? metadata.ownerInstructions : []),
+            message,
+          ].slice(-8),
+        }),
+        { persist: true, assertCurrent: params.assertCurrent },
+      );
+      params.assertCurrent?.();
+      if (rt.manager.getCall(callId) !== call || TerminalStates.has(call.state)) {
+        throw new VoiceCallCommandInputError("Call is not active");
+      }
+      const instruction =
+        params.mode === "say"
+          ? `Owner instruction for this call: say this now, verbatim, then listen. Answer: ${JSON.stringify(message)}`
+          : `Owner instruction for this call: ${JSON.stringify(message)}. Apply this guidance from now on while respecting the call brief's disclosure and approval limits.`;
+      const result = rt.webhookServer.speakRealtime(callId, instruction);
+      requireSuccess(result, "Steering failed");
+      return { success: true };
     },
 
     async speak(params: { callId?: string; message?: string; allowTwimlFallback?: boolean }) {

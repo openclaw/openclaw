@@ -191,7 +191,7 @@ it.each([
     const forgetCachedDatabase = () => {
       const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
       if (cached) {
-        closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+        closeCachedOpenClawAgentDatabase(cached);
       }
       clearOpenClawAgentDatabaseValidationCache(state.root);
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
@@ -217,13 +217,11 @@ it.each([
       },
     );
     const order: string[] = [];
-    const materialize = archives.materializeSessionStateDeletePlans;
-    vi.spyOn(archives, "materializeSessionStateDeletePlans").mockImplementation(async (plans) => {
-      const result = await materialize(plans);
-      if (victim === "history" && plans.some((plan) => plan.sessionId === originalId)) {
-        expect(
-          result.find((plan) => plan.sessionId === originalId)?.archive?.bytes.byteLength,
-        ).toBeGreaterThan(0);
+    const materialize = archives.materializeSessionHistoryEvictionPlan;
+    vi.spyOn(archives, "materializeSessionHistoryEvictionPlan").mockImplementation(async (plan) => {
+      const result = await materialize(plan);
+      if (victim === "history" && plan.sessionId === originalId) {
+        expect(result?.archive?.bytes.byteLength).toBeGreaterThan(0);
         expect(
           readRow(
             databasePath,
@@ -464,7 +462,6 @@ it("skips an originating incognito budget kick without disk or background work",
   const successor = state.path("successor-state");
   fs.mkdirSync(successor);
   const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-  const memory = openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: sentinel });
   const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
   const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
   kickSessionHistoryDiskBudgetMaintenance({
@@ -478,16 +475,12 @@ it("skips an originating incognito budget kick without disk or background work",
     }),
   });
   vi.stubEnv("OPENCLAW_STATE_DIR", successor);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
   expect(
     queueSpy.mock.calls.filter(
       ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
     ),
   ).toEqual([]);
   expect(measureSpy).not.toHaveBeenCalled();
-  expect(memory.db.isOpen).toBe(true);
   expect(fs.existsSync(path.dirname(sentinel))).toBe(false);
   expect(fs.readdirSync(successor)).toEqual([]);
 });

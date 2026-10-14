@@ -9,13 +9,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { getAuthoredConfigSecretRef, hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import {
   type PersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
 } from "../config/sessions/session-store-owner.js";
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import {
   normalizeAgentId,
   normalizeAgentIdStrict,
@@ -62,6 +63,15 @@ type HookSessionPolicyResolved = {
 
 export type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
 
+export class UnresolvedHooksTokenError extends Error {
+  constructor() {
+    super(
+      "hooks.token has an unresolved environment reference; supply the configured secret or disable hooks",
+    );
+    this.name = "UnresolvedHooksTokenError";
+  }
+}
+
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) {
     return null;
@@ -69,6 +79,13 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   const token = normalizeOptionalString(cfg.hooks?.token);
   if (!token) {
     throw new Error("hooks.enabled requires hooks.token");
+  }
+  // Loaded literals may resemble references; only authored resolution facts can reject them.
+  if (
+    hasUnresolvedConfigPath(cfg, "hooks.token") ||
+    getAuthoredConfigSecretRef(cfg, "hooks.token")
+  ) {
+    throw new UnresolvedHooksTokenError();
   }
   const rawPath = normalizeOptionalString(cfg.hooks?.path) || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
@@ -191,9 +208,11 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
+  timeoutMs?: number,
 ): Promise<Result<unknown, string>> {
   const result = await readJsonBodyWithLimit(req, {
     maxBytes,
+    timeoutMs,
     emptyObjectOnEmpty: true,
     destroyOnLimit: false,
   });
@@ -205,9 +224,6 @@ export async function readJsonBody(
   }
   if (result.code === "REQUEST_BODY_TIMEOUT") {
     return { ok: false, error: "request body timeout" };
-  }
-  if (result.code === "CONNECTION_CLOSED") {
-    return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
   }
   return { ok: false, error: result.error };
 }
@@ -373,46 +389,43 @@ function normalizeHookAgentDelivery(params: {
   const hasChannel = params.channel !== undefined;
   const hasTo = params.to !== undefined;
   const hasAccountId = params.accountId !== undefined;
-  if (!hasChannel && !hasTo && !hasAccountId) {
-    return {
-      ok: true,
-      value: {
-        deliver,
-        channel,
-        to,
-        accountId,
-        delivery: { mode: "none" },
-      },
-    };
-  }
-  if (hasTo && !to) {
-    return {
-      ok: false,
-      error: "to must be a non-empty string for hook delivery",
-    };
-  }
-  if (hasAccountId && !accountId) {
-    return {
-      ok: false,
-      error: "accountId must be a non-empty string for hook delivery",
-    };
-  }
-  if (hasAccountId && (!hasChannel || !to)) {
-    return {
-      ok: false,
-      error: "accountId requires channel and to for hook delivery",
-    };
-  }
-  if (!hasChannel || !to) {
-    return {
-      ok: false,
-      error: "channel and to must be set together for hook delivery",
-    };
-  }
-  if (channel === "last") {
-    return {
-      ok: false,
-      error: "channel must name a concrete channel for hook delivery",
+  let delivery: HookAgentPayload["delivery"] = { mode: "none" };
+  if (hasChannel || hasTo || hasAccountId) {
+    if (hasTo && !to) {
+      return {
+        ok: false,
+        error: "to must be a non-empty string for hook delivery",
+      };
+    }
+    if (hasAccountId && !accountId) {
+      return {
+        ok: false,
+        error: "accountId must be a non-empty string for hook delivery",
+      };
+    }
+    if (hasAccountId && (!hasChannel || !to)) {
+      return {
+        ok: false,
+        error: "accountId requires channel and to for hook delivery",
+      };
+    }
+    if (!hasChannel || !to) {
+      return {
+        ok: false,
+        error: "channel and to must be set together for hook delivery",
+      };
+    }
+    if (channel === "last") {
+      return {
+        ok: false,
+        error: "channel must name a concrete channel for hook delivery",
+      };
+    }
+    delivery = {
+      mode: "announce",
+      channel,
+      to,
+      ...(accountId ? { accountId } : {}),
     };
   }
   return {
@@ -422,12 +435,7 @@ function normalizeHookAgentDelivery(params: {
       channel,
       to,
       accountId,
-      delivery: {
-        mode: "announce",
-        channel,
-        to,
-        ...(accountId ? { accountId } : {}),
-      },
+      delivery,
     },
   };
 }
@@ -477,24 +485,16 @@ export function resolveEffectiveHookTargetAgentId(
       : hooksConfig.agentPolicy.defaultAgentId;
   } else if (source === "request" && raw) {
     const normalized = normalizeAgentIdStrict(raw);
-    if (!normalized.ok) {
+    const requestedAgentId = normalized.ok ? normalized.value : raw;
+    if (!normalized.ok || !hooksConfig.agentPolicy.knownAgentIds.has(requestedAgentId)) {
       return {
         ok: false,
         code: "unknown-agent",
-        agentId: raw,
-        error: `unknown agentId "${raw}"`,
+        agentId: requestedAgentId,
+        error: `unknown agentId "${requestedAgentId}"`,
       };
     }
-    if (hooksConfig.agentPolicy.knownAgentIds.has(normalized.value)) {
-      selectedAgentId = normalized.value;
-    } else {
-      return {
-        ok: false,
-        code: "unknown-agent",
-        agentId: normalized.value,
-        error: `unknown agentId "${normalized.value}"`,
-      };
-    }
+    selectedAgentId = requestedAgentId;
   }
   const resolvedAgentId = selectedAgentId ?? hooksConfig.agentPolicy.defaultAgentId;
   const persistedOwner = hooksConfig.agentPolicy.globalSessionStoreOwner;
@@ -564,24 +564,19 @@ export function resolveHookSessionKey(params: {
     ) {
       return { ok: false, error: getHookSessionKeyRequestPolicyError() };
     }
-    const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-    if (allowedPrefixes && !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)) {
-      return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
+  } else {
+    const defaultSessionKey = params.hooksConfig.sessionPolicy.defaultSessionKey;
+    if (defaultSessionKey) {
+      return { ok: true, value: defaultSessionKey };
     }
-    return { ok: true, value: requested };
   }
 
-  const defaultSessionKey = params.hooksConfig.sessionPolicy.defaultSessionKey;
-  if (defaultSessionKey) {
-    return { ok: true, value: defaultSessionKey };
-  }
-
-  const generated = `hook:${(params.idFactory ?? randomUUID)()}`;
+  const sessionKey = requested ?? `hook:${(params.idFactory ?? randomUUID)()}`;
   const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-  if (allowedPrefixes && !isSessionKeyAllowedByPrefix(generated, allowedPrefixes)) {
+  if (allowedPrefixes && !isSessionKeyAllowedByPrefix(sessionKey, allowedPrefixes)) {
     return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
   }
-  return { ok: true, value: generated };
+  return { ok: true, value: sessionKey };
 }
 
 function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolved[]): boolean {
@@ -639,6 +634,9 @@ export function normalizeAgentPayload(
   );
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKey = normalizeOptionalString(payload.sessionKey);
+  if (payload.sessionKey !== undefined && !sessionKey) {
+    return { ok: false, error: "sessionKey must be a non-empty string" };
+  }
   const sessionModeRaw = payload.sessionMode;
   if (
     sessionModeRaw !== undefined &&

@@ -1,4 +1,5 @@
 // Voice Call plugin entrypoint registers its OpenClaw integration.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
@@ -12,7 +13,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
 import {
   definePluginEntry,
   type GatewayRequestHandlerOptions,
@@ -32,6 +32,7 @@ import {
 } from "./src/config.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 import { resolveActiveVoiceCallToolScope } from "./src/tool-call-scope.js";
+import { VoiceCallToolSchema } from "./src/tool-schema.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
@@ -48,48 +49,6 @@ const voiceCallConfigSchema = {
   },
 };
 
-const VoiceCallToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("initiate_call"),
-    to: Type.Optional(Type.String({ description: "Call target" })),
-    message: Type.String({ description: "Intro message" }),
-    mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
-    sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
-    dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
-  }),
-  Type.Object({
-    action: Type.Literal("continue_call"),
-    callId: Type.String({ description: "Call ID" }),
-    message: Type.String({ description: "Follow-up message" }),
-  }),
-  Type.Object({
-    action: Type.Literal("speak_to_user"),
-    callId: Type.String({ description: "Call ID" }),
-    message: Type.String({ description: "Message to speak" }),
-  }),
-  Type.Object({
-    action: Type.Literal("send_dtmf"),
-    callId: Type.String({ description: "Call ID" }),
-    digits: Type.String({ description: "DTMF digits to send" }),
-  }),
-  Type.Object({
-    action: Type.Literal("end_call"),
-    callId: Type.String({ description: "Call ID" }),
-  }),
-  Type.Object({
-    action: Type.Literal("get_status"),
-    callId: Type.String({ description: "Call ID" }),
-  }),
-  Type.Object({
-    mode: Type.Optional(Type.Union([Type.Literal("call"), Type.Literal("status")])),
-    to: Type.Optional(Type.String({ description: "Call target" })),
-    sid: Type.Optional(Type.String({ description: "Call SID" })),
-    message: Type.Optional(Type.String({ description: "Optional intro message" })),
-    sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
-    dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
-  }),
-]);
-
 function isCliOnlyProcess(): boolean {
   return process.env.OPENCLAW_CLI === "1" && !process.argv.slice(2).includes("gateway");
 }
@@ -99,46 +58,32 @@ const VOICE_CALL_RUNTIME_COORDINATOR_KEY = Symbol.for("openclaw.voice-call.runti
 type VoiceCallRuntimeGeneration = {
   retired: boolean;
   scheduler?: PluginServiceSchedulerV1;
+  runInServiceContext?: <T>(run: () => T) => T;
   serviceHealth?: Parameters<
     Parameters<OpenClawPluginApi["registerService"]>[0]["start"]
   >[0]["serviceHealth"];
 };
 
 type VoiceCallRuntimeRegistration = {
-  epoch: number;
   generation: VoiceCallRuntimeGeneration;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
 };
 
-type VoiceCallRuntimeSlot =
-  | {
-      state: "starting";
-      owner: VoiceCallRuntimeGeneration;
-      promise: Promise<VoiceCallRuntime>;
-    }
-  | {
-      state: "running";
-      owner: VoiceCallRuntimeGeneration;
-      runtime: VoiceCallRuntime;
-    }
-  | {
-      state: "stopping";
-      owner: VoiceCallRuntimeGeneration;
-      promise: Promise<void>;
-    };
+type VoiceCallRuntimeSlot = {
+  owner: VoiceCallRuntimeGeneration;
+  promise: Promise<VoiceCallRuntime>;
+  stopPromise?: Promise<void>;
+};
 
 type VoiceCallRuntimeCoordinator = {
   current?: VoiceCallRuntimeRegistration;
-  epochCounter: number;
   slot?: VoiceCallRuntimeSlot;
 };
 
 class VoiceCallRuntimeLifecycleError extends Error {}
 
 function getVoiceCallRuntimeCoordinator(): VoiceCallRuntimeCoordinator {
-  return resolveGlobalSingleton(VOICE_CALL_RUNTIME_COORDINATOR_KEY, () => ({
-    epochCounter: 0,
-  }));
+  return resolveGlobalSingleton(VOICE_CALL_RUNTIME_COORDINATOR_KEY, () => ({}));
 }
 
 function activateVoiceCallRuntimeGeneration(
@@ -146,14 +91,6 @@ function activateVoiceCallRuntimeGeneration(
   registration: VoiceCallRuntimeRegistration,
   generation: VoiceCallRuntimeGeneration,
 ): void {
-  if (
-    registration.epoch < (coordinator.current?.epoch ?? 0) ||
-    registration.generation !== generation
-  ) {
-    throw new VoiceCallRuntimeLifecycleError(
-      "Voice call runtime generation was superseded; use the current plugin registration",
-    );
-  }
   if (generation.retired) {
     throw new VoiceCallRuntimeLifecycleError(
       "Voice call runtime generation is retired; use the current plugin registration",
@@ -172,22 +109,16 @@ function stopVoiceCallRuntimeGeneration(
   generation: VoiceCallRuntimeGeneration,
 ): Promise<void> {
   const ownedSlot = coordinator.slot?.owner === generation ? coordinator.slot : undefined;
-  if (!ownedSlot || ownedSlot.state === "stopping") {
-    return ownedSlot?.promise ?? Promise.resolve();
+  if (!ownedSlot) {
+    return Promise.resolve();
   }
-  const stopPromise = Promise.resolve().then(async () => {
-    const runtime = ownedSlot.state === "running" ? ownedSlot.runtime : await ownedSlot.promise;
-    await runtime.stop();
-  });
-  const stoppingSlot = { state: "stopping" as const, owner: generation, promise: stopPromise };
-  if (coordinator.slot === ownedSlot) {
-    coordinator.slot = stoppingSlot;
-  }
-  return stopPromise.finally(() => {
-    if (coordinator.slot === stoppingSlot) {
-      coordinator.slot = undefined;
-    }
-  });
+  return (ownedSlot.stopPromise ??= ownedSlot.promise
+    .then((runtime) => runtime.stop())
+    .finally(() => {
+      if (coordinator.slot === ownedSlot) {
+        coordinator.slot = undefined;
+      }
+    }));
 }
 
 export default definePluginEntry({
@@ -201,7 +132,6 @@ export default definePluginEntry({
 
     const runtimeCoordinator = getVoiceCallRuntimeCoordinator();
     const runtimeRegistration: VoiceCallRuntimeRegistration = {
-      epoch: ++runtimeCoordinator.epochCounter,
       generation: { retired: false },
       ensureRuntime: () => ensureRegisteredRuntime(),
     };
@@ -222,71 +152,55 @@ export default definePluginEntry({
         throw new Error(validation.errors.join("; "));
       }
 
-      while (true) {
+      if (
+        (config.reports.enabled || config.live.transcript) &&
+        !runtimeGeneration.runInServiceContext
+      ) {
+        throw new VoiceCallRuntimeLifecycleError(
+          "Voice call requester reporting requires service startup",
+        );
+      }
+
+      const previous = runtimeCoordinator.slot;
+      if (previous && (previous.owner !== runtimeGeneration || previous.stopPromise)) {
+        await stopVoiceCallRuntimeGeneration(runtimeCoordinator, previous.owner);
         activateRuntimeGeneration(runtimeGeneration);
-        const slot = runtimeCoordinator.slot;
-        if (slot) {
-          if (slot.owner !== runtimeGeneration) {
-            if (slot.owner.retired) {
-              await stopVoiceCallRuntimeGeneration(runtimeCoordinator, slot.owner);
-              continue;
-            }
-            throw new VoiceCallRuntimeLifecycleError(
-              "A previous voice call runtime generation is still active; retry after it stops",
-            );
-          }
-
-          if (slot.state === "running") {
-            return slot.runtime;
-          }
-          if (slot.state === "stopping") {
-            await slot.promise;
-            continue;
-          }
-
-          let createdRuntime: VoiceCallRuntime;
-          try {
-            createdRuntime = await slot.promise;
-          } catch (err) {
-            if (runtimeCoordinator.slot === slot) {
-              runtimeCoordinator.slot = undefined;
-            }
-            throw err;
-          }
-          activateRuntimeGeneration(runtimeGeneration);
-          if (runtimeCoordinator.slot !== slot) {
-            continue;
-          }
-          runtimeCoordinator.slot = {
-            state: "running",
-            owner: runtimeGeneration,
-            runtime: createdRuntime,
-          };
-          return createdRuntime;
-        }
-
+      }
+      if (!runtimeCoordinator.slot) {
         const scheduler = runtimeGeneration.scheduler;
         if (!scheduler || scheduler.signal.aborted) {
           throw new VoiceCallRuntimeLifecycleError(
             "Voice call service is not running; start the Gateway and retry",
           );
         }
-        const runtimePromise = createVoiceCallRuntime({
-          scheduler,
-          config,
-          coreConfig: api.config as OpenClawConfig,
-          fullConfig: api.config,
-          agentRuntime: api.runtime.agent,
-          stateRuntime: api.runtime.state,
-          ttsRuntime: api.runtime.tts,
-          logger: api.logger,
-        });
         runtimeCoordinator.slot = {
-          state: "starting",
           owner: runtimeGeneration,
-          promise: runtimePromise,
+          promise: createVoiceCallRuntime({
+            scheduler,
+            config,
+            coreConfig: api.config as OpenClawConfig,
+            fullConfig: api.config,
+            agentRuntime: api.runtime.agent,
+            stateRuntime: api.runtime.state,
+            ttsRuntime: api.runtime.tts,
+            deliveryRuntime: api.runtime,
+            runInServiceContext: runtimeGeneration.runInServiceContext,
+            logger: api.logger,
+          }),
         };
       }
+      const slot = runtimeCoordinator.slot;
+      let runtime: VoiceCallRuntime;
+      try {
+        runtime = await slot.promise;
+      } catch (err) {
+        if (runtimeCoordinator.slot === slot && !slot.stopPromise) {
+          runtimeCoordinator.slot = undefined;
+        }
+        throw err;
+      }
+      activateRuntimeGeneration(runtimeGeneration);
+      return runtime;
     };
     const ensureRegisteredRuntime = async (
       runtimeGeneration = runtimeRegistration.generation,
@@ -342,6 +256,32 @@ export default definePluginEntry({
             params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined,
           sessionKey: normalizeOptionalString(params?.sessionKey),
           requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+          brief: params?.brief,
+        });
+      },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
+    );
+
+    registerGatewayCommand(
+      "voicecall.steer",
+      ({ params, client, hasCurrentClientAuthority, signal }) => {
+        const scopes = client?.connect.scopes ?? [];
+        const operator = scopes.includes("operator.write") || scopes.includes("operator.admin");
+        if (params.mode !== undefined && params.mode !== "say" && params.mode !== "guidance") {
+          throw new VoiceCallCommandInputError("mode must be say or guidance");
+        }
+        return commands.steer({
+          callId: normalizeOptionalString(params.callId),
+          message: normalizeOptionalString(params.message),
+          mode: params.mode,
+          requesterSessionKey: client?.internal?.agentToolCaller?.sessionKey,
+          operator,
+          assertCurrent: () => {
+            signal?.throwIfAborted();
+            if (hasCurrentClientAuthority && !hasCurrentClientAuthority()) {
+              throw new VoiceCallCommandInputError("Steering caller authority expired");
+            }
+          },
         });
       },
       VOICE_CALL_WRITE_METHOD_SCOPE,
@@ -447,6 +387,7 @@ export default definePluginEntry({
           dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
           sessionKey: normalizeOptionalString(params?.sessionKey),
           requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+          brief: params?.brief,
           agentId: normalizedAgentId,
         });
       },
@@ -503,6 +444,7 @@ export default definePluginEntry({
               sessionKey: normalizeOptionalString(rawParams.sessionKey),
               agentId,
               requesterSessionKey,
+              brief: rawParams.brief,
             };
             if (typeof rawParams.action === "string") {
               switch (rawParams.action) {
@@ -521,6 +463,23 @@ export default definePluginEntry({
                     }),
                   );
                 }
+                case "steer_call":
+                  if (
+                    rawParams.mode !== undefined &&
+                    rawParams.mode !== "say" &&
+                    rawParams.mode !== "guidance"
+                  ) {
+                    throw new VoiceCallCommandInputError("mode must be say or guidance");
+                  }
+                  return json(
+                    await commands.steer({
+                      callId: normalizeOptionalString(rawParams.callId),
+                      message: normalizeOptionalString(rawParams.message),
+                      mode: rawParams.mode,
+                      requesterSessionKey,
+                      assertCurrent: () => signal?.throwIfAborted(),
+                    }),
+                  );
                 case "continue_call":
                   return json(
                     await commands.continueCall(
@@ -615,6 +574,8 @@ export default definePluginEntry({
             runtimeRegistration.generation = { retired: false };
           }
           runtimeRegistration.generation.scheduler = ctx.scheduler;
+          const serviceContext = AsyncLocalStorage.snapshot();
+          runtimeRegistration.generation.runInServiceContext = (run) => serviceContext(run);
           runtimeRegistration.generation.serviceHealth = ctx.serviceHealth;
           activateRuntimeGeneration(runtimeRegistration.generation);
         } catch (err) {

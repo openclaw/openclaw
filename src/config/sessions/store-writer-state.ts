@@ -3,7 +3,7 @@ import {
   clearStoreWriterQueuesForTest,
   type StoreWriterQueue,
 } from "../../shared/store-writer-queue.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 
 export const WRITER_QUEUES = new Map<string, StoreWriterQueue>();

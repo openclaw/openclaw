@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCommandErrorForUser } from "../../process/command-error.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -14,9 +15,9 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
 import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
+import type { CliTimeoutContext, FallbackAttemptRecord } from "./error.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
@@ -46,7 +47,12 @@ const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity
 const RATE_LIMIT_SPECIFIC_HINT_RE =
   /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
-  /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+  /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context (?:length|window) exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_RE =
+  /\b(?:this\s+)?prompt\s+(?:is\s+)?(?:too long|longer than)\b.{0,120}\b(?:free tier|single request|per[- ]request)\b/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE =
+  "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+const PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
 
@@ -62,9 +68,7 @@ export function formatBillingErrorMessage(
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
   const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
   if (isSubscriptionAuth) {
-    return providerLabel
-      ? `⚠️ ${providerLabel} returned a billing error — check your account for subscription or usage limits, then try again.`
-      : "⚠️ API provider returned a billing error — check your account for subscription or usage limits, then try again.";
+    return `⚠️ ${providerLabel ?? "API provider"} returned a billing error — check your account for subscription or usage limits, then try again.`;
   }
   return providerLabel
     ? `⚠️ ${providerLabel} returned a billing error — check your account's balance and usage limits before trying again.`
@@ -95,17 +99,58 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
+function renderProviderPromptSizeLimitCopy(raw: string): string | undefined {
+  if (raw.length > PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH) {
+    return undefined;
+  }
+  const status = extractErrorHttpStatus(raw);
+  if (status?.code !== 400) {
+    return undefined;
+  }
+  const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(status.rest);
+  const providerMessage = info?.message ?? status.rest;
+  return providerMessage.length <= 300 && PROVIDER_PROMPT_SIZE_LIMIT_RE.test(providerMessage)
+    ? PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE
+    : undefined;
+}
+
+/** Render only controller-recorded exhaustion, never infer it from provider text. */
+export function renderRateLimitRetryExhaustion(
+  retries: number | undefined,
+  finalModel = false,
+): string | undefined {
+  if (retries === undefined) {
+    return undefined;
+  }
+  const scope = finalModel ? " on the final model" : "";
+  return retries === 0
+    ? `Automatic rate-limit recovery is disabled${scope} for this session (retry.provider.maxRetries: 0).`
+    : `Rate-limit recovery stopped${scope} after ${retries} automatic ${retries === 1 ? "retry" : "retries"} without a completed model response. Check completed work before trying again.`;
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
+  rateLimitRetriesExhausted?: number;
 }): string {
+  const exhaustion =
+    params.reason === "rate_limit"
+      ? renderRateLimitRetryExhaustion(params.rateLimitRetriesExhausted)
+      : undefined;
+  if (exhaustion) {
+    return exhaustion;
+  }
   const raw = params.raw ?? "";
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
   if (params.reason === "overloaded") {
     return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const promptSizeCopy = renderProviderPromptSizeLimitCopy(raw);
+  if (promptSizeCopy) {
+    return promptSizeCopy;
   }
   for (const leg of splitFailoverAggregateLegs(raw)) {
     const fromLeg = extractProviderRateLimitMessage(leg);
@@ -194,17 +239,15 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
-  const commandError = formatCommandErrorForUser(trimmed);
-  if (commandError) {
-    return commandError;
-  }
-  const execDenied = formatExecDeniedUserMessage(trimmed);
-  if (execDenied) {
-    return execDenied;
-  }
-  const diskSpace = formatDiskSpaceErrorCopy(trimmed);
-  if (diskSpace) {
-    return diskSpace;
+  for (const format of [
+    formatCommandErrorForUser,
+    formatExecDeniedUserMessage,
+    formatDiskSpaceErrorCopy,
+  ]) {
+    const copy = format(trimmed);
+    if (copy) {
+      return copy;
+    }
   }
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
@@ -219,7 +262,7 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return reason === "billing"
@@ -382,11 +425,30 @@ export function renderRateLimitReplyCopy(params: {
   reason?: FailoverReason;
   provider?: string;
   attempts?: readonly ReplyFallbackAttempt[];
+  rateLimitRetriesExhausted?: number;
   cooldownExpiry?: number | null;
   nowMs?: number;
   sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
+  if (params.reason === "rate_limit") {
+    const promptSizeCopy = renderProviderPromptSizeLimitCopy(params.message);
+    if (promptSizeCopy) {
+      return promptSizeCopy;
+    }
+  }
+  const exhaustion =
+    params.reason === "rate_limit" && !attempts.some((attempt) => attempt.reason === "billing")
+      ? renderRateLimitRetryExhaustion(
+          attempts.length
+            ? attempts.at(-1)?.rateLimitRetriesExhausted
+            : params.rateLimitRetriesExhausted,
+          attempts.length > 1,
+        )
+      : undefined;
+  if (exhaustion) {
+    return exhaustion;
+  }
   const usageLimit = extractCodexUsageLimitErrorMessage(
     attempts,
     params.message,
@@ -476,6 +538,32 @@ export function renderMissingApiKeyReplyCopy(params?: {
   return provider === "openai"
     ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`."
     : "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.";
+}
+
+const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
+  /\bcodex app-server client closed before turn completed\b/iu;
+const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
+  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
+  /\bcodex session generation is no longer current\b/iu;
+const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
+  /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
+
+export function renderCodexAppServerFailureCopy(message: string): string | null {
+  const normalizedMessage = message.trim();
+  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
+    return "⚠️ This Codex session changed before your message could run. Please send it again.";
+  }
+  if (CODEX_EXECUTION_NODE_DISCONNECTED_RE.test(normalizedMessage)) {
+    return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
+  }
+  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
+    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
+  }
+  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
+    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
+  }
+  return null;
 }
 
 const CLI_BACKEND_NO_OUTPUT_STALL_RE =

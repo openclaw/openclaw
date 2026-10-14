@@ -1,13 +1,12 @@
 // Shared relay test doubles for the talk realtime gateway relay suites.
 import { vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
-import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
+import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import type { RealtimeVoiceBridge } from "../../../talk/provider-types.js";
-import { prepareTalkSessionTarget } from "../session-target.js";
 import { stopTalkRealtimeRelaySession } from "./operations.js";
-import { createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw } from "./session-create.js";
-import { drainingRelaySessions } from "./state.js";
+import { drainingRelaySessions, relaySessions } from "./state.js";
 
 export function createRelayAgentConfig(agentId: "main" | "ops"): OpenClawConfig {
   return {
@@ -61,45 +60,36 @@ export async function drainRelayTestSessions(activeRelaySessions: Map<string, st
   activeRelaySessions.clear();
 }
 
-type RelaySessionParams = Parameters<typeof createTalkRealtimeRelaySessionRaw>[0];
-type RelayFixtureDefaults = "connId" | "providerConfig" | "instructions" | "tools";
+export function ensureActiveRelayTurnId(relaySessionId: string): string {
+  const relay = relaySessions.get(relaySessionId);
+  if (!relay) {
+    throw new Error(`Missing relay test session ${relaySessionId}`);
+  }
+  if (!relay.harness.talk.activeTurnId) {
+    relay.harness.talk.startTurn({ turnId: "turn-1" });
+  }
+  return relay.harness.talk.activeTurnId ?? "turn-1";
+}
 
-export function createTrackedTalkRealtimeRelaySession(
-  activeRelaySessions: Map<string, string>,
-  params: Omit<RelaySessionParams, "sessionTarget" | "controlSource" | RelayFixtureDefaults> &
-    Partial<Pick<RelaySessionParams, RelayFixtureDefaults>> & { sessionKey?: string },
-): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
-  const {
-    sessionKey,
-    connId = "conn-1",
-    providerConfig = {},
-    instructions = "brief",
-    tools = [],
-    ...request
-  } = params;
-  const cfg = params.cfg ?? { agents: { entries: { main: {} } } };
-  const capabilities = resolveRealtimeVoiceProviderCapabilities({
-    provider: params.provider,
-    providerConfig,
-    cfg,
-    model: params.model,
-    surface: "gateway-relay",
-  });
-  const session = createTalkRealtimeRelaySessionRaw({
-    ...request,
-    connId,
-    providerConfig,
-    instructions,
-    tools,
-    controlSource: capabilities?.handlesAgentConsult === true ? "delegation" : "transcript",
-    capabilities,
-    context: {
-      ...request.context,
-      chatAbortControllers: request.context.chatAbortControllers ?? new Map(),
-    },
-    cfg,
-    sessionTarget: prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
-  });
-  activeRelaySessions.set(session.relaySessionId, connId);
-  return session;
+export function observeRelayTranscriptFailures() {
+  const failures = [createDeferred(), createDeferred()] as const;
+  const append = clientVoiceSession.appendRelayVoiceTranscript;
+  let attempt = 0;
+  const observer = vi
+    .spyOn(clientVoiceSession, "appendRelayVoiceTranscript")
+    .mockImplementation((...args) => {
+      const failure = failures[attempt++];
+      const pending = append(...args);
+      if (failure) {
+        void pending.then(
+          () => failure.reject(new Error("Expected relay transcript append failure")),
+          () => failure.resolve(),
+        );
+      }
+      return pending;
+    });
+  return {
+    afterAttempt: (index: 0 | 1) => failures[index].promise,
+    restore: () => observer.mockRestore(),
+  };
 }

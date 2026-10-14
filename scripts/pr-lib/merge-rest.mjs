@@ -4,6 +4,7 @@ import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
 
 const OID = /^[0-9a-f]{40}$/;
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 // REST values normalize into GitHub's MergeStateStatus enum, never arbitrary admission states.
 // https://docs.github.com/en/graphql/reference/pulls#mergestatestatus
 const MERGE_STATES = new Set(
@@ -25,10 +26,10 @@ function requireEvidence(condition, message) {
   }
 }
 
-function requireRestSupport(condition, message) {
+function requireRestSupport(condition, message, code = "OPENCLAW_REST_UNSUPPORTED") {
   if (!condition) {
-    const error = new Error(`REST merge: ${message}; use GraphQL.`);
-    error.code = "OPENCLAW_REST_UNSUPPORTED";
+    const error = new Error(`REST merge: ${message}.`);
+    error.code = code;
     throw error;
   }
 }
@@ -72,6 +73,8 @@ function apiArgs(repo, endpoint, extra = []) {
     `repos/${repo.nameWithOwner}${endpoint}`,
     "-H",
     "Cache-Control: max-age=0",
+    "-H",
+    "X-GitHub-Api-Version: 2026-03-10",
     ...extra,
   ];
 }
@@ -191,6 +194,13 @@ function readPullRequest(repo, authority, pr) {
   requireRestSupport(
     record.state !== "open" || (!record.merged && record.auto_merge === null),
     "open PR already has an auto-merge request or inconsistent lifecycle",
+  );
+  // API 2026-03-10 omits the landed commit from PR resources. Use the complete
+  // GraphQL observation; the async result alone cannot replace the PR receipt.
+  requireRestSupport(
+    !record.merged || record.state !== "closed" || Object.hasOwn(record, "merge_commit_sha"),
+    "merged PR commit requires GraphQL observation",
+    "OPENCLAW_REST_MERGED_RECEIPT_UNAVAILABLE",
   );
   requireEvidence(
     !record.merged || (record.state === "closed" && OID.test(record.merge_commit_sha ?? "")),
@@ -481,15 +491,13 @@ export function readRequiredMergeChecks(repo, head, policy, { includeCheckIdenti
     "REST cannot prove complete check-suite evidence",
   );
   const represented = new Set(matchingChecks.map((check) => check.check_suite?.id));
-  for (const suite of suites) {
-    const requiredApp = required.some(({ app }) => app === null || app === suite.app.id);
-    if (
-      !requiredApp ||
-      represented.has(suite.id) ||
-      (suite.status === "completed" && suite.conclusion === "success")
-    ) {
-      continue;
-    }
+  const unrepresented = suites.filter(
+    (suite) =>
+      required.some(({ app }) => app === null || app === suite.app.id) &&
+      !represented.has(suite.id) &&
+      !(suite.status === "completed" && suite.conclusion === "success"),
+  );
+  for (const suite of unrepresented) {
     requireEvidence(
       (suite.latest_check_runs_count === 0 ||
         (suite.status === "completed" && nonemptyString(suite.conclusion))) &&
@@ -498,34 +506,59 @@ export function readRequiredMergeChecks(repo, head, policy, { includeCheckIdenti
         suite.latest_check_runs_count >= 0,
       "new required-app check suite has no complete check evidence",
     );
-    // Empty installed-app suites and skipped labelers contribute no required
-    // context only when their own complete, stable check result proves that.
-    const scoped = checkPages(
+  }
+  if (unrepresented.length > 0) {
+    // The commit endpoint covers at most 1,000 suites, not 1,000 check runs.
+    // The complete suite inventory above bounds that documented truncation.
+    // Read all checks once, then reread suites after their checks, rather than
+    // making two requests per empty installed-app suite or skipped labeler.
+    const complete = checkPages(
       repo,
-      `/check-suites/${suite.id}/check-runs?filter=latest&per_page=100`,
+      `/commits/${head}/check-runs?filter=latest&per_page=100`,
       "check_runs",
       head,
     );
-    requireEvidence(
-      scoped.length === suite.latest_check_runs_count &&
-        validCheckRuns(scoped, head) &&
-        scoped.every(
-          (check) => check.check_suite?.id === suite.id && check.app.id === suite.app.id,
-        ) &&
-        !scoped.some(matchesRequired),
-      "terminal suite contains missing or required check evidence",
+    requireEvidence(validCheckRuns(complete, head), "invalid complete check-run identities");
+    const bySuite = new Map(suites.map((suite) => [suite.id, []]));
+    for (const check of complete) {
+      const scoped = bySuite.get(check.check_suite?.id);
+      requireEvidence(scoped, "check run has no inventoried suite");
+      scoped.push(check);
+    }
+    for (const suite of unrepresented) {
+      const scoped = bySuite.get(suite.id);
+      requireEvidence(
+        scoped.length === suite.latest_check_runs_count &&
+          scoped.every((check) => check.app.id === suite.app.id) &&
+          !scoped.some(matchesRequired),
+        "terminal suite contains missing or required check evidence",
+      );
+    }
+    const current = checkPages(
+      repo,
+      `/commits/${head}/check-suites?per_page=100`,
+      "check_suites",
+      head,
     );
-    const current = read(repo, `/check-suites/${suite.id}`);
+    const currentById = new Map(current.map((suite) => [suite?.id, suite]));
     requireEvidence(
-      current?.id === suite.id &&
-        current.head_sha === head &&
-        current.app?.id === suite.app.id &&
-        current.status === suite.status &&
-        current.conclusion === suite.conclusion &&
-        current.updated_at === suite.updated_at &&
-        current.latest_check_runs_count === suite.latest_check_runs_count,
-      "terminal suite changed while proving its checks irrelevant",
+      current.length === suites.length &&
+        currentById.size === suites.length &&
+        suites.every((suite) => currentById.has(suite.id)),
+      "check-suite inventory changed while proving checks irrelevant",
     );
+    for (const suite of unrepresented) {
+      const fresh = currentById.get(suite.id);
+      requireEvidence(
+        fresh.head_sha === head &&
+          fresh.app?.id === suite.app.id &&
+          fresh.status === suite.status &&
+          fresh.conclusion === suite.conclusion &&
+          fresh.updated_at === suite.updated_at &&
+          fresh.latest_check_runs_count === suite.latest_check_runs_count,
+        "terminal suite changed while proving its checks irrelevant",
+      );
+    }
   }
   for (const check of candidates) {
     if (check.status !== "completed" || check.conclusion !== "success") {
@@ -590,7 +623,88 @@ function mergeBody(value) {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
+function asyncMergeResponse(repo, pr, head, uuid, payload) {
+  const args = apiArgs(repo, `/pulls/${pr}/merge-async${uuid ? `/${uuid}` : ""}`, [
+    "--include",
+    ...(uuid ? [] : ["--method", "PUT", "--input", "-"]),
+  ]);
+  // Old protected Octopool rejects this header before generic JSON rewriting.
+  // Keep it first: older parsers can delegate on an unknown flag like --hostname.
+  args.splice(1, 0, "-H", "X-Octopool-Require: merge-async-v1");
+  let raw;
+  try {
+    raw = execPrGh(
+      args,
+      { encoding: "utf8", ...(uuid ? {} : { input: JSON.stringify(payload) }) },
+      "plain",
+    );
+  } catch (error) {
+    const conflict = parseGithubResponse(String(error.stdout ?? ""));
+    if (!uuid && conflict.status === "409" && UUID.test(conflict.body?.details?.uuid ?? "")) {
+      requireEvidence(
+        false,
+        `async request ${conflict.body.details.uuid} already exists; inspect its options and ownership without resubmitting`,
+      );
+    }
+    throw error;
+  }
+  const response = parseGithubResponse(raw);
+  const result = response.body;
+  const details = result?.details;
+  requireEvidence(
+    (uuid ? response.status === "200" : ["200", "202"].includes(response.status)) &&
+      ["pending", "merged", "enqueued", "failed"].includes(result?.status) &&
+      typeof details?.message === "string" &&
+      details.message.length <= 4096,
+    "invalid async merge response; reconcile the retained intent without resubmitting",
+  );
+  if (result.status === "pending") {
+    requireEvidence(
+      UUID.test(details.uuid ?? "") &&
+        (!uuid || details.uuid === uuid) &&
+        details.expected_head_sha === head &&
+        details.merge_method === "squash" &&
+        details.merge_action === "direct_merge" &&
+        (details.bypass_rules === undefined || details.bypass_rules === false),
+      "async merge request does not match the prepared head and direct squash options",
+    );
+  } else if (result.status === "merged") {
+    requireEvidence(OID.test(details.sha ?? ""), "async merge result has no valid commit");
+  }
+  requireEvidence(
+    result.status === "merged" || details.sha == null,
+    "unmerged async result unexpectedly contains a commit",
+  );
+  requireEvidence(
+    response.status !== "202" || result.status === "pending",
+    "async acceptance did not return a pending request UUID",
+  );
+  return {
+    uuid: uuid ?? details.uuid ?? null,
+    status: result.status,
+    message: details.message,
+    sha: result.status === "merged" ? details.sha : null,
+  };
+}
+
 function main([mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra]) {
+  if (mode === "merge-result") {
+    requireEvidence(
+      /^[1-9][0-9]*$/.test(prValue ?? "") &&
+        Number.isSafeInteger(Number(prValue)) &&
+        UUID.test(head ?? "") &&
+        OID.test(bodySnapshot ?? "") &&
+        expectedObservation === undefined &&
+        extra.length === 0,
+      "invalid async merge status arguments",
+    );
+    process.stdout.write(
+      `${JSON.stringify(
+        asyncMergeResponse(parseRepository(repository), Number(prValue), bodySnapshot, head),
+      )}\n`,
+    );
+    return;
+  }
   const observing = ["observe", "observe-admission", "observe-prior-ci"].includes(mode);
   const priorCiObservation = mode === "observe-prior-ci";
   requireEvidence(
@@ -678,6 +792,12 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
       transport: "rest",
     };
   } else {
+    // The async endpoint also merges downstack PRs. This owner admits one PR;
+    // GitHub includes `stack` on REST resources belonging to a stack.
+    requireEvidence(
+      current.stack == null,
+      "stacked PRs require review and authorization of the full stack",
+    );
     requireEvidence(
       current.state === "open" &&
         !current.draft &&
@@ -701,17 +821,11 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     const payload = {
       sha: head,
       merge_method: "squash",
+      merge_action: "direct_merge",
+      bypass_rules: false,
       commit_message: body,
     };
-    result = execPrGhJson(
-      apiArgs(repo, `/pulls/${pr}/merge`, ["--method", "PUT", "--input", "-"]),
-      { input: JSON.stringify(payload), stdio: ["pipe", "pipe", "pipe"] },
-      "plain",
-    );
-    requireEvidence(
-      result?.merged === true && OID.test(result.sha ?? ""),
-      "merge response did not confirm acceptance; reconcile the retained intent before any further request",
-    );
+    result = asyncMergeResponse(repo, pr, head, undefined, payload);
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -726,8 +840,12 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         : String(error.stderr || error.message).trim(),
     );
     if (
-      ["observe", "observe-admission", "checks", "preview"].includes(process.argv[2]) &&
-      (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")
+      ["observe", "observe-admission", "observe-prior-ci", "checks", "preview"].includes(
+        process.argv[2],
+      ) &&
+      (error.code === "OPENCLAW_REST_MERGED_RECEIPT_UNAVAILABLE" ||
+        (process.argv[2] !== "observe-prior-ci" &&
+          (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")))
     ) {
       process.stdout.write('{"restUnavailable":true}\n');
     } else {

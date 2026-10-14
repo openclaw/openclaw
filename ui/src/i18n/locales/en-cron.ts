@@ -3,6 +3,10 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
+    linkedRun: {
+      label: "Showing the linked run.",
+      showAll: "Show all runs",
+    },
     suggestions: {
       title: "Starter automations",
       schedules: {

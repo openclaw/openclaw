@@ -1,14 +1,14 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchXService } from "./fetch.js";
 import { X_POST_READ_MICRO_USD, X_USER_READ_MICRO_USD, xReadCost, xReplyCost } from "./pricing.js";
 import { XBudgetExceededError, type XSpend } from "./spend.js";
 
-const X_API_ORIGIN = "https://api.x.com";
 const POST_FIELDS =
-  "author_id,conversation_id,created_at,in_reply_to_user_id,referenced_tweets,entities";
+  "author_id,conversation_id,created_at,in_reply_to_user_id,referenced_tweets,entities,withheld";
 
 export type XPost = NonNullable<ReturnType<typeof parseXPost>>;
-export type XUser = { id: string; username: string; name?: string };
+export type XUser = { id: string; username: string; name?: string; protected?: boolean };
 export type XPage = ReturnType<typeof parsePage>;
 export type XPostEnvelope = { post: XPost; users: XUser[]; recipientPending?: true };
 export type XFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -114,6 +114,7 @@ export function parseXPost(input: unknown) {
     text: row.text,
     author_id: row.author_id,
     conversation_id: row.conversation_id,
+    ...(row.withheld !== undefined ? { withheld: true } : {}),
     ...(typeof row.created_at === "string" ? { created_at: row.created_at } : {}),
     ...(typeof row.in_reply_to_user_id === "string"
       ? { in_reply_to_user_id: row.in_reply_to_user_id }
@@ -132,6 +133,7 @@ function parseUser(value: unknown): XUser | undefined {
     ? {
         id: row.id,
         username: row.username,
+        ...(typeof row.protected === "boolean" ? { protected: row.protected } : {}),
         ...(typeof row.name === "string" ? { name: row.name } : {}),
       }
     : undefined;
@@ -203,44 +205,6 @@ export function createXApiClient(options: {
   let pendingRefreshToken: string | undefined;
   let refreshTask: Promise<void> | undefined;
 
-  async function fetcher(
-    url: string,
-    init: RequestInit,
-    assertActive?: XAssertActive,
-    onDispatch?: () => void,
-  ) {
-    if (options.fetch) {
-      const assertCurrent = await assertActive?.();
-      init.signal?.throwIfAborted();
-      assertCurrent?.();
-      onDispatch?.();
-      return options.fetch(url, init);
-    }
-    const [{ fetchWithSsrFGuard }, { responseWithRelease }, { fetchWithRuntimeDispatcher }] =
-      await Promise.all([
-        import("openclaw/plugin-sdk/ssrf-runtime"),
-        import("openclaw/plugin-sdk/fetch-runtime"),
-        import("openclaw/plugin-sdk/runtime-fetch"),
-      ]);
-    const guarded = await fetchWithSsrFGuard({
-      url,
-      init,
-      capture: false,
-      requireHttps: true,
-      policy: { hostnameAllowlist: ["api.x.com"] },
-      maxRedirects: 0,
-      fetchImpl: async (input, prepared) => {
-        const assertCurrent = await assertActive?.();
-        prepared?.signal?.throwIfAborted();
-        assertCurrent?.();
-        onDispatch?.();
-        return fetchWithRuntimeDispatcher(input, prepared);
-      },
-    });
-    // Includes long-lived Activity bodies: release the pinned dispatcher only after consumption.
-    return responseWithRelease(guarded.response, guarded.release);
-  }
-
   function requestSignal(signal?: AbortSignal): AbortSignal {
     return AbortSignal.any([
       ...[options.signal, signal].filter((value): value is AbortSignal => Boolean(value)),
@@ -259,19 +223,24 @@ export function createXApiClient(options: {
         await options.saveRefreshToken(pendingRefreshToken);
         pendingRefreshToken = undefined;
       }
-      const response = await fetcher(`${X_API_ORIGIN}/2/oauth2/token`, {
-        method: "POST",
-        redirect: "error",
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${encodeURIComponent(options.clientId)}:${encodeURIComponent(options.clientSecret)}`).toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
+      const response = await fetchXService(
+        "api.x.com",
+        "/2/oauth2/token",
+        {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${encodeURIComponent(options.clientId)}:${encodeURIComponent(options.clientSecret)}`).toString("base64")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+          }).toString(),
+          signal: requestSignal(),
         },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-        }).toString(),
-        signal: requestSignal(),
-      });
+        options.fetch,
+      );
       if (!response.ok) {
         await response.body?.cancel();
         throw new XApiError(response.status, "token refresh");
@@ -359,8 +328,9 @@ export function createXApiClient(options: {
         let authorityRejected = false;
         let authorityError: unknown;
         try {
-          response = await fetcher(
-            `${X_API_ORIGIN}${path}`,
+          response = await fetchXService(
+            "api.x.com",
+            path,
             {
               method: params.method ?? "GET",
               redirect: "error",
@@ -371,6 +341,7 @@ export function createXApiClient(options: {
               ...(params.body ? { body: JSON.stringify(params.body) } : {}),
               signal,
             },
+            options.fetch,
             params.assertActive
               ? async () => {
                   try {
@@ -457,12 +428,13 @@ export function createXApiClient(options: {
     query: Record<string, string | undefined>,
     maximumPosts: number,
     signal?: AbortSignal,
+    appOnly = false,
   ) {
     const params = new URLSearchParams({
       "tweet.fields": POST_FIELDS,
       // Reference IDs remain in tweet.fields; fetch their contents through bounded calls.
       expansions: "author_id",
-      "user.fields": "username,name",
+      "user.fields": "username,name,protected",
     });
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) {
@@ -471,6 +443,7 @@ export function createXApiClient(options: {
     }
     return request(`${path}?${params}`, {
       signal,
+      appOnly,
       billing: {
         maximum: maximumPosts * (X_POST_READ_MICRO_USD + X_USER_READ_MICRO_USD),
         actual: (value) => xReadCost(value, "posts"),
@@ -499,6 +472,13 @@ export function createXApiClient(options: {
       }
       return page("/2/tweets", { ids: ids.join(",") }, ids.length, signal);
     },
+    // App-only lookup has no user/follower entitlement: it proves public availability.
+    getPublicPosts: (ids: string[], signal?: AbortSignal) => {
+      if (!options.bearerToken || !ids.length || ids.length > 100) {
+        throw new Error("Public X lookup requires an app-only bearer token and 1–100 post ids");
+      }
+      return page("/2/tweets", { ids: ids.join(",") }, ids.length, signal, true);
+    },
     searchConversation: (params: {
       conversationId: string;
       maxPosts: number;
@@ -516,6 +496,45 @@ export function createXApiClient(options: {
         Math.max(10, Math.min(Math.floor(params.maxPosts), 100)),
         params.signal,
       ),
+    async getUsersByUsernames(
+      usernames: string[],
+      signal?: AbortSignal,
+      assertActive?: XAssertActive,
+    ): Promise<XUser[]> {
+      const handles = usernames.map((username) => username.replace(/^@/, ""));
+      if (
+        !handles.length ||
+        handles.length > 100 ||
+        handles.some((handle) => !/^[A-Za-z0-9_]{1,15}$/.test(handle))
+      ) {
+        throw new Error("X user lookup requires 1–100 valid usernames");
+      }
+      const query = new URLSearchParams({
+        usernames: handles.join(","),
+        "user.fields": "id,username,name",
+      });
+      return request(`/2/users/by?${query}`, {
+        signal,
+        assertActive,
+        billing: {
+          maximum: handles.length * X_USER_READ_MICRO_USD,
+          actual: (value) => xReadCost(value, "users"),
+          parse: (value) => {
+            const row = record(value);
+            if (!row || (row.data !== undefined && !Array.isArray(row.data))) {
+              throw new Error("X API returned an invalid users response");
+            }
+            return (row.data ?? []).map((entry: unknown) => {
+              const user = parseUser(entry);
+              if (!user || !/^[A-Za-z0-9_]{1,15}$/.test(user.username)) {
+                throw new Error("X API returned an invalid user");
+              }
+              return user;
+            });
+          },
+        },
+      });
+    },
     async getUserByUsername(username: string, signal?: AbortSignal): Promise<XUser> {
       const user = await request(
         `/2/users/by/username/${encodeURIComponent(username.replace(/^@/, ""))}?user.fields=id,username,name`,

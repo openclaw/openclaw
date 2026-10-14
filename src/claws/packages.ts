@@ -70,13 +70,7 @@ type PlannedClawPackage = ResolvedClawPackage & {
   riskWarning?: string;
 };
 function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
-  const details = action.details as
-    | (Partial<ResolvedClawPackage> & {
-        ownerAction?: "install" | "reuse";
-        installId?: string;
-        riskWarning?: string;
-      })
-    | undefined;
+  const details = action.details as Partial<PlannedClawPackage> | undefined;
   if (details?.kind !== "skill" && details?.kind !== "plugin") {
     throw new Error(`Package action ${JSON.stringify(action.id)} has no valid package kind.`);
   }
@@ -110,14 +104,10 @@ function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
   };
 }
 
-type ClawPluginProbeDeps = {
-  probePlugin?: typeof installPluginFromClawHub;
-};
-
 async function probeClawPluginArtifact(
   pkg: ClawPackage,
   isolateFromLiveExtensions: boolean,
-  deps: ClawPluginProbeDeps,
+  deps: Pick<PackageInstallerDeps, "probePlugin">,
 ): Promise<Awaited<ReturnType<typeof installPluginFromClawHub>>> {
   const probePlugin = deps.probePlugin ?? installPluginFromClawHub;
   const request = {
@@ -144,7 +134,7 @@ export async function preflightClawPackage(
   workspaceDir: string,
   options: {
     env?: NodeJS.ProcessEnv;
-    deps?: Pick<PackageInstallerDeps, "preflightPlugin"> & ClawPluginProbeDeps;
+    deps?: Pick<PackageInstallerDeps, "preflightPlugin" | "probePlugin">;
   } = {},
 ): Promise<ClawPackagePreflightResult> {
   if (pkg.kind === "skill") {
@@ -179,7 +169,7 @@ export async function preflightClawPackage(
     return {
       ok: false,
       code: "plugin_artifact_inspection_unavailable",
-      message: `Plugin ${pkg.ref}@${pkg.version} did not return canonical artifact inspection.`,
+      message: `Plugin ${pkg.ref}@${pkg.version} did not return artifact inspection.`,
     };
   }
   if (probe.artifactInspection.format === "agent") {

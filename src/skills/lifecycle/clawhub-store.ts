@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   getAgentWorkspaceAccess,
@@ -33,6 +34,7 @@ import type {
   ClawHubSkillDownloadedArtifactLock,
   ClawHubSkillFileLock,
   ClawHubSkillOrigin,
+  ClawHubSkillLockEntry,
   ClawHubSkillsLockfile,
   ClawHubSkillRef,
 } from "./workspace-types.js";
@@ -117,6 +119,21 @@ export function parseRequestedClawHubSkillRef(raw: string): ClawHubSkillRef {
 
 export function formatClawHubSkillRef(ref: ClawHubSkillRef): string {
   return ref.ownerHandle ? `@${ref.ownerHandle}/${ref.slug}` : ref.slug;
+}
+
+export function describeClawHubSkillRefMismatch(
+  requested: ClawHubSkillRef,
+  tracked: Pick<ClawHubSkillRef, "ownerHandle" | "requestedReference">,
+): string | undefined {
+  const { slug } = requested;
+  if (requested.ownerHandle && tracked.ownerHandle !== requested.ownerHandle) {
+    const trackedRef = formatClawHubSkillRef({ slug, ownerHandle: tracked.ownerHandle });
+    return `Skill "${slug}" is tracked as ${trackedRef}, not @${requested.ownerHandle}/${slug}.`;
+  }
+  if (requested.requestedReference && tracked.requestedReference !== requested.requestedReference) {
+    return `Skill "${slug}" is not tracked from ${requested.requestedReference}.`;
+  }
+  return undefined;
 }
 
 export function normalizeStoredRegistry(registry: string): string {
@@ -252,6 +269,39 @@ export async function readClawHubSkillsLockfile(
   return { version: 1, skills: {} };
 }
 
+function writeGuardedClawHubTrackingJson(
+  filePath: string,
+  value: ClawHubSkillsLockfile | ClawHubSkillOrigin,
+  assertCurrent: () => void,
+): void {
+  assertCurrent();
+  replaceFileAtomicSync({
+    filePath,
+    content: `${JSON.stringify(value, null, 2)}\n`,
+    mode: 0o600,
+    dirMode: 0o777 & ~process.umask(),
+    copyFallbackOnPermissionError: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    beforeRename: assertCurrent,
+  });
+}
+
+async function writeClawHubSkillsLockfile(
+  workspaceDir: string,
+  lockfile: ClawHubSkillsLockfile,
+  beforePersistentApply?: () => void,
+): Promise<void> {
+  const filePath = path.join(workspaceDir, DOT_DIR, "lock.json");
+  if (beforePersistentApply) {
+    writeGuardedClawHubTrackingJson(filePath, lockfile, beforePersistentApply);
+    return;
+  }
+  await writeJson(filePath, lockfile, {
+    trailingNewline: true,
+  });
+}
+
 function readJsonIfExistsSync(
   candidate: string,
 ): { exists: false } | { exists: true; value: unknown } {
@@ -336,6 +386,19 @@ export async function readClawHubSkillOriginStrict(
   return { kind: "missing" };
 }
 
+async function writeClawHubSkillOrigin(
+  skillDir: string,
+  origin: ClawHubSkillOrigin,
+  beforePersistentApply?: () => void,
+): Promise<void> {
+  const filePath = path.join(skillDir, DOT_DIR, "origin.json");
+  if (beforePersistentApply) {
+    writeGuardedClawHubTrackingJson(filePath, origin, beforePersistentApply);
+    return;
+  }
+  await writeJson(filePath, origin, { trailingNewline: true });
+}
+
 async function readInstalledSkillFileLock(
   skillDir: string,
 ): Promise<ClawHubSkillFileLock | undefined> {
@@ -351,15 +414,11 @@ async function readInstalledSkillFileLock(
 }
 
 /** Finalize native tracking beside the installed files, preserving other tracked skills. */
-export async function recordClawHubSkillInstall(
-  params: Parameters<WorkspaceSkillLifecycle["recordClawHubSkillInstall"]>[0],
-): Promise<void> {
-  const { origin, verification } = params;
-  await writeJson(path.join(params.skillDir, DOT_DIR, "origin.json"), origin, {
-    trailingNewline: true,
-  });
-  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
-  lock.skills[origin.slug] = {
+export function clawHubSkillLockEntry(
+  origin: ClawHubSkillOrigin,
+  verification?: ClawHubSkillLockEntry["verification"],
+): ClawHubSkillLockEntry {
+  return {
     version: origin.installedVersion,
     registry: origin.registry,
     installedAt: origin.installedAt,
@@ -372,8 +431,53 @@ export async function recordClawHubSkillInstall(
     ...(origin.fileTreeSha256 ? { fileTreeSha256: origin.fileTreeSha256 } : {}),
     ...(verification ? { verification } : {}),
   };
-  await writeJson(path.join(params.workspaceDir, DOT_DIR, "lock.json"), lock, {
-    trailingNewline: true,
+}
+
+export async function recordClawHubSkillInstall(
+  params: Parameters<WorkspaceSkillLifecycle["recordClawHubSkillInstall"]>[0],
+): Promise<void> {
+  const { origin, verification } = params;
+  await writeClawHubSkillOrigin(params.skillDir, origin, params.beforePersistentApply);
+  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
+  lock.skills[origin.slug] = clawHubSkillLockEntry(origin, verification);
+  await writeClawHubSkillsLockfile(params.workspaceDir, lock, params.beforePersistentApply);
+}
+
+export function replaceClawHubSkillLockEntryExpected(params: {
+  workspaceDir: string;
+  slug: string;
+  expected: ClawHubSkillLockEntry;
+  replacement: ClawHubSkillLockEntry;
+  assertCurrent?: () => void;
+}): void {
+  const current = readClawHubSkillsLockfileStatusSync(params.workspaceDir);
+  if (
+    current.kind !== "found" ||
+    stableStringify(current.lock.skills[params.slug]) !== stableStringify(params.expected)
+  ) {
+    throw new Error(`Skill ${JSON.stringify(params.slug)} tracking changed during rollback.`);
+  }
+  const next: ClawHubSkillsLockfile = {
+    ...current.lock,
+    skills: { ...current.lock.skills, [params.slug]: params.replacement },
+  };
+  const beforeRename = () => {
+    params.assertCurrent?.();
+    const latest = readClawHubSkillsLockfileStatusSync(params.workspaceDir);
+    if (latest.kind !== "found" || stableStringify(latest.lock) !== stableStringify(current.lock)) {
+      throw new Error(`Skill ${JSON.stringify(params.slug)} tracking changed during rollback.`);
+    }
+  };
+  beforeRename();
+  replaceFileAtomicSync({
+    filePath: path.join(params.workspaceDir, DOT_DIR, "lock.json"),
+    content: `${JSON.stringify(next, null, 2)}\n`,
+    mode: 0o600,
+    dirMode: 0o777 & ~process.umask(),
+    copyFallbackOnPermissionError: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    beforeRename,
   });
 }
 

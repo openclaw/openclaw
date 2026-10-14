@@ -11,6 +11,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAbortMemory, setAbortMemory } from "./abort-primitives.js";
 import { applySessionHints } from "./body.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -24,7 +25,7 @@ describe("applySessionHints", () => {
     let entry: SessionEntry = {
       sessionId,
       updatedAt: 1,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryDeliveryRunId: "interrupted-claim",
       restartRecoveryDeliverySourceRunId: "channel-user:original-input",
@@ -52,8 +53,14 @@ describe("applySessionHints", () => {
     const body = await Promise.resolve(applySessionHints(prepared));
     expect(body).toContain("organize my sessions");
 
+    await using actor = createReplyRecoveryActorFixture({
+      agentId: "main",
+      ...scope,
+      getSessionId: () => sessionId,
+    });
     const controller = createReplyRestartRecoveryClaimController({
       agentId: "main",
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: "new-input",
       lifecycleGeneration,
       getEntry: () => entry,
@@ -76,7 +83,7 @@ describe("applySessionHints", () => {
     });
     expect(loadSessionEntry(scope)).toMatchObject({
       abortedLastRun: true,
-      status: "running",
+      status: "interrupted",
       restartRecoveryDeliveryRunId: "interrupted-claim",
       restartRecoveryDeliverySourceRunId: "channel-user:original-input",
     });

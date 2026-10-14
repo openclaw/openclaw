@@ -173,7 +173,6 @@ export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
-// Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -493,11 +492,7 @@ export type AnthropicStreamEvent = Record<string, unknown> & {
 };
 
 export function countApproxTokens(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  return Math.max(1, Math.ceil(trimmed.length / 4));
+  return Math.ceil(text.trim().length / 4);
 }
 
 export function extractEmbeddingInputTexts(input: unknown): string[] {

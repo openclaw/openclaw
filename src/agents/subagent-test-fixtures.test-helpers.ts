@@ -3,11 +3,17 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import { projectSubagentRunForSessionList } from "./subagents/registry/subagent-delivery-state.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+  projectSubagentRunForSessionList,
+} from "./subagents/registry/subagent-delivery-state.js";
+import type { PendingFinalDeliveryPayload } from "./subagents/registry/subagent-registry-read.types.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryState from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
@@ -72,8 +78,6 @@ export async function configureMockSubagentRegistryPersistence(methods: {
   const worker = await import("../state/openclaw-state-worker-store.js");
   const { rowToSubagentRunRecord } =
     await import("./subagents/registry/subagent-registry.store.codec.js");
-  const { subagentRunRowVersion } =
-    await import("./subagents/registry/subagent-registry.store.row.js");
   const original = worker.runOpenClawStateWorkerOperation;
   const spy = vi
     .spyOn(worker, "runOpenClawStateWorkerOperation")
@@ -118,10 +122,6 @@ export async function configureMockSubagentRegistryPersistence(methods: {
               options?.assertCurrent?.();
               return {
                 writeId: write.writeId,
-                versions: new Map([
-                  ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-                  ...write.deleteRunIds.map((id) => [id, null] as const),
-                ]),
                 notices: [],
               };
             },
@@ -205,6 +205,8 @@ export function createSubagentRunParams(
 ): RegisterSubagentRunParams {
   return {
     childSessionKey: "agent:main:subagent:child",
+    childAgentId: parseAgentSessionKey(overrides.childSessionKey)?.agentId ?? "main",
+    sessionEntry: { sessionId: "sess-child" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: overrides.runId,
@@ -343,11 +345,15 @@ export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSuba
   ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
 };
 
-export function createSubagentRegistryHarness(
-  registry: SubagentRegistryModule,
-): SubagentRegistryHarness {
-  return {
-    ...registry,
-    registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
-  };
-}
+export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
+  const now = Date.now();
+  const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
+
+  const delivery = ensureDeliveryState(args.entry);
+  delivery.status = "pending";
+  delivery.createdAt ??= now;
+  delivery.lastAttemptAt = now;
+  delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+  delivery.lastError = args.error ?? null;
+  delivery.payload = payload;
+};

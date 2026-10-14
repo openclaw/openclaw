@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary } from "../cli-runtime-api.js";
 import {
   CRABBOX_MIN_VERSION,
+  isCrabboxVersionAtLeast,
   probeCrabboxVersion,
   resolveManagedCrabboxBinaryPath,
 } from "./crabbox-managed-binary.js";
@@ -170,10 +171,10 @@ describe("managed Crabbox", () => {
   });
 
   it("upgrades an old candidate, preserves its distribution, and reuses it offline", async () => {
-    const test = await fixture("0.68.0");
+    const test = await fixture("0.72.0");
     const params = test.options;
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual(test.installed);
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.68.0");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.72.0");
     expect(
       await fs.readFile(path.join(path.dirname(test.binary), "companion-helper"), "utf8"),
     ).toBe("keep me");
@@ -184,11 +185,11 @@ describe("managed Crabbox", () => {
         );
       }
     }
-    await fs.writeFile(test.binary, "0.70.0");
+    await fs.writeFile(test.binary, "0.74.0");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
       binary: test.binary,
-      version: "0.70.0",
+      version: "0.74.0",
     });
     expect(test.fetch).toHaveBeenCalledTimes(2);
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([
@@ -574,6 +575,18 @@ describe("managed Crabbox", () => {
 });
 
 describe("Crabbox version admission", () => {
+  it.each([
+    ["0.78.0", true],
+    ["0.78.0+build", true],
+    ["0.78.1", true],
+    ["1.0.0", true],
+    ["0.77.9", false],
+    ["0.78.0-rc.1", false],
+    ["unparseable", false],
+  ])("compares %s against a release floor (%s)", (version, expected) => {
+    expect(isCrabboxVersionAtLeast(version, "0.78.0")).toBe(expected);
+  });
+
   it("reports a redacted version failure without retaining private error data", async () => {
     const token = "synthetic-version-secret-0123456789";
     const cause = Object.assign(
@@ -604,8 +617,13 @@ describe("Crabbox version admission", () => {
   });
 
   it.each([
-    ["0.69.0-rc.1", "outdated"],
-    ["0.69.0+build.1", "supported"],
+    ["0.69.0", "outdated"],
+    ["0.70.0", "outdated"],
+    ["0.71.0", "outdated"],
+    ["0.72.0", "outdated"],
+    ["0.73.0", "supported"],
+    ["0.73.0-rc.1", "outdated"],
+    ["0.73.0+build.1", "supported"],
     ["0.9007199254740993.0", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {
     const test = await fixture(version);

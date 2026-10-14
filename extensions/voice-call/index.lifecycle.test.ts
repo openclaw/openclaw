@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
@@ -144,6 +145,41 @@ describe("voice-call runtime lifecycle", () => {
       Symbol.for("openclaw.voice-call.runtimeCoordinator")
     ];
     vi.restoreAllMocks();
+  });
+
+  it("requires service startup before enabling requester reporting", async () => {
+    const registration = registerVoiceCall({ config: { reports: { enabled: true } } });
+    expectLifecycleError(await executeCall(registration.tool()), "requires service startup");
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+  });
+
+  it("captures each replacement service context independently of the requesting caller", async () => {
+    const actor = new AsyncLocalStorage<string>();
+    const runtimeA = createRuntime("call-a", "+15550000001");
+    const runtimeB = createRuntime("call-b", "+15550000002");
+    vi.mocked(createVoiceCallRuntime)
+      .mockResolvedValueOnce(runtimeA.runtime)
+      .mockResolvedValueOnce(runtimeB.runtime);
+    const serviceA = registerVoiceCall({ config: { reports: { enabled: true } } });
+    void actor.run("service-a", () => serviceA.service.start(serviceContext));
+    await actor.run("requesting-caller", () => executeCall(serviceA.tool()));
+    const contextA = vi.mocked(createVoiceCallRuntime).mock.calls[0]?.[0].runInServiceContext;
+    expect(contextA).toBeDefined();
+    expect(actor.run("requesting-caller", () => contextA?.(() => actor.getStore()))).toBe(
+      "service-a",
+    );
+
+    const serviceB = registerVoiceCall({ config: { reports: { enabled: true } } });
+    void actor.run("service-b", () => serviceB.service.start(serviceContext));
+    await actor.run("requesting-caller", () => executeCall(serviceB.tool()));
+    const contextB = vi.mocked(createVoiceCallRuntime).mock.calls[1]?.[0].runInServiceContext;
+    expect(actor.run("requesting-caller", () => contextB?.(() => actor.getStore()))).toBe(
+      "service-b",
+    );
+    expect(actor.run("requesting-caller", () => contextA?.(() => actor.getStore()))).toBe(
+      "service-a",
+    );
+    expect(runtimeA.stop).toHaveBeenCalledOnce();
   });
 
   it("shares one pending runtime between full and tool-discovery registrations", async () => {
@@ -335,31 +371,6 @@ describe("voice-call runtime lifecycle", () => {
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
     expect(runtimeA.stop).toHaveBeenCalledTimes(1);
     expect(runtimeB.initiateCall).toHaveBeenCalledTimes(3);
-    expect(runtimeB.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not revive an older staged A after activated B stops", async () => {
-    const logged = createDeferred<string>();
-    const runtimeB = createRuntime("call-b", "+15550000002");
-    vi.mocked(createVoiceCallRuntime).mockResolvedValue(runtimeB.runtime);
-    const stagedA = registerVoiceCall({
-      logger: createLogger(logged.resolve),
-      registrationMode: "full",
-    });
-    const retainedToolA = stagedA.tool();
-    const generationB = registerVoiceCall({ registrationMode: "full" });
-
-    expect(generationB.service.start(serviceContext)).toBeUndefined();
-    await executeCall(generationB.tool());
-    await generationB.service.stop?.(serviceContext);
-    expectLifecycleError(await executeCall(retainedToolA), "retired");
-    expect(stagedA.service.start(serviceContext)).toBeUndefined();
-    await expect(logged.promise).resolves.toContain("superseded");
-    expect(serviceHealth.reportFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("superseded") }),
-    );
-
-    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
     expect(runtimeB.stop).toHaveBeenCalledTimes(1);
   });
 

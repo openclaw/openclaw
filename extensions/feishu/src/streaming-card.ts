@@ -1,7 +1,3 @@
-/**
- * Feishu Streaming Card - Card Kit streaming API for real-time text output
- */
-
 import type { Client } from "@larksuiteoapi/node-sdk";
 import {
   asDateTimestampMs,
@@ -39,6 +35,12 @@ type FeishuStreamingCloseResult = {
   visibleReplySent: boolean;
   content?: string;
   messageId?: string;
+  /**
+   * False when the card rejected the final text (for example after CardKit closed
+   * streaming mode). Earlier accepted preview text may still be visible, but it is
+   * not the completed answer, so the dispatcher must deliver that answer another way.
+   */
+  finalTextAccepted?: boolean;
 };
 
 /** Provider finalization failed after a streaming card may already be visible. */
@@ -64,7 +66,6 @@ const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
-// Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
@@ -568,6 +569,7 @@ export class FeishuStreamingSession {
       visibleReplySent: visibleContentSent,
       ...(visibleContentSent ? { content: finalState.sentText } : {}),
       ...(finalState.messageId ? { messageId: finalState.messageId } : {}),
+      ...(finalWriteError === undefined ? {} : { finalTextAccepted: false }),
     };
     if (finalWriteError !== undefined || closeError !== undefined) {
       const cause =

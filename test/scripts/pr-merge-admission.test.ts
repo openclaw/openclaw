@@ -7,6 +7,19 @@ const { fixture, outcomeRef, lockRef, describePosix, unknownProjection } =
   createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("merges without a ClawSweeper comment or pre-dispatch comment read", () => {
+    const f = fixture();
+    f.save({ ...f.state(), issueCommentsErrorAt: 1 });
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().issueCommentReads).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(() => f.git(["rev-parse", "--verify", lockRef])).toThrow();
+  });
+
   it("stops before intent when queue removal invalidates the captured squash body", () => {
     const f = fixture();
     f.save({
@@ -80,7 +93,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       "Conflicting path: owner.txt",
       `Local outcome ref ${outcomeRef}: absent`,
       "Legacy .local/merge-output.log: absent",
-      "lock-recover, then rerun merge-run",
+      "rerun merge-run; if the operation lock was retained",
     ]) {
       expect(run.output).toContain(line);
     }
@@ -118,7 +131,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(existsSync(f.worktree)).toBe(true);
       expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
       expect(run.output).toContain(`mergeStateStatus: observed="${mergeStateStatus}"; expected=`);
-      expect(run.output).toContain("lock-recover, then rerun merge-run");
+      expect(run.output).toContain("rerun merge-run; if the operation lock was retained");
       if (mergeStateStatus === "DIRTY") {
         expect(run.output).toContain("Conflicts exist");
       }
@@ -162,35 +175,149 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  it.each(["settlement", "final"])(
-    "lands ordinary squash when main advances during %s admission",
-    (stage) => {
-      const f = fixture();
-      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-      const settled = { pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } };
-      f.save({
-        ...f.state(),
-        observations: [
-          { pr: unknownProjection },
-          { ...settled, ...(stage === "settlement" ? { main } : {}) },
-          ...(stage === "final" ? [{ main }] : []),
-        ],
-      });
+  it.each([
+    { route: "ordinary", stage: "settlement" },
+    { route: "ordinary", stage: "final" },
+    { route: "ordinary", stage: "recalculation" },
+    { route: "auto", stage: "recalculation" },
+    { route: "auto", stage: "projection change" },
+    { route: "auto", stage: "unstable projection" },
+    { route: "auto", stage: "hooks projection" },
+    { route: "Crabbox", stage: "settlement" },
+    { route: "Crabbox", stage: "final" },
+    { route: "Crabbox", stage: "recalculation" },
+    { route: "Crabbox", stage: "last reread" },
+    { route: "Crabbox", stage: "projection change" },
+    { route: "Crabbox", stage: "proof recalculation" },
+  ])("lands $route squash when main advances during $stage admission", ({ route, stage }) => {
+    const f = fixture();
+    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+    const mergeStateStatus = route === "auto" ? "BLOCKED" : "CLEAN";
+    const settled = { pr: { mergeable: "MERGEABLE", mergeStateStatus } };
+    f.save({
+      ...f.state(),
+      admin: route === "Crabbox",
+      gates: route === "Crabbox" ? "fail" : "pass",
+      observations:
+        stage === "settlement"
+          ? [{ pr: unknownProjection }, { ...settled, main }]
+          : stage === "proof recalculation"
+            ? [settled, { main, reportedMain: f.base }, { pr: unknownProjection }, settled]
+            : [
+                settled,
+                ...(stage === "last reread" ? [{}] : []),
+                {
+                  main,
+                  ...(stage === "recalculation"
+                    ? { pr: unknownProjection }
+                    : stage === "projection change"
+                      ? { pr: { mergeStateStatus: route === "auto" ? "CLEAN" : "BLOCKED" } }
+                      : stage === "unstable projection"
+                        ? { pr: { mergeStateStatus: "UNSTABLE" } }
+                        : stage === "hooks projection"
+                          ? { pr: { mergeStateStatus: "HAS_HOOKS" } }
+                          : {}),
+                },
+                ...(stage === "recalculation" ? [settled] : []),
+              ],
+    });
 
-      const run = f.run(stage === "final");
+    const run = f.run(route === "auto");
 
-      expect(run.status, run.output).toBe(0);
-      expect(f.record()).toMatchObject({
-        phase: "complete",
-        head: f.head,
-        main: stage === "settlement" ? main : f.base,
-      });
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(1);
-      expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
-      expect(f.git(["show", `${f.record().landed}:sibling.txt`])).toBe("advanced");
-    },
-  );
+    expect(run.status, run.output).toBe(0);
+    expect(f.record()).toMatchObject({
+      phase: "complete",
+      route: route === "Crabbox" ? "admin" : route === "auto" ? "auto" : "immediate",
+      head: f.head,
+      main: stage === "settlement" ? main : f.base,
+    });
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().posts).toBe(1);
+    expect(f.state().settlementSleeps).toEqual(
+      stage === "settlement" || stage.includes("recalculation") ? [1] : [],
+    );
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
+    expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
+    expect(f.git(["show", `${f.record().landed}:sibling.txt`])).toBe("advanced");
+  });
+
+  it.each([
+    "rewritten main",
+    "rewritten observed main",
+    "conflicting tree",
+    "head",
+    "closed",
+    "draft",
+    "queue policy",
+    "blocked route",
+    "persistent UNKNOWN",
+    "strict ordinary",
+    "strict initial",
+    "strict Crabbox",
+    "rewritten final Crabbox main",
+  ])("stops a main advance before dispatch on %s", (fault) => {
+    const f = fixture();
+    const main = f.commit(
+      f.tree(fault === "conflicting tree" ? "conflict\n" : "before\n", "advanced\n"),
+      fault === "rewritten main" ? [] : [f.base],
+    );
+    const pr =
+      fault === "head"
+        ? { headRefOid: f.base }
+        : fault === "closed"
+          ? { state: "CLOSED" }
+          : fault === "draft"
+            ? { isDraft: true }
+            : fault === "queue policy"
+              ? { isMergeQueueEnabled: true }
+              : fault === "blocked route"
+                ? { mergeStateStatus: "BEHIND" }
+                : fault === "persistent UNKNOWN"
+                  ? unknownProjection
+                  : {};
+    const first =
+      fault === "rewritten observed main"
+        ? f.commit(f.tree("before\n", "first advance\n"), [f.base])
+        : f.base;
+    f.save({
+      ...f.state(),
+      admin: fault.includes("Crabbox"),
+      gates: fault.includes("Crabbox") ? "fail" : "pass",
+      strictDrift: fault.startsWith("strict "),
+      observations:
+        fault === "strict initial"
+          ? [{ main }]
+          : fault === "rewritten final Crabbox main"
+            ? [
+                {},
+                { main, reportedMain: f.base },
+                { main: f.commit(f.tree("before\n", "later\n"), [main]), pr: unknownProjection },
+                { main, pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } },
+              ]
+            : [{ main: first }, { main, pr }],
+    });
+
+    const run = f.run();
+
+    expect(run.status, run.output).not.toBe(0);
+    expect(f.state().mutations, run.output).toBe(0);
+    expect(f.state().posts).toBe(0);
+    expect(f.captures()).toEqual([]);
+    expect(() => f.record()).toThrow();
+    expect(run.output).toContain(
+      fault.startsWith("rewritten")
+        ? "both observed and verified main"
+        : fault === "conflicting tree"
+          ? "cannot establish prepared-head merge tree"
+          : fault === "persistent UNKNOWN"
+            ? "mergeability recalculation remained UNKNOWN after 3 observations"
+            : fault.startsWith("strict ")
+              ? "OPENCLAW_PR_STRICT_DRIFT=1"
+              : fault === "blocked route"
+                ? "selected merge route is blocked"
+                : "PR or main changed during observation",
+    );
+  });
 
   it("preserves gh queue eligibility when the verified admin route is selected", () => {
     const f = fixture();
@@ -288,14 +415,15 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.captures()).toEqual([]);
     expect(existsSync(f.worktree)).toBe(true);
     expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
-    expect(f.git(["cat-file", "-t", lockRef])).toBe("blob");
+    // A pre-dispatch stop drains cleanly, so the supervisor releases the process lock.
+    expect(() => f.git(["rev-parse", "--verify", lockRef])).toThrow();
     expect(run.output).toContain("Waiting for GitHub mergeability to settle");
     if (persistent) {
       expect(run.output).toContain("stopped before intent/dispatch");
     }
     if (finalRead) {
       expect(run.output).toContain("PR or main changed during observation");
-      expect(run.output).toContain("lock-recover, then rerun merge-run");
+      expect(run.output).toContain("rerun merge-run; if the operation lock was retained");
       expect(run.output).toContain(
         fault === "final UNKNOWN mergeable"
           ? 'mergeable: observed="UNKNOWN"; expected="MERGEABLE"'
@@ -321,7 +449,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     }
     if (fault === "known HAS_HOOKS") {
       expect(run.output).toContain(
-        "auto-merge admission requires MERGEABLE with CLEAN, BEHIND, or BLOCKED status",
+        "auto-merge admission requires MERGEABLE with CLEAN, UNSTABLE, BEHIND, or BLOCKED status",
       );
     }
     if (fault === "conflicting") {
@@ -423,71 +551,4 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(() => f.record()).toThrow();
     },
   );
-
-  it.each(["ack-only", "removed", "unavailable"])(
-    "rejects %s ClawSweeper review evidence before intent",
-    (fault) => {
-      const f = fixture();
-      const comments = [
-        {
-          id: fault === "ack-only" ? 1 : 2,
-          body: "<!-- clawsweeper-pr-ack:opened item=123 -->",
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ];
-      f.save({
-        ...f.state(),
-        ...(fault === "ack-only"
-          ? { issueComments: comments }
-          : fault === "removed"
-            ? { issueCommentsAfterFirst: comments }
-            : { issueCommentsErrorAt: 2 }),
-      });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
-      if (fault === "removed") {
-        expect(run.output).toContain(
-          "ClawSweeper review gate failed: completed review is missing.",
-        );
-        expect(f.state().issueCommentReads).toBe(2);
-      } else if (fault === "unavailable") {
-        expect(run.output).toContain("unable to read current issue comments");
-      }
-      expect(f.state().mutations).toBe(0);
-      expect(() => f.record()).toThrow();
-    },
-  );
-
-  it("retains the newest completion at final admission regardless of review age", () => {
-    const f = fixture();
-    const next = f.state();
-    next.issueComments[0]!.body = next.issueComments[0]!.body.replace(
-      /reviewed_at=\S+/u,
-      "reviewed_at=2000-01-01T00:00:00.000Z",
-    );
-    const reviewedAt = "2000-01-02T00:00:00.000Z";
-    f.save({
-      ...next,
-      issueCommentsAfterFirst: [
-        ...next.issueComments,
-        {
-          id: 2,
-          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${reviewedAt} sha=${f.head} source_revision=${"c".repeat(64)} lease_owner=github-run-2 lease_comment_id=2 v=1 -->
-
-<!-- clawsweeper-review item=123 -->`,
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ],
-    });
-
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
-    expect(f.record().clawsweeperReview).toMatchObject({
-      commentId: 2,
-      reviewedAt,
-      reviewedSha: f.head,
-      sourceRevision: "c".repeat(64),
-    });
-  });
 });

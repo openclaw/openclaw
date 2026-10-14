@@ -6,7 +6,7 @@ import {
 } from "../../harness/before-agent-run.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { log } from "../logger.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -18,11 +18,6 @@ type HookContext = Parameters<HookRunner["runBeforeAgentRun"]>[1];
 type BeforeAgentRunSession = {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
-};
-
-type BeforeAgentRunBlockOutcome = {
-  blockedBy: string;
-  promptError: Error;
 };
 
 export async function runEmbeddedAttemptBeforeAgentRun(input: {
@@ -38,7 +33,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   sessionManager: ReturnType<typeof guardSessionManager>;
   systemPrompt: string;
   withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
-}): Promise<BeforeAgentRunBlockOutcome | undefined> {
+}) {
   const block = await runBeforeAgentRunGate(
     input.hookRunner,
     {
@@ -64,7 +59,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   ) {
     try {
       await input.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(input.sessionManager, async () => {
+        withSessionManagerAppend(input.sessionManager, async () => {
           await input.sessionManager.appendMessageAsync(redactedUserMessage);
           input.sessionManager.flushPendingPersistence();
         }),

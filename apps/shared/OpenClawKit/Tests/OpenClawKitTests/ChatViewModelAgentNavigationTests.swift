@@ -12,7 +12,9 @@ private actor AgentNavigationGate {
         self.arrivals += 1
         let ready = self.arrivalWaiters.filter { $0.count <= self.arrivals }
         self.arrivalWaiters.removeAll { $0.count <= self.arrivals }
-        for waiter in ready { waiter.continuation.resume() }
+        for waiter in ready {
+            waiter.continuation.resume()
+        }
     }
 
     func waitUntilStarted(count: Int = 1) async {

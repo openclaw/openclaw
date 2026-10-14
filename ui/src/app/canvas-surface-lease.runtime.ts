@@ -86,7 +86,7 @@ export function createCanvasSurfaceLease(params: {
         const delayMs =
           refreshed.expiresAtMs === undefined
             ? MISSING_EXPIRY_RENEWAL_DELAY_MS
-            : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - Date.now() - RENEWAL_LEAD_MS);
+            : refreshed.expiresAtMs - Date.now() - RENEWAL_LEAD_MS;
         schedule(delayMs, expectedGeneration);
       })
       .catch((error: unknown) => {
@@ -109,8 +109,7 @@ export function createCanvasSurfaceLease(params: {
       started = true;
       consecutiveFailures = 0;
       clearScheduledRenewal();
-      const trimmedUrl = helloUrl?.trim();
-      currentUrl = trimmedUrl ? trimmedUrl : null;
+      currentUrl = helloUrl?.trim() || null;
       params.onChange(currentUrl);
       if (currentUrl) {
         renew(generation);

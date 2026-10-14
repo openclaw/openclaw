@@ -102,7 +102,6 @@ describe("memory index", () => {
       provider: {
         embed: (text: string) => Promise<number[]>;
       } | null;
-      embedQueryWithRetry: (text: string) => Promise<number[]>;
       retireCurrentProvider: () => Promise<void>;
     };
     if (!fields.provider) {
@@ -122,7 +121,7 @@ describe("memory index", () => {
       return [1, 0, 0, 0];
     };
 
-    const queryPromise = fields.embedQueryWithRetry("alpha");
+    const queryPromise = manager.search("alpha");
     await firstQueryStarted;
     const retirementPromise = fields.retireCurrentProvider();
     let retirementSettled = false;
@@ -142,7 +141,9 @@ describe("memory index", () => {
       releaseFirstQuery();
     }
 
-    await expect(queryPromise).resolves.toEqual([1, 0, 0, 0]);
+    await expect(queryPromise).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
     await retirementPromise;
     expect(providerFixture.providerCloseCalls).toBe(1);
   });
@@ -205,7 +206,7 @@ describe("memory index", () => {
     const manager = await getPersistentManager(createCfg({ provider: "openai" }));
     await manager.sync({ reason: "test" });
     const fields = manager as unknown as {
-      searchVector: () => Promise<unknown[]>;
+      searchVector: () => Promise<{ results: unknown[]; candidates: unknown[] }>;
       closing: boolean;
       closed: boolean;
     };
@@ -220,7 +221,7 @@ describe("memory index", () => {
     fields.searchVector = async () => {
       markVectorSearchStarted();
       await vectorSearchGate;
-      return [];
+      return { results: [], candidates: [] };
     };
 
     const generationReleaseStarted = createDeferred<void>();

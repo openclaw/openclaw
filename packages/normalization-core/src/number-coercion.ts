@@ -1,17 +1,14 @@
 import { normalizeOptionalString } from "./string-coerce.ts";
 
-/** Returns a number only when the input is already finite. */
 export function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/** Returns a finite number only when it is greater than zero. */
 export function asPositiveFiniteNumber(value: unknown): number | undefined {
   const number = asFiniteNumber(value);
   return number && number > 0 ? number : undefined;
 }
 
-/** Returns a finite number only when it is zero or greater. */
 export function asNonNegativeFiniteNumber(value: unknown): number | undefined {
   const number = asFiniteNumber(value);
   return number && number < 0 ? undefined : number;
@@ -94,7 +91,6 @@ export function parseStrictFiniteNumber(value: unknown): number | undefined {
   return asFiniteNumber(Number(normalized));
 }
 
-/** Returns positive safe integers without string coercion. */
 export function asPositiveSafeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
@@ -108,7 +104,6 @@ export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 /** Fallback ISO value for invalid timestamp inputs. */
 export const UNIX_EPOCH_ISO_STRING = "1970-01-01T00:00:00.000Z";
 
-/** Returns a Date-valid millisecond timestamp. */
 export function asDateTimestampMs(value: unknown): number | undefined {
   return asFiniteNumberInRange(value, {
     min: -MAX_DATE_TIMESTAMP_MS,
@@ -126,7 +121,6 @@ export function parseDateFirstTimestampMs(value: unknown): number | undefined {
   return typeof value === "number" ? asFiniteNumber(value) : parseDateStringTimestampMs(value);
 }
 
-/** Checks whether a Date-valid timestamp is after the supplied/current time. */
 export function isFutureDateTimestampMs(
   value: unknown,
   opts: { nowMs?: number } = {},
@@ -136,13 +130,11 @@ export function isFutureDateTimestampMs(
   return timestampMs !== undefined && nowMs !== undefined && timestampMs > nowMs;
 }
 
-/** Converts Date-valid millisecond timestamps to ISO strings. */
 export function timestampMsToIsoString(value: unknown): string | undefined {
   const timestampMs = asDateTimestampMs(value);
   return timestampMs === undefined ? undefined : new Date(timestampMs).toISOString();
 }
 
-/** Resolves a Date-valid timestamp with a Date-valid fallback. */
 export function resolveDateTimestampMs(
   value: unknown,
   fallbackValue: unknown = Date.now(),
@@ -259,18 +251,15 @@ export function resolveOptionalIntegerOption(
   return resolveIntegerOption(value, value, range);
 }
 
-/** Resolves an integer option with a non-negative lower bound. */
 export function resolveNonNegativeIntegerOption(value: unknown, fallback: number): number {
   return resolveIntegerOption(value, fallback, { min: 0 });
 }
 
-/** Parses strict positive integer values from numbers or strings. */
 export function parseStrictPositiveInteger(value: unknown): number | undefined {
   const parsed = parseStrictInteger(value);
   return parsed !== undefined && parsed > 0 ? parsed : undefined;
 }
 
-/** Parses strict non-negative integer values from numbers or strings. */
 export function parseStrictNonNegativeInteger(value: unknown): number | undefined {
   const parsed = parseStrictInteger(value);
   return parsed !== undefined && parsed >= 0 ? parsed : undefined;
@@ -281,17 +270,14 @@ function safeMillisecondsFromSeconds(seconds: number | undefined): number | unde
   return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
 }
 
-/** Converts strict positive seconds to safe millisecond counts. */
 export function positiveSecondsToSafeMilliseconds(value: unknown): number | undefined {
   return safeMillisecondsFromSeconds(parseStrictPositiveInteger(value));
 }
 
-/** Converts strict non-negative seconds to safe millisecond counts. */
 export function nonNegativeSecondsToSafeMilliseconds(value: unknown): number | undefined {
   return safeMillisecondsFromSeconds(parseStrictNonNegativeInteger(value));
 }
 
-/** Resolves an absolute expiration timestamp from a positive duration in milliseconds. */
 export function resolveExpiresAtMsFromDurationMs(
   value: unknown,
   opts: { nowMs?: number; bufferMs?: number; minRemainingMs?: number } = {},
@@ -320,7 +306,6 @@ export function resolveExpiresAtMsFromDurationMs(
   return Math.max(expiresAt, minExpiresAt);
 }
 
-/** Resolves an absolute expiration timestamp from a positive duration in seconds. */
 export function resolveExpiresAtMsFromDurationSeconds(
   value: unknown,
   opts: { nowMs?: number; bufferMs?: number; minRemainingMs?: number } = {},
@@ -329,7 +314,6 @@ export function resolveExpiresAtMsFromDurationSeconds(
   return durationMs === undefined ? undefined : resolveExpiresAtMsFromDurationMs(durationMs, opts);
 }
 
-/** Resolves an absolute expiration timestamp from Unix epoch seconds. */
 export function resolveExpiresAtMsFromEpochSeconds(
   value: unknown,
   opts: { bufferMs?: number; maxMs?: number } = {},

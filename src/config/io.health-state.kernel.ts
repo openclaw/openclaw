@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
@@ -31,8 +31,8 @@ function stringifyFingerprint(value: ConfigHealthFingerprint | null | undefined)
   return value ? JSON.stringify(value) : null;
 }
 
-function selectConfigHealthRows(db: DatabaseSync, configPath?: string) {
-  let query = getNodeSqliteKysely<ConfigHealthDatabase>(db)
+function selectConfigHealthRows(db: EngineConnection) {
+  const query = getNodeSqliteKysely<ConfigHealthDatabase>(db)
     .selectFrom("config_health_entries")
     .select([
       "config_path",
@@ -41,9 +41,6 @@ function selectConfigHealthRows(db: DatabaseSync, configPath?: string) {
       "last_observed_suspicious_signature",
       "updated_at_ms",
     ]);
-  if (configPath !== undefined) {
-    query = query.where("config_path", "=", configPath);
-  }
   return executeSqliteQuerySync(db, query.orderBy("config_path", "asc")).rows;
 }
 
@@ -64,7 +61,7 @@ function decodeConfigHealthRows(
   };
 }
 
-export function readConfigHealthStateInDatabase(db: DatabaseSync): ConfigHealthState {
+export function readConfigHealthStateInDatabase(db: EngineConnection): ConfigHealthState {
   return decodeConfigHealthRows(selectConfigHealthRows(db));
 }
 
@@ -89,7 +86,7 @@ export const configHealthReadOperations = {
       },
     };
   },
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 /** Omitted fields remain untouched; explicit undefined and null clear their stored value. */
 export function prepareConfigHealthPatch(changes: ConfigHealthEntryChanges): ConfigHealthPatch {
@@ -108,36 +105,44 @@ export function prepareConfigHealthPatch(changes: ConfigHealthEntryChanges): Con
 
 /** Compare the original read and merge in one write transaction, preserving untouched JSON. */
 export function patchConfigHealthEntryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configPath: string,
   patch: ConfigHealthPatch,
   expected: ConfigHealthEntryBasis | null | undefined,
   updatedAtMs: number,
 ): boolean {
-  const current = selectConfigHealthRows(db, configPath)[0];
   if (expected === undefined) {
     return false;
   }
-  if (expected === null) {
-    if (current !== undefined) {
-      return false;
-    }
-  } else if (
-    current === undefined ||
-    current.last_known_good_json !== expected.lastKnownGoodJson ||
-    current.last_promoted_good_json !== expected.lastPromotedGoodJson ||
-    current.last_observed_suspicious_signature !== expected.suspiciousSignature ||
-    current.updated_at_ms !== expected.updatedAtMs
-  ) {
-    return false;
-  }
-  writeConfigHealthPatchInDatabase(db, configPath, patch, updatedAtMs);
-  return true;
+  const sql = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+  // SQLite IS compares nulls as values, preserving the exact persisted read basis.
+  const query =
+    expected === null
+      ? sql
+          .insertInto("config_health_entries")
+          .values({
+            config_path: configPath,
+            last_known_good_json: null,
+            last_promoted_good_json: null,
+            last_observed_suspicious_signature: null,
+            ...patch,
+            updated_at_ms: updatedAtMs,
+          })
+          .onConflict((conflict) => conflict.column("config_path").doNothing())
+      : sql
+          .updateTable("config_health_entries")
+          .set({ ...patch, updated_at_ms: updatedAtMs })
+          .where("config_path", "=", configPath)
+          .where("last_known_good_json", "is", expected.lastKnownGoodJson)
+          .where("last_promoted_good_json", "is", expected.lastPromotedGoodJson)
+          .where("last_observed_suspicious_signature", "is", expected.suspiciousSignature)
+          .where("updated_at_ms", "=", expected.updatedAtMs);
+  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
 }
 
 /** The caller owns the transaction; omitted fields and sibling paths remain unchanged. */
 export function writeConfigHealthPatchInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configPath: string,
   patch: ConfigHealthPatch,
   updatedAtMs: number,

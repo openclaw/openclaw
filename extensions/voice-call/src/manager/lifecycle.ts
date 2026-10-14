@@ -10,6 +10,7 @@ const log = createSubsystemLogger("voice-call/lifecycle");
 type CallLifecycleContext = Pick<
   CallManagerContext,
   | "activeCalls"
+  | "onCallUpdated"
   | "providerCallIdMap"
   | "storePath"
   | "stateRuntime"
@@ -60,4 +61,5 @@ export async function finalizeCall(params: {
   if (call.providerCallId && ctx.providerCallIdMap.get(call.providerCallId) === call.callId) {
     ctx.providerCallIdMap.delete(call.providerCallId);
   }
+  void ctx.onCallUpdated?.(call);
 }

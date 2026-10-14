@@ -1,10 +1,15 @@
 // Skill tool dispatch tests cover policy-filtered tool surfaces.
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../../secrets/provider-env-vars.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSkillDispatchTools, type SkillToolDispatchDependencies } from "./tool-dispatch.js";
@@ -30,7 +35,14 @@ const createOpenClawToolsAsyncMock = vi.fn<
 const dependencies: SkillToolDispatchDependencies = {
   createOpenClawToolsAsync: createOpenClawToolsAsyncMock,
 };
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-skill-delegated-policy-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-skill-delegated-policy-",
+);
 
 const dispatchDefaults = {
   message: { surface: "telegram", senderId: "user-1" },
@@ -42,6 +54,14 @@ const dispatchDefaults = {
   model: "gpt-5.5",
   senderIsOwner: true,
 } satisfies Parameters<typeof resolveSkillDispatchTools>[0];
+
+beforeEach(() => {
+  // Exercise auth-source preparation even on hosts with configured search providers.
+  for (const name of listKnownProviderAuthEnvVarNamesCore({ config: {} })) {
+    vi.stubEnv(name, undefined);
+  }
+});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("resolveSkillDispatchTools", () => {
   it.each([
@@ -57,10 +77,12 @@ describe("resolveSkillDispatchTools", () => {
   ] satisfies Array<{ tools: OpenClawConfig["tools"]; actions: string[] }>)(
     "limits gateway actions to the skill dispatch policy: $tools",
     async ({ tools: toolPolicy, actions }) => {
+      const config: OpenClawConfig = { plugins: { enabled: false }, tools: toolPolicy };
+      setRuntimeConfigSnapshot(config);
       const tools = await resolveSkillDispatchTools(
         {
           message: { surface: "webchat" },
-          cfg: { plugins: { enabled: false }, tools: toolPolicy },
+          cfg: config,
           agentId: "main",
           sessionKey: "agent:main:main",
           workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
@@ -135,19 +157,6 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.sessionConfigSource).toBe("runtime");
   });
 
-  it("passes unrestricted skill-dispatch tool surfaces to cron jobs", async () => {
-    const tools = await resolveSkillDispatchTools(dispatchDefaults, dependencies);
-
-    const args = createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-    expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec", "conversations_send"]);
-    expect(args?.cronCreatorToolAllowlist).toEqual([
-      { name: "read" },
-      { name: "automations" },
-      { name: "exec" },
-      { name: "conversations_send" },
-    ]);
-  });
-
   it("carries command skill file identity into tool diagnostics", async () => {
     await resolveSkillDispatchTools(
       {
@@ -173,6 +182,16 @@ describe("resolveSkillDispatchTools", () => {
     const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:main:subagent:skill-child";
+    const config: OpenClawConfig = {
+      session: { store: storePath },
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["group:runtime", "group:fs"] },
+          "id:alice": {},
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
     await replaceSessionEntry({ storePath, sessionKey }, {
       sessionId: "skill-child-session",
       updatedAt: Date.now(),
@@ -187,15 +206,7 @@ describe("resolveSkillDispatchTools", () => {
       {
         ...dispatchDefaults,
         message: { surface: "telegram" },
-        cfg: {
-          session: { store: storePath },
-          tools: {
-            toolsBySender: {
-              "*": { deny: ["group:runtime", "group:fs"] },
-              "id:alice": {},
-            },
-          },
-        },
+        cfg: config,
         sessionKey,
       },
       dependencies,

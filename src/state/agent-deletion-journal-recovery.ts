@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_DELETION_RECOVERY_SOURCE_KEY as SOURCE_KEY,
+  assertAgentDeletionRecoveryHoldsMatch,
   decodeHolds,
   readAgentDeletionRecoveryHolds,
   readReport,
   type RecoveryDatabase,
   type RecoveryReport,
+  type AgentDeletionRecoveryHoldPredicate,
 } from "./agent-deletion-journal-recovery.kernel.js";
 import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
 import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
@@ -48,11 +52,15 @@ export function reconstructAgentDeletionJournal(
   held: readonly HeldAgentDatabase[],
   now = Date.now(),
 ): HeldAgentDatabase[] {
+  const db = database.db;
+  if (isPostgresSqlConnection(db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   if (!database.db.isTransaction) {
     throw new Error("Agent deletion journal reconstruction requires a shared-state transaction.");
   }
   const previous = readReport(database);
-  if (!reconstructAgentDeletionJournalSchema(database.db, database.path)) {
+  if (!reconstructAgentDeletionJournalSchema(db, database.path)) {
     return decodeHolds(database, previous?.held ?? []);
   }
   return recordAgentDeletionRecoveryHolds(database, held, { now });
@@ -100,11 +108,15 @@ export function resolveAgentDeletionRecoveryHolds(
   database: RecoveryDatabase,
   agentId: string,
   targetPaths: readonly string[],
+  predicate?: AgentDeletionRecoveryHoldPredicate,
 ): number {
   if (!database.db.isTransaction) {
     throw new Error("Agent deletion recovery resolution requires a shared-state transaction.");
   }
   const report = readReport(database);
+  if (predicate) {
+    assertAgentDeletionRecoveryHoldsMatch(decodeHolds(database, report?.held ?? []), predicate);
+  }
   if (!report) {
     return 0;
   }

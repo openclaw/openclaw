@@ -6,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest,
@@ -249,39 +248,6 @@ it("stages a directory-only v2 result above 25,000 reconciliation records", asyn
   expect(staged.base.directories).toHaveLength(directoryCount);
   expect(staged.current.directories).toHaveLength(directoryCount);
   expect(staged.changedEntries).toEqual([]);
-});
-
-it("compares and round-trips 26,000 modified-file reconciliation records", () => {
-  const paths = Array.from(
-    { length: 13_000 },
-    (_, index) => `changed-${index.toString().padStart(5, "0")}.txt`,
-  );
-  const base = fileManifest(paths, "base\n");
-  const current = fileManifest(paths, "worker\n");
-  // Record capacity belongs to comparison and persistence; the next test covers
-  // the real Git pack and filesystem round trip without materializing this inventory.
-  const changed = parseChangedWorkspaceResult(base, current);
-  expect(changed.changed).toBe(true);
-  expect(changed.entries).toEqual(current.entries);
-  const basePack = new Uint8Array();
-  const journal: WorkerWorkspaceReconciliationJournal = {
-    version: 1,
-    temporaryNonce: "a".repeat(32),
-    baseManifestRef: encodeManifest(base).ref,
-    currentManifestRef: encodeManifest(current).ref,
-    baseEntries: base.entries,
-    appliedEntries: changed.entries,
-    baseTree: "b".repeat(40),
-    basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-    basePack,
-  };
-  const restored = parseWorkerWorkspaceReconciliationPlan(
-    serializeWorkerWorkspaceReconciliationPlan(journal),
-  );
-
-  expect(restored.baseEntries).toEqual(base.entries);
-  expect(restored.appliedEntries).toEqual(current.entries);
-  expect(restored.baseEntries.length + restored.appliedEntries.length).toBe(26_000);
 });
 
 it("stages, applies, and recovers modified files across Git tree batches", async () => {

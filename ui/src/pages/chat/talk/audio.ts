@@ -177,15 +177,6 @@ export class RealtimeTalkMediaStreamMeter {
   }
 }
 
-function pcm16ToFloat(bytes: Uint8Array): Float32Array {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const samples = new Float32Array(Math.floor(bytes.byteLength / 2));
-  for (let i = 0; i < samples.length; i += 1) {
-    samples[i] = view.getInt16(i * 2, true) / 0x8000;
-  }
-  return samples;
-}
-
 export function estimateBase64DecodedByteLength(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
@@ -230,7 +221,12 @@ export class RealtimeTalkPcmOutputQueue {
     }
     let samples: Float32Array;
     try {
-      samples = pcm16ToFloat(base64ToBytes(base64));
+      const bytes = base64ToBytes(base64);
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      samples = new Float32Array(Math.floor(bytes.byteLength / 2));
+      for (let i = 0; i < samples.length; i += 1) {
+        samples[i] = view.getInt16(i * 2, true) / 0x8000;
+      }
     } catch {
       // Malformed base64 in a relayed frame must not throw back into the
       // realtime event path; drop it like any other ignorable frame.

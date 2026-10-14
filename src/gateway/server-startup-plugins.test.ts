@@ -16,6 +16,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -132,6 +133,7 @@ const runGatewaySessionStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
 const listLegacyPairingStoreFiles = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const refreshPluginRegistryAfterConfigMutation = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -174,6 +176,11 @@ vi.mock("../plugins/plugin-lookup-table.js", () => ({
 }));
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
+
+vi.mock("../plugins/registry-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/registry-refresh.js")>()),
+  refreshPluginRegistryAfterConfigMutation,
+}));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurfaceForOwner,
@@ -248,6 +255,47 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     runChannelPluginStartupMaintenance.mockClear();
     runGatewaySessionStartupMaintenance.mockReset().mockResolvedValue(undefined);
     listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
+    refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("joins admitted registry refresh when the Gateway closes during maintenance", async () => {
+    await withOpenClawTestState({ label: "startup-registry-maintenance" }, async () => {
+      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+      const started = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      refreshPluginRegistryAfterConfigMutation.mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+      });
+      const log = createLog();
+      let settled = false;
+      const maintenance = runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        pluginMetadataSnapshot: { registrySource: "derived" },
+        databases: [],
+        signal: controller.signal,
+        log,
+      }).finally(() => {
+        settled = true;
+      });
+      try {
+        expect(
+          await Promise.race([
+            started.promise.then(() => "started"),
+            maintenance.then(() => "completed"),
+          ]),
+        ).toBe("started");
+        controller.abort(new Error("Gateway closing"));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+      } finally {
+        release.resolve();
+        await maintenance;
+      }
+      expect(log.warn).not.toHaveBeenCalled();
+    });
   });
 
   it("reports failed session repair while completing the other maintenance owners", async () => {
@@ -278,6 +326,7 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     await runGatewayPostReadyStartupMaintenance({
       getConfig: () => ({}),
       getPluginRegistry: createEmptyPluginRegistry,
+      pluginMetadataSnapshot: { registrySource: "derived" },
       databases: [],
       signal: controller.signal,
       log,
@@ -285,6 +334,7 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
     expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });
 });

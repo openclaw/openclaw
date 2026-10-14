@@ -215,12 +215,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
 async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts) {
   const core = getMattermostRuntime();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
-  if (!opts?.cfg) {
-    throw new Error(
-      "Mattermost send requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
-  const cfg = requireRuntimeConfig(opts.cfg, "Mattermost send");
+  const cfg = requireRuntimeConfig(opts?.cfg, "Mattermost send");
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -247,6 +242,7 @@ async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts
   });
   const retry = account.config.dmChannelRetry;
   const dmRetryOptions = retry && {
+    // Snapshot before the user lookup can yield.
     maxRetries: retry.maxRetries,
     initialDelayMs: retry.initialDelayMs,
     maxDelayMs: retry.maxDelayMs,

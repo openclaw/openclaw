@@ -6,7 +6,7 @@ import {
   applyAgentDatabaseReaderRequest,
   decodeAgentDatabaseReaderRequest,
   encodeAgentDatabaseReaderRequest,
-  hasDeletedAgentDatabases,
+  captureDeletedAgentDatabaseFences,
   isDeletedAgentDatabasePath,
   matchesAgentDatabaseReadCandidatePath,
   registerAgentDatabaseReaderCloser,
@@ -40,10 +40,31 @@ describe("agent database reader requests", () => {
     expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(close))).toEqual(
       close,
     );
+    const retained = { ...close, retainedPaths: [databasePath] };
+    expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(retained))).toEqual(
+      retained,
+    );
     const deleted = { ...close, deleted: true as const, agentId: "alpha" };
     expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(deleted))).toEqual(
       deleted,
     );
+    expect(
+      decodeAgentDatabaseReaderRequest(
+        JSON.stringify({
+          deleted: close.candidates,
+          agentId: "alpha",
+          retainedPaths: [databasePath],
+        }),
+      ),
+    ).toEqual(deleted);
+    expect(
+      decodeAgentDatabaseReaderRequest(
+        JSON.stringify({
+          candidates: close.candidates,
+          retainedPaths: [1],
+        }),
+      ),
+    ).toBeUndefined();
     const revive = { kind: "revive" as const, agentIds: ["alpha"] };
     expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(revive))).toEqual(
       revive,
@@ -99,7 +120,7 @@ describe("agent database reader requests", () => {
         agentId: "alpha",
       });
       expect(isDeletedAgentDatabasePath(databasePath)).toBe(true);
-      expect(hasDeletedAgentDatabases()).toBe(true);
+      expect(captureDeletedAgentDatabaseFences()).toEqual([[databasePath, "alpha"]]);
       expect(isDeletedAgentDatabasePath(path.join(agentDir, "other.sqlite"))).toBe(false);
       expect(seen).toEqual([[databasePath], [databasePath]]);
 
@@ -120,7 +141,7 @@ describe("agent database reader requests", () => {
       await applyAgentDatabaseReaderRequest({ kind: "revive", agentIds: ["beta"] });
       expect(isDeletedAgentDatabasePath(databasePath)).toBe(true);
       await expect(reviveAgentDatabases(["alpha"])).rejects.toThrow("worker close failed");
-      expect(hasDeletedAgentDatabases()).toBe(true);
+      expect(captureDeletedAgentDatabaseFences()).toEqual([[survivor, "alpha-other"]]);
       expect(isDeletedAgentDatabasePath(databasePath)).toBe(false);
       expect(isDeletedAgentDatabasePath(external)).toBe(false);
       await reviveAgentDatabases(["alpha"]);
@@ -132,7 +153,7 @@ describe("agent database reader requests", () => {
       await reviveAgentDatabases(["alpha"]);
       expect(isDeletedAgentDatabasePath(survivor)).toBe(true);
       await reviveAgentDatabases(["alpha-other"]);
-      expect(hasDeletedAgentDatabases()).toBe(false);
+      expect(captureDeletedAgentDatabaseFences()).toEqual([]);
     } finally {
       unregister();
       await liveWorkerTaskPools.close(pool, [], async () => {});

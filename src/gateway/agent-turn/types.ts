@@ -28,10 +28,13 @@ export type AgentTurnPrincipal = Pick<
   GatewayClient,
   | "authenticatedUserId"
   | "authenticatedUserProfile"
+  | "authPolicy"
   | "connId"
   | "connect"
   | "internal"
   | "isDeviceTokenAuth"
+  | "usesSharedGatewayAuth"
+  | "sharedGatewaySessionGeneration"
 >;
 
 export type AgentTurnContext = Pick<

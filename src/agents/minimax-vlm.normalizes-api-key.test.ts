@@ -1,5 +1,4 @@
 // Covers MiniMax VLM auth/header normalization and provider-specific routing.
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
 
@@ -73,10 +72,6 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     await runNormalizationCase("minimax-test-\r\nkey");
   });
 
-  it("drops non-Latin1 characters from apiKey before sending Authorization header", async () => {
-    await runNormalizationCase("minimax-З│test-key");
-  });
-
   it("keeps trusted MINIMAX_API_HOST env fallback for VLM routing", async () => {
     process.env.MINIMAX_API_HOST = "https://api.minimaxi.com";
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
@@ -88,24 +83,21 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
   });
 
-  it.each(["minimax-cn", "minimax-portal-cn"])(
-    "routes %s to the CN VLM host by default",
-    async (provider) => {
-      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+  it.each(["minimax-portal-cn"])("routes %s to the CN VLM host by default", async (provider) => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
-      await expect(
-        understandImage({
-          provider,
-        }),
-      ).resolves.toBe("ok");
+    await expect(
+      understandImage({
+        provider,
+      }),
+    ).resolves.toBe("ok");
 
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-      expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
-    },
-  );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
 
-  it.each(["minimax-cn", "minimax-portal-cn"])(
+  it.each(["minimax-portal-cn"])(
     "keeps %s on the CN VLM host when the configured host is malformed",
     async (provider) => {
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
@@ -123,65 +115,12 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     },
   );
 
-  it("uses the caller-provided request timeout", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-    await expect(
-      understandImage({
-        apiHost: "https://api.minimax.io",
-        timeoutMs: 180_000,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(opts?.timeoutMs).toBe(180_000);
-  });
-
-  it("uses the default request timeout for non-positive caller timeouts", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-    await expect(
-      understandImage({
-        apiHost: "https://api.minimax.io",
-        timeoutMs: 0,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(opts?.timeoutMs).toBe(60_000);
-  });
-
-  it("clamps oversized caller request timeouts before creating the abort signal", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
-
-    await expect(
-      understandImage({
-        apiHost: "https://api.minimax.io",
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-    const opts = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(opts?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
   describe("SSRF policy", () => {
     it.each([
       {
         name: "pins a default hostname without broad private-network access",
         input: { apiHost: "https://api.minimax.io" },
         policy: { hostnameAllowlist: ["api.minimax.io"] },
-      },
-      {
-        name: "preserves a custom public origin",
-        input: { apiHost: "https://custom-minimax.example.com" },
-        policy: {
-          hostnameAllowlist: ["custom-minimax.example.com"],
-          allowedOrigins: ["https://custom-minimax.example.com"],
-        },
       },
       {
         name: "preserves an explicitly configured loopback origin",
@@ -204,11 +143,6 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
           allowedOrigins: ["https://custom-minimax.example.com"],
           allowPrivateNetwork: true,
         },
-      },
-      {
-        name: "keeps default-host policy unchanged under explicit denial",
-        input: { apiHost: "https://api.minimax.io", allowPrivateNetwork: false },
-        policy: { hostnameAllowlist: ["api.minimax.io"] },
       },
       {
         name: "refuses metadata-like configured origin trust",

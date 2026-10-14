@@ -3,6 +3,7 @@ import type { PreparedAgentCredentialMode } from "../agents/agent-auth-credentia
 import * as authProfiles from "../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { dualRoutes } from "../agents/model-auth-availability.test-support.js";
+import * as modelCatalogDecisions from "../agents/model-catalog-decisions.js";
 import * as openaiRoutes from "../agents/openai-model-routes.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
@@ -10,7 +11,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import * as userModelAccounts from "../state/user-model-accounts.js";
 import { createStatusModelResolver } from "./status-model-auth.js";
 
 const cfg: OpenClawConfig = {
@@ -31,6 +31,7 @@ function statusAuth(
     config?: OpenClawConfig;
     nativeDiscovery?: { accountType: string; authMode?: string };
     profiles?: AuthProfileStore["profiles"];
+    model?: { provider: string; id: string };
   } = {},
 ) {
   const config = options.config ?? cfg;
@@ -38,6 +39,7 @@ function statusAuth(
     provider: "openai",
     id: "gpt-5.4",
     name: "GPT",
+    ...options.model,
     ...(options.nativeDiscovery ? { nativeRuntime: "codex" } : {}),
   };
   const pluginRegistry = createEmptyPluginRegistry();
@@ -165,11 +167,68 @@ describe("status model authentication and endpoint", () => {
           ...(override ? { authLabelOverride: "oauth (personal account)" } : {}),
         }),
       ).toEqual({
-        authLabel: override ? "oauth (personal account)" : "api-key",
+        authLabel: override ? "oauth (personal account)" : "api-key (models.json)",
         endpoint: "https://api.openai.com/v1",
       });
     },
   );
+
+  it.each([
+    ["configured-key", "models.json"],
+    ["ollama-2:bound", "ollama-2:bound"],
+  ])("shows the selected custom-provider credential for %s", async (apiKey, label) => {
+    const provider = {
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama" as const,
+      models: [],
+    };
+    const model = { provider: "ollama-2", id: "qwen3:4b" };
+    const resolve = statusAuth(undefined, {
+      model,
+      config: {
+        models: {
+          providers: {
+            ollama: { ...provider, apiKey: "built-in-key" },
+            "ollama-2": { ...provider, auth: "api-key", apiKey },
+          },
+        },
+      },
+      profiles: {
+        "ollama-2:ambient": { type: "api_key", provider: "ollama-2", key: "unused-key" },
+        "ollama-2:bound": { type: "api_key", provider: "ollama-2", key: "bound-key" },
+      },
+    });
+
+    expect(
+      await resolve({
+        provider: model.provider,
+        model: model.id,
+        runtimeId: "openclaw",
+        acceptedProviderIds: [model.provider],
+      }),
+    ).toEqual({ authLabel: `api-key (${label})`, endpoint: undefined });
+  });
+
+  it("identifies a selected environment credential without exposing its value", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-environment-key");
+    const resolve = statusAuth(undefined, {
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "OPENAI_API_KEY",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+    expect(await resolve({ ...selection, runtimeId: "openclaw" })).toEqual({
+      authLabel: "api-key (environment)",
+      endpoint: "https://api.openai.com/v1",
+    });
+  });
 
   it.each(["openclaw", "codex"])(
     "keeps a pinned personal SIWC account on Responses with %s despite native login",
@@ -186,7 +245,13 @@ describe("status model authentication and endpoint", () => {
           email: "private@example.test",
         },
       };
-      vi.spyOn(userModelAccounts, "readUserModelAuthProfile").mockReturnValue(undefined);
+      vi.spyOn(modelCatalogDecisions, "prepareModelCatalogDecisions").mockImplementation(
+        async (params) =>
+          modelCatalogDecisions.createModelCatalogDecisions({
+            ...params,
+            preparedPersonalCatalog: { links: [], profiles: {}, isCurrent: () => true },
+          }),
+      );
       vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
         version: 1,
         profiles,

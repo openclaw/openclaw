@@ -49,7 +49,7 @@ export class TeamReportsScheduler {
   private accepting = false;
   private active?: ActiveRun;
   private stopPromise?: Promise<void>;
-  private catchUp = true;
+  private catchUpDay?: PeriodDescriptor;
   private due: { closedDay?: number; intraday?: number } = {};
   private deferred = new Set<"closed-day" | "intraday">();
   private roster: Person[];
@@ -73,8 +73,13 @@ export class TeamReportsScheduler {
       throw new Error("Team Reports scheduler cannot be started again");
     }
     this.accepting = true;
+    // Keep manual generation and stored-report readers available without arming collection.
+    if (!this.options.config.schedule.enabled) {
+      return;
+    }
     const now = Date.now();
     const notBefore = now + STARTUP_GRACE_MS;
+    this.catchUpDay = describePeriod("day", now - DAY_MS);
     try {
       this.armClosedDay(now, notBefore);
       this.armIntraday(notBefore);
@@ -95,6 +100,7 @@ export class TeamReportsScheduler {
   async status() {
     return {
       running: this.accepting,
+      scheduleEnabled: this.options.config.schedule.enabled,
       activeRunId: this.active?.id,
       nextDue: { ...this.due },
       runs: await this.options.store.listRuns(),
@@ -223,15 +229,18 @@ export class TeamReportsScheduler {
       return;
     }
     // Recover yesterday in the first scheduled run, using the worker's accepted-day reuse.
-    const catchUp = this.catchUp;
-    this.catchUp = false;
-    const runKind = catchUp ? "closed-day" : kind;
+    const catchUpDay = this.catchUpDay;
+    this.catchUpDay = undefined;
+    const runKind = catchUpDay ? "closed-day" : kind;
     const now = Date.now();
     const days =
       runKind === "closed-day"
         ? [describePeriod("day", now - DAY_MS), describePeriod("day", now)]
         : [describePeriod("day", now)];
-    await this.begin(runKind, days, catchUp);
+    if (catchUpDay && !days.some((day) => day.key === catchUpDay.key)) {
+      days.unshift(catchUpDay);
+    }
+    await this.begin(runKind, days, catchUpDay !== undefined);
   }
 
   private async begin(

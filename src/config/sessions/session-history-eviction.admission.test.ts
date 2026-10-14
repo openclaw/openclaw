@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -15,7 +16,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -71,10 +71,10 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    materializeSessionStateDeletePlans: async (
-      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
+    materializeSessionHistoryEvictionPlan: async (
+      ...args: Parameters<typeof actual.materializeSessionHistoryEvictionPlan>
     ) => {
-      const result = await actual.materializeSessionStateDeletePlans(...args);
+      const result = await actual.materializeSessionHistoryEvictionPlan(...args);
       await hook.afterMaterialize?.();
       return result;
     },
@@ -123,7 +123,7 @@ it.each([
   { boundary: "initial", cold: true, outcome: "revoked" },
   { boundary: "replan", cold: true, outcome: "revoked" },
 ] as const)(
-  "keeps $boundary history preparation and $outcome inside its writer FIFO (cold: $cold)",
+  "keeps $boundary history preparation and $outcome ordered at worker admission (cold: $cold)",
   async ({ boundary: preparationBoundary, cold, outcome }) => {
     const sessionsDir = testState.sessionsDir();
     fs.mkdirSync(sessionsDir, { recursive: true });
@@ -212,9 +212,9 @@ it.each([
       events.push("preparation-ready");
       expect(database.db.isTransaction).toBe(false);
       if (cold) {
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
         invalidateOpenClawAgentDatabaseValidation(database.path);
-        clearOpenClawAgentIntegrityVerification(database.path, testState.env);
+        revokeSqliteDatabaseAdmissionsForPath(database.path);
         expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
         events.push("parent-handle-closed");
       }
@@ -272,9 +272,25 @@ it.each([
       integrityGate.entered.then(() => "worker" as const),
       work.then(() => "completed" as const),
     ]);
+    let followingWriter: Promise<void> | undefined;
     if (boundary === "worker") {
+      await laterWriter;
+      let followingWriterRan = false;
+      followingWriter = own(
+        runExclusiveSqliteSessionWrite(
+          options,
+          async () => {
+            followingWriterRan = true;
+            events.push("following-writer");
+          },
+          "session.history.eviction-prepare",
+        ),
+      );
       await yieldToEventLoop();
-      expect(laterWriterRan).toBe(false);
+      // Both archive reads and cold integrity validation release writer admission;
+      // transaction ordering resumes only when the reclaimer requests its write.
+      expect(laterWriterRan).toBe(true);
+      expect(followingWriterRan).toBe(true);
       expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(true);
       if (outcome === "protected") {
         // A peer connection can refresh the live entry while its worker validates.
@@ -308,7 +324,7 @@ it.each([
     }
     integrityGate.release();
     if (outcome === "revoked") {
-      await expect(work).rejects.toThrow("Agent database execution admission is closed");
+      await expect(work).rejects.toThrow(/revoked|admission is closed/);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
     } else {
       await expect(work).resolves.toMatchObject({
@@ -316,6 +332,7 @@ it.each([
       });
     }
     await laterWriter;
+    await followingWriter;
     observingAdmission = false;
     expect(boundary).toBe(cold ? "worker" : "completed");
     expect(events.indexOf("later-writer")).toBeGreaterThan(events.indexOf("blocker-released"));

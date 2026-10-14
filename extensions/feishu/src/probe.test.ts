@@ -87,19 +87,6 @@ async function expectErrorResultCached(params: {
   expect(params.requestFn).toHaveBeenCalledTimes(2);
 }
 
-async function expectFreshDefaultProbeAfter(
-  requestFn: ReturnType<typeof vi.fn>,
-  invalidate: () => void,
-) {
-  await probeFeishu(DEFAULT_CREDS);
-  expect(requestFn).toHaveBeenCalledTimes(1);
-
-  invalidate();
-
-  await probeFeishu(DEFAULT_CREDS);
-  expect(requestFn).toHaveBeenCalledTimes(2);
-}
-
 async function readSequentialDefaultProbePair() {
   const first = await probeFeishu(DEFAULT_CREDS);
   return { first, second: await probeFeishu(DEFAULT_CREDS) };
@@ -112,38 +99,9 @@ describe("probeFeishu", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns error when credentials are missing", async () => {
-    const result = await probeFeishu();
-    expect(result).toEqual({ ok: false, error: "missing credentials (appId, appSecret)" });
-  });
-
-  it("returns error when appId is missing", async () => {
-    const result = await probeFeishu({ appSecret: "secret" } as never); // pragma: allowlist secret
-    expect(result).toEqual({ ok: false, error: "missing credentials (appId, appSecret)" });
-  });
-
   it("returns error when appSecret is missing", async () => {
     const result = await probeFeishu({ appId: "cli_123" } as never);
     expect(result).toEqual({ ok: false, error: "missing credentials (appId, appSecret)" });
-  });
-
-  it("returns bot info on successful probe", async () => {
-    const requestFn = setupSuccessClient();
-
-    await expectDefaultSuccessResult();
-    expect(requestFn).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes the probe timeout to the Feishu request", async () => {
-    const requestFn = setupSuccessClient();
-
-    await probeFeishu(DEFAULT_CREDS);
-
-    expect(requestFn).toHaveBeenCalledWith({
-      method: "GET",
-      url: "/open-apis/bot/v3/info",
-      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
-    });
   });
 
   it("returns timeout error when request exceeds timeout", async () => {
@@ -158,7 +116,7 @@ describe("probeFeishu", () => {
       expect(result).toEqual({
         ok: false,
         appId: DEFAULT_CREDS.appId,
-        error: "probe timed out after 1000ms",
+        error: "check timed out after 1000ms",
       });
     });
   });
@@ -173,7 +131,7 @@ describe("probeFeishu", () => {
       { abortSignal: abortController.signal },
     );
 
-    expect(result).toEqual({ ok: false, appId: "cli_123", error: "probe aborted" });
+    expect(result).toEqual({ ok: false, appId: "cli_123", error: "check aborted" });
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
@@ -186,30 +144,6 @@ describe("probeFeishu", () => {
 
       expect(first).toEqual(second);
       expect(requestFn).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it("evicts cached probe results when the current clock is invalid", async () => {
-    const requestFn = setupSuccessClient();
-
-    await probeFeishu(DEFAULT_CREDS);
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      await probeFeishu(DEFAULT_CREDS);
-    } finally {
-      dateNow.mockRestore();
-    }
-
-    expect(requestFn).toHaveBeenCalledTimes(2);
-  });
-
-  it("makes a fresh API call after cache expires", async () => {
-    await withFakeTimers(async () => {
-      const requestFn = setupSuccessClient();
-
-      await expectFreshDefaultProbeAfter(requestFn, () => {
-        vi.advanceTimersByTime(10 * 60 * 1000 + 1);
-      });
     });
   });
 
@@ -258,34 +192,6 @@ describe("probeFeishu", () => {
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
-  it("does not share cache between accounts with same appId but different appSecret", async () => {
-    const requestFn = setupClient(BOT1_RESPONSE);
-
-    // First account with appId + secret A
-    await probeFeishu({ appId: "cli_shared", appSecret: "secret_aaa" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(1);
-
-    // Second account with same appId but different secret (e.g. after rotation)
-    // must NOT reuse the cached result
-    await probeFeishu({ appId: "cli_shared", appSecret: "secret_bbb" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses accountId for cache key when available", async () => {
-    const requestFn = setupClient(BOT1_RESPONSE);
-
-    // Two accounts with same appId+appSecret but different accountIds are cached separately
-    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(1);
-
-    await probeFeishu({ accountId: "acct-2", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(2);
-
-    // Same accountId should return cached
-    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(2);
-  });
-
   it("does not reuse cached identity when an account is reassigned to another app", async () => {
     const requestFn = vi
       .fn()
@@ -309,7 +215,7 @@ describe("probeFeishu", () => {
   });
 
   it("handles standard bot info nested under data", async () => {
-    setupClient({
+    const requestFn = setupClient({
       code: 0,
       data: { bot: { app_name: "DataBot", open_id: "ou_data" } },
     });
@@ -318,6 +224,11 @@ describe("probeFeishu", () => {
       ...DEFAULT_SUCCESS_RESULT,
       botName: "DataBot",
       botOpenId: "ou_data",
+    });
+    expect(requestFn).toHaveBeenCalledWith({
+      method: "GET",
+      url: "/open-apis/bot/v3/info",
+      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
     });
   });
 

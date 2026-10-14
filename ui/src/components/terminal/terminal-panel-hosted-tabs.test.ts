@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -11,12 +10,13 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import { terminalPanelHostedTabs, type TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
@@ -36,7 +36,7 @@ async function mount(embedded = true, tabsInHeader = true) {
           : {}) as T,
     addEventListener: () => () => {},
   };
-  const panel = document.createElement(tagName) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(tagName);
   panel.available = true;
   panel.embedded = embedded;
   panel.tabsInHeader = tabsInHeader;
@@ -45,9 +45,9 @@ async function mount(embedded = true, tabsInHeader = true) {
   if (!embedded) {
     panel.toggle();
   }
+  await panel.updateComplete;
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
-  const sessions = (panel as unknown as { terminalSessions: TerminalPanelSessionController })
-    .terminalSessions;
+  const sessions = terminalSessionsForTest(panel);
   await waitForFast(() => expect(sessions.booting).toBe(false));
   await panel.updateComplete;
   return { panel, sessions };
@@ -56,7 +56,16 @@ async function mount(embedded = true, tabsInHeader = true) {
 function mountActions(panel: OpenClawTerminalPanel) {
   const container = document.createElement("div");
   document.body.append(container);
-  const update = () => render(panel.hostedActions, container);
+  const update = () => {
+    const actions = panel.hostedActions;
+    if (actions) {
+      if (container.firstChild !== actions) {
+        container.replaceChildren(actions);
+      }
+    } else {
+      container.replaceChildren();
+    }
+  };
   panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, update);
   update();
   return container;
@@ -76,8 +85,13 @@ describe("Terminal panel hosted tabs", () => {
     await i18n.setLocale("en");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // This fixture has no destination panel to consume a queued docking handoff.
+    for (const panel of document.querySelectorAll<OpenClawTerminalPanel>(tagName)) {
+      panel.closeTerminalPanel();
+    }
     document.body.replaceChildren();
+    await Promise.resolve();
     createGhosttyTerminalMock.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -95,10 +109,17 @@ describe("Terminal panel hosted tabs", () => {
       expect(Boolean(panel.renderRoot.querySelector(".tp-actions"))).toBe(ownsStrip);
       expect(panel.renderRoot.querySelector(".tp-viewport")).not.toBeNull();
       expect(panel.renderRoot.querySelector(".tp-file-input")).not.toBeNull();
-      expect(panel.renderRoot.querySelector(".tp-viewport")?.getAttribute("aria-labelledby")).toBe(
-        ownsStrip ? `terminal-tab-${panel.activeHostedTabId}` : null,
-      );
-      expect(panel.hostedActions === nothing).toBe(ownsStrip);
+      const viewport = panel.renderRoot.querySelector(".tp-viewport")!;
+      const selectedTab = panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]');
+      expect(viewport.getAttribute("aria-labelledby")).toBe(ownsStrip ? selectedTab?.id : null);
+      if (ownsStrip) {
+        expect(selectedTab).not.toBeNull();
+        expect(selectedTab?.getAttribute("aria-controls")).toBe(viewport.id);
+        expect(document.getElementById(viewport.getAttribute("aria-labelledby")!)).toBe(
+          selectedTab,
+        );
+      }
+      expect(panel.hostedActions === undefined).toBe(ownsStrip);
       expect(readPanelHostedTabs(panel)).toBe(panel);
     },
   );
@@ -146,11 +167,14 @@ describe("Terminal panel hosted tabs", () => {
     const { panel, sessions } = await mount();
     await sessions.openSession();
     const firstId = sessions.tabs[0]!.id;
+    const closedHost = sessions.tabs[0]!.host;
+    const remainingHost = sessions.tabs[1]!.host;
     panel.selectHostedTab(firstId);
     expect(panel.activeHostedTabId).toBe(firstId);
     await panel.closeHostedTab(firstId);
     expect(panel.hostedTabs.some((tab) => tab.id === firstId)).toBe(false);
-    expect(panel.isUpdatePending).toBe(false);
+    expect(panel.renderRoot.contains(closedHost)).toBe(false);
+    expect(panel.renderRoot.contains(remainingHost)).toBe(true);
   });
 
   it("notifies on tab, selection, booting and header handoff changes, without repeating unrelated renders", async () => {
@@ -217,14 +241,6 @@ describe("Terminal panel hosted tabs", () => {
     );
     button(actions, "Add files to terminal").click();
     expect(inputClick).toHaveBeenCalledOnce();
-    const dock = vi.fn();
-    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
-    try {
-      button(actions, "Dock to bottom").click();
-      expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
-    } finally {
-      window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
-    }
     expect(button(actions, "Add files to terminal").disabled).toBe(false);
     const pending = vi
       .spyOn(panel.terminalPanelUploadController, "hasPendingBatch")
@@ -237,9 +253,17 @@ describe("Terminal panel hosted tabs", () => {
     panel.requestUpdate();
     await panel.updateComplete;
     expect(button(actions, "Add files to terminal").disabled).toBe(true);
+    const dock = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
+    try {
+      button(actions, "Dock to bottom").click();
+      expect(dock.mock.calls[0]?.[0].detail).toMatchObject({ dock: "bottom", open: true });
+    } finally {
+      window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, dock);
+    }
   });
 
-  it("opens its shadow menu from light DOM and restores focus on Escape", async () => {
+  it("opens its panel menu from the hosted header and restores focus on Escape", async () => {
     const { panel } = await mount();
     const actions = mountActions(panel);
     const trigger = button(actions, "Terminal sessions");
@@ -247,9 +271,7 @@ describe("Terminal panel hosted tabs", () => {
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
     trigger.click();
     await waitForFast(() =>
-      expect(panel.shadowRoot?.activeElement).toBe(
-        panel.renderRoot.querySelector(".tp-session-refresh"),
-      ),
+      expect(document.activeElement).toBe(panel.renderRoot.querySelector(".tp-session-refresh")),
     );
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     const menu = panel.renderRoot.querySelector(".tp-session-menu.tp-session-menu--hosted")!;

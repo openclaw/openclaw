@@ -57,7 +57,13 @@ const readerOwners = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteReaderOwners"),
   () =>
     new AsyncLocalStorage<
-      SqliteReaderOwner & { timing: { preparedAtMs: number; hostAdmissionWaitMs: number } }
+      SqliteReaderOwner & {
+        timing: {
+          preparedAtMs: number;
+          hostAdmissionWaitMs: number;
+          transactions: { count: number };
+        };
+      }
     >(),
 );
 
@@ -89,7 +95,11 @@ export function withSqliteReaderOwner<T>(owner: SqliteReaderOwner, operation: ()
     {
       ...owner,
       operation: boundedOperation(owner.operation),
-      timing: { preparedAtMs: Date.now(), hostAdmissionWaitMs: 0 },
+      timing: {
+        preparedAtMs: Date.now(),
+        hostAdmissionWaitMs: 0,
+        transactions: readerOwners.getStore()?.timing.transactions ?? { count: 0 },
+      },
     },
     operation,
   );
@@ -194,19 +204,16 @@ export function retainSqliteReader(
   if (databasePath && pathReaders) {
     activeReaders.byPath.set(databasePath, pathReaders);
   }
-  let released = false;
   return {
     progress() {
-      if (!released) {
+      if (databaseReaders.has(token)) {
         reader.lastProgressAtMs = Date.now();
       }
     },
     release() {
-      if (released) {
+      if (!databaseReaders.delete(token)) {
         return;
       }
-      released = true;
-      databaseReaders.delete(token);
       if (
         databaseReaders.size === 0 &&
         activeReaders.byDatabase.get(database) === databaseReaders

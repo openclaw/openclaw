@@ -61,6 +61,7 @@ describeControlUiE2e("plugin install button progress", () => {
           await activity(stage, "completed");
         }
         await activity("dependencies", "started");
+        await button.blur();
         await button.hover();
         const card = page.locator(".plugin-install-progress");
         await card.waitFor({ state: "visible" });
@@ -70,13 +71,29 @@ describeControlUiE2e("plugin install button progress", () => {
         await page.clock.runFor(1100);
         await expect.poll(() => timer.textContent()).not.toBe(initialTime);
         expect(await card.textContent()).toContain("Installing plugin dependencies");
+        const buttonBounds = (await button.boundingBox())!;
+        const cardBounds = (await card.boundingBox())!;
+        const gapY =
+          cardBounds.y > buttonBounds.y
+            ? (buttonBounds.y + buttonBounds.height + cardBounds.y) / 2
+            : (cardBounds.y + cardBounds.height + buttonBounds.y) / 2;
+        await page.mouse.move(buttonBounds.x + buttonBounds.width / 2, gapY);
+        expect(await card.isVisible()).toBe(true);
         await card.hover();
         expect(await card.isVisible()).toBe(true);
         await button.click();
         await page.mouse.move(1400, 800);
         expect(await card.isVisible()).toBe(true);
+        const outsideControl = page.locator(".plugins-settings-breadcrumb__parent");
+        await outsideControl.focus();
+        expect(await outsideControl.evaluate((element) => element === document.activeElement)).toBe(
+          true,
+        );
+        expect(await card.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
         await card.waitFor({ state: "hidden" });
+        expect(await button.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await button.getAttribute("aria-expanded")).toBe("false");
         expect(await page.locator(".plugin-catalog-detail").count()).toBe(1);
         await button.blur();
         await button.focus();
@@ -217,6 +234,17 @@ describeControlUiE2e("plugin install button progress", () => {
               .getByText("Registry refused the dependency download.", { exact: true })
               .waitFor();
             await captureFailure(true);
+            const failureSummary = card.locator(".plugin-install-progress__failure > summary");
+            await failureSummary.focus();
+            expect(
+              await failureSummary.evaluate((element) => element === document.activeElement),
+            ).toBe(true);
+            await page.keyboard.press("Escape");
+            await card.waitFor({ state: "hidden" });
+            await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
+            await page.mouse.move(0, 0);
+            await button.hover();
+            await card.waitFor({ state: "visible" });
             await gateway.deferNext("plugins.install");
             await button.click();
             await gateway.waitForRequest("plugins.install", { after: 1 });

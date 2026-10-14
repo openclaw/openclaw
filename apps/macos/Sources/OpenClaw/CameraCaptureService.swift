@@ -1,7 +1,6 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 import OSLog
 
@@ -16,7 +15,6 @@ actor CameraCaptureService {
     enum CameraError: LocalizedError {
         case cameraUnavailable
         case microphoneUnavailable
-        case permissionDenied(kind: String)
         case captureFailed(String)
         case exportFailed(String)
 
@@ -26,8 +24,6 @@ actor CameraCaptureService {
                 "Camera unavailable"
             case .microphoneUnavailable:
                 "Microphone unavailable"
-            case let .permissionDenied(kind):
-                "\(kind) permission denied"
             case let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
@@ -47,7 +43,7 @@ actor CameraCaptureService {
     }
 
     func snap(
-        facing: CameraFacing,
+        facing: OpenClawCameraFacing,
         maxWidth: Int?,
         quality: Double?,
         deviceId: String?,
@@ -117,7 +113,7 @@ actor CameraCaptureService {
     }
 
     func clip(
-        facing: CameraFacing,
+        facing: OpenClawCameraFacing,
         durationMs: Int?,
         includeAudio: Bool,
         deviceId: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
@@ -167,15 +163,8 @@ actor CameraCaptureService {
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
-        if !AppLaunchRuntimePlan.current.allowsActivation {
-            guard AVCaptureDevice.authorizationStatus(for: mediaType) == .authorized else {
-                PermissionManager.reportDeferredRequest()
-                throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
-            }
-            return
-        }
-        if await !(CameraAuthorization.isAuthorized(for: mediaType)) {
-            throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
+        if let error = await PermissionManager.missingPermissions([mediaType == .video ? .camera : .microphone]) {
+            throw error
         }
     }
 

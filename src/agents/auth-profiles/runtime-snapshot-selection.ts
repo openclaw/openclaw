@@ -5,8 +5,10 @@ import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCachedCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { assertAuthProfileMigrationStateAtDatabasePath } from "./legacy-source-diagnostic.js";
 import { resolveRuntimeStoreKey } from "./mutation-lineage.js";
+import { getPreparedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { buildPersistedAuthProfileSecretsStore, mergeAuthProfileStores } from "./persisted.js";
 import {
+  captureRuntimeAuthProfileLegacyCandidates,
   cloneRuntimeAuthProfileLegacyCandidates,
   cloneRuntimeAuthSharedOwner,
   runtimeAuthProfileSnapshotSharesOwner,
@@ -17,6 +19,7 @@ import {
   type RuntimeAuthProfileLegacyCandidates,
   type RuntimeAuthSharedOwner,
 } from "./runtime-snapshot-owner.js";
+import type { FreshSharedAuthStoreHandoff } from "./shared-store-bootstrap.js";
 import type { AuthProfileStore, AuthProfileStoreOwner, RuntimeAuthProfileStore } from "./types.js";
 
 export type OwnedRuntimeSnapshot = {
@@ -31,8 +34,30 @@ export type SharedAuthProfileStoreMutation = {
   stateChanged: boolean;
   selectionChanged?: boolean;
   profileIds: Iterable<string>;
-  oauthRefreshClaimIds?: ReadonlyMap<string, string | undefined>;
 };
+
+/** Retain overlays while preparing snapshots for the acknowledged shared-owner handoff. */
+export function prepareRuntimeAuthProfileSharedOwnerHandoff(
+  entries: OwnedRuntimeAuthProfileStoreSnapshotEntry[],
+  { previousSharedDatabasePath, sharedDatabasePath, env }: FreshSharedAuthStoreHandoff,
+): OwnedRuntimeAuthProfileStoreSnapshotEntry[] | undefined {
+  let rebound = false;
+  for (const entry of entries) {
+    if (
+      (entry.owner.kind === "resolved" && entry.owner.location !== "legacy-main") ||
+      !runtimeAuthProfileSnapshotSharesOwner(entry.owner, {
+        sharedDatabasePath: previousSharedDatabasePath,
+        location: "legacy-main",
+      })
+    ) {
+      continue;
+    }
+    rebound = true;
+    entry.owner = { kind: "resolved", sharedDatabasePath, location: "state-db" };
+    entry.legacyCandidates = captureRuntimeAuthProfileLegacyCandidates(entry.agentDir, env);
+  }
+  return rebound ? entries : undefined;
+}
 
 export function sharedMutationAffectsSnapshot(
   mutation?: SharedAuthProfileStoreMutation,
@@ -74,28 +99,25 @@ function cloneOwnedRuntimeAuthProfileStoreSnapshot(
 /** Borrow the snapshot owner's map; selection never retains or mutates credential state. */
 export function createRuntimeAuthProfileSnapshotSelection(
   snapshots: ReadonlyMap<string, OwnedRuntimeSnapshot>,
-  revision: (databasePath: string) => number,
   invalidate: (databasePath: string, agentDir?: string) => unknown,
 ) {
   /** Select producer-owned identities before copying any credential bodies. */
   function listRuntimeAuthProfileStoreSnapshotTargetsForSharedOwner(
     owner: AuthProfileStoreOwner,
     mutation?: SharedAuthProfileStoreMutation,
-  ): Array<{ databasePath: string; agentDir: string; runtimeRevision: number }> {
+  ): Array<{ databasePath: string; agentDir: string }> {
     const affected = sharedMutationAffectsSnapshot(mutation);
-    return Array.from(snapshots).flatMap(([databasePath, entry]) =>
-      databasePath !== owner.sharedDatabasePath &&
-      runtimeAuthProfileSnapshotSharesOwner(entry.owner, owner) &&
-      affected(entry.store)
-        ? [
-            {
-              databasePath,
-              agentDir: path.dirname(databasePath),
-              runtimeRevision: revision(databasePath),
-            },
-          ]
-        : [],
-    );
+    return Array.from(snapshots)
+      .filter(
+        ([databasePath, entry]) =>
+          databasePath !== owner.sharedDatabasePath &&
+          runtimeAuthProfileSnapshotSharesOwner(entry.owner, owner) &&
+          affected(entry.store),
+      )
+      .map(([databasePath]) => ({
+        databasePath,
+        agentDir: path.dirname(databasePath),
+      }));
   }
   /** Captures the published owners once; catalog reads refresh usage without opening storage. */
   function createPreparedRuntimeAuthProfileUsageReader(
@@ -165,9 +187,81 @@ export function createRuntimeAuthProfileSnapshotSelection(
     };
   }
 
+  /** Reads a cloned runtime auth profile store snapshot for an agent dir. */
+  function getRuntimeAuthProfileStoreSnapshotCore(
+    agentDir?: string,
+  ): RuntimeAuthProfileStore | undefined {
+    if (!agentDir && !getPreparedSharedAuthStoreOwnership(process.env)) {
+      return undefined;
+    }
+    return getRuntimeAuthProfileStoreSnapshotAtDatabasePath(resolveRuntimeStoreKey(agentDir));
+  }
+
+  function getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+    databasePath: string,
+  ): RuntimeAuthProfileStore | undefined {
+    const store = snapshots.get(databasePath)?.store;
+    if (store) {
+      observeCachedCanonicalAuthProfileCredentials(store.profiles);
+    }
+    return store ? cloneAuthProfileStore(store) : undefined;
+  }
+
+  /**
+   * Reads the effective prepared auth store without falling back to persisted storage.
+   * Lifecycle consumers use this after auth publication so request paths never reopen SQLite.
+   */
+  function getPreparedRuntimeAuthProfileStoreSnapshotCore(
+    agentDir?: string,
+    inheritedAuthDir?: string,
+    env?: NodeJS.ProcessEnv,
+  ): RuntimeAuthProfileStore | undefined {
+    if (
+      (!agentDir || !inheritedAuthDir) &&
+      !getPreparedSharedAuthStoreOwnership(env ?? process.env)
+    ) {
+      return undefined;
+    }
+    const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir, env);
+    const requestedKey = resolveRuntimeStoreKey(agentDir, env);
+    const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
+    if (requestedKey === inheritedKey) {
+      return inherited;
+    }
+    const requested = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(requestedKey);
+    // With no agent, the shared snapshot wins without merging the inherited store.
+    if (agentDir && inherited && requested) {
+      return mergeAuthProfileStores(inherited, requested, {
+        preserveBaseRuntimeExternalProfiles: true,
+      });
+    }
+    if (agentDir && !requested && inherited) {
+      // The shared snapshot owns its order; this agent has no local override to reset.
+      return { ...inherited, runtimeLocalOrderProviderIds: [] };
+    }
+    return requested ?? inherited;
+  }
+
+  /** Checks the owned profile keys without copying private credential data out of the owner. */
+  function hasRuntimeAuthProfileStoreSource(agentDir?: string, env?: NodeJS.ProcessEnv): boolean {
+    const store = snapshots.get(resolveRuntimeStoreKey(agentDir, env))?.store;
+    return Boolean(store && Object.keys(store.profiles).length > 0);
+  }
+
+  /** Returns true when requested or main runtime snapshots contain profiles. */
+  function hasAnyRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
+    return (
+      hasRuntimeAuthProfileStoreSource(agentDir) ||
+      (Boolean(agentDir) && hasRuntimeAuthProfileStoreSource())
+    );
+  }
+
   return {
     /** Newer incremental views can still omit this write; discard matching owner views on failure. */
-    invalidateRuntimeAuthProfileStoreSnapshotsForOwner: (owner: AuthProfileStoreOwner) => {
+    invalidateRuntimeAuthProfileStoreSnapshotsForOwner: (
+      owner: AuthProfileStoreOwner,
+      isCurrent?: (databasePath: string) => boolean,
+    ) => {
       const targets = [
         {
           databasePath: owner.databasePath,
@@ -182,6 +276,9 @@ export function createRuntimeAuthProfileSnapshotSelection(
       ];
       for (const target of targets) {
         try {
+          if (isCurrent && !isCurrent(target.databasePath)) {
+            continue;
+          }
           const entry = snapshots.get(target.databasePath);
           if (!entry || runtimeAuthProfileSnapshotSharesOwner(entry.owner, owner)) {
             invalidate(target.databasePath, target.agentDir);
@@ -192,6 +289,11 @@ export function createRuntimeAuthProfileSnapshotSelection(
       }
     },
     createPreparedRuntimeAuthProfileUsageReader,
+    getRuntimeAuthProfileStoreSnapshotCore,
+    getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
+    getPreparedRuntimeAuthProfileStoreSnapshotCore,
+    hasRuntimeAuthProfileStoreSource,
+    hasAnyRuntimeAuthProfileStoreSource,
     getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath: (databasePath: string) => {
       const entry = snapshots.get(databasePath);
       if (entry) {
@@ -199,20 +301,18 @@ export function createRuntimeAuthProfileSnapshotSelection(
       }
       return entry && cloneOwnedRuntimeAuthProfileStoreSnapshot(databasePath, entry);
     },
-    listOwnedRuntimeAuthProfileStoreSnapshots: () => {
-      return Array.from(snapshots, ([databasePath, entry]) =>
+    listOwnedRuntimeAuthProfileStoreSnapshots: () =>
+      Array.from(snapshots, ([databasePath, entry]) =>
         cloneOwnedRuntimeAuthProfileStoreSnapshot(databasePath, entry),
-      );
-    },
+      ),
     listRuntimeAuthProfileStoreSnapshotsForSharedOwner: (
       owner: AuthProfileStoreOwner,
       mutation?: SharedAuthProfileStoreMutation,
-    ) => {
-      return listRuntimeAuthProfileStoreSnapshotTargetsForSharedOwner(owner, mutation).map(
+    ) =>
+      listRuntimeAuthProfileStoreSnapshotTargetsForSharedOwner(owner, mutation).map(
         ({ databasePath }) =>
           cloneOwnedRuntimeAuthProfileStoreSnapshot(databasePath, snapshots.get(databasePath)!),
-      );
-    },
+      ),
   };
 }
 

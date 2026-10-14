@@ -1,4 +1,3 @@
-/** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -15,6 +14,7 @@ import {
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
+import { normalizeReservedToolNames } from "./agent-bundle-mcp-names.js";
 import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
@@ -47,7 +47,6 @@ type LspServerCapabilities = {
   [key: string]: unknown;
 };
 
-/** Materialized LSP tools plus session capabilities and cleanup handle. */
 type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
@@ -536,11 +535,7 @@ export async function createBundleLspToolRuntime(params: {
     return { tools: [], sessions: [], dispose: async () => {} };
   }
 
-  const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) =>
-      normalizeOptionalLowercaseString(name),
-    ).filter(Boolean),
-  );
+  const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
 

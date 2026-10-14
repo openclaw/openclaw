@@ -88,14 +88,12 @@ export function attachModelProviderLocalService<TModel extends object>(
   return { ...model, [MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL]: service };
 }
 
-/** Read local-service startup metadata attached to a model. */
 export function getModelProviderLocalService(
   model: object,
 ): ModelProviderLocalServiceConfig | undefined {
   return (model as ModelWithProviderLocalService)[MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL];
 }
 
-/** Ensure a model's local provider service is healthy and return a lease. */
 export async function ensureModelProviderLocalService(
   model: Model,
   probeHeaders?: HeadersInit,
@@ -113,7 +111,6 @@ export async function ensureModelProviderLocalService(
   );
 }
 
-/** Ensure a provider endpoint's local service is healthy and return a request lease. */
 export async function ensureProviderLocalService(
   target: ProviderLocalServiceTarget,
   signal?: AbortSignal | null,
@@ -264,7 +261,6 @@ export async function stopManagedProviderLocalServices(): Promise<void> {
   );
 }
 
-/** Return bounded local-service state for focused lifecycle tests. */
 export function getManagedProviderLocalServiceDiagnosticsForTest(): LocalServiceDiagnostics[] {
   return structuredClone(
     [...services.values()]

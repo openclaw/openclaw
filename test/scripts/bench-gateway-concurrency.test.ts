@@ -95,6 +95,31 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it.skipIf(process.platform !== "linux")(
+    "caps Control UI defaults to the requested cohort",
+    () => {
+      for (const total of [1, 10, 50]) {
+        const options = testing.parseOptions([
+          "--control-ui-clients",
+          String(total),
+          "--resource-cgroup",
+          "/synthetic/cgroup",
+          "--transpiler-cache",
+          "/synthetic/cache",
+          "--runs",
+          "1",
+          "--warmup",
+          "0",
+        ]);
+        expect(options.controlUiLoad).toMatchObject({
+          totalClients: total,
+          activeClients: Math.min(25, total),
+          drivers: Math.min(4, total),
+        });
+      }
+    },
+  );
+
   describe("passive activity-summary diagnostics", () => {
     const create = () => createActivitySummaryDiagnostics(performance.now());
     const recapLog = (error: unknown = "Activity recap timed out") =>
@@ -881,40 +906,46 @@ describe("gateway concurrency benchmark script", () => {
   });
 
   it("binds Responses continuations through runtime context to the newest ordinary user", () => {
-    const runtimeContext = {
-      type: "message",
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nQuoted benchmark stream 99.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        },
-      ],
-    };
-    const input = [
-      { role: "user", content: "benchmark stream 1." },
-      { role: "assistant", content: "old answer" },
-      { role: "user", content: [{ type: "input_text", text: "benchmark warmup tool stream 2." }] },
-      runtimeContext,
-      { type: "function_call_output", output: "done" },
-    ];
-    expect(summarizeMockInferenceRequest({ input })).toMatchObject({
-      purpose: "benchmark-turn",
-      benchmarkPhase: "warmup",
-      turnIndex: 2,
-      hasToolOutput: true,
-    });
-    for (const content of [
-      "an ordinary newer request",
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nan incomplete carrier",
-      "ordinary prefix\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ncontext\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    for (const text of [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nQuoted benchmark stream 99.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context:\nQuoted benchmark stream 99.\nEnd OpenClaw runtime context.",
     ]) {
-      const facts = summarizeMockInferenceRequest({
-        input: [...input, { role: "user", content }, runtimeContext],
-      });
-      expect(facts.purpose).toBe("other");
-      expect(facts.turnIndex).toBeUndefined();
-      expect(facts.hasToolOutput).toBe(false);
+      for (const content of [text, [{ type: "input_text", text }]]) {
+        const runtimeContext = { type: "message", role: "user", content };
+        const input = [
+          { role: "user", content: "benchmark stream 1." },
+          { role: "assistant", content: "old answer" },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "benchmark warmup tool stream 2." }],
+          },
+          runtimeContext,
+          { type: "function_call_output", output: "done" },
+        ];
+        for (const turns of [input, [...input, runtimeContext]]) {
+          expect(summarizeMockInferenceRequest({ input: turns })).toMatchObject({
+            purpose: "benchmark-turn",
+            benchmarkPhase: "warmup",
+            turnIndex: 2,
+            hasToolOutput: true,
+          });
+        }
+        for (const boundaryContent of [
+          "an ordinary newer request",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nan incomplete carrier",
+          "ordinary prefix\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ncontext\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "OpenClaw runtime context:\nan incomplete carrier",
+          "ordinary prefix\nOpenClaw runtime context:\ncontext\nEnd OpenClaw runtime context.",
+          "OpenClaw runtime context:\ncontext\nEnd OpenClaw runtime context.\nordinary suffix",
+        ]) {
+          const facts = summarizeMockInferenceRequest({
+            input: [...input, { role: "user", content: boundaryContent }, runtimeContext],
+          });
+          expect(facts.purpose).toBe("other");
+          expect(facts.turnIndex).toBeUndefined();
+          expect(facts.hasToolOutput).toBe(false);
+        }
+      }
     }
   });
 
@@ -2280,4 +2311,31 @@ syncBuiltinESMExports();\n`,
       );
     }
   });
+});
+
+it("cancels dispatch readiness promptly instead of waiting for a later ready event", async () => {
+  vi.useFakeTimers();
+  try {
+    const controller = new AbortController();
+    const interrupted = new Error("synthetic interruption");
+    let reads = 0;
+    const pending = testing
+      .waitForGatewayDispatchReady(
+        () => {
+          controller.abort(interrupted);
+          return ++reads === 1 ? "" : "startup trace: sidecars.ready ";
+        },
+        Infinity,
+        controller.signal,
+      )
+      .then(
+        () => false,
+        () => true,
+      );
+    await vi.runAllTimersAsync();
+    expect(await pending).toBe(true);
+    expect(reads).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

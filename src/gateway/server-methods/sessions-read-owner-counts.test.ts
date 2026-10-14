@@ -1,6 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   patchSessionEntryCore,
@@ -20,13 +23,16 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   identifiedClient,
-  listSessions,
+  listSessions as readList,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
 
+const listSessions = (params: Parameters<typeof readList>[0]) =>
+  readList({ ...params, acceptsSerializedJson: true });
+
 afterEach(() => vi.restoreAllMocks());
 
-it("counts caller-visible open ownership and direct running work across agents before pagination", async () => {
+it("counts caller-visible conversations once through direct and delegated work before pagination", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const ada = ensureProfileForEmail("counts-ada@example.test").id;
     const bob = ensureProfileForEmail("counts-bob@example.test").id;
@@ -34,14 +40,16 @@ it("counts caller-visible open ownership and direct running work across agents b
     const context = requestContext({
       agents: { entries: { main: {}, work: {} } },
     });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const client = identifiedClient(ada);
+    const now = Date.now();
     const seed = (name: string, agentId = "main", fields: Partial<SessionEntry> = {}) => {
       const sessionKey = "agent:" + agentId + ":" + name;
       const scope = { agentId, sessionKey };
       const { owner, participants, ...entry } = fields;
       replaceSessionEntrySync(scope, {
         sessionId: name,
-        updatedAt: 100,
+        updatedAt: now,
         visibility: "shared",
         createdActor: actor(ada),
         ...entry,
@@ -54,7 +62,7 @@ it("counts caller-visible open ownership and direct running work across agents b
         });
       }
       for (const participant of participants ?? []) {
-        recordSessionParticipant(scope, { identity: participant.identity, promptedAt: 100 });
+        recordSessionParticipant(scope, { identity: participant.identity, promptedAt: now });
       }
       return sessionKey;
     };
@@ -65,15 +73,16 @@ it("counts caller-visible open ownership and direct running work across agents b
     });
     const remote = seed("remote", "work");
     const queued = seed("queued", "work");
-    seed("stale", "main", { status: "running" });
+    seed("stale", "main", { status: "interrupted" });
     seed("reassigned-to-ada", "main", { createdActor: actor(bob), owner: { actor: actor(ada) } });
     seed("reassigned-to-bob", "work", { owner: { actor: actor(bob) } });
     seed("own-draft", "main", { visibility: "draft" });
-    seed("dashboard:visible-child", "work", { spawnedBy: idle });
-    seed("archive", "main", { archivedAt: 100, status: "running" });
+    const visibleChild = seed("dashboard:visible-child", "work", { spawnedBy: idle });
+    seed("archive", "main", { archivedAt: now, status: "done" });
     const privateKey = seed("private", "work", { createdActor: actor(bob), visibility: "draft" });
     seed("incognito", "main", { incognito: true });
-    seed("subagent:hidden", "main", { spawnedBy: idle });
+    const child = seed("subagent:hidden", "main", { spawnedBy: idle });
+    const grandchild = seed("subagent:nested", "work", { spawnedBy: child });
     seed("cron:hidden");
     seed("system", "main", { createdActor: { type: "system" }, owner: { actor: actor(ada) } });
     seed("agent-owned", "main", {
@@ -165,6 +174,89 @@ it("counts caller-visible open ownership and direct running work across agents b
         ownerSessionCounts: expected(8, 0),
       });
 
+      registerAgentRunContext(runIds[0], {
+        sessionKey: visibleChild,
+        agentId: "work",
+        projectSessionActive: true,
+      });
+      const releaseChildWait = registerAgentRunCapacityWait(
+        runIds[0],
+        getAgentRunLifecycleGeneration(),
+      );
+      try {
+        expect(await listSessions({ client, context, request })).toMatchObject({
+          ownerSessionCounts: expected(8, 0),
+        });
+      } finally {
+        releaseChildWait?.();
+        clearAgentRunContext(runIds[0]);
+      }
+
+      // A yielded parent still owns working descendants, even when they are hidden from the list.
+      const childRun = createSubagentRunRecord({
+        runId: "counts-child",
+        childSessionKey: child,
+        requesterSessionKey: idle,
+        controllerSessionKey: "agent:work:delegated-controller",
+        startedAt: Date.now(),
+      });
+      const grandchildRun = createSubagentRunRecord({
+        runId: "counts-grandchild",
+        childSessionKey: grandchild,
+        requesterSessionKey: child,
+        startedAt: Date.now(),
+      });
+      subagentRuns.set(childRun.runId, childRun);
+      subagentRuns.commitOwnership(childRun);
+      const delegated = await listSessions({
+        client,
+        context,
+        request: { ...request, limit: 100 },
+      });
+      expect(delegated.sessions.find((row) => row.key === idle)).toMatchObject({
+        hasActiveRun: false,
+        hasActiveSubagentRun: true,
+      });
+      expect(delegated.ownerSessionCounts).toEqual(expected(8, 1));
+      subagentRuns.set(grandchildRun.runId, grandchildRun);
+      subagentRuns.commitOwnership(grandchildRun);
+      registerAgentRunContext(runIds[0], {
+        sessionKey: idle,
+        agentId: "main",
+        projectSessionActive: true,
+      });
+      expect(await listSessions({ client, context, request })).toMatchObject({
+        ownerSessionCounts: expected(8, 1),
+      });
+      clearAgentRunContext(runIds[0]);
+      childRun.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+      subagentRuns.commitOwnership(childRun);
+      expect(await listSessions({ client, context, request })).toMatchObject({
+        ownerSessionCounts: expected(8, 1),
+      });
+      grandchildRun.execution = {
+        status: "terminal",
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+      };
+      subagentRuns.commitOwnership(grandchildRun);
+      expect(await listSessions({ client, context, request })).toMatchObject({
+        ownerSessionCounts: expected(8, 0),
+      });
+      // A later child turn has a new execution ID but retains the original parent lineage.
+      registerAgentRunContext(runIds[0], {
+        sessionKey: grandchild,
+        agentId: "work",
+        projectSessionActive: true,
+      });
+      expect(await listSessions({ client, context, request })).toMatchObject({
+        ownerSessionCounts: expected(8, 1),
+      });
+      clearAgentRunContext(runIds[0]);
+      expect(await listSessions({ client, context, request })).toMatchObject({
+        ownerSessionCounts: expected(8, 0),
+      });
+
       // A sharing/ownership change during readiness must affect the whole facet.
       const projection = getSessionRowProjection(context)!;
       const ensure = projection.prepareSelection;
@@ -176,15 +268,19 @@ it("counts caller-visible open ownership and direct running work across agents b
             assignedBy: actor(ada),
           },
         );
-        await patchSessionEntryCore({ agentId: "main", sessionKey: running }, () => ({
-          visibility: "draft",
-        }));
+        await patchSessionEntryCore(
+          { agentId: "main", sessionKey: running },
+          () => ({ visibility: "draft" }),
+          { skipMaintenance: true },
+        );
         await ensure();
       });
       expect(await listSessions({ client, context, request })).toMatchObject({
         ownerSessionCounts: expected(7, 0),
       });
     } finally {
+      subagentRuns.delete("counts-child");
+      subagentRuns.delete("counts-grandchild");
       releaseWait?.();
       for (const runId of runIds) {
         clearAgentRunContext(runId);
@@ -195,6 +291,8 @@ it("counts caller-visible open ownership and direct running work across agents b
 
 it("keeps the owner summary complete beyond the people facet cap and resolves merged owners", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const profiles = Array.from(
       { length: 61 },
       (_, i) => ensureProfileForEmail("count-owner-" + i + "@example.test").id,
@@ -210,7 +308,6 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
         },
       );
     }
-    const context = requestContext({ agents: { entries: { main: {} } } });
     const client = identifiedClient(profiles[1]!);
     const request = { includeOwnerSessionCounts: true, includePeople: true, limit: 1 };
     const counts = profiles.map((profileId) => ({ profileId, open: 1, running: 0 }));
@@ -219,6 +316,9 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
       peopleIncomplete: true,
       count: 1,
     });
+    expect(
+      await listSessions({ client, context, request: { ...request, involvingMe: true } }),
+    ).toMatchObject({ ownerSessionCounts: [{ profileId: profiles[1], open: 1, running: 0 }] });
     mergeProfiles(profiles[0]!, profiles[1]!);
     expect(await listSessions({ client, context, request })).toMatchObject({
       ownerSessionCounts: counts
@@ -226,5 +326,76 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
         .map((count, i) => ({ profileId: count.profileId, open: i === 0 ? 2 : 1, running: 0 }))
         .toSorted((a, b) => a.profileId.localeCompare(b.profileId)),
     });
+    expect(
+      await listSessions({ client, context, request: { ...request, involvingMe: true } }),
+    ).toMatchObject({ ownerSessionCounts: [{ profileId: profiles[1], open: 2, running: 0 }] });
+  });
+});
+
+it("updates personal membership after owner, participant, and archive publications while retaining owner facets", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const ada = ensureProfileForEmail("membership-ada@example.test").id;
+    const bob = ensureProfileForEmail("membership-bob@example.test").id;
+    const actor = (id: string) => ({ type: "human", source: "profile", id }) as const;
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
+    const client = identifiedClient(ada);
+    for (const [name, profileId] of [
+      ["owned", ada],
+      ["reassigned", bob],
+      ["participant", bob],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:${name}` },
+        {
+          sessionId: name,
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: actor(profileId),
+        },
+      );
+    }
+    const request = { involvingMe: true, includeOwnerSessionCounts: true, limit: 100 };
+    const initial = await listSessions({ client, context, request });
+    expect(initial.sessions.map((row) => row.key)).toEqual(["agent:main:owned"]);
+    expect(initial.owners?.map((owner) => owner.identity?.id).toSorted()).toEqual(
+      [ada, bob].toSorted(),
+    );
+    expect(initial.ownerSessionCounts).toEqual([{ profileId: ada, open: 1, running: 0 }]);
+    assignSessionOwner(
+      { agentId: "main", sessionKey: "agent:main:reassigned" },
+      {
+        owner: actor(ada),
+        assignedBy: actor(bob),
+      },
+    );
+    recordSessionParticipant(
+      { agentId: "main", sessionKey: "agent:main:participant" },
+      {
+        identity: { type: "profile", id: ada },
+        promptedAt: 10,
+      },
+    );
+    const involved = await listSessions({ client, context, request });
+    expect(involved.sessions.map((row) => row.key).toSorted()).toEqual([
+      "agent:main:owned",
+      "agent:main:participant",
+      "agent:main:reassigned",
+    ]);
+    expect(involved.ownerSessionCounts).toEqual(
+      [
+        { profileId: ada, open: 2, running: 0 },
+        { profileId: bob, open: 1, running: 0 },
+      ].toSorted((a, b) => a.profileId.localeCompare(b.profileId)),
+    );
+    await patchSessionEntryCore({ agentId: "main", sessionKey: "agent:main:participant" }, () => ({
+      archivedAt: 20,
+    }));
+    const archived = await listSessions({ client, context, request });
+    expect(archived.sessions.map((row) => row.key).toSorted()).toEqual([
+      "agent:main:owned",
+      "agent:main:reassigned",
+    ]);
+    expect(archived.ownerSessionCounts).toEqual([{ profileId: ada, open: 2, running: 0 }]);
   });
 });

@@ -237,7 +237,7 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               update: () => ({
                 result: undefined,
                 replacements: [
-                  { sessionKey: childSessionKey, entry: { ...entry, status: "running" } },
+                  { sessionKey: childSessionKey, entry: { ...entry, status: undefined } },
                 ],
               }),
             });
@@ -285,7 +285,7 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
             const metadata = await measure("subagent-list-selected", iteration, () =>
               readSubagentListSessionEntries(cfg, context.list),
             );
-            expect(metadata.get(childSessionKey)?.model).toBe("saved-fixture-model");
+            expect(metadata.get(run.runId)?.model).toBe("saved-fixture-model");
             expect(counters.fullLoads).toBe(0);
             expect(counters.parsedEntries).toBe(0);
           }

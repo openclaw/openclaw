@@ -72,10 +72,6 @@ public struct MacControlPrimaryStatus: Codable, Sendable {
         self.connection = connection
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case mode, transport, sshTarget, url, remotePort, tunnel, connection
-    }
-
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.mode, forKey: .mode)

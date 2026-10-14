@@ -20,6 +20,7 @@ import {
 } from "../gateway/server-methods/requester-cron-authority.test-support.js";
 import { sessionMutationHandlers } from "../gateway/server-methods/sessions-mutations.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
@@ -36,8 +37,9 @@ import {
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
-import { CronService, type CronEvent } from "./service.js";
-import { createNoopLogger } from "./service.test-harness.js";
+import type { CronEvent } from "./service.js";
+import { createCronServiceWithStateForTest, createNoopLogger } from "./service.test-harness.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -141,7 +143,8 @@ async function createFixture(option: CiAutomationOption) {
   expect(other.id).not.toBe(selected.id);
   const clock = createGatewaySchedulerClock(Date.now());
   let finished = createDeferredCore<CronEvent>();
-  const execution = new CronService({
+  const work = new AsyncWorkScope();
+  const { cron: execution, state: executionState } = createCronServiceWithStateForTest({
     scheduler: createTestGatewayScheduler(clock.clock),
     nowMs: clock.clock.now,
     storePath: path.join(stateDir, "cron", "jobs.json"),
@@ -156,14 +159,17 @@ async function createFixture(option: CiAutomationOption) {
       }
     },
     runIsolatedAgentJob: (request) =>
-      runCronIsolatedAgentTurn({
-        ...request,
-        cfg: config,
-        deps: {},
-        agentId: "main",
-        sessionKey:
-          resolveCronSessionTargetSessionKey(request.job.sessionTarget) ?? `cron:${request.job.id}`,
-      }),
+      work.track(() =>
+        runCronIsolatedAgentTurn({
+          ...request,
+          cfg: config,
+          deps: {},
+          agentId: "main",
+          sessionKey:
+            resolveCronSessionTargetSessionKey(request.job.sessionTarget) ??
+            `cron:${request.job.id}`,
+        }),
+      ),
   });
   // Reload through a distinct scheduler owner rather than reuse cron.add's memory.
   await execution.start();
@@ -173,9 +179,18 @@ async function createFixture(option: CiAutomationOption) {
   const tick = async () => {
     finished = createDeferredCore<CronEvent>();
     await clock.advanceBy(300_000);
+    void work
+      .track(() => onTimer(executionState))
+      .catch((error: unknown) => finished.reject(error));
     return await finished.promise;
   };
-  return { creator, client, target, add, selected, other, execution, seed, tick };
+  const stop = async () => {
+    execution.stop();
+    await execution.waitForIdle();
+    // Cancellation publishes its result before the core finishes touching session state.
+    await work.drain();
+  };
+  return { creator, client, target, add, selected, other, execution, seed, tick, stop };
 }
 
 it("transports autoFix for only the selected PR across session replacement and disables future effects", async () => {
@@ -222,7 +237,7 @@ it("transports autoFix for only the selected PR across session replacement and d
       fixture.selected.id,
     );
   } finally {
-    fixture.execution.stop();
+    await fixture.stop();
   }
 });
 
@@ -231,6 +246,7 @@ it.each([false, true])(
   async (replaced) => {
     const fixture = await createFixture("autoArchive");
     const respond = vi.fn();
+    const releaseCore = createDeferredCore();
     runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
       const target = readRecipeTarget(params.prompt);
       const patch = {
@@ -251,6 +267,9 @@ it.each([false, true])(
         client: fixture.client,
         isWebchatConnect: () => false,
       });
+      if (!replaced) {
+        await releaseCore.promise;
+      }
       return { payloads: [{ text: "Synthetic archive request settled" }], meta: { agentMeta: {} } };
     });
     try {
@@ -281,10 +300,21 @@ it.each([false, true])(
       } else {
         expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
         expect(stored).toMatchObject({ sessionId: SESSION_ID, archivedAt: expect.any(Number) });
-        expect((await fixture.creator.read()).every((job) => !job.enabled)).toBe(true);
+        const stopped = vi.fn();
+        const teardown = fixture.stop().then(stopped);
+        try {
+          // Keep the core held across a worker round-trip before checking teardown.
+          expect((await fixture.creator.read()).every((job) => !job.enabled)).toBe(true);
+          expect(stopped).not.toHaveBeenCalled();
+        } finally {
+          releaseCore.resolve();
+          await teardown;
+        }
+        expect(stopped).toHaveBeenCalledOnce();
       }
     } finally {
-      fixture.execution.stop();
+      releaseCore.resolve();
+      await fixture.stop();
     }
   },
 );

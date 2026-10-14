@@ -329,15 +329,11 @@ jobs:
             // so it gets file-bounded jobs like Telegram instead of one batch job.
             const fileSplitExtensionIds = ["telegram", "codex"].filter((id) => batchedExtensionIds.has(id));
             const fileSplitPlanGroups = hasJobSplitter
-              ? await Promise.all(fileSplitExtensionIds.map(async (extensionId) => {
-                  const planGroups = planner.createExtensionTestShards({ extensionIds: [extensionId], shardCount: 1 })
-                    .flatMap((shard) => shard.planGroups);
-                  // Telegram rows keep their historical Node-only runtime.
-                  const runtime = extensionId === "telegram"
-                    ? {}
-                    : await resolveExtensionRuntime({ planGroups, fullReleaseValidation, vitestArgs: extensionVitestArgs });
-                  return planGroups.map((group) => ({ ...group, family: extensionId, runtime }));
-                })).then((groups) => groups.flat())
+              ? fileSplitExtensionIds.flatMap((extensionId) =>
+                  planner.createExtensionTestShards({ extensionIds: [extensionId], shardCount: 1 })
+                    .flatMap((shard) => shard.planGroups)
+                    .map((group) => ({ ...group, family: extensionId })),
+                )
               : [];
             const sourcePlanGroups = new Map();
             if (hasJobSplitter) {
@@ -437,7 +433,9 @@ jobs:
                   runner: "blacksmith-8vcpu-ubuntu-2404",
                   shard_index: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
                   task: "extension-file-shard",
-                  ...group.runtime,
+                  // Plain pnpm test does not consume the batch dual-runtime policy.
+                  test_runtime_policy: "node",
+                  requires_bun: false,
                 });
               }
             }

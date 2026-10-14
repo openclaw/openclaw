@@ -1,4 +1,5 @@
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type {
@@ -109,10 +110,7 @@ export function createDiscordMessageRunQueue(
 
   return {
     enqueue(job) {
-      let resolvePending!: () => void;
-      const pending = new Promise<void>((resolve) => {
-        resolvePending = resolve;
-      });
+      const { promise: pending, resolve: resolvePending } = createDeferred();
       pendingTasks.add(pending);
       const settlePending = () => {
         pendingTasks.delete(pending);

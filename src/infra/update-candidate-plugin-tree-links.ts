@@ -1,14 +1,15 @@
-import type { BigIntStats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
+import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
 import type {
   UpdateCandidatePluginEntry,
   UpdateCandidatePluginTreePlan,
@@ -17,6 +18,13 @@ import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
+
+export function ignoreUnresolvedPluginLink(error: unknown): undefined {
+  if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+    return undefined;
+  }
+  throw error;
+}
 
 export const isUpdateCandidateHostLauncher = (file: string) =>
   path.basename(path.dirname(file)) === ".bin" &&
@@ -37,17 +45,26 @@ export function assertUpdateCandidatePluginEntryStat(
   if (!sameKind || !sameIdentity || !sameMode) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
-  const sameFile =
-    entry.kind !== "file" ||
-    sameFileMutationFingerprint(current, {
+  if (entry.kind === "file") {
+    const expected = {
       dev: BigInt(entry.dev),
       ino: BigInt(entry.ino),
       size: BigInt(entry.size),
       birthtimeNs: BigInt(entry.birthtimeNs),
       mtimeNs: BigInt(entry.mtimeNs),
       ctimeNs: BigInt(entry.ctimeNs),
-    });
-  if (!sameFile || (entry.kind === "symlink" && current.size !== BigInt(entry.size))) {
+      mode: BigInt(entry.mode | constants.S_IFREG),
+      uid: BigInt(entry.uid),
+      gid: BigInt(entry.gid),
+    };
+    if (
+      !sameFileMutationMetadata(expected, current) ||
+      (current.ctimeNs !== expected.ctimeNs &&
+        hashFileMutationSnapshotSync(entry.path, expected) !== entry.sha256)
+    ) {
+      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+    }
+  } else if (entry.kind === "symlink" && current.size !== BigInt(entry.size)) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
 }
@@ -56,6 +73,7 @@ export function assertUpdateCandidatePluginEntryStat(
 export function resolveUpdateCandidatePluginTreeTargets(
   plan: MaterializablePlan,
   params: { targetStateDir: string; candidateRoot: string },
+  onProgress?: () => void,
 ) {
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
@@ -87,32 +105,24 @@ export function resolveUpdateCandidatePluginTreeTargets(
     return path.join(owner[1], path.relative(owner[0], source));
   };
   const assertBindings = async () => {
-    const checked = await runTasksWithConcurrency({
-      limit: 4,
-      errorMode: "stop",
-      tasks: [
-        ...plan.moduleBindings.map(([source, real]) => async () => {
-          if ((await fs.realpath(source)) !== real) {
-            throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
-          }
-        }),
-        ...plan.edges.map((edge) => async () => {
-          const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
-          const real = await fs.realpath(edge.source).catch((error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-              return target;
-            }
-            throw error;
-          });
-          if (target !== edge.target || real !== edge.real) {
-            throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
-          }
-        }),
-      ],
-    });
-    if (checked.hasError) {
-      throw checked.firstError;
-    }
+    await runUpdateCandidatePluginTasks([
+      ...plan.moduleBindings.map(([source, real]) => async () => {
+        if ((await fs.realpath(source)) !== real) {
+          throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
+        }
+        onProgress?.();
+      }),
+      ...plan.edges.map((edge) => async () => {
+        const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
+        const real = await fs
+          .realpath(edge.source)
+          .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
+        if (target !== edge.target || real !== edge.real) {
+          throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
+        }
+        onProgress?.();
+      }),
+    ]);
   };
   return {
     privateRoot,
@@ -143,53 +153,41 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
   assertBeforeMutation?: () => void;
 }): Promise<string[]> {
   const { privateRoot, candidateRoot } = params;
-  // Projection owns these private links. Installer peer-link policy expects a
-  // literal node_modules directory and cannot bind a relocated module owner.
-  for (const link of params.hostLinks) {
-    if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(link)))) {
-      throw new Error("Plugin host link escapes update state");
+  // Projection owns these private links; host edges and private aliases retain
+  // their distinct admission order and existing-target checks.
+  const publish = async (file: string, target: string, kind: "host link" | "module alias") => {
+    const host = kind === "host link";
+    const parent = path.dirname(file);
+    if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(parent))) {
+      throw new Error(`Plugin ${kind} escapes update state`);
     }
-    params.assertBeforeMutation?.();
-    await fs.mkdir(path.dirname(link), { recursive: true });
-    const existing = await fs.lstat(link).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    if (host) {
+      params.assertBeforeMutation?.();
+      await fs.mkdir(parent, { recursive: true });
+    }
+    const existing = await fs.lstat(file).catch(ignoreMissingUpdateCandidateFile);
     if (existing) {
-      if (
-        !existing.isSymbolicLink() ||
-        path.resolve(path.dirname(link), await fs.readlink(link)) !== candidateRoot
-      ) {
-        throw new Error("Plugin host link conflicts with its update owner");
+      const matches = host
+        ? existing.isSymbolicLink() && path.resolve(parent, await fs.readlink(file)) === target
+        : (await fs.realpath(file)) === (await fs.realpath(target));
+      if (!matches) {
+        throw new Error(`Plugin ${kind} conflicts with its ${host ? "update" : "private"} owner`);
       }
     } else {
+      if (!host) {
+        params.assertBeforeMutation?.();
+        await fs.mkdir(parent, { recursive: true });
+      }
       params.assertBeforeMutation?.();
-      await fs.symlink(candidateRoot, link, process.platform === "win32" ? "junction" : "dir");
+      await fs.symlink(target, file, process.platform === "win32" ? "junction" : "dir");
     }
+  };
+  for (const link of params.hostLinks) {
+    await publish(link, candidateRoot, "host link");
   }
   const privateAliases: string[] = [];
   for (const [alias, target] of params.aliases) {
-    if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(alias)))) {
-      throw new Error("Plugin module alias escapes update state");
-    }
-    const existing = await fs.lstat(alias).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
-    if (existing) {
-      if ((await fs.realpath(alias)) !== (await fs.realpath(target))) {
-        throw new Error("Plugin module alias conflicts with its private owner");
-      }
-    } else {
-      params.assertBeforeMutation?.();
-      await fs.mkdir(path.dirname(alias), { recursive: true });
-      params.assertBeforeMutation?.();
-      await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
-    }
+    await publish(alias, target, "module alias");
     privateAliases.push(alias);
   }
   return privateAliases;
@@ -216,6 +214,7 @@ export async function verifyUpdateCandidatePluginTree(
     candidateRoot: string;
     hostLinks: Set<string>;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+    onProgress?: () => void;
   },
 ): Promise<void> {
   const readEntry = async (file: string) => {
@@ -238,6 +237,7 @@ export async function verifyUpdateCandidatePluginTree(
     } else if (stat.isSymbolicLink()) {
       assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
     }
+    params.onProgress?.();
     // Inspect the entry before traversal, including standalone module aliases;
     // following a copied root link can otherwise accept an entirely live tree.
     if (link !== undefined) {
@@ -246,17 +246,12 @@ export async function verifyUpdateCandidatePluginTree(
     }
     if (stat.isDirectory()) {
       const listing = await fs.readdir(file, { withFileTypes: true });
-      const leaves = await runTasksWithConcurrency({
-        limit: 4,
-        errorMode: "stop",
-        tasks: listing
+      const leaves = await runUpdateCandidatePluginTasks(
+        listing
           .filter((entry) => !entry.isDirectory())
           .map((entry) => () => readEntry(path.join(file, entry.name))),
-      });
-      if (leaves.hasError) {
-        throw leaves.firstError;
-      }
-      const observations = new Map(leaves.results.map((entry) => [entry.file, entry]));
+      );
+      const observations = new Map(leaves.map((entry) => [entry.file, entry]));
       for (const entry of listing) {
         const child = path.join(file, entry.name);
         await verify(entry.isDirectory() ? await readEntry(child) : observations.get(child)!);

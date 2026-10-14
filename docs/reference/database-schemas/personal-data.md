@@ -30,6 +30,8 @@ Personal model accounts use the existing `secret_store_entries` identity scope, 
 
 The credential and its selected link commit in one synchronous transaction after the Gateway revalidates the initiating authorization. Runtime loads only an explicitly selected credential and routes refresh and usage updates to that same owner. Shared and agent-local auth saves exclude the reserved personal-profile namespace, including runtime snapshots and CLI mirrors.
 
+The shared-state reader loads selected personal credentials with one batched query. One-hop profile merges keep existing credential IDs usable, while missing merge targets and unflattened merge chains never supply credentials. Gateway skill-authoring role and requester checks consume the profile owner's committed catalog, including its write receipts, without reading SQLite on the main thread.
+
 Unlink records an explicit disconnected selection and retains credentials used by existing session pins. A verified identity merge transfers only the live source's records, preserving the target's selections and disconnections while retaining old credential IDs for pinned sessions. Credentials stranded on an alias by an older build are not adopted at runtime. A compatible downgrade leaves private records outside the older shared-account pool; re-upgrade can use retained records, while accounts stranded by older identity merges need reconnecting.
 
 See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for connection, cancellation, session billing, and unlink behavior.

@@ -80,10 +80,6 @@ export class ChannelWizardHost {
     this.deps.requestUpdate();
   }
 
-  setTextValue(value: string): void {
-    this.textValue = value;
-  }
-
   toggleSecretVisibility(): void {
     this.secretVisible = !this.secretVisible;
     this.deps.requestUpdate();

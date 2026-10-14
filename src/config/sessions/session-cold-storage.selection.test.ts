@@ -5,6 +5,7 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -19,6 +20,7 @@ import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
+  currentId,
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
@@ -83,6 +85,7 @@ function expectHistoryUnchanged() {
 
 it.each([
   { name: "a newly admitted normalized logical key", change: "protected" },
+  { name: "a newly registered live run", change: "registry" },
   { name: "an unrelated newly admitted key", change: "unrelated" },
   { name: "revoked configuration", change: "configuration" },
 ])("rechecks $name after worker selection without parent SQLite", async ({ change }) => {
@@ -117,6 +120,12 @@ it.each([
     );
     if (change === "configuration") {
       config.session.maintenance.coldStorage.enabled = false;
+    } else if (change === "registry") {
+      registerAgentRunContext("cold-live-run", {
+        agentId: "main",
+        sessionKey: fixture.scope.sessionKey,
+        projectSessionActive: true,
+      });
     } else {
       admission = await beginSessionWorkAdmission({
         scope: ownerStorePath,
@@ -147,6 +156,7 @@ it.each([
     delayed.release.resolve();
     await outcome;
     observer.restore();
+    clearAgentRunContext("cold-live-run");
     admission?.release();
     await admission?.released;
   }
@@ -159,6 +169,63 @@ it.each([
     ).toBe(archive.archive_bytes);
   }
 });
+
+it.each([
+  "registry",
+  "recovery-cycle",
+  "recovery-run",
+  "recovery-tombstone",
+  "terminal-run",
+] as const)(
+  "keeps pending %s custody hot before recovery dispatch, then permits retired claims",
+  async (custody) => {
+    const protectedHistory = custody !== "recovery-tombstone" && custody !== "terminal-run";
+    if (custody === "registry") {
+      registerAgentRunContext("cold-live-run", {
+        agentId: "main",
+        sessionKey: fixture.scope.sessionKey,
+        projectSessionActive: true,
+      });
+    } else {
+      replaceSessionEntrySync(fixture.scope, {
+        sessionId: currentId,
+        updatedAt: 1,
+        ...(custody === "recovery-cycle" || custody === "recovery-tombstone"
+          ? {
+              mainRestartRecovery: {
+                cycleId: "waiting",
+                revision: 1,
+                chargedAttempts: 0,
+                ...(custody === "recovery-tombstone" ? { tombstone: { reason: "exhausted" } } : {}),
+              },
+            }
+          : {
+              restartRecoveryRuns: [
+                { runId: "awaiting-recovery", lifecycleGeneration: "previous-gateway" },
+              ],
+              ...(custody === "terminal-run"
+                ? { restartRecoveryTerminalRunIds: ["awaiting-recovery"] }
+                : {}),
+            }),
+      });
+    }
+    const before = fixture.snapshot();
+    try {
+      await expect(
+        runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) }),
+      ).resolves.toEqual({
+        archivedTranscripts: protectedHistory ? 0 : 1,
+        externalizedTranscripts: 0,
+      });
+      if (protectedHistory) {
+        expect(fixture.snapshot()).toEqual(before);
+        expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+      }
+    } finally {
+      clearAgentRunContext("cold-live-run");
+    }
+  },
+);
 
 it("propagates selection failure without a mutation or synchronous fallback", async () => {
   const failure = new Error("Cold selection worker refused");

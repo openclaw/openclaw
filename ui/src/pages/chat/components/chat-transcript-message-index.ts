@@ -15,10 +15,10 @@ import {
   persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { isInterSessionMessage, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import type { StreamGroupPart } from "./chat-message-stream.ts";
+import type { StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { projectChatPositions, type ChatPositionIndex } from "./chat-position-projection.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -110,7 +110,9 @@ function coalesceInterSessionUpdates(items: ChatRenderItem[]): ChatRenderItem[] 
   for (const item of items) {
     if (
       item.kind !== "group" ||
-      !isInterSessionGroup(item) ||
+      !isSessionActivityGroup(item) ||
+      // Automation runs stay separate even when they target the same conversation.
+      !isInterSessionMessage(item.messages[0]?.message) ||
       !item.senderSession?.sessionKey ||
       // Reply targets retain the original group's run and prompt attribution.
       item.messages.some(({ message }) => normalizeMessage(message).replyTarget)
@@ -142,9 +144,10 @@ function ownsStream(item: ChatRenderItem, stream: LiveStream): item is StreamOwn
 }
 
 function sameStreamStructure(previous: LiveStream, next: LiveStream): boolean {
-  const fields = Reflect.ownKeys(previous).filter((field) => field !== "text");
+  const structural = (field: PropertyKey) => field !== "text" && field !== "thinking";
+  const fields = Reflect.ownKeys(previous).filter(structural);
   return (
-    fields.length === Reflect.ownKeys(next).filter((field) => field !== "text").length &&
+    fields.length === Reflect.ownKeys(next).filter(structural).length &&
     fields.every(
       (field) =>
         Object.hasOwn(next, field) &&
@@ -178,6 +181,9 @@ export function projectTranscriptChain(
     sessionKey: string;
     runWorking: boolean;
     searchActive: boolean;
+    bubbleMode?: boolean;
+    messages?: readonly unknown[];
+    activeRunId?: string | null;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
@@ -187,6 +193,9 @@ export function projectTranscriptChain(
     options.sessionKey,
     options.runWorking,
     options.searchActive,
+    options.bubbleMode,
+    options.messages,
+    options.activeRunId,
     session?.key,
     session?.lastRunId,
     session?.status,
@@ -209,13 +218,7 @@ export function projectTranscriptChain(
       const transcriptItems = cached.value.transcriptItems.slice();
       collapsedItems[live.owner.collapsedIndex] = owner;
       transcriptItems[live.owner.transcriptIndex] = owner;
-      const value = {
-        collapsedItems,
-        transcriptItems,
-        workGroups: cached.value.workGroups,
-        continuations: cached.value.continuations,
-        searchActive: cached.value.searchActive,
-      };
+      const value = { ...cached.value, collapsedItems, transcriptItems };
       const updatedOwner = { ...live.owner, item: owner };
       const updatedLive = { ...live, item: next, owner: updatedOwner };
       liveChains.set(value, {
@@ -429,10 +432,10 @@ export function expandReplyTargetWork(
     for (const part of parts) {
       if (
         part.kind === "group" &&
-        isInterSessionGroup(part) &&
+        isSessionActivityGroup(part) &&
         part.messages.some((source) => persistedMessageEntryId(source.message) === messageId)
       ) {
-        setExpansionState(expandedToolCards, "inter-session:" + part.key, true);
+        setExpansionState(expandedToolCards, "session-activity:" + part.key, true);
       }
       if (
         part.kind === "work-group" &&

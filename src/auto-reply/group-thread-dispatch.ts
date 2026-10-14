@@ -13,6 +13,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { observeAgentRunStart } from "./agent-run-start.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { resolveGroupThreadConfig } from "./group-thread-config.js";
 import {
@@ -49,11 +50,7 @@ import type { FinalizedMsgContext } from "./templating.js";
 
 function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
   const queued = { tool: 0, block: 0, final: 0 };
-  const counts = {
-    tool: createReplyDispatchSettledCounts(),
-    block: createReplyDispatchSettledCounts(),
-    final: createReplyDispatchSettledCounts(),
-  };
+  const counts = mapReplyDispatchCounts(queued, createReplyDispatchSettledCounts);
   const pending: Promise<void>[] = [];
   const send = (kind: ReplyDispatchKind, operation: ReplyDispatchOperation) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
@@ -69,25 +66,17 @@ function participantDispatcher(parent: ReplyDispatcher): ReplyDispatcher {
     if (accepted) {
       queued[kind]++;
     }
-    if (outcome.isTracked()) {
-      pending.push(
-        outcome.promise.then((result) => {
-          counts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[result]]++;
-          const delivered = outcome.getDeliveredPayload() ?? payload;
-          if (
-            kind !== "tool" &&
-            result === "delivered" &&
-            isReplyPayloadTerminalContent(delivered)
-          ) {
-            recordGroupThreadReply(delivered);
-          }
-        }),
-      );
-    } else if (accepted) {
-      counts[kind].delivered++;
-      if (kind !== "tool" && isReplyPayloadTerminalContent(payload)) {
-        recordGroupThreadReply(payload);
+    const settle = (result: Awaited<typeof outcome.promise>, tracked = false) => {
+      counts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[result]]++;
+      const delivered = tracked ? (outcome.getDeliveredPayload() ?? payload) : payload;
+      if (kind !== "tool" && result === "delivered" && isReplyPayloadTerminalContent(delivered)) {
+        recordGroupThreadReply(delivered);
       }
+    };
+    if (outcome.isTracked()) {
+      pending.push(outcome.promise.then((result) => settle(result, true)));
+    } else if (accepted) {
+      settle("delivered");
     }
     return accepted;
   };
@@ -193,11 +182,10 @@ function prepareParticipant(
         suppressNextUserMessagePersistence: undefined,
         messageInjectionDisposition: undefined,
         runId: undefined,
-        onAgentRunStart: (...args) => {
-          runState.runId = args[0];
-          runState.executionIdentityToken = args[1];
-          return original?.onAgentRunStart?.(...args);
-        },
+        ...observeAgentRunStart(original, (start) => {
+          runState.runId = start.runId;
+          runState.executionIdentityToken = start.executionIdentityToken;
+        }),
         promptCacheKey: undefined,
         onSessionPrepared: undefined,
         replyOperation: undefined,

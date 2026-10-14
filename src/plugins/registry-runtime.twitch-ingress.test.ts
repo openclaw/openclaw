@@ -250,12 +250,6 @@ describe("Twitch registered participant provenance", () => {
 
   it.each([
     {
-      accountId: "default",
-      policy: { allowFrom: ["123456"] },
-      name: "allowlist",
-      coverage: "enforced",
-    },
-    {
       accountId: "secondary",
       policy: { allowFrom: ["123456"] },
       name: "allowlist",

@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { codeModeFailureCode } from "./code-mode-errors.js";
 import * as worker from "./code-mode-executor.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginToolWithExecute,
@@ -41,7 +40,11 @@ describe("Code Mode guest execution", () => {
     const details = await run(
       codeModeTools,
       `
-        const result = { invoked: false, value: null };
+        const result = {
+          invoked: false,
+          value: null,
+          hostGlobals: [typeof process, typeof module, typeof require, typeof globalThis.__openclawHostRequest],
+        };
         result.value = {
           toJSON() {
             result.invoked = true;
@@ -55,7 +58,7 @@ describe("Code Mode guest execution", () => {
 
     expect(details).toMatchObject({
       status: "completed",
-      value: { invoked: false },
+      value: { invoked: false, hostGlobals: ["undefined", "undefined", "undefined", "undefined"] },
       telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
     });
     expect(noop.execute).not.toHaveBeenCalled();
@@ -77,7 +80,7 @@ describe("Code Mode guest execution", () => {
       pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
       pluginTool("tool___openclawResult", "Keep the exact safe lifecycle-shaped name"),
     ];
-    const { tools: codeModeTools, compacted } = createGuestHarness([...targets]);
+    const { tools: codeModeTools, ctx, catalogRef } = createGuestHarness([...targets]);
 
     const details = await run(
       codeModeTools,
@@ -111,9 +114,10 @@ describe("Code Mode guest execution", () => {
         expect.stringMatching(/^tool___openclawResult_[a-f0-9]{8}$/u),
       ]),
     );
+    const catalogPrompt = buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []);
     for (const name of value.names) {
       expect(name.startsWith("__openclaw")).toBe(false);
-      expect(compacted.tools[0]?.description).toContain(`- ${name} `);
+      expect(catalogPrompt).toContain(`- ${name} `);
     }
     expect(details).toMatchObject({ value: { encoding: "still works" } });
     expect(value.results).toEqual(
@@ -199,21 +203,6 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it("never exposes Node module loaders or the raw host callback to the guest", async () => {
-    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
-
-    const details = await run(
-      codeModeTools,
-      "return [typeof process, typeof module, typeof require, typeof globalThis.__openclawHostRequest];",
-    );
-
-    expect(details).toMatchObject({
-      status: "completed",
-      value: ["undefined", "undefined", "undefined", "undefined"],
-    });
-    expect(testing.activeRuns.size).toBe(0);
-  });
-
   it.each(["node", "quickjs"] as const)(
     "%s rejects malformed commands before dispatch and accepts a corrected follow-up",
     async (executor) => {
@@ -261,11 +250,6 @@ describe("Code Mode guest execution", () => {
   );
 
   it.each([
-    {
-      executor: "node",
-      source: "return missingFn();",
-      error: "ReferenceError: missingFn is not defined",
-    },
     {
       executor: "quickjs",
       source: "return missingFn();",
@@ -392,14 +376,104 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it("normalizes only transport interrupt errors as timeouts", () => {
-    expect(codeModeFailureCode(new Error("interrupted"))).toBe("timeout");
-    const timeout = { status: "failed", code: "timeout", error: "interrupted" };
-    expect(testing.normalizeCodeModeTimeoutResult(timeout)).toEqual({
-      ...timeout,
-      error: "code mode timeout exceeded",
+  it("preserves returned tool failures while catching thrown tool errors", async () => {
+    const h = createCodeModeHarness();
+    const reason = "Start the Gateway with visitor-access enabled before managing visitors.";
+    const errorTool = (name: string, text: string, details: unknown) =>
+      pluginToolWithExecute(name, "Fail", async () => ({
+        content: [{ type: "text" as const, text }],
+        details,
+        isError: true,
+      }));
+    const tools = [
+      errorTool("flag_only", reason, { error: true }),
+      errorTool("no_details", "Gateway unavailable.", undefined),
+      errorTool("blank_message", "Visitor store is locked.", { error: true, message: " " }),
+      errorTool("structured", "Rendered failure.", { status: "failed", error: "structured" }),
+      pluginToolWithExecute("throw_error", "Throw", async () => {
+        throw new Error("Tool execution threw.");
+      }),
+    ];
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+    const exec = expectDefined(h.tools[0], "exec");
+    expect(exec.description).toContain(
+      "Thrown tool errors are catchable. Returned values may instead report failure. Follow the tool's result contract, and inspect possible effects before retrying.",
+    );
+    const result = resultDetails(
+      await exec.execute("tool-error-text", {
+        code: `
+          let returnedCaught = false;
+          let values;
+          try {
+            values = [await flag_only(), await no_details(), await blank_message(), await structured()];
+          } catch {
+            returnedCaught = true;
+          }
+          let thrownMessage;
+          try {
+            await throw_error();
+          } catch (error) {
+            thrownMessage = error.message;
+          }
+          return { values, returnedCaught, thrownMessage };
+        `,
+      }),
+    );
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.value).toEqual({
+      values: [
+        { error: true, message: reason },
+        { message: "Gateway unavailable." },
+        { error: true, message: "Visitor store is locked." },
+        { status: "failed", error: "structured" },
+      ],
+      returnedCaught: false,
+      thrownMessage: "Tool execution threw.",
     });
-    const guestError = { ...timeout, code: "internal_error" };
-    expect(testing.normalizeCodeModeTimeoutResult(guestError)).toEqual(guestError);
+    for (const tool of tools) {
+      expect(tool.execute).toHaveBeenCalledOnce();
+    }
+  });
+
+  async function executeSource(args: Record<string, unknown>) {
+    const { tools } = createGuestHarness();
+    return resultDetails(await tools[0]!.execute("source", args));
+  }
+
+  describe("Code Mode source validation", () => {
+    it.each([
+      { code: " ", command: "return 7;" },
+      { code: "return 7;", command: " \n " },
+    ])("executes the populated alias: %j", async (args) => {
+      expect(await executeSource(args)).toMatchObject({ status: "completed", value: 7 });
+    });
+
+    it.each([
+      { args: { code: "return 1;", command: "return 2;" }, error: "code and command must match" },
+      { args: { code: "", command: "   " }, error: "code or command must be a non-empty string" },
+      { args: { code: "return 1;", language: "typescript" }, error: "JavaScript only" },
+      { args: { code: "return 1;", typecheck: false }, error: "JavaScript only" },
+    ])("rejects invalid control arguments: $args", async ({ args, error }) => {
+      await expect(executeSource(args)).rejects.toThrow(error);
+      expect(testing.activeRuns.size).toBe(0);
+    });
+
+    it.each([
+      String.raw`return r\u0065quire('node:fs');`,
+      "return require?.('node:fs');",
+      "return (0, require)('node:fs');",
+      "return module.require('node:fs');",
+      "return `${({ value: import('node:fs') }).value}`;",
+    ])("rejects module access before dispatch: %s", async (code) => {
+      expect(await executeSource({ code })).toMatchObject({
+        status: "failed",
+        code: "invalid_input",
+        failurePhase: "input",
+        bridgeDispatchStarted: false,
+        telemetry: { callCount: 0 },
+        error: expect.stringContaining("module access is disabled"),
+      });
+      expect(testing.activeRuns.size).toBe(0);
+    });
   });
 });

@@ -91,7 +91,10 @@ export async function refreshUpdateRunReportArtifact(
     const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
       ? ""
       : nativeFailureDiagnostics(run.steps);
-    const report = renderUpdateRunReport(run, { mode: run.target.kind });
+    const report = renderUpdateRunReport(run, {
+      mode: run.target.kind,
+      markdownLimit: Infinity,
+    });
     await writeTextAtomic(
       outputPath,
       redactSupportString(
@@ -132,17 +135,15 @@ export async function writeTriageUpdateFailure(
     options.outputPath ??
     path.join(stateDir, "logs", "support", updateDiagnosticArtifactName("failure"));
   const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
+  let detail: string | undefined;
   if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
-    const detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
+    detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
       (inventoryPath) => `Complete Doctor lint inventory: ${inventoryPath}`,
       (error: unknown) =>
         `Complete Doctor lint inventory unavailable: ${formatErrorMessage(error)}`,
     );
-    // The released reader strips new fields and successful steps. Its error text retains
-    // this diagnostic link even after a later plugin failure or another CLI handoff.
-    inventory.error = `${inventory.error ?? inventory.result.reason ?? "Update failed"}. ${detail}`;
   }
-  const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact");
+  const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact", detail);
   const body = `${JSON.stringify(sanitized)}\n`;
   // The managed helper's private handoff keeps the latest complete outcome after cleanup.
   await writeTextAtomic(outputPath, body, { mode: 0o600, dirMode: 0o700 });

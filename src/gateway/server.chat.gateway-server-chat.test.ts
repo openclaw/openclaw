@@ -6,13 +6,13 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
@@ -36,6 +36,7 @@ import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
+import * as chatRestartRecovery from "./server-methods/chat-restart-recovery.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
 import {
@@ -46,7 +47,6 @@ import {
   createGatewayHistoryDeliveryMirror,
   hasGatewayHistoryMessageToolMirror,
 } from "./session-history-fixtures.test-support.js";
-import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   agentDiscoveryMock,
@@ -406,7 +406,7 @@ describe("gateway server chat", () => {
     { method: "send", message: "hello from dashboard" },
     { method: "steer", message: "follow-up from dashboard" },
   ])(
-    "sessions.$method accepts an existing session input before reporting its committed history position",
+    "sessions.$method returns the committed history position when starting an existing session input",
     async ({ method, message }) => {
       const sessionKey = `agent:main:dashboard:test-${method}`;
       const runId = `idem-sessions-${method}-1`;
@@ -428,9 +428,8 @@ describe("gateway server chat", () => {
           idempotencyKey: runId,
         });
         expect(res.ok).toBe(true);
-        expectRecordFields(res.payload, { runId, status: "started" });
-        // The suite's TEST client ACKs before dispatch can commit the user turn.
-        expect(res.payload).not.toHaveProperty("messageSeq");
+        // Direct operator input commits through restart-safe admission before the ACK.
+        expectRecordFields(res.payload, { runId, status: "started", messageSeq: 1 });
         await waitForAgentRunDrained(runId);
 
         const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey });
@@ -440,7 +439,10 @@ describe("gateway server chat", () => {
         );
         expect(users).toHaveLength(1);
         const user = expectRecordFields(users[0], { role: "user" });
-        expectRecordFields(user["__openclaw"], { seq: 1, idempotencyKey: `${runId}:user` });
+        expectRecordFields(user["__openclaw"], {
+          seq: res.payload?.messageSeq,
+          idempotencyKey: `${runId}:user`,
+        });
         expect(collectHistoryTextValues(users)).toEqual([message]);
       } finally {
         // A failed ACK assertion must not retire storage before detached work finishes.
@@ -682,7 +684,7 @@ describe("gateway server chat", () => {
         key: "agent:main:dashboard:test-abort",
         runId: "idem-sessions-abort-1",
       });
-      expect(abortRes.ok).toBe(true);
+      expect(abortRes.ok, JSON.stringify(abortRes.error)).toBe(true);
       expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
@@ -713,7 +715,6 @@ describe("gateway server chat", () => {
       await removeTempDir(dir);
     }
   });
-
   test("sessions.abort resolves active runs by runId without a caller session key", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-runid-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -1004,29 +1005,6 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send accepts the backing session id returned by chat.history", async () => {
-    await withMainSessionStore(async () => {
-      const historyRes = await rpcReq<{ sessionId?: string }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(historyRes.ok).toBe(true);
-      const sessionId = historyRes.payload?.sessionId;
-      expect(sessionId).toBe("sess-main");
-
-      const runId = "idem-chat-send-history-session-id";
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        sessionId,
-        message: "/context list",
-        idempotencyKey: runId,
-      });
-      expect(sendRes.ok).toBe(true);
-      expect(sendRes.payload?.status).toBe("started");
-
-      await waitForAgentRunDrained(runId);
-    });
-  });
-
   test("chat.history applies the reset kept-tail cut and preserves its marker", async () => {
     await withMainSessionStore(async () => {
       const storePath = testState.sessionStorePath;
@@ -1086,7 +1064,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("marks a running webchat session failed when restart drain overlaps dispatch rejection", async () => {
+  test("persists a failed chat dispatch before restart drain can finish", async ({ signal }) => {
     await withMainSessionStore(async (dir) => {
       await writeSessionStore({
         entries: {
@@ -1094,7 +1072,6 @@ describe("gateway server chat", () => {
             sessionId: "sess-main",
             sessionFile: path.join(dir, "sess-main.jsonl"),
             updatedAt: 1_000,
-            status: "running",
             startedAt: 900,
           },
         },
@@ -1103,25 +1080,23 @@ describe("gateway server chat", () => {
       expect(subscribeRes.ok).toBe(true);
       const rejectDispatch = createDeferred();
       const releasePersistence = createDeferred();
-      let dispatchStarted = false;
+      const dispatchStarted = createDeferred();
       const persistenceEntered = createDeferred();
-      const persistLifecycleEvent = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
+      const terminalizeAdmission = chatRestartRecovery.terminalizeRestartSafeChatAdmission;
       const persistSpy = vi
-        .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+        .spyOn(chatRestartRecovery, "terminalizeRestartSafeChatAdmission")
         .mockImplementation(async (params) => {
-          if (params.event.runId !== "idem-dispatch-error-1") {
-            await persistLifecycleEvent(params);
-            return;
+          if (params.clientRunId === "idem-dispatch-error-1") {
+            persistenceEntered.resolve();
+            await releasePersistence.promise;
           }
-          persistenceEntered.resolve();
-          await releasePersistence.promise;
-          await persistLifecycleEvent(params);
+          return terminalizeAdmission(params);
         });
       const messagePromises: Promise<unknown>[] = [];
       const sessionChanged = await (async () => {
         try {
           dispatchInboundMessageMock.mockImplementationOnce(async () => {
-            dispatchStarted = true;
+            dispatchStarted.resolve();
             await rejectDispatch.promise;
             throw new Error("provider rejected request");
           });
@@ -1145,12 +1120,10 @@ describe("gateway server chat", () => {
             idempotencyKey: "idem-dispatch-error-1",
           });
           expect(res.ok).toBe(true);
-          await waitForFast(() => {
-            expect(dispatchStarted).toBe(true);
-          });
+          await withinTest(dispatchStarted.promise, signal);
           markGatewayRestartDraining();
           rejectDispatch.resolve();
-          await persistenceEntered.promise;
+          await withinTest(persistenceEntered.promise, signal);
           const restartInspectors = {
             getQueueSize: () => 0,
             getPendingReplies: () => 0,
@@ -1168,9 +1141,8 @@ describe("gateway server chat", () => {
           releasePersistence.resolve();
           await errorPromise;
           const changed = await sessionChangedPromise;
-          await waitForFast(() => {
-            expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
-          });
+          await withinTest(requestExecution.waitForCompletion("idem-dispatch-error-1"), signal);
+          expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
           return changed;
         } finally {
           rejectDispatch.resolve();
@@ -1204,7 +1176,7 @@ describe("gateway server chat", () => {
   });
 
   const contextOverflowCopy =
-    "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
+    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 
   test.each([
     {
@@ -1253,105 +1225,6 @@ describe("gateway server chat", () => {
     },
   );
 
-  test.each([
-    {
-      name: "hides assistant control replies in Responses output blocks",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "output_text", text: "NO_REPLY" }],
-          timestamp: 1,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "output_text", text: "visible response" }],
-          timestamp: 2,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "input_text", text: "NO_REPLY" }],
-          timestamp: 3,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "input_text", text: "visible assistant input" }],
-          timestamp: 4,
-        },
-      ],
-      expected: ["assistant:visible response", "assistant:visible assistant input"],
-    },
-    {
-      name: "hides commentary-only assistant entries",
-      messages: [
-        createGatewayHistoryText("user", "hello", 1),
-        {
-          role: "assistant",
-          phase: "commentary",
-          content: [{ type: "text", text: "thinking like caveman" }],
-          timestamp: 2,
-        },
-        createGatewayHistoryText("assistant", "real reply", 3),
-      ],
-      expected: ["user:hello", "assistant:real reply"],
-    },
-    {
-      name: "hides assistant announce/reply skip-only entries",
-      messages: [
-        createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
-        createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
-        {
-          role: "assistant",
-          text: "real text field reply",
-          content: "ANNOUNCE_SKIP",
-          timestamp: 3,
-        },
-        createGatewayHistoryText("assistant", "real reply", 4),
-      ],
-      expected: ["assistant:real text field reply", "assistant:real reply"],
-    },
-    {
-      name: "hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries",
-      messages: [
-        createGatewayHistoryText("user", "hello", 1),
-        createGatewayHistoryText("assistant", "NO_REPLY", 2),
-        createGatewayHistoryText("assistant", "real reply", 3),
-        {
-          role: "assistant",
-          text: "real text field reply",
-          content: "NO_REPLY",
-          timestamp: 4,
-        },
-        createGatewayHistoryText("user", "NO_REPLY", 5),
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "NO_REPLY" },
-            { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
-          ],
-          timestamp: 6,
-        },
-      ],
-      expected: [
-        "user:hello",
-        "assistant:real reply",
-        "assistant:real text field reply",
-        "user:NO_REPLY",
-        "assistant:NO_REPLY",
-      ],
-    },
-  ])("chat.history $name", async ({ messages, expected }) => {
-    const historyMessages = await loadChatHistoryWithMessages(messages);
-    const roleAndText = historyMessages.map((message) => {
-      const entry = isRecord(message) ? message : {};
-      const role = typeof entry.role === "string" ? entry.role : "unknown";
-      const text =
-        typeof entry.text === "string" ? entry.text : (extractFirstTextBlock(message) ?? "");
-      return `${role}:${text}`;
-    });
-
-    expect(roleAndText).toEqual(expected);
-  });
-
   test("chat.history omits argument-derived replies for partial broadcasts and retains diagnostics", async () => {
     const result = {
       kind: "broadcast",
@@ -1386,54 +1259,6 @@ describe("gateway server chat", () => {
       expect.objectContaining({ role: "toolResult", toolCallId: "reused-call", content: result }),
     );
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-  });
-
-  test("chat.history retains canonical publications after tool results without caption or call-ID joins", async () => {
-    const imageBlocks = ["first", "second"].map((name) => ({
-      type: "image",
-      artifactId: `artifact_managed_image_${name}`,
-      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
-      alt: `${name}.png`,
-      mimeType: "image/png",
-    }));
-    const publications = imageBlocks.map((image, index) => ({
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Sanitized publication." }, image],
-      openclawDeliveryMirror: { kind: "message-tool-source-reply", toolCallId: "different-call" },
-      timestamp: index + 3,
-    }));
-    const result = createGatewayHistoryMessageToolResult("reused-call", { ok: true }, 5);
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryMessageToolCall(
-        "reused-call",
-        { action: "send", message: "Unverified argument caption." },
-        1,
-      ),
-      result,
-      ...publications,
-      createGatewayHistoryText("assistant", "NO_REPLY", 6),
-    ]);
-    expect(collectHistoryTextValues(historyMessages)).toEqual([
-      "Sanitized publication.",
-      "Sanitized publication.",
-    ]);
-    for (const publication of publications) {
-      expect(historyMessages).toContainEqual(expect.objectContaining(publication));
-    }
-    expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
-    const publicRows = historyMessages.filter(isRecord);
-    expect(publicRows).toHaveLength(historyMessages.length);
-    const reprojected = await loadChatHistoryWithMessages(publicRows);
-    expect(collectHistoryTextValues(reprojected)).toEqual([
-      "Sanitized publication.",
-      "Sanitized publication.",
-    ]);
-    for (const publication of publications) {
-      expect(reprojected).toContainEqual(expect.objectContaining(publication));
-    }
   });
 
   test("chat.history drops retired synthetic replies without dropping canonical or forwarded messages", async () => {

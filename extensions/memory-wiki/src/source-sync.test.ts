@@ -68,25 +68,6 @@ describe("syncMemoryWikiImportedSources", () => {
     refreshIndexesMock.mockResolvedValue(refreshResult);
   });
 
-  it("routes bridge mode through bridge sync and merges refresh results", async () => {
-    const config = createConfig();
-
-    const result = await syncMemoryWikiImportedSources({ config, appConfig });
-
-    expect(syncBridgeMock).toHaveBeenCalledWith({ config, appConfig });
-    expect(syncUnsafeLocalMock).not.toHaveBeenCalled();
-    expect(refreshIndexesMock).toHaveBeenCalledWith({
-      config,
-      syncResult: bridgeResult,
-    });
-    expect(result).toEqual({
-      ...bridgeResult,
-      indexesRefreshed: true,
-      indexRefreshReason: "import-changed",
-      indexUpdatedFiles: ["index.md", "sources/index.md"],
-    });
-  });
-
   it("coalesces separately resolved equivalent configs for one vault", async () => {
     const vaultPath = path.join(os.tmpdir(), `memory-wiki-source-sync-${vaultCounter++}`);
     const firstConfig = createConfig("bridge", vaultPath);

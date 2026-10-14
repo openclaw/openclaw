@@ -94,11 +94,14 @@ export function resolveEstimatedSessionCostUsd(params: {
   model?: string;
   entry?: Pick<
     SessionEntry,
-    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
+    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite" | "usageReport"
   >;
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
+  if (params.entry?.usageReport?.state === "unavailable") {
+    return undefined;
+  }
   const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
@@ -153,7 +156,6 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   }
   // Store-only child links lack a live registry entry; retain recent unknown-state rows.
   return (
-    entry.status === "running" ||
     isFinitePositiveTimestamp(entry.startedAt) ||
     (isFinitePositiveTimestamp(entry.updatedAt) &&
       now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS)

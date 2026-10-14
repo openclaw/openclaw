@@ -45,6 +45,16 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   const clearTimeoutFn = clearTimeout;
   const now = performance.now.bind(performance);
   const clearIdle = (slot: Slot<Input, Output>) => clearTimeoutFn(slot.idleTimer);
+  const isBurstSlot = (slot: Slot<Input, Output>) => {
+    if (options.burstIdleTimeoutMs !== undefined) {
+      for (const available of slots) {
+        if (!available.retiring && !available.retirementFailed) {
+          return available !== slot;
+        }
+      }
+    }
+    return false;
+  };
 
   function startRotate(): RetainedOperation<void> {
     if (rotation) {
@@ -126,7 +136,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     slot: Slot<Input, Output>,
     reason: WorkerRetirementReason = "closed",
   ): RetainedOperation<void> {
-    if (reason === "idle_timeout") {
+    if (reason === "idle_timeout" && !isBurstSlot(slot)) {
       lastIdleRetirementAt = now();
     } else if (reason === "rotation") {
       lastIdleRetirementAt = -Infinity;
@@ -290,6 +300,34 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     }
   }
 
+  function idle(slot: Slot<Input, Output>, elapsedIdleMs = 0): void {
+    const burst = isBurstSlot(slot);
+    const idleMs = (burst ? options.burstIdleTimeoutMs : options.idleTimeoutMs) ?? 60_000;
+    if (idleMs <= 0) {
+      return;
+    }
+    // A promptly reused pool retains one isolate; excess slots keep their own timeout.
+    if (!burst && !warmSlot && now() - lastIdleRetirementAt < WORKER_WARM_WINDOW_MS) {
+      warmSlot = slot;
+    }
+    const startedAt = burst ? now() : 0;
+    const timeoutMs = warmSlot === slot ? Math.max(idleMs, WORKER_WARM_WINDOW_MS) : idleMs;
+    slot.idleTimer = runInContext(() =>
+      setTimeoutFn(
+        () => {
+          // A cancellation can leave this formerly surplus worker as the first live slot.
+          if (burst && !isBurstSlot(slot)) {
+            idle(slot, now() - startedAt);
+            return;
+          }
+          void retire(slot, "idle_timeout").catch(() => undefined);
+        },
+        Math.max(0, timeoutMs - elapsedIdleMs),
+      ),
+    );
+    slot.idleTimer.unref();
+  }
+
   return {
     get dispatchAllowed() {
       return rotation === undefined && !rotationFailed;
@@ -305,23 +343,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
       rotation?.service();
     },
     clearIdle,
-    idle(slot: Slot<Input, Output>) {
-      const idleMs = options.idleTimeoutMs ?? 60_000;
-      if (idleMs <= 0) {
-        return;
-      }
-      // A promptly reused pool retains one isolate; excess slots keep their normal timeout.
-      if (!warmSlot && now() - lastIdleRetirementAt < WORKER_WARM_WINDOW_MS) {
-        warmSlot = slot;
-      }
-      slot.idleTimer = runInContext(() =>
-        setTimeoutFn(
-          () => void retire(slot, "idle_timeout").catch(() => undefined),
-          warmSlot === slot ? Math.max(idleMs, WORKER_WARM_WINDOW_MS) : idleMs,
-        ),
-      );
-      slot.idleTimer.unref();
-    },
+    idle,
     retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>) {
       for (const slot of slots) {
         if (

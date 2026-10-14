@@ -44,9 +44,16 @@ target below about 60% of the live bucket. With the current 10,000-registration
 bucket, that means a 6,000-registration operating target, leaving headroom for
 concurrent repositories, retries, and burst overlap.
 
-Trusted automatic hybrid first-attempt preflight jobs request the existing
-16-class after three nearby hosted preflights remained unassigned while their
-Blacksmith security jobs completed. Each eligible hybrid run admits one
+Automatic canonical hybrid and RunsOn first-attempt preflight jobs use the
+Blacksmith 4-class, matching default Blacksmith preflight. The original 16-class
+placement addressed hosted assignment stalls, not a measured compute requirement.
+On October 13, 610 existing 4-class preflights over 24 hours had no OOM events,
+113-second p95 duration, and 14.31% p95 peak memory. A representative job exposed
+two CPUs and 7.65 GiB RAM. Local full and changed manifest plans also fit two CPUs
+and 4 GiB without swap, with identical outputs to four CPUs. Keep the 20-minute
+deadline, planner profiles, cache trust, and hosted retry/manual/override routes.
+Monitor assignment latency after rollout; these observations do not establish
+matched-workload billing savings. Each eligible hybrid run admits one
 Blacksmith preflight and gate, plus security when optional hosted admission is
 closed, for at most three control registrations; default Blacksmith retains one.
 All three occur in the current non-Node union and reserved 5,110 envelope.
@@ -183,6 +190,8 @@ Eligible Blacksmith and hybrid compact bins with multiple ordinary groups reques
 The `github` compact planner can place smaller ordinary groups on an already-required stronger logical runner. Each emitted job retains its strongest capacity owner, serial execution, original child processes and worker limits, the 210-second budget, and the ten-group limit. SDK and plugin runtime consumers are separated from ordinary files before packing; the SDK light project intersects shared include lists with its own inventory. Parent-derived fractional costs are rounded only at the emitted job boundary, so rounding small consumers cannot create a redundant runtime build. The shared packer can exchange groups to fill compatible capacity while rechecking complete replacements. Runtime-only hosted groups may share their strongest prerequisite within the existing 210-second serial budget; the build itself costs 160–166 seconds and is charged once per job. No-build exclusive groups keep their 150-second limit. Stranded tooling tails are sized against remaining compatible capacity before normal admission is reapplied. Exclusive, dist, oversized, and runtime-preparing bins retain their separate constraints.
 
 The September 16 capacity repair removes the blanket post-packing 32-to-16 downgrade and the three named compact 32-to-16 overrides. On the inspected inventory, 18 existing hybrid jobs per push or broad PR return to the 32-class; the Blacksmith profile restores 19 push or 36 broad-PR placements, including agent-support and tooling. This changes zero total runner registrations and adds no hosted rows, so the conservative 5,010-registration envelope remains unchanged. Restoring real-Gateway E2E adds one 32-class assignment when that job is selected, for 19 hybrid assignments in total on this inventory, still with zero additional registrations. Other workflow sizing remains in place. These counts depend on the inventory; verify the emitted plan and actual eight-CPU/24-GiB admission before claiming a wall-time improvement.
+
+Current pure Blacksmith plans use the 16-class for source-only serial tooling jobs whose complete file inventory has no compiler/artifact capacity fixture or explicit runner/memory anchor. Each group keeps its two-worker pin. Builds, dist, mixed configurations, overlapping jobs, and unknown file inventories retain their planned capacity. This final allocation rule preserves packing, group identities, test coverage, deadlines, and runner registrations; hosted and hybrid plans are unchanged. Existing Blacksmith file estimates remain historical estimates, so compare observed complete-job cost and duration after the change rather than assuming half the runner rate means half the bill.
 
 Failed-job-only hybrid retries retain their original matrix and its admitted aggregate estimates when routing to hosted Ubuntu. They do not repack to 210 seconds. The existing capacity gate reduces concurrency to one on those hosts, while the retained two-slot descriptor keeps the two-worker child budget. Such retries can exceed the eight-minute normal-run objective; existing 60/120-minute job deadlines and watchdogs are unchanged. Requested runner labels do not establish actual CPU or memory capacity.
 
@@ -518,6 +527,13 @@ setup, preparation, dependency waits, and the final gate in workflow projections
 
 Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
+Precisely selected, source-only CLI and Gateway client jobs use the 16-class when
+every serial group belongs to either family, has at most two explicit files, and
+retains its two-worker fallback. Gateway client groups must pair the
+`agentic-gateway-core-2` owner with `vitest.gateway-client.config.ts`. Apply this
+capacity choice after packing; keep complete families, other owners, builds,
+memory floors, and explicit large-runner anchors at their planned capacity.
+RunsOn inherits the same hybrid choice for these retained Blacksmith jobs.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
 Hybrid packing keeps descending-cost initial placement when the completed plan

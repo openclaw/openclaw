@@ -60,8 +60,11 @@ export async function fetchWithWebToolsNetworkGuard(
 async function withWebToolsNetworkGuard<T>(
   params: WebToolGuardedFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+  trustedPolicy?: SsrFPolicy,
 ): Promise<T> {
-  const { response, finalUrl, release } = await fetchWithWebToolsNetworkGuard(params);
+  const { response, finalUrl, release } = await fetchWithWebToolsNetworkGuard(
+    trustedPolicy ? { ...params, policy: trustedPolicy, useEnvProxy: true } : params,
+  );
   try {
     return await run({ response, finalUrl });
   } finally {
@@ -74,14 +77,10 @@ export async function withTrustedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
-  const trustedPolicy = ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(params.url) ?? {};
   return await withWebToolsNetworkGuard(
-    {
-      ...params,
-      policy: trustedPolicy,
-      useEnvProxy: true,
-    },
+    params,
     run,
+    ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(params.url) ?? {},
   );
 }
 
@@ -90,14 +89,7 @@ export async function withSelfHostedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
-  return await withWebToolsNetworkGuard(
-    {
-      ...params,
-      policy: WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY,
-      useEnvProxy: true,
-    },
-    run,
-  );
+  return await withWebToolsNetworkGuard(params, run, WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY);
 }
 
 /** Runs a fetch under strict SSRF protection without env proxy trust. */

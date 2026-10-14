@@ -7,8 +7,8 @@ import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { agentDatabaseLifecycle as cache } from "./openclaw-agent-db-lifecycle.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
+import { OPENCLAW_AGENT_SCHEMA_V21_SQL } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 /** Materialize distinct current databases without runtime handles, leases, or registrations. */
 export function createCurrentOpenClawAgentDatabaseFixtures(
@@ -40,7 +40,7 @@ export function createCurrentOpenClawAgentDatabaseFixtures(
 /** Remove only the schema owner's future projection before carving a historical database. */
 export function removeCanonicalValidationFromHistoricalAgentFixture(database: DatabaseSync): void {
   const definitions = [
-    ...canonicalSessionValidationSchemaSql().matchAll(
+    ...canonicalSessionValidationSchemaSql(OPENCLAW_AGENT_SCHEMA_V21_SQL).matchAll(
       /^CREATE (TABLE|TRIGGER) IF NOT EXISTS ([a-z_]+)\b/gm,
     ),
   ];
@@ -96,11 +96,6 @@ export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; pa
 }
 
 /** Model missing restart metadata without invoking the runtime invalidation owner. */
-export function removeAgentIntegrityMetadataForTest(env: NodeJS.ProcessEnv): void {
-  const store = openNodeSqliteDatabase(resolveQuarantineStorePath(env));
-  try {
-    store.exec("DELETE FROM agent_integrity_verifications");
-  } finally {
-    store.close();
-  }
+export function removeAgentIntegrityMetadataForTest(pathname: string): void {
+  fs.rmSync(`${pathname}.seal`, { force: true });
 }

@@ -100,7 +100,7 @@ describe("cron canonical speech payload delivery", () => {
       const result = await maybeApplyTtsToCronPayloads({
         cfg: createTtsConfig(`openclaw-cron-speech-${randomUUID()}`),
         payloads: normalized.payload,
-        delivery: { ok: true, channel, to: "test-recipient", mode: "explicit" },
+        delivery: { channel },
         agentId: "main",
         ttsAuto: auto,
       });

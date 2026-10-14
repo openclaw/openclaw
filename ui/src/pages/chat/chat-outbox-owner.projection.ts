@@ -1,4 +1,5 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxItemNeedsReview } from "../../lib/chat/outbox-owner-registry.ts";
 import type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 
@@ -48,12 +49,7 @@ export function projectChatOutboxAttention(
   return outboxes.flatMap((outbox) =>
     outbox.queue
       .filter((item) =>
-        owner
-          ? owner.needsReview(outbox, item)
-          : !item.pendingRunId &&
-            (item.sendState === "failed" ||
-              item.sendState === "unconfirmed" ||
-              item.sendState === "held"),
+        owner ? owner.needsReview(outbox, item) : storedChatOutboxItemNeedsReview(item),
       )
       .map((item) => ({
         id: item.id,

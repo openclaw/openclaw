@@ -21,6 +21,31 @@ afterEach(() => {
 });
 
 describe("native session binding leases", () => {
+  it("refuses callback entry when acquisition settles after lease expiry", async () => {
+    vi.useFakeTimers();
+    const { state, values, owner } = createLeaseFixture();
+    const withCurrent = state.withCurrent.bind(state);
+    state.withCurrent = (authority) => {
+      const store = withCurrent(authority);
+      return {
+        ...store,
+        async compareAndApply(...args) {
+          const result = await store.compareAndApply(...args);
+          if (args[2].action === "set" && args[2].value.lease) {
+            vi.setSystemTime(args[2].value.lease.expiresAt);
+          }
+          return result;
+        },
+      };
+    };
+    const run = vi.fn(async () => "native effect");
+    await expect(
+      owner.withLease("expired", run, { prepareLease: prepareBindingTestLease }),
+    ).rejects.toThrow("Lost binding lease");
+    expect(run).not.toHaveBeenCalled();
+    expect(values.get("expired")).not.toHaveProperty("lease");
+  });
+
   it.each(["absent", "renewed"])(
     "serializes peer writes behind a %s binding lease",
     async (mode) => {
@@ -220,44 +245,6 @@ describe("native session binding leases", () => {
       }
     },
   );
-
-  it("reports lease loss even when the callback catches a commit refusal", async () => {
-    vi.useFakeTimers();
-    const { state, values, owner } = createLeaseFixture();
-    values.set("binding", { value: "original" });
-    const withCurrent = state.withCurrent.bind(state);
-    let expireBeforeAdmission = false;
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          if (expireBeforeAdmission) {
-            expireBeforeAdmission = false;
-            vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
-          }
-          return await store.compareAndApply(...args);
-        },
-      };
-    };
-    await expect(
-      owner.withLease(
-        "binding",
-        async () => {
-          expireBeforeAdmission = true;
-          await expect(
-            owner.transact("binding", (current) => ({
-              next: { ...current, value: "unauthorized" },
-              result: true,
-            })),
-          ).rejects.toThrow("Lost binding lease");
-          return "callback completed";
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
-    ).rejects.toThrow("Lost binding lease");
-    expect(values.get("binding")).toEqual({ value: "original" });
-  });
 
   it("joins queued renewal before releasing a failed owner", async () => {
     vi.useFakeTimers();

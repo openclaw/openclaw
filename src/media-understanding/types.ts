@@ -79,10 +79,7 @@ export type AudioTranscriptionRequest = MediaUnderstandingProviderRequest & {
   query?: Record<string, string | number | boolean>;
 };
 
-type MediaUnderstandingProviderRequest = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
+type MediaUnderstandingProviderRequest = ImagesDescriptionInput & {
   /** Compatibility field for existing providers; prefer auth.kind/apiKey. */
   apiKey: string;
   auth?: MediaUnderstandingProviderRequestAuth;
@@ -103,13 +100,19 @@ type MediaUnderstandingTextResult = {
 
 export type AudioTranscriptionResult = MediaUnderstandingTextResult;
 
-type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> & {
+export type AudioTranscriptionConfigContext = Pick<
+  AudioTranscriptionRequest,
+  "baseUrl" | "headers" | "request" | "model"
+> & {
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   profile?: string;
   preferredProfile?: string;
 };
+
+type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> &
+  AudioTranscriptionConfigContext;
 
 export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
@@ -159,22 +162,16 @@ export type StructuredExtractionInput =
   | StructuredExtractionTextInput
   | StructuredExtractionImageInput;
 
-export type StructuredExtractionRequest = {
+export type StructuredExtractionRequest = Omit<
+  ImagesDescriptionRequest,
+  "images" | "prompt" | "maxTokens" | "agentId" | "workspaceDir" | "preparedModelRuntime"
+> & {
   /** Image-first extraction input; callers must include at least one image. */
   input: StructuredExtractionInput[];
   instructions: string;
   schemaName?: string;
   jsonSchema?: unknown;
   jsonMode?: boolean;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  profile?: string;
-  preferredProfile?: string;
-  authStore?: AuthProfileStore;
-  agentDir: string;
-  cfg: OpenClawConfig;
-  model: string;
-  provider: string;
 };
 
 export type StructuredExtractionResult = {
@@ -221,6 +218,8 @@ export type MediaUnderstandingProvider = {
     ctx: MediaUnderstandingProviderAuthContext,
   ) => MediaUnderstandingProviderSyntheticAuthResult | null | undefined;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
+  /** Checks provider-owned credentials and transport settings without uploading audio. */
+  isAudioConfigured?: (context: AudioTranscriptionConfigContext) => boolean | Promise<boolean>;
   /** Called after file loading. Result.error is only a rejection before audio upload;
    * upload/HTTP failures must throw and stop automatic provider selection. */
   transcribeAudioWithContext?: (

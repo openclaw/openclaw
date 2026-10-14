@@ -15,6 +15,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
@@ -42,6 +43,7 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import { normalizeChatSendAckStatus } from "./chat-send-ack.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
 
@@ -61,6 +63,7 @@ type SlashCommandResult = {
 };
 
 type SlashCommandContext = {
+  attachments?: readonly ChatAttachment[];
   sessions: SessionCapability;
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
@@ -126,22 +129,22 @@ export async function executeSlashCommand(
     case "help":
       return executeHelp();
     case "compact":
-      return await executeCompact(sessionKey, context);
+      return executeCompact(sessionKey, context);
     case "model":
-      return await executeModel(client, sessionKey, args, context);
+      return executeModel(client, sessionKey, args, context);
     case "think":
-      return await executeThink(client, sessionKey, args, context);
+      return executeThink(client, sessionKey, args, context);
     case "fast":
-      return await executeFast(sessionKey, args, context);
+      return executeFast(sessionKey, args, context);
     case "verbose":
-      return await executeVerbose(sessionKey, args, context);
+      return executeVerbose(sessionKey, args, context);
     case "usage":
-      return await executeUsage(sessionKey, context);
+      return executeUsage(sessionKey, context);
     case "agents":
-      return await executeAgents(client);
+      return executeAgents(client);
     case "steer":
     case "redirect":
-      return await executeRunCommand(client, sessionKey, args, context, commandName);
+      return executeRunCommand(client, sessionKey, args, context, commandName);
     default:
       return {
         content: t("chat.commandResults.unknownCommand", { command: `/${commandName}` }),
@@ -304,17 +307,12 @@ async function executeThink(
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
     const modelCatalog = context.chatModelCatalog ?? [];
     const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
-    if (!level) {
+    if (
+      !level ||
+      isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false
+    ) {
       return {
-        content: t("chat.commandResults.thinking.unrecognized", {
-          level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
-        }),
-      };
-    }
-    if (isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false) {
-      return {
-        content: t("chat.commandResults.thinking.unsupported", {
+        content: t(`chat.commandResults.thinking.${level ? "unsupported" : "unrecognized"}`, {
           level: rawLevel,
           options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
@@ -394,17 +392,9 @@ async function executeFast(
     }
   }
 
-  if (isSessionDefaultDirectiveValue(rawMode)) {
-    return patchSession(
-      context,
-      sessionKey,
-      { fastMode: null },
-      () => ({ content: t("chat.commandResults.fast.reset") }),
-      "chat.commandResults.fast.resetFailed",
-    );
-  }
-
-  const nextMode = normalizeChatFastModeInput(rawMode);
+  const nextMode = isSessionDefaultDirectiveValue(rawMode)
+    ? null
+    : normalizeChatFastModeInput(rawMode);
   if (nextMode === undefined) {
     return {
       content: t("chat.commandResults.fast.unrecognized", { mode: args.trim() }),
@@ -417,11 +407,17 @@ async function executeFast(
     { fastMode: nextMode },
     () => ({
       content:
-        nextMode === "auto"
-          ? t("chat.commandResults.fast.setAuto")
-          : t(nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled"),
+        nextMode === null
+          ? t("chat.commandResults.fast.reset")
+          : nextMode === "auto"
+            ? t("chat.commandResults.fast.setAuto")
+            : t(
+                nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled",
+              ),
     }),
-    "chat.commandResults.fast.setFailed",
+    nextMode === null
+      ? "chat.commandResults.fast.resetFailed"
+      : "chat.commandResults.fast.setFailed",
   );
 }
 
@@ -434,8 +430,9 @@ async function executeUsage(
     if (!session) {
       return { content: t("chat.commandResults.usage.noActiveThread") };
     }
-    const hasInputTokens = Number.isFinite(session.inputTokens);
-    const hasOutputTokens = Number.isFinite(session.outputTokens);
+    const usageAvailable = session.usageReport?.state !== "unavailable";
+    const hasInputTokens = usageAvailable && Number.isFinite(session.inputTokens);
+    const hasOutputTokens = usageAvailable && Number.isFinite(session.outputTokens);
     const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
     const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
     const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
@@ -457,10 +454,10 @@ async function executeUsage(
     const lines = [
       `**${t("chat.commandResults.usage.title")}**`,
       t("chat.commandResults.usage.inputTokens", {
-        count: `**${formatCompactTokenCount(input)}**`,
+        count: `**${hasInputTokens ? formatCompactTokenCount(input) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.outputTokens", {
-        count: `**${formatCompactTokenCount(output)}**`,
+        count: `**${hasOutputTokens ? formatCompactTokenCount(output) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.totalTokens", { count: `**${totalDisplay}**` }),
     ];
@@ -584,13 +581,17 @@ async function executeRunCommand(
   try {
     const message = args.trim();
     if (!message) {
-      return { content: t(`chat.commandResults.${command}.usage`) };
+      return {
+        content: t(`chat.commandResults.${command}.usage`),
+        ...(context.attachments?.length ? { failed: true } : {}),
+      };
     }
     assertCurrentSlashCommand(context);
     const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
       sessionKey,
       ...selectedGlobalScope(sessionKey, context),
       message,
+      attachments: buildChatApiAttachments(context.attachments),
       ...(command === "steer"
         ? { deliver: false, queueMode: "steer" }
         : { queueMode: "interrupt" }),

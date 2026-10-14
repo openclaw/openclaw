@@ -50,7 +50,6 @@ it.each(["dispose", "disposeAsync"] as const)(
 
 function capturedPackage(root: string, links: string[] = []): PluginPackageCapture {
   return {
-    destination: path.resolve(root),
     capturedRoot: path.resolve(root),
     sourceRoot: path.resolve(root),
     links: new Set(links.map((link) => path.resolve(link))),

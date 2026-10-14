@@ -23,10 +23,8 @@ export async function cleanupVisibleSpawnSession(params: {
   expectedLifecycleRevision?: string;
 }): Promise<string> {
   const outcome = await deleteSubagentSessionForCleanup({
+    ...params,
     callGateway: ({ method, params: cleanupParams }) => params.callGateway(method, cleanupParams),
-    childSessionKey: params.childSessionKey,
-    expectedSessionId: params.expectedSessionId,
-    expectedLifecycleRevision: params.expectedLifecycleRevision,
     emitLifecycleHooks: false,
     onError: (error) => log.warn(`visible session cleanup failed: ${formatErrorMessage(error)}`),
   });

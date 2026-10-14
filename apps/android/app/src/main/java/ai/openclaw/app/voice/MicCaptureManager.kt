@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
+import kotlin.math.abs
 
 enum class VoiceConversationRole {
   User,
@@ -38,6 +39,21 @@ data class VoiceConversationEntry(
   val isStreaming: Boolean = false,
   val localizedSource: String? = null,
 )
+
+private const val MAX_VOICE_CONVERSATION_ENTRIES = 40
+
+internal fun MutableStateFlow<List<VoiceConversationEntry>>.appendVoiceEntry(
+  role: VoiceConversationRole,
+  text: String,
+  isStreaming: Boolean = false,
+  localizedSource: String? = null,
+): String {
+  val id = UUID.randomUUID().toString()
+  value =
+    (value + VoiceConversationEntry(id, role, text, isStreaming, localizedSource))
+      .takeLast(MAX_VOICE_CONVERSATION_ENTRIES)
+  return id
+}
 
 internal inline fun MutableStateFlow<List<VoiceConversationEntry>>.updateVoiceEntry(
   id: String,
@@ -84,7 +100,6 @@ internal class MicCaptureManager(
     private const val pcmuBias = 0x84
     private const val pcmuClip = 32635
     private const val transcriptIdleFlushMs = 1_600L
-    private const val maxConversationEntries = 40
     private const val pendingRunTimeoutMs = 45_000L
   }
 
@@ -136,10 +151,7 @@ internal class MicCaptureManager(
   private var ttsPauseDepth = 0
   private var resumeMicAfterTts = false
 
-  private fun hasQueuedMessages(): Boolean =
-    synchronized(messageQueueLock) {
-      messageQueue.isNotEmpty()
-    }
+  private fun hasQueuedMessages(): Boolean = queuedMessageCount() > 0
 
   private fun queuedMessageCount(): Int =
     synchronized(messageQueueLock) {
@@ -351,23 +363,13 @@ internal class MicCaptureManager(
         if (gatewayError.isNotEmpty()) {
           upsertPendingAssistant(text = gatewayError, isStreaming = false)
         } else {
-          val failure = nativeText("Voice request failed")
-          upsertPendingAssistant(
-            text = failure.resolveNativeText(),
-            isStreaming = false,
-            localizedSource = failure.source,
-          )
+          upsertPendingAssistant(nativeText("Voice request failed"))
         }
         completePendingTurn()
       }
 
       "aborted" -> {
-        val abortedText = nativeText("Response aborted")
-        upsertPendingAssistant(
-          text = abortedText.resolveNativeText(),
-          isStreaming = false,
-          localizedSource = abortedText.source,
-        )
+        upsertPendingAssistant(nativeText("Response aborted"))
         completePendingTurn()
       }
     }
@@ -487,8 +489,8 @@ internal class MicCaptureManager(
   private fun queueRecognizedMessage(text: String) {
     val message = text.trim()
     _liveTranscript.value = null
-    if (!message.hasTranscriptContent()) return
-    appendConversation(
+    if (message.none { it.isLetterOrDigit() }) return
+    _conversation.appendVoiceEntry(
       role = VoiceConversationRole.User,
       text = message,
     )
@@ -512,11 +514,7 @@ internal class MicCaptureManager(
   private fun sendQueuedIfIdle() {
     if (_isSending.value) return
     if (!hasQueuedMessages()) {
-      if (_micEnabled.value) {
-        _statusText.value = nativeText("Listening")
-      } else {
-        _statusText.value = nativeText("Mic off")
-      }
+      _statusText.value = if (_micEnabled.value) nativeText("Listening") else nativeText("Mic off")
       return
     }
     if (!gatewayConnected) {
@@ -619,27 +617,6 @@ internal class MicCaptureManager(
 
   private fun queuedWaitingStatus(): NativeText = nativeText("\${queuedMessageCount()} queued · waiting for gateway", queuedMessageCount())
 
-  private fun appendConversation(
-    role: VoiceConversationRole,
-    text: String,
-    isStreaming: Boolean = false,
-    localizedSource: String? = null,
-  ): String {
-    val id = UUID.randomUUID().toString()
-    _conversation.value =
-      (
-        _conversation.value +
-          VoiceConversationEntry(
-            id = id,
-            role = role,
-            text = text,
-            isStreaming = isStreaming,
-            localizedSource = localizedSource,
-          )
-      ).takeLast(maxConversationEntries)
-    return id
-  }
-
   private fun updateConversationEntry(
     id: String,
     text: String?,
@@ -663,7 +640,7 @@ internal class MicCaptureManager(
     val currentId = pendingAssistantEntryId
     if (currentId == null) {
       pendingAssistantEntryId =
-        appendConversation(
+        _conversation.appendVoiceEntry(
           role = VoiceConversationRole.Assistant,
           text = text,
           isStreaming = isStreaming,
@@ -678,6 +655,13 @@ internal class MicCaptureManager(
       localizedSource = localizedSource,
     )
   }
+
+  private fun upsertPendingAssistant(text: NativeText.Resource) =
+    upsertPendingAssistant(
+      text = text.resolveNativeText(),
+      isStreaming = false,
+      localizedSource = text.source,
+    )
 
   private fun playAssistantReplyAsync(text: String) {
     val spoken = text.trim()
@@ -748,7 +732,7 @@ internal class MicCaptureManager(
           val buffer = ByteArray(frameBytes)
           audioInput.startRecording()
           while (isCurrent() && _micEnabled.value) {
-            val read = audioInput.read(buffer, 0, buffer.size)
+            val read = audioInput.read(buffer)
             if (read <= 0) continue
             audioFrames.trySend(buffer.copyOf(read))
           }
@@ -763,12 +747,7 @@ internal class MicCaptureManager(
           audioInput?.close()
           synchronized(ttsPauseLock) {
             // Re-enable can arrive after the read loop exits but before this job completes.
-            if (captureJob?.isActive == true &&
-              audioInputGeneration.get() == inputGeneration &&
-              transcriptionSession == session &&
-              _micEnabled.value &&
-              !stopRequested
-            ) {
+            if (isCurrent() && _micEnabled.value && !stopRequested) {
               startTranscriptionCapture(session)
             }
           }
@@ -859,16 +838,8 @@ internal class MicCaptureManager(
     }
 
   private fun linear16ToPcmu(sample: Int): Byte {
-    var sign = 0
-    var magnitude = sample
-    if (magnitude < 0) {
-      sign = 0x80
-      magnitude = -magnitude
-    }
-    if (magnitude > pcmuClip) {
-      magnitude = pcmuClip
-    }
-    magnitude += pcmuBias
+    val sign = if (sample < 0) 0x80 else 0
+    val magnitude = abs(sample).coerceAtMost(pcmuClip) + pcmuBias
 
     var exponent = 7
     var mask = 0x4000
@@ -880,5 +851,3 @@ internal class MicCaptureManager(
     return (sign or (exponent shl 4) or mantissa).inv().toByte()
   }
 }
-
-private fun String.hasTranscriptContent(): Boolean = any { it.isLetterOrDigit() }

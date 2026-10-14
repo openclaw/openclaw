@@ -185,7 +185,7 @@ export type ControlUiAction = {
 export type ControlUiAccessory = {
   id: string;
   placement: "session-header";
-  mount: ControlUiView<BoardGetParams & { session?: ControlUiSession }>;
+  mount: ControlUiView<BoardGetParams>;
 };
 
 export type ControlUiWidget = {

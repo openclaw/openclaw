@@ -9,6 +9,7 @@ import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import { formatUnknownError } from "../errors.js";
 import {
   extractMSTeamsConversationMessageId,
@@ -23,6 +24,7 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
 import { admitMSTeamsMessage } from "./access.js";
+import { createMSTeamsHandlerConfigReader } from "./config.js";
 import { prepareMSTeamsInboundContent } from "./inbound-content.js";
 import { dispatchMSTeamsInboundTurn } from "./inbound-dispatch.js";
 import {
@@ -35,6 +37,8 @@ import { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thre
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
+    accountPolicyCfg = cfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -51,16 +55,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log.debug?.(message);
     }
   };
-  const msteamsCfg = cfg.channels?.msteams;
+  const msteamsCfg = cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(cfg, accountId)
+    : undefined;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "msteams",
+    accountId,
   });
   const historyLimit = resolvePromptHistoryLimit(
     msteamsCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
   const conversationHistories = new Map<string, HistoryEntry[]>();
-  const readConfig = createRuntimeConfigReader(cfg);
+  const readFullConfig = createRuntimeConfigReader(accountPolicyCfg);
+  const readConfig = deps.readConfig ?? createMSTeamsHandlerConfigReader(deps);
   const resolveDebounceMs = () =>
     core.channel.debounce.resolveInboundDebounceMs({ cfg: readConfig(), channel: "msteams" });
 
@@ -128,6 +136,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           conversationId,
           messageId: facts.threadId,
           botId: activity.recipient.id,
+          accountId,
         });
         currentCfg = readConfig();
       }
@@ -142,6 +151,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const admission = await admitMSTeamsMessage({
       cfg: currentCfg,
+      accountId,
       activity,
       text,
       conversationId,
@@ -197,6 +207,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const threadRouting = prepareMSTeamsThreadRouting({
       cfg: currentCfg,
+      accountId,
       context,
       isDirectMessage,
       isChannel,
@@ -314,6 +325,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     await dispatchMSTeamsInboundTurn({
       cfg: currentCfg,
+      accountPolicyCfg: readFullConfig(),
+      readConfig,
+      listenerAccountId: accountId,
       runtime,
       app,
       tokenProvider,
@@ -417,6 +431,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   ) {
     const entry = await prepareMSTeamsDebounceEntry({
       context,
+      accountId,
       turnAdoptionLifecycle,
     });
     await inboundDebouncer.enqueue(entry);

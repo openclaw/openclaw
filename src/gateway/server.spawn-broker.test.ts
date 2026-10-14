@@ -193,8 +193,9 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           }
         }
         expect(spawnCount).toBe(1);
-        expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
+        expect(child?.pid).toBeTypeOf("number");
+        expect(() => process.kill(child!.pid!, 0)).toThrow();
         expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
       } finally {
         resume.resolve();

@@ -10,7 +10,6 @@ public enum OpenClawChatHistoryPresentation {
     private struct MessageEntry {
         var message: OpenClawChatMessage
         var text: String
-        var runID: String?
         var isMessageToolMirror: Bool
     }
 
@@ -25,7 +24,7 @@ public enum OpenClawChatHistoryPresentation {
     {
         let entries = rawMessages.compactMap(Self.decodeMessage)
         if let directReply = entries.last(where: {
-            Self.isTerminalAssistant($0) && ($0.runID ?? $0.message.idempotencyKey) == runID
+            Self.isTerminalAssistant($0) && ($0.message.transcriptRunID ?? $0.message.idempotencyKey) == runID
         }) {
             return directReply.text
         }
@@ -59,7 +58,7 @@ public enum OpenClawChatHistoryPresentation {
             // Attachment-only user rows still bound the turn even when previews hide them.
             guard entry.message.role.lowercased() != "user" else { return nil }
             // A collected input may execute under a fresh run ID; only its receipt permits that.
-            if consumedEventID == nil, let candidateRunID = entry.runID, candidateRunID != runID {
+            if consumedEventID == nil, let candidateRunID = entry.message.transcriptRunID, candidateRunID != runID {
                 return nil
             }
             if Self.isTerminalAssistant(entry) { return entry.text }
@@ -103,7 +102,6 @@ public enum OpenClawChatHistoryPresentation {
         return MessageEntry(
             message: message,
             text: text,
-            runID: fields?["__openclaw"]?.dictionaryValue?["runId"]?.stringValue,
             isMessageToolMirror: fields?["openclawMessageToolMirror"]?.dictionaryValue != nil)
     }
 
@@ -125,10 +123,7 @@ public enum OpenClawChatHistoryPresentation {
     private nonisolated static func timestampMs(_ timestamp: Double?) -> Int64? {
         guard let timestamp, timestamp.isFinite, timestamp >= 0 else { return nil }
         let milliseconds = timestamp > 100_000_000_000 ? timestamp : timestamp * 1000
-        guard milliseconds.isFinite,
-              milliseconds >= 0,
-              milliseconds <= 32_503_680_000_000
-        else { return nil }
+        guard milliseconds <= 32_503_680_000_000 else { return nil }
         return Int64(milliseconds)
     }
 }

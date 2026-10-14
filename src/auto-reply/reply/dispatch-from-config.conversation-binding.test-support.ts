@@ -104,6 +104,5 @@ export function createDispatchConversationBindingMocks(mock: Pick<typeof vi, "fn
         },
       }),
     resolveConversationBindingContextFromMessage,
-    resolveConversationBindingThreadIdFromMessage: (ctx: BindingMsgContext) => resolveThreadId(ctx),
   };
 }

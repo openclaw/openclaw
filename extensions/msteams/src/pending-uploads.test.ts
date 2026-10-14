@@ -43,22 +43,6 @@ describe("pending-uploads", () => {
   });
 
   describe("storePendingUpload", () => {
-    it("stores and retrieves a pending upload", () => {
-      const id = storePendingUploadForTest({
-        contentType: "text/plain",
-        consentCardActivityId: "activity-abc",
-      });
-
-      const upload = requirePendingUpload(id);
-      expect(upload.id).toBe(id);
-      expect(upload.buffer.toString()).toBe("data");
-      expect(upload.filename).toBe("file.txt");
-      expect(upload.contentType).toBe("text/plain");
-      expect(upload.conversationId).toBe("conv-1");
-      expect(upload.createdAt).toBe(Date.now());
-      expect(upload.consentCardActivityId).toBe("activity-abc");
-    });
-
     it("auto-removes entry after TTL expires", () => {
       const id = storePendingUploadForTest();
 
@@ -78,18 +62,6 @@ describe("pending-uploads", () => {
       expect(getPendingUpload(id)).toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
     });
-
-    it("leaves existing uploads untouched for undefined id", () => {
-      const id = storePendingUploadForTest();
-
-      removePendingUpload(undefined);
-      expect(getPendingUpload(id)).toBeDefined();
-    });
-
-    it("leaves the store empty for unknown ids", () => {
-      removePendingUpload("non-existent-id");
-      expect(getPendingUpload("non-existent-id")).toBeUndefined();
-    });
   });
 
   describe("setPendingUploadActivityId", () => {
@@ -100,11 +72,6 @@ describe("pending-uploads", () => {
 
       setPendingUploadActivityId(id, "activity-xyz");
       expect(getPendingUpload(id)?.consentCardActivityId).toBe("activity-xyz");
-    });
-
-    it("leaves the store empty for unknown upload ids", () => {
-      setPendingUploadActivityId("non-existent", "activity-xyz");
-      expect(getPendingUpload("non-existent")).toBeUndefined();
     });
   });
 

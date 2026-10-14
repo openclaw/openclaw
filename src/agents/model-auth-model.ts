@@ -1,6 +1,3 @@
-/**
- * Model-level auth diagnostics and request-header preparation.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -13,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
@@ -32,6 +30,7 @@ import * as authConfig from "./model-auth-provider-config.js";
 import {
   resolveApiKeyForProviderCore,
   resolveScopedAuthProfileStore,
+  resolveScopedAuthProfileStoreAsync,
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
@@ -45,7 +44,7 @@ const log = createSubsystemLogger("model-auth");
 
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-/** Reports the strongest configured auth mode for provider-list UI and diagnostics. */
+/** @deprecated Use resolveModelAuthModeAsync. Retained until an announced stable removal window. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
@@ -62,12 +61,46 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
+  if (!store) {
+    warnPluginSdkDeprecation({
+      family: "auth-profiles",
+      method: "resolveModelAuthMode",
+      replacement: "resolveModelAuthModeAsync",
+    });
+  }
   const authStore =
     store ??
     resolveScopedAuthProfileStore({
       cfg,
       provider: resolved,
     });
+  return resolveModelAuthModeFromStore(resolved, cfg, authStore, options);
+}
+
+export async function resolveModelAuthModeAsync(
+  provider?: string,
+  cfg?: OpenClawConfig,
+  store?: AuthProfileStore,
+  options?: { workspaceDir?: string },
+): Promise<ModelAuthMode | undefined> {
+  const resolved = provider?.trim();
+  if (!resolved) {
+    return undefined;
+  }
+  if (authConfig.resolveProviderAuthOverride(cfg, resolved) === "aws-sdk") {
+    return "aws-sdk";
+  }
+  const authStore =
+    store ?? (await resolveScopedAuthProfileStoreAsync({ cfg, provider: resolved }));
+  return resolveModelAuthModeFromStore(resolved, cfg, authStore, options);
+}
+
+function resolveModelAuthModeFromStore(
+  resolved: string,
+  cfg: OpenClawConfig | undefined,
+  authStore: AuthProfileStore,
+  options: { workspaceDir?: string } | undefined,
+): ModelAuthMode {
   const profiles = listProfilesForProvider(authStore, resolved);
   const modes = new Set(
     profiles
@@ -101,7 +134,6 @@ export function resolveModelAuthMode(
   return "unknown";
 }
 
-/** Checks provider auth availability, including profile fallback order. */
 export async function hasAvailableAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -121,12 +153,12 @@ export async function hasAvailableAuthForProvider(params: {
   }
   const store =
     params.store ??
-    resolveScopedAuthProfileStore({
+    (await resolveScopedAuthProfileStoreAsync({
       agentDir: params.agentDir,
       cfg,
       provider,
       preferredProfile,
-    });
+    }));
   // An inline provider key inside its billing/auth cooldown is not available
   // auth: the resolver refuses to hand it back, so reporting it as available
   // would strand callers on a credential they cannot use.
@@ -220,7 +252,6 @@ export async function hasAvailableAuthForProvider(params: {
   return false;
 }
 
-/** Resolves request credentials from the provider attached to a model descriptor. */
 export async function getApiKeyForModelCore(params: {
   model: Model;
   cfg?: OpenClawConfig;
@@ -307,11 +338,12 @@ export function applySecretRefHeaderSentinels<T extends Model>(
   const isManagedSecret = (value: unknown) =>
     parseSecretRef(value) !== null ||
     (typeof value === "string" && isSecretRefHeaderValueMarker(value));
+  const sentinelize = (value: string) =>
+    mintSecretSentinel(value, { label: `model-auth:${model.provider}` });
   const addReplacement = (name: string, value: string, replacement?: string) => {
     replacements.set(name.trim().toLowerCase(), {
       value,
-      replacement:
-        replacement ?? mintSecretSentinel(value, { label: `model-auth:${model.provider}` }),
+      replacement: replacement ?? sentinelize(value),
     });
   };
   for (const [sourceHeaders, runtimeHeaders] of [
@@ -342,9 +374,7 @@ export function applySecretRefHeaderSentinels<T extends Model>(
       continue;
     }
     protectedRequestHeaders ??= { ...attachedRequest.headers };
-    protectedRequestHeaders[name] = mintSecretSentinel(value, {
-      label: `model-auth:${model.provider}`,
-    });
+    protectedRequestHeaders[name] = sentinelize(value);
   }
   if (protectedRequestHeaders && attachedRequest) {
     protectedRequest = { ...attachedRequest, headers: protectedRequestHeaders };
@@ -361,15 +391,11 @@ export function applySecretRefHeaderSentinels<T extends Model>(
           ...protectedRequest,
           auth: {
             ...attachedRequest.auth,
-            token: mintSecretSentinel(token, { label: `model-auth:${model.provider}` }),
+            token: sentinelize(token),
           },
         };
       }
-      addReplacement(
-        "Authorization",
-        `Bearer ${token}`,
-        `Bearer ${mintSecretSentinel(token, { label: `model-auth:${model.provider}` })}`,
-      );
+      addReplacement("Authorization", `Bearer ${token}`, `Bearer ${sentinelize(token)}`);
     }
   } else if (
     sourceAuth?.mode === "header" &&
@@ -385,15 +411,11 @@ export function applySecretRefHeaderSentinels<T extends Model>(
           ...protectedRequest,
           auth: {
             ...attachedRequest.auth,
-            value: mintSecretSentinel(value, { label: `model-auth:${model.provider}` }),
+            value: sentinelize(value),
           },
         };
       }
-      addReplacement(
-        headerName,
-        `${prefix}${value}`,
-        `${prefix}${mintSecretSentinel(value, { label: `model-auth:${model.provider}` })}`,
-      );
+      addReplacement(headerName, `${prefix}${value}`, `${prefix}${sentinelize(value)}`);
     }
   }
   let headers: Record<string, string> | undefined;

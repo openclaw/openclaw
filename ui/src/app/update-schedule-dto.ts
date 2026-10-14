@@ -1,6 +1,6 @@
 // Narrow only rendered fields and tolerate additive fields across Gateway restarts.
 // Schema-parity tests enforce required strings without loading TypeBox at startup.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isNonEmptyProtocolString } from "../../../packages/gateway-protocol/src/protocol-value-normalization.js";
 import type { UpdateImmutableInstall } from "../../../packages/gateway-protocol/src/schema/config.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
@@ -14,11 +14,7 @@ function isBoundedInteger(value: unknown, minimum: number): value is number {
 const MAX_COMMITS = 5;
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
-  const snapshot = hello?.snapshot;
-  if (!isRecord(snapshot)) {
-    return null;
-  }
-  return readUpdateAvailableValue(snapshot.updateAvailable);
+  return readUpdateAvailableValue(asNullableRecord(hello?.snapshot)?.updateAvailable);
 }
 
 export function readUpdateAvailableValue(update: unknown): UpdateAvailable | null {
@@ -258,9 +254,5 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
 }
 
 export function readUpdateSchedule(hello: GatewayHelloOk | null): UpdateScheduleState | null {
-  const snapshot = hello?.snapshot;
-  if (!isRecord(snapshot)) {
-    return null;
-  }
-  return readUpdateScheduleValue(snapshot.updateSchedule);
+  return readUpdateScheduleValue(asNullableRecord(hello?.snapshot)?.updateSchedule);
 }

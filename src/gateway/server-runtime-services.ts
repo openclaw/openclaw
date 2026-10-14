@@ -2,7 +2,7 @@
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { onOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -19,22 +19,25 @@ import {
   schedulePendingSessionDeliveries,
   startSessionDeliveryRuntime,
 } from "../infra/session-delivery-queue-runtime.js";
+import { getQueueSize } from "../process/command-queue.js";
 import {
+  getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
+import { withAuthorizedQueuedConversationDelivery } from "./conversation-route-ownership.js";
 import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import {
   clearGatewayMaintenanceHandles,
   type GatewayMaintenanceHandles,
@@ -61,6 +64,7 @@ type StartupMaintenanceParams = Parameters<
 type GatewayStartupMaintenance = {
   startupSessionDatabases: StartupMaintenanceParams["databases"];
   pluginRuntime: { registry: ReturnType<StartupMaintenanceParams["getPluginRegistry"]> };
+  pluginMetadataSnapshot?: StartupMaintenanceParams["pluginMetadataSnapshot"];
   startupTrace?: StartupMaintenanceParams["startupTrace"];
 };
 type GatewayPostReadyLogger = StartupMaintenanceParams["log"];
@@ -117,37 +121,67 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
 }): void {
+  const isRecovering = () =>
+    getQueueSize(CommandLane.Background) > 0 ||
+    getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
+  const idle = {
+    scheduler: params.scheduler,
+    delayMs: params.delayMs,
+    retryDelayMs: Math.max(1_000, params.delayMs),
+    isClosing: () => params.signal.aborted || params.isClosing(),
+    isBusy: isRecovering,
+    waitForReady: params.waitForPostReadyWork,
+    log: params.log,
+  };
   if (process.platform === "linux") {
-    params.scheduler.schedule({
+    scheduleGatewayIdleTask({
+      ...idle,
       id: "database:page-cache",
-      delayMs: params.delayMs,
-      everyMs: 15 * 60 * 1000,
-      run: () =>
-        runWithGatewayIndependentRootWorkAdmission(
-          async () => {
-            await racePromiseWithAbortSignal(params.waitForPostReadyWork(), params.signal);
-            if (params.isClosing()) {
-              return;
-            }
-            const { warmGatewayDatabasePageCache } =
-              await import("./server-database-page-cache.js");
-            params.signal.throwIfAborted();
-            await warmGatewayDatabasePageCache({
-              databases: params.startupMaintenance.startupSessionDatabases,
-              signal: params.signal,
-              startupTrace: params.startupMaintenance.startupTrace,
-              log: params.log,
-            });
-          },
-          "runtime:database-page-cache",
-          params.signal,
-        ).catch((error: unknown) => {
-          if (!params.isClosing()) {
+      repeatDelayMs: 15 * 60 * 1000,
+      errorMessage: "database page-cache probe failed",
+      run: async (signal) => {
+        try {
+          const { warmGatewayDatabasePageCache } = await import("./server-database-page-cache.js");
+          signal.throwIfAborted();
+          await warmGatewayDatabasePageCache({
+            databases: params.startupMaintenance.startupSessionDatabases,
+            signal,
+            startupTrace: params.startupMaintenance.startupTrace,
+            log: params.log,
+          });
+        } catch (error) {
+          if (!signal.aborted && !params.isClosing()) {
             params.log.warn(`database page-cache probe failed: ${String(error)}`);
           }
-        }),
+        }
+      },
     });
   }
+  scheduleGatewayIdleTask({
+    ...idle,
+    id: "startup:database-maintenance",
+    errorMessage: "Gateway post-ready startup maintenance failed",
+    run: async (signal) => {
+      await measureStartup(
+        params.startupMaintenance.startupTrace,
+        "post-ready.startup-maintenance",
+        async () => {
+          const { runGatewayPostReadyStartupMaintenance } =
+            await import("./server-startup-plugins.js");
+          signal.throwIfAborted();
+          await runGatewayPostReadyStartupMaintenance({
+            getConfig: getRuntimeConfig,
+            getPluginRegistry: () => params.startupMaintenance.pluginRuntime.registry,
+            pluginMetadataSnapshot: params.startupMaintenance.pluginMetadataSnapshot,
+            databases: params.startupMaintenance.startupSessionDatabases,
+            startupTrace: params.startupMaintenance.startupTrace,
+            signal,
+            log: params.log,
+          });
+        },
+      );
+    },
+  });
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,
@@ -160,28 +194,6 @@ export function scheduleGatewayPostReadyMaintenance(params: {
           await params.waitForPostReadyWork();
           if (params.isClosing()) {
             return;
-          }
-          try {
-            await measureStartup(
-              params.startupMaintenance.startupTrace,
-              "post-ready.startup-maintenance",
-              async () => {
-                const { runGatewayPostReadyStartupMaintenance } =
-                  await import("./server-startup-plugins.js");
-                await runGatewayPostReadyStartupMaintenance({
-                  getConfig: getRuntimeConfig,
-                  getPluginRegistry: () => params.startupMaintenance.pluginRuntime.registry,
-                  databases: params.startupMaintenance.startupSessionDatabases,
-                  startupTrace: params.startupMaintenance.startupTrace,
-                  signal: params.signal,
-                  log: params.log,
-                });
-              },
-            );
-          } catch (error) {
-            if (!params.isClosing()) {
-              params.log.warn(`Gateway post-ready startup maintenance failed: ${String(error)}`);
-            }
           }
           try {
             if (!params.isClosing()) {
@@ -236,14 +248,16 @@ function startPendingOutboundDeliveryRecovery(params: {
   const scheduler = params.scheduler.scope();
   const { signal } = scheduler;
   let initialPass = true;
+  let pending = false;
   let inFlight: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
   const recover = (): Promise<void> | undefined => {
-    if (signal.aborted || inFlight || isGatewayWorkAdmissionClosed()) {
+    if (signal.aborted || inFlight) {
       return undefined;
     }
+    pending = false;
     const recovery = runWithGatewayIndependentRootWorkAdmission(async () => {
       if (signal.aborted) {
         return;
@@ -254,7 +268,7 @@ function startPendingOutboundDeliveryRecovery(params: {
       if (signal.aborted) {
         return;
       }
-      const deliverWithCurrentConversationAuthority = async (
+      const deliver = (
         deliveryParams: DeliverOutboundPayloadsParams,
         stateContext?: DeliveryQueueStateContext,
       ) => {
@@ -264,21 +278,17 @@ function startPendingOutboundDeliveryRecovery(params: {
             ? completion
             : deliveryParams.conversationDeliveryAttemptAuthority;
         if (!attemptAuthority) {
-          return await deliverOutboundPayloadsInternal(deliveryParams, stateContext);
+          return deliverOutboundPayloadsInternal(deliveryParams, stateContext);
         }
-        return await deliverOutboundPayloadsInternal(
+        return deliverOutboundPayloadsInternal(
           {
             ...deliveryParams,
-            onDeliveryAttempt: async () => {
-              await deliveryParams.onDeliveryAttempt?.();
-              if (!attemptAuthority.routeFingerprint) {
-                return;
-              }
-              await assertQueuedConversationDeliveryAttemptAuthorized(
+            withDirectAdapterHandoff: (initiate) =>
+              withAuthorizedQueuedConversationDelivery(
                 {
                   readCurrentConfig: getRuntimeConfig,
                   operationId: attemptAuthority.operationId,
-                  routeFingerprint: attemptAuthority.routeFingerprint,
+                  routeFingerprint: attemptAuthority.routeFingerprint ?? "",
                 },
                 {
                   agentId: attemptAuthority.agentId,
@@ -288,15 +298,21 @@ function startPendingOutboundDeliveryRecovery(params: {
                     stateContext,
                   ),
                 },
-              );
-            },
+                initiate,
+              ),
           },
           stateContext,
         );
       };
-      logRecovery ??= params.log.child("delivery-recovery");
+      const recoveryLog = (logRecovery ??= params.log.child("delivery-recovery"));
+      const options = {
+        deliver,
+        log: recoveryLog,
+        cfg: initialPass ? params.cfg : getRuntimeConfig(),
+        shouldContinue: () => !signal.aborted,
+        onPending: schedule,
+      };
       if (initialPass) {
-        const cfg = params.cfg;
         initialPass = false;
         const { countPendingDeliveryQueueEntries } =
           await import("../infra/delivery-queue-sqlite.js");
@@ -305,77 +321,85 @@ function startPendingOutboundDeliveryRecovery(params: {
           OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
           OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
         } = await import("../infra/outbound/delivery-queue-namespaces.js");
-        const remaining = countPendingDeliveryQueueEntries(
-          [
-            LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-            OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-            OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-          ],
-          undefined,
-          recoveryContext,
-        );
-        if (remaining > 0) {
-          logRecovery.warn(
-            `${remaining} legacy outbound deliveries need repair. Stop the Gateway and run openclaw doctor --fix.`,
+        const diagnoseLegacy = async () => {
+          const remaining = await countPendingDeliveryQueueEntries(
+            [
+              LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+              OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+              OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+            ],
+            undefined,
+            recoveryContext,
           );
+          if (!signal.aborted && remaining > 0) {
+            recoveryLog.warn(
+              `${remaining} legacy outbound deliveries need repair. Stop the Gateway and run openclaw doctor --fix.`,
+            );
+          }
+        };
+        const settled = await Promise.allSettled([
+          diagnoseLegacy(),
+          recoverPendingDeliveries(options, deliver, recoveryContext),
+        ]);
+        for (const result of settled) {
+          if (result.status === "rejected") {
+            schedule();
+            params.log.error(`Delivery recovery failed: ${String(result.reason)}`);
+          }
         }
-        await recoverPendingDeliveries(
-          {
-            deliver: deliverWithCurrentConversationAuthority,
-            log: logRecovery,
-            cfg,
-            shouldContinue: () => !signal.aborted,
-          },
-          deliverWithCurrentConversationAuthority,
-          recoveryContext,
-        );
         return;
       }
-      // Normal retries use fresh config so revoked accounts cannot inherit the
-      // authority captured at gateway startup.
       await drainPendingDeliveriesCore(
         {
+          ...options,
           drainKey: "gateway:outbound",
           logLabel: "Outbound delivery retry",
-          cfg: getRuntimeConfig(),
-          log: logRecovery,
-          deliver: deliverWithCurrentConversationAuthority,
           selectEntry: () => ({ match: true, bypassBackoff: false }),
-          shouldContinue: () => !signal.aborted,
         },
-        deliverWithCurrentConversationAuthority,
+        deliver,
         recoveryContext,
       );
-    }, "runtime:delivery-recovery").catch((err: unknown) =>
-      params.log.error(`Delivery recovery failed: ${String(err)}`),
-    );
+    }, "runtime:delivery-recovery").catch((err: unknown) => {
+      pending = true;
+      params.log.error(`Delivery recovery failed: ${String(err)}`);
+    });
     const settled: Promise<void> = recovery.finally(() => {
-      if (inFlight === settled) {
-        inFlight = null;
+      inFlight = null;
+      if (pending) {
+        schedule();
       }
     });
     inFlight = settled;
     return settled;
   };
 
-  // Match the queue's first backoff window without holding admission between
-  // ticks; otherwise suspended/restarting gateways retain invisible work.
-  scheduler.schedule({
-    id: "delivery:outbound-recovery",
-    delayMs: computeBackoffMs(1),
-    everyMs: computeBackoffMs(1),
-    run: recover,
+  const schedule = () => {
+    // Keep enqueues arriving during a scan for its successor, even if that scan was empty.
+    pending = true;
+    if (!inFlight) {
+      scheduler.schedule({
+        id: "delivery:outbound-recovery",
+        delayMs: computeBackoffMs(1),
+        mode: "earliest",
+        run: () => (isGatewayWorkAdmissionClosed() ? schedule() : recover()),
+      });
+    }
+  };
+  const unsubscribe = onOutboundDeliveryEnqueued((stateDir) => {
+    if (stateDir === recoveryContext.stateDir) {
+      runInDetachedAsyncContext(schedule);
+    }
   });
-  void recover();
+  void (isGatewayWorkAdmissionClosed() ? schedule() : recover());
   return () => {
     if (stopPromise) {
       return stopPromise;
     }
+    unsubscribe();
     const scheduled = scheduler.stop();
     const recovery = inFlight;
     if (!recovery) {
-      stopPromise = scheduled;
-      return stopPromise;
+      return (stopPromise = scheduled);
     }
     const stillPendingTimer = setTimeout(() => {
       (logRecovery ??= params.log.child("delivery-recovery")).warn(
@@ -507,16 +531,6 @@ export function activateGatewayScheduledServices(params: {
       .child("heartbeat")
       .warn(
         "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
-      );
-  }
-  if (
-    !params.cronEnabled &&
-    resolveSkillWorkshopConfig(params.cfgAtStart).autonomous.mode === "auto"
-  ) {
-    params.log
-      .child("skill-workshop")
-      .warn(
-        "scheduled skill collection reviews are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
       );
   }
   // Scheduled heartbeat wakes fire from a timer with no Gateway request, so

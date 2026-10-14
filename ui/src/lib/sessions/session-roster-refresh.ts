@@ -8,11 +8,7 @@ import {
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import {
-  appendSessionResults,
-  preserveCurrentSessionRow,
-  reconcileRosterPresentationMetadata,
-} from "./reconcile.ts";
+import { appendSessionResults, preserveCurrentSessionRow } from "./reconcile.ts";
 import type {
   SessionGateway,
   SessionListOptions,
@@ -89,8 +85,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   };
 
   const managedList = (scope: SessionListScope) =>
-    getManagedSessionList(managedLists, scope, (entry, isCurrent) =>
-      refreshManagedList(entry, { append: false, invalidated: true, background: true }, isCurrent),
+    getManagedSessionList(managedLists, scope, (entry, isCurrent, immediate) =>
+      refreshManagedList(
+        entry,
+        { append: false, invalidated: true, background: true, immediate },
+        isCurrent,
+      ),
     );
 
   const primaryWindows = createSessionPrimaryWindows(
@@ -104,13 +104,20 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   const scheduleManagedLists = (
     matches: (entry: ManagedSessionList) => boolean,
     excludedKey?: string,
+    options: { foreground?: boolean; immediate?: boolean } = {},
   ) => {
     // Dormant primary windows cannot close event gaps until selection revalidates them.
     primaryWindows.retire((entry) => entry.key !== excludedKey && matches(entry));
     for (const entry of managedLists.values()) {
       if (entry.key !== excludedKey && matches(entry)) {
         entry.readGeneration += 1;
-        entry.coordinator.schedule();
+        if (options.foreground && pageActive && entry.listeners.size > 0) {
+          // Accepted user actions need authoritative membership now,
+          // independently of a slow primary read or background bootstrap.
+          void refreshManagedList(entry, { append: false, invalidated: true });
+        } else {
+          entry.coordinator.schedule(options.immediate);
+        }
       }
     }
   };
@@ -122,12 +129,24 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       "key" | "agentId" | "controlOwnerSessionKey" | "parentSessionKey" | "spawnedBy"
     >,
     sourceListScope?: SessionListScope,
+    observedReadRevision?: number,
+    immediate = false,
   ) => {
     const matches = sessionListEventMatcher({ agentId, session: row });
-    const sourceKey = sourceListScope && sessionListQueryKey(sourceListScope);
     // Adopting a query's accepted row into the primary roster cannot make
     // that supplying query stale. Other membership projections still refresh.
-    scheduleManagedLists((entry) => matches(entry.query, entry.snapshot.result), sourceKey);
+    scheduleManagedLists(
+      (entry) =>
+        // A list already covers metadata requested before it; real events
+        // and later observations still retire its pages and schedule a fresh read.
+        !(
+          (entry.pending || entry.snapshot.readSucceeded === true) &&
+          observedReadRevision !== undefined &&
+          entry.readRevision >= observedReadRevision
+        ) && matches(entry.query, entry.snapshot.result),
+      sourceListScope && sessionListQueryKey(sourceListScope),
+      { foreground: immediate },
+    );
   };
 
   const refreshManagedList = createSessionManagedListRefresh(host, {
@@ -189,15 +208,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const mergeWithCurrent =
         !currentState.resultCached && append && typeof requestOptions.offset === "number";
       const currentResult = currentState.resultCached ? null : currentState.result;
-      const presented = reconcileRosterPresentationMetadata(result, currentResult);
-      observations.inherit(presented, result, currentResult, requestOptions.agentId);
-      const observed = observations.accept(
-        presented,
-        currentState.result,
-        null,
-        requestOptions.agentId,
-        currentState.agentId,
-      );
+      const observed = observations.accept(result, currentState, null, requestOptions.agentId);
       let nextResult =
         observed && mergeWithCurrent && currentResult
           ? appendSessionResults(currentResult, observed)
@@ -494,7 +505,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   const reconcileMutation = createSessionMutationRefresh(host, {
     foreground: () => ({ agentId: lastListOptions.agentId, initial: listOptionsSource === "none" }),
     replacementOptions,
-    invalidate: invalidateManagedLists,
+    invalidate: (agentId, immediate) =>
+      invalidateManagedLists(agentId, undefined, undefined, undefined, immediate),
     refresh: (options, isErrorCurrent) =>
       refreshInternal(options, false, isErrorCurrent, "reconcile"),
     read: listReader.reconcile,
@@ -524,7 +536,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         scope,
         lists,
         affectsPrimary: matches({ agentId: lastListOptions.agentId }),
-        ...observations.captureEventDelivery(scope, revision),
+        ...observations.captureEventDelivery(scope),
       };
     },
     primaryList: () => primaryList,
@@ -625,9 +637,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     },
     lastOptions: () => lastListOptions,
     retireWarmLists,
-    selectionPresentation(
-      agentId: string | null,
-    ): Pick<SessionListSnapshot, "result" | "agentId"> | null {
+    selectionPresentation(agentId: string | null) {
       const connection = host.connection.capture();
       return connection && !host.observerError() && agentId
         ? primaryWindows.presentation(replacementOptions(agentId), connection.epoch)
@@ -656,25 +666,24 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         primarySnapshotApplied?: boolean;
         affectsPrimary?: boolean;
         affectedLists?: ReadonlySet<ManagedSessionList>;
+        immediate?: boolean;
       } = {},
     ) {
       const matchesAgent = sessionListAgentMatcher(options.agentId);
       const affected = options.affectedLists;
-      // Server events can invalidate a read; accepted row observations are reconciled into it.
       primaryWindows.invalidate(
         (entry) => affected?.has(entry) ?? matchesAgent(entry.query.agentId),
         lastListOptions,
       );
-      if (
-        !options.primarySnapshotApplied &&
-        (options.affectsPrimary ?? matchesAgent(lastListOptions.agentId))
-      ) {
-        eventRefreshCoordinator.schedule();
-      } else if (options.primarySnapshotApplied) {
+      if (options.primarySnapshotApplied) {
         eventRefreshCoordinator.scheduleFallback();
+      } else if (options.affectsPrimary ?? matchesAgent(lastListOptions.agentId)) {
+        eventRefreshCoordinator.schedule(options.immediate);
       }
       if (affected) {
-        scheduleManagedLists((entry) => affected.has(entry));
+        scheduleManagedLists((entry) => affected.has(entry), undefined, {
+          immediate: options.immediate,
+        });
         for (const entry of managedLists.values()) {
           if (
             !affected.has(entry) &&

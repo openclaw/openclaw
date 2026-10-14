@@ -1,16 +1,14 @@
 import type http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
-  RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { VoiceCallRealtimeConfig } from "../config.js";
-import type { CallManager } from "../manager.js";
 import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
+import { makeCall, makeBridge, makeHandler } from "./realtime-call-control.test-helpers.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
@@ -18,108 +16,6 @@ type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridg
 afterEach(() => {
   vi.useRealTimers();
 });
-
-function makeCall(providerCallId: string, overrides: Partial<CallRecord> = {}): CallRecord {
-  return {
-    callId: "call-1",
-    providerCallId,
-    provider: "twilio",
-    direction: "inbound",
-    state: "ringing",
-    from: "+15550001234",
-    to: "+15550009999",
-    startedAt: Date.now(),
-    transcript: [],
-    processedEventIds: [],
-    metadata: {},
-    ...overrides,
-  };
-}
-
-function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoiceBridge {
-  return {
-    connect: async () => {},
-    sendAudio: () => {},
-    setMediaTimestamp: () => {},
-    submitToolResult: vi.fn(),
-    acknowledgeMark: () => {},
-    close: () => {},
-    isConnected: () => true,
-    triggerGreeting: () => {},
-    ...overrides,
-  };
-}
-
-function makeHandler(params: {
-  call: CallRecord;
-  createBridge: RealtimeVoiceProviderPlugin["createBridge"];
-  endCall?: CallManager["endCall"];
-  idleHangupMs?: number;
-  nativeConsult?: boolean;
-}) {
-  const config = {
-    enabled: true,
-    streamPath: "/voice/stream/realtime",
-    instructions: "Be helpful.",
-    toolPolicy: "safe-read-only",
-    consultPolicy: "auto",
-    tools: [],
-    fastContext: {
-      enabled: false,
-      timeoutMs: 800,
-      maxResults: 3,
-      sources: ["memory", "sessions"],
-      fallbackToConsult: false,
-    },
-    agentContext: {
-      enabled: false,
-      maxChars: 6000,
-      includeIdentity: true,
-      includeWorkspaceFiles: true,
-      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-    },
-    providers: {},
-    ...(params.idleHangupMs ? { idleHangupMs: params.idleHangupMs } : {}),
-  } satisfies VoiceCallRealtimeConfig;
-  const provider: RealtimeVoiceProviderPlugin = {
-    id: "openai",
-    label: "OpenAI",
-    isConfigured: () => true,
-    createBridge: params.createBridge,
-    capabilities: {
-      transports: ["gateway-relay"],
-      inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
-      outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
-      supportsBargeIn: true,
-      ...(params.nativeConsult ? { handlesAgentConsult: true, supportsToolCalls: false } : {}),
-    },
-  };
-  const manager = {
-    processEvent: vi.fn(async () => ({ kind: "processed" })),
-    updateCallMetadata: vi.fn(async (call: CallRecord, update) => {
-      call.metadata = update(call.metadata);
-    }),
-    endCall: params.endCall ?? vi.fn(async () => ({ success: true })),
-    getCallForStream: vi.fn(async () => params.call),
-    getCallByProviderCallId: vi.fn(() => params.call),
-  } as unknown as CallManager;
-  const handler = new RealtimeCallHandler(
-    config,
-    manager,
-    () => ({
-      agentId: "main",
-      instructions: config.instructions,
-      provider,
-      providerConfig: { apiKey: "test-key" },
-      capabilities: provider.capabilities,
-    }),
-    "/voice/webhook",
-    { connect: () => {}, disconnect: () => {}, retire: () => {} },
-    undefined,
-  );
-  handler.setPublicUrl("https://public.example/voice/webhook");
-  return { handler, manager };
-}
 
 async function openCall(params: {
   call: CallRecord;
@@ -165,6 +61,60 @@ async function closeCall(
 }
 
 describe("realtime call control over the Twilio stream", () => {
+  it("retires the realtime producer without ending a call before carrier playback", async () => {
+    const providerCallId = "CA-carrier-playback";
+    const call = makeCall(providerCallId);
+    const created = createDeferred<void>();
+    const close = vi.fn();
+    const { handler, processEvent } = makeHandler({
+      call,
+      createBridge: () => {
+        created.resolve();
+        return makeBridge({ close });
+      },
+    });
+    const { server, ws } = await openCall({ call, handler, providerCallId });
+    try {
+      await created.promise;
+      await handler.prepareCarrierPlayback(call.callId);
+      expect(close).toHaveBeenCalledOnce();
+      expect(handler.speak(call.callId, "Too late")).toMatchObject({ success: false });
+      expect(processEvent.mock.calls).not.toContainEqual([
+        expect.objectContaining({ type: "call.ended" }),
+      ]);
+    } finally {
+      await closeCall(handler, server, ws);
+    }
+  });
+
+  it("abandons a pending realtime admission when carrier voicemail takes ownership", async () => {
+    const providerCallId = "CA-pending-playback";
+    const call = makeCall(providerCallId);
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const createBridge = vi.fn(() => makeBridge());
+    const { handler, manager, endCall } = makeHandler({ call, createBridge });
+    manager.updateCallMetadata = vi.fn(async (record, update) => {
+      entered.resolve();
+      await release.promise;
+      record.metadata = update(record.metadata);
+    });
+    const { server, ws } = await openCall({ call, handler, providerCallId });
+    try {
+      await entered.promise;
+      call.metadata = { ...call.metadata, voicemailStatus: "pending" };
+      await handler.prepareCarrierPlayback(call.callId);
+      const closed = waitForClose(ws);
+      release.resolve();
+      await closed;
+      expect(createBridge).not.toHaveBeenCalled();
+      expect(endCall).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await closeCall(handler, server, ws);
+    }
+  });
+
   it("keeps a native consult running when far-side speech arrives during silent model output", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const receivedAudio = createDeferred<void>();

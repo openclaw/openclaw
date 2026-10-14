@@ -9,6 +9,7 @@ import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
+import { createClientTestIdentity } from "../gateway/client.test-support.js";
 import { ChatLog } from "./components/chat-log.js";
 import { withGatewayChatConnection } from "./gateway-chat.test-support.js";
 import type { TuiEvent, TuiSessionDescription, TuiSessionList } from "./tui-backend.js";
@@ -106,6 +107,59 @@ describe("GatewayChatClient", () => {
       agentId: "work",
       includeDetails: true,
     });
+  });
+
+  it("isolates session-scoped catalogs only when the Gateway advertises them", async () => {
+    const request = mockRequest()
+      .mockResolvedValueOnce({
+        models: [{ provider: "fixture", id: "first", name: "First" }],
+      })
+      .mockResolvedValueOnce({
+        models: [{ provider: "fixture", id: "second", name: "Second" }],
+      });
+    const client = createClient();
+    client.hello = hello(["models.list"], undefined, [
+      GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
+      GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG,
+    ]);
+
+    await client.listModels({ agentId: "work", sessionKey: "agent:work:first" });
+    await client.listModels({ agentId: "work", sessionKey: "agent:work:second" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
+      agentId: "work",
+      sessionKey: "agent:work:first",
+      includeDetails: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      agentId: "work",
+      sessionKey: "agent:work:second",
+      includeDetails: true,
+    });
+    expect(
+      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:first" })?.[0]?.id,
+    ).toBe("first");
+    expect(
+      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
+    ).toBe("second");
+  });
+
+  it("keeps session keys off requests to older Gateways", async () => {
+    const request = mockRequest({
+      models: [{ provider: "fixture", id: "shared", name: "Shared" }],
+    });
+    const client = createClient();
+    client.hello = hello(["models.list"], undefined, [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG]);
+
+    await client.listModels({ agentId: "work", sessionKey: "agent:work:first" });
+
+    expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
+      agentId: "work",
+      includeDetails: true,
+    });
+    expect(
+      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
+    ).toBe("shared");
   });
 
   it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
@@ -289,6 +343,10 @@ describe("GatewayChatClient", () => {
 
   it("surfaces loopback block-mode start failures through disconnect handler", async () => {
     vi.useFakeTimers();
+    const identity = await import("../infra/device-identity-async.js");
+    vi.spyOn(identity, "loadOrCreateDeviceIdentityAsync").mockResolvedValue(
+      createClientTestIdentity("fixture-tui-proxy-device"),
+    );
     // The preceding mock test resets modules; keep client and proxy ownership together.
     const { GatewayChatClient: CurrentGatewayChatClient } = await import("./gateway-chat.js");
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");

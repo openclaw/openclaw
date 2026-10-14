@@ -3,79 +3,12 @@
  * This state tracks order, last-good profile, and cooldown/failure metadata
  * separately from secret-bearing credentials.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { coerceProfileUsageStats } from "./profile-usage-stats.js";
 import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sqlite.js";
-import type { AuthProfileState, AuthProfileStateStore, ProfileUsageStats } from "./types.js";
+import { coerceAuthProfileState } from "./state-normalization.js";
+import type { AuthProfileState, AuthProfileStateStore } from "./types.js";
 
-function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const normalized: Record<string, string[]> = {};
-  for (const [provider, value] of Object.entries(raw)) {
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    const providerKey = normalizeProviderId(provider);
-    if (!providerKey) {
-      continue;
-    }
-    const list = normalizeTrimmedStringList(value);
-    if (list.length > 0) {
-      normalized[providerKey] = list;
-    }
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function normalizeLastGood(raw: unknown): AuthProfileState["lastGood"] {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const normalized: Record<string, string> = {};
-  for (const [provider, profileId] of Object.entries(raw)) {
-    const providerKey = normalizeProviderId(provider);
-    const normalizedProfileId = normalizeOptionalString(profileId);
-    if (!providerKey || !normalizedProfileId) {
-      continue;
-    }
-    normalized[providerKey] = normalizedProfileId;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function normalizeUsageStats(raw: unknown): AuthProfileState["usageStats"] {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const normalized: Record<string, ProfileUsageStats> = {};
-  for (const [profileId, value] of Object.entries(raw)) {
-    const normalizedProfileId = normalizeOptionalString(profileId);
-    const stats = coerceProfileUsageStats(value);
-    if (!normalizedProfileId || !stats) {
-      continue;
-    }
-    normalized[normalizedProfileId] = stats;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-/** Coerces persisted auth profile runtime state into the current shape. */
-export function coerceAuthProfileState(raw: unknown): AuthProfileState {
-  if (!isRecord(raw)) {
-    return {};
-  }
-  return {
-    order: normalizeAuthProfileOrder(raw.order),
-    lastGood: normalizeLastGood(raw.lastGood),
-    usageStats: normalizeUsageStats(raw.usageStats),
-  };
-}
+export { coerceAuthProfileState } from "./state-normalization.js";
 
 /** Merges auth profile runtime state, with override records winning per key. */
 export function mergeAuthProfileState(

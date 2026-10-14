@@ -1015,7 +1015,7 @@ describe("config plugin validation", () => {
     [
       "skill-workshop",
       true,
-      "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)",
+      'plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Set skills.workshop.autonomous.mode to "auto" or "off" and use openclaw skills workshop commands, then remove this plugins config entry)',
     ],
   ] as const)("warns across all references to removed %s", (id, enabled, message) => {
     const res = validateRemovedPluginConfig(id, enabled);

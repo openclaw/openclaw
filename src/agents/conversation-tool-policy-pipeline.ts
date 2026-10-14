@@ -70,6 +70,16 @@ export function buildConversationToolPolicyPipelineSteps(params: {
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
   const profile = params.capabilityProfile.policy;
+  const step = (
+    policy: ToolPolicyLike | undefined,
+    label: string,
+    kind: "session" | "runtime" = "session",
+  ): ToolPolicyPipelineStep => ({
+    policy,
+    source: { kind },
+    label,
+    unavailableCoreToolReason: params.unavailableCoreToolReason,
+  });
   return [
     ...buildDefaultToolPolicyPipelineSteps({
       profilePolicy: params.policies.profilePolicy,
@@ -88,35 +98,13 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       sources: profile.sources,
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     }),
-    {
-      policy: params.policies.sandboxPolicy,
-      source: { kind: "session" },
-      label: "sandbox tools.allow",
-      unavailableCoreToolReason: params.unavailableCoreToolReason,
-    },
+    step(params.policies.sandboxPolicy, "sandbox tools.allow"),
     ...(params.additionalStepsAfterSandbox ?? []),
-    {
-      policy: params.policies.subagentPolicy,
-      source: { kind: "session" },
-      label: "subagent tools.allow",
-      unavailableCoreToolReason: params.unavailableCoreToolReason,
-    },
+    step(params.policies.subagentPolicy, "subagent tools.allow"),
     ...(params.includeRuntimeToolPolicy
-      ? [
-          {
-            policy: params.policies.runtimeToolPolicy,
-            source: { kind: "runtime" as const },
-            label: "runtime tools.allow",
-            unavailableCoreToolReason: params.unavailableCoreToolReason,
-          },
-        ]
+      ? [step(params.policies.runtimeToolPolicy, "runtime tools.allow", "runtime")]
       : []),
-    {
-      policy: params.policies.inheritedToolPolicy,
-      source: { kind: "session" },
-      label: "inherited tools",
-      unavailableCoreToolReason: params.unavailableCoreToolReason,
-    },
+    step(params.policies.inheritedToolPolicy, "inherited tools"),
   ];
 }
 

@@ -429,8 +429,6 @@ final class DashboardBrowserSessionStore {
         ] + patterns.map { pattern in
             ["trigger": ["url-filter": pattern], "action": ["type": "ignore-previous-rules"]]
         }
-        guard let encoded = try String(data: JSONSerialization.data(withJSONObject: rules), encoding: .utf8)
-        else { throw GatewayBrowserSessionError.invalidSession }
-        return encoded
+        return try String(bytes: JSONSerialization.data(withJSONObject: rules), encoding: .utf8)!
     }
 }

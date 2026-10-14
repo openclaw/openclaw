@@ -22,26 +22,38 @@ export const AUTH_PROFILE_FAILURE_REASONS: ReadonlySet<AuthProfileFailureReason>
   FAILURE_REASON_PRIORITY,
 );
 
+const [blockedFields, cooldownFields, disabledFields] = [
+  ["blockedUntil", "blockedReason", "blockedSource", "blockedModel", "blockedScope"],
+  ["cooldownUntil", "cooldownReason", "cooldownClassification", "cooldownModel"],
+  ["disabledUntil", "disabledReason"],
+] as const;
+const expiryWindows = [cooldownFields, blockedFields, disabledFields];
+const clearedWindows = Object.fromEntries(
+  [...blockedFields, ...cooldownFields, ...disabledFields].map((field) => [field, undefined]),
+);
+
 /** Clears failure windows while preserving unrelated usage history. */
 export function resetAuthProfileFailureState(
   existing: ProfileUsageStats,
   overrides?: Partial<ProfileUsageStats>,
+  successfulModel?: string,
 ): ProfileUsageStats {
   return {
     ...existing,
     errorCount: 0,
-    blockedUntil: undefined,
-    blockedReason: undefined,
-    blockedSource: undefined,
-    blockedModel: undefined,
-    blockedScope: undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-    disabledUntil: undefined,
-    disabledReason: undefined,
+    ...clearedWindows,
     failureCounts: undefined,
+    // A sibling model succeeding does not replenish this model's quota.
+    ...(successfulModel && existing.cooldownModel && existing.cooldownModel !== successfulModel
+      ? {
+          cooldownUntil: existing.cooldownUntil,
+          cooldownReason: existing.cooldownReason,
+          cooldownClassification: existing.cooldownClassification,
+          cooldownModel: existing.cooldownModel,
+          errorCount: existing.errorCount,
+          failureCounts: existing.failureCounts,
+        }
+      : {}),
     ...overrides,
   };
 }
@@ -251,25 +263,13 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     }
 
     let profileMutated = false;
-    if (expired(stats.cooldownUntil)) {
-      stats.cooldownUntil = undefined;
-      stats.cooldownReason = undefined;
-      stats.cooldownClassification = undefined;
-      stats.cooldownModel = undefined;
-      profileMutated = true;
-    }
-    if (expired(stats.blockedUntil)) {
-      stats.blockedUntil = undefined;
-      stats.blockedReason = undefined;
-      stats.blockedSource = undefined;
-      stats.blockedModel = undefined;
-      stats.blockedScope = undefined;
-      profileMutated = true;
-    }
-    if (expired(stats.disabledUntil)) {
-      stats.disabledUntil = undefined;
-      stats.disabledReason = undefined;
-      profileMutated = true;
+    for (const fields of expiryWindows) {
+      if (expired(stats[fields[0]])) {
+        for (const field of fields) {
+          stats[field] = undefined;
+        }
+        profileMutated = true;
+      }
     }
 
     // Reset the aggregate counter when ALL cooldowns have expired so unrelated

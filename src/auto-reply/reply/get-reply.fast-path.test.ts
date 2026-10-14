@@ -51,7 +51,8 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn<LoadModelCatalogFn>(),
   resolveReplyDirectives: vi.fn(),
 }));
-vi.mock("./commands.runtime.js", () => ({
+vi.mock("./commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands.js")>()),
   handleCommands: (...args: unknown[]) => mocks.handleCommands(...args),
 }));
 vi.mock("./commands-status.js", () => ({

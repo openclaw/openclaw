@@ -7,8 +7,10 @@ export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" }
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
   theme: "settings-appearance-theme",
+  background: "settings-appearance-background",
   accent: "settings-appearance-accent",
   typography: "settings-appearance-typography",
+  tabIcon: "settings-appearance-tab-icon",
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
@@ -16,7 +18,7 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   connection: "settings-appearance-connection",
 } as const;
 
-const appearanceSettingsRouteTarget = (targetId: string) =>
+export const appearanceSettingsRouteTarget = (targetId: string) =>
   ({ routeId: "appearance", search: "?section=__appearance__", hash: `#${targetId}` }) as const;
 
 export const SETTINGS_ROUTE_TARGETS = {

@@ -5,7 +5,7 @@ import type { NodePluginToolDescriptor } from "../../../packages/gateway-protoco
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
-import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { LlmCompleteUsage, PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 import type {
   RuntimeSessionFactsResult,
   RuntimeSessionFactsSelection,
@@ -135,6 +135,12 @@ export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
+  /** Fence an in-process channel send to the exact current requester session incarnation. */
+  sessionDeliveryGeneration?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */
@@ -191,6 +197,13 @@ export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
     /** Fresh, tool-free background inference under the existing subagent model policy. */
     complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
+    /** Ephemeral session-context inference on the session's model, with tool execution denied. */
+    forkSession: (params: {
+      sessionKey: string;
+      message: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    }) => Promise<{ text: string; usage?: LlmCompleteUsage }>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
@@ -213,6 +226,7 @@ export type PluginRuntime = PluginRuntimeCore & {
     resolveWorkspaceAuthority: (params: {
       config: OpenClawConfig;
       agentId?: string;
+      storePath?: string;
       confinedToolNames?: readonly string[];
       requiredToolNames?: readonly string[];
       modelProvider?: string;

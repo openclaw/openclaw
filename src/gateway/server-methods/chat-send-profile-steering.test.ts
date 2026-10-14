@@ -52,7 +52,6 @@ describe("native profile-bound steering", () => {
       }
       const sourceTurnId = "native-active-source";
       await upsertSessionEntryCore(fixture.scope, {
-        status: "running",
         restartRecoveryDeliveryRunId: "native-receipt-owner",
         restartRecoveryDeliverySourceRunId: sourceTurnId,
       });

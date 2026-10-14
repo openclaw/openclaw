@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -25,6 +25,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 const PRIMARY_DEVICE_IDENTITY_KEY = "primary";
@@ -226,7 +227,7 @@ function storedIdentityToRow(
 }
 
 function readStoredIdentityRowFromDatabase(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   identityKey: string,
 ): DeviceIdentityRow | null {
   const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
@@ -239,7 +240,7 @@ function readStoredIdentityRowFromDatabase(
 }
 
 function readStoredIdentityFromDatabase(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   identityKey: string,
 ): StoredDeviceIdentity | null {
   const row = readStoredIdentityRowFromDatabase(database, identityKey);
@@ -252,7 +253,7 @@ function readStoredIdentityFromDatabase(
 }
 
 function isEmptyBootstrapIdentityTableMiss(
-  database: { db: Parameters<typeof getNodeSqliteKysely>[0] },
+  database: { db: EngineConnection },
   error: unknown,
 ): boolean {
   if (
@@ -317,13 +318,13 @@ export function readStoredDeviceIdentity(
   return readStoredIdentityFromDatabase(database, resolved.identityKey);
 }
 
-/** Read without creating, repairing, chmodding, or joining the writer lifecycle. */
+/** Read identity rows without creating identities or joining the writer lifecycle. */
 export function readStoredDeviceIdentityReadOnly(
   options: DeviceIdentityStoreOptions = {},
 ): StoredDeviceIdentity | null {
   const resolved = resolveDeviceIdentityStore(options);
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    withExistingOpenClawStateDatabaseReadOnly(
       (database) => {
         try {
           return readStoredIdentityFromDatabase(database, resolved.identityKey);

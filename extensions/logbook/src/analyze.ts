@@ -58,7 +58,6 @@ function clockToMs(day: string, clock: string): number | null {
   return date.getTime();
 }
 
-/** Strips code fences and extracts the outermost JSON array/object from model text. */
 function extractJsonPayload(raw: string): string {
   const cleaned = raw.replaceAll("```json", "").replaceAll("```", "").trim();
   const firstBracket = cleaned.search(/[[{]/);
@@ -203,37 +202,33 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
     return { ok: false, error: "Output contained no valid cards." };
   }
   const sorted = drafts.toSorted((a, b) => a.startMs - b.startMs);
-  const normalized: LogbookCardDraft[] = [];
-  for (const current of sorted) {
-    const previous = normalized.at(-1);
+  for (const [index, current] of sorted.entries()) {
+    const previous = sorted[index - 1];
     if (!previous) {
-      normalized.push(current);
       continue;
     }
     const overlapMs = previous.endMs - current.startMs;
     if (overlapMs > 60 * 1000) {
       return {
         ok: false,
-        error: `Cards ${normalized.length - 1} and ${normalized.length} overlap by ${Math.round(overlapMs / 60000)} minutes; adjacent cards must meet cleanly.`,
+        error: `Cards ${index - 1} and ${index} overlap by ${Math.round(overlapMs / 60000)} minutes; adjacent cards must meet cleanly.`,
       };
     }
     if (overlapMs > 0) {
       if (current.endMs <= previous.endMs) {
         return {
           ok: false,
-          error: `Card ${normalized.length}: endTime must be after the previous card's endTime.`,
+          error: `Card ${index}: endTime must be after the previous card's endTime.`,
         };
       }
       // Trim sub-minute overlaps instead of round-tripping to the model again.
-      normalized.push({ ...current, startMs: previous.endMs });
-    } else {
-      normalized.push(current);
+      current.startMs = previous.endMs;
     }
   }
-  return { ok: true, drafts: normalized };
+  return { ok: true, drafts: sorted };
 }
 
-/** Sub-minute slack so minute-rounded model times do not fail coverage checks. */
+/** Slack so minute-rounded model times do not fail coverage checks. */
 const COVERAGE_TOLERANCE_MS = 2 * 60 * 1000;
 
 function formatClockForError(ms: number): string {
@@ -292,7 +287,6 @@ export function validateCardCoverage(params: {
   return { ok: true };
 }
 
-/** Union of the revision window: previous draft cards plus the new batch range. */
 export function revisionWindow(params: {
   batchStartMs: number;
   batchEndMs: number;
@@ -307,7 +301,6 @@ export function revisionWindow(params: {
   return { startMs, endMs };
 }
 
-/** Groups pending frames into one batch window, splitting on large gaps. */
 export function selectBatchFrames(params: {
   frames: Array<{ id: number; capturedAtMs: number }>;
   /** Close an in-progress window immediately instead of waiting for elapse. */
@@ -367,7 +360,6 @@ export function selectBatchFrames(params: {
   };
 }
 
-/** Picks the frame closest to a card's midpoint as its keyframe. */
 export function pickKeyframeId(
   card: { startMs: number; endMs: number },
   frames: Array<{ id: number; capturedAtMs: number }>,

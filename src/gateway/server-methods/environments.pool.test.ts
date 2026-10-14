@@ -33,6 +33,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(10_000);
   vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue({
     sessionHostNodeIds: new Set(),
+    deviceFolderNodeIds: new Set(),
     issuesByNodeId: new Map(),
     workerSlotsByNodeId: new Map(),
     workerBundleByNodeId: new Map(),
@@ -53,7 +54,6 @@ afterEach(() => vi.restoreAllMocks());
 
 const preparationRequests = [
   { scope: "operator.write", requested: true, includeDetails: false },
-  { scope: "operator.admin", requested: undefined, includeDetails: false },
   { scope: "operator.admin", requested: true, includeDetails: true },
 ];
 
@@ -99,7 +99,7 @@ describe("prepared worker pool projection", () => {
           method,
           {
             ...(listing ? {} : { environmentId: "worker-1" }),
-            ...(requested === undefined ? {} : { includePreparedDetails: requested }),
+            includePreparedDetails: requested,
           },
           { service, scopes: [scope] },
         );

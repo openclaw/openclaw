@@ -5,13 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   findPersistedAuthProfileCredential,
+  findPersistedAuthProfileCredentialAsync,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -168,21 +172,22 @@ describe("agent exec stored auth", () => {
         };
         writePersistedAuthProfileStoreRaw(sharedStore);
         writePersistedAuthProfileStoreRaw(localStore, state.agentDir());
+        await prepareSharedAuthStoreOwnership(state.env);
         setRuntimeAuthProfileStoreSnapshot(sharedStore, state.agentDir());
         const result = await run({
           runAgent: async () => {
             expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
-            const store = ensureAuthProfileStore(undefined, noExternal);
+            const store = await ensureAuthProfileStoreAsync(undefined, noExternal);
             expect(Object.keys(store.profiles).toSorted()).toEqual([
               "openai:shared",
               "openai:token",
             ]);
-            expect(loadAuthProfileStoreForRuntime(undefined, noExternal).profiles).toEqual(
-              store.profiles,
-            );
-            expect(findPersistedAuthProfileCredential({ profileId: "openai:token" })).toEqual(
-              sharedStore.profiles["openai:token"],
-            );
+            expect(
+              (await loadAuthProfileStoreForRuntimeAsync(undefined, noExternal)).profiles,
+            ).toEqual(store.profiles);
+            expect(
+              await findPersistedAuthProfileCredentialAsync({ profileId: "openai:token" }),
+            ).toEqual(sharedStore.profiles["openai:token"]);
             expect(store).toMatchObject({ runtimeLocalProfileIds: ["openai:shared"] });
             expect(resolveAuthProfileOrder({ store, provider: "openai", cfg: {} })).toEqual([
               "openai:shared",

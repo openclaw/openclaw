@@ -7,7 +7,6 @@ import {
   type InternalSessionEntry as SessionEntry,
   type SessionStoreTarget,
 } from "../../config/sessions.js";
-import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import { prepareSessionStoreTargetInventory } from "../../config/sessions/session-store-target-inventory.js";
@@ -22,6 +21,14 @@ export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restar
 export const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 export const MAX_RECOVERY_RETRIES = 3;
 export const RETRY_BACKOFF_MULTIPLIER = 2;
+export function readInterruptedRunId(entry: SessionEntry): string | undefined {
+  const runs = entry.restartRecoveryRuns;
+  if (!runs?.length) {
+    return normalizeOptionalString(entry.lifecycleRunId);
+  }
+  return runs.length === 1 ? runs[0]?.runId : undefined;
+}
+
 export type ExpectedRestartRecoveryTarget = {
   agentId?: string;
   canonicalSessionKey?: string;
@@ -37,7 +44,8 @@ export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
 export function resolveRestartRecoveryTerminalClientRunId(
   entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,
 ): string | undefined {
-  return entry.restartRecoverySourceIngress === "control-ui"
+  return entry.restartRecoverySourceIngress === "control-ui" ||
+    entry.restartRecoverySourceIngress === "internal"
     ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
     : undefined;
 }
@@ -46,7 +54,6 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   cfg?: OpenClawConfig;
   agentIds?: ReadonlySet<string>;
   stateDir?: string;
-  statuses?: Parameters<typeof hasSessionEntriesByStatusReadOnly>[1];
   shouldContinue?: () => boolean;
 }): Promise<SessionStoreTarget[]> {
   if (params.shouldContinue?.() === false) {
@@ -109,29 +116,15 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       });
     }
   }
-  const eligibleTargets: SessionStoreTarget[] = [];
-  for (const target of storeTargets) {
-    if (!params.cfg && params.agentIds && !params.agentIds.has(target.agentId)) {
-      continue;
-    }
-    if (params.shouldContinue?.() === false) {
-      return [];
-    }
-    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
-      continue;
-    }
-    const hasStatus =
-      !params.statuses ||
-      (await hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses));
-    if (params.shouldContinue?.() === false) {
-      return [];
-    }
-    if (hasStatus) {
-      eligibleTargets.push(target);
-    }
+  if (params.shouldContinue?.() === false) {
+    return [];
   }
-  return eligibleTargets
-    .filter((target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env }))
+  return storeTargets
+    .filter(
+      (target) =>
+        (params.cfg !== undefined || !params.agentIds || params.agentIds.has(target.agentId)) &&
+        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
+    )
     .toSorted(
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
     );

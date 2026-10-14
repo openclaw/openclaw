@@ -5,6 +5,7 @@ import {
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  hasReplyPayloadSpeechContent,
   isReplyPayloadTerminalContent,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -71,7 +72,6 @@ export function isSilentAgentReplyText(
     : isSilentReplyText(value, SILENT_REPLY_TOKEN);
 }
 
-/** Returns whether payload metadata contains user-visible content. */
 export function hasVisibleAgentPayload(
   result: { payloads?: unknown },
   options: PayloadVisibilityOptions = {},
@@ -84,15 +84,11 @@ export function hasVisibleAgentPayload(
       }
       const record = payload as ReplyPayload & { visible?: unknown };
       if (
-        options.requireTerminalContent &&
-        (record.visible === false || !isReplyPayloadTerminalContent(record))
+        (options.requireTerminalContent &&
+          (record.visible === false || !isReplyPayloadTerminalContent(record))) ||
+        (options.includeErrorPayloads === false && record.isError === true) ||
+        (options.includeReasoningPayloads === false && record.isReasoning === true)
       ) {
-        return false;
-      }
-      if (options.includeErrorPayloads === false && record.isError === true) {
-        return false;
-      }
-      if (options.includeReasoningPayloads === false && record.isReasoning === true) {
         return false;
       }
       const visibleText =
@@ -101,6 +97,7 @@ export function hasVisibleAgentPayload(
           !isSilentAgentReplyText(record.text, "payload"));
       return Boolean(
         visibleText ||
+        hasReplyPayloadSpeechContent(record) ||
         hasNonEmptyString(record.mediaUrl) ||
         hasNonEmptyStringArray(record.mediaUrls) ||
         hasVisibleAttachmentReference(record.attachments) ||
@@ -125,7 +122,6 @@ export function hasExplicitlyVisibleAgentPayload(payload: unknown): boolean {
   );
 }
 
-/** Returns whether a payload intentionally contains only the silent-reply marker. */
 export function hasIntentionalSilentAgentPayload(result: { payloads?: unknown }): boolean {
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
   return payloads.some((payload) => {
@@ -140,13 +136,11 @@ export function hasIntentionalSilentAgentPayload(result: { payloads?: unknown })
   });
 }
 
-/** Reads a transcript message role without trusting its boundary shape. */
 export function getTranscriptMessageRole(message: unknown): string | undefined {
   const role = asOptionalObjectRecord(message)?.role;
   return typeof role === "string" ? role : undefined;
 }
 
-/** Reads a committed final source-reply mirror from a transcript message. */
 export function readTerminalSourceReplyDeliveryMirror(
   message: unknown,
 ): { sourceTurnId: string; toolCallId?: string } | undefined {

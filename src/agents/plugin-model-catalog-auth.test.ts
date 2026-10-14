@@ -13,7 +13,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import * as persistedAuth from "./auth-profiles/persisted.js";
-import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { capturePluginModelCatalogAuth } from "./plugin-model-catalog-auth.js";

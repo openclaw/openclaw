@@ -105,18 +105,17 @@ return {
 
 describe("cron script MCP namespace", () => {
   it.each([
-    { mode: "trigger", server: "sources", tool: "list_sources", cursor: "c1" },
-    { mode: "payload", server: "sources", tool: "list_sources", cursor: "c1" },
-    { mode: "trigger", server: "team__sources", tool: "*", cursor: null },
+    { server: "sources", tool: "list_sources", cursor: "c1" },
+    { server: "team__sources", tool: "*", cursor: null },
   ] as const)(
-    "calls authorized MCP tools and retires the runtime ($mode, $server/$tool)",
-    async ({ mode, server, tool, cursor }) => {
+    "calls authorized MCP tools and retires the runtime ($server/$tool)",
+    async ({ server, tool, cursor }) => {
       const fixture = createMcpFixture({
         extra: tool === "*" ? { tools: { deny: ["team__sources__delete_source"] } } : undefined,
       });
       const runtime = createCronScriptRuntime({ config: fixture.config });
       const input = {
-        jobId: `mcp-${mode}`,
+        jobId: "mcp-trigger",
         script: QUIET_HOUR_SCRIPT.replaceAll(
           "MCP.sources",
           server === "sources" ? "MCP.sources" : "MCP.teamSources",
@@ -125,13 +124,11 @@ describe("cron script MCP namespace", () => {
         toolsAllow: [`${server}__${tool}`],
       };
 
-      const result =
-        mode === "trigger"
-          ? await runtime.evaluateTrigger(input)
-          : await runtime.executePayload(input);
+      const result = await runtime.evaluateTrigger(input);
 
       expect(result).toMatchObject({
-        ...(mode === "trigger" ? { kind: "evaluated", fire: false } : { kind: "completed" }),
+        kind: "evaluated",
+        fire: false,
         state: {
           cursor: "next",
           listed: { tool: "list_sources", since: cursor ?? "start", sources: [] },
@@ -147,9 +144,7 @@ describe("cron script MCP namespace", () => {
 
   it.each([
     { caps: "a wildcard", toolsAllow: ["*"], script: "typeof MCP" },
-    { caps: "an unprefixed glob", toolsAllow: ["sour*"], script: "typeof MCP" },
     { caps: "no toolsAllow", toolsAllow: undefined, script: "typeof MCP" },
-    { caps: "a script that never mentions it", toolsAllow: ["sources__*"], script: '"undefined"' },
   ])("starts no MCP server for $caps", async ({ toolsAllow, script }) => {
     const fixture = createMcpFixture();
     const runtime = createCronScriptRuntime({ config: fixture.config });

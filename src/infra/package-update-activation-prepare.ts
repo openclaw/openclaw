@@ -7,6 +7,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
 import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { formatErrorMessage } from "./errors.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
   completePackageActivationCustody,
@@ -20,6 +21,7 @@ import {
   isPackageActivationComplete,
   assertPackageActivationLayout,
   resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
   resolvePackageActivationHelper,
   packageActivationIdentity,
   resolvePackageActivationAnchor,
@@ -54,13 +56,7 @@ export type PackageActivationPreparation = {
   launchers: Array<{ name: string; previous: string | null }>;
 };
 
-function readPackageActivationRuntime(): Buffer {
-  const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
-  if (!source.pathname.endsWith(".mjs")) {
-    throw new Error("Package publication recovery requires its built sealed helper.");
-  }
-  return fs.readFileSync(source);
-}
+export class PackageActivationArchiveError extends Error {}
 
 function packageActivationRecoveryCommand(
   node: string,
@@ -198,7 +194,7 @@ export async function preparePackageActivationJournal(
     throw new Error("Package publication recovery requires same-filesystem directories.");
   }
   // A completed receipt may be replaced only by this new, genuinely admitted
-  // operation in the same original store. Legacy/incomplete artifacts refuse.
+  // operation under its current fence. Legacy/incomplete artifacts refuse.
   assertPackageActivationLayout(anchor);
   const priorJournal = fs.lstatSync(resolvePackageActivationControl(anchor), {
     throwIfNoEntry: false,
@@ -207,7 +203,23 @@ export async function preparePackageActivationJournal(
     : undefined;
   const prior = priorJournal?.read();
   if (prior && !isPackageActivationComplete(anchor, prior)) {
-    throw new Error("An unresolved package operation already owns this installation.");
+    throw new Error(
+      "An unresolved package operation already owns this installation. Run openclaw update repair before retrying.",
+    );
+  }
+  if (priorJournal && prior) {
+    try {
+      priorJournal.archiveSettled(prior, assertCurrent);
+    } catch (error) {
+      assertCurrent();
+      if (fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+        priorJournal.assertCurrent(prior);
+      }
+      throw new PackageActivationArchiveError(
+        `Completed package recovery evidence retained; standalone publication repair is unavailable for this update: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
   }
   const preparation: PackageActivationDescriptor["preparation"] = [
     { name: "candidate" as const, source: stageRoot, identity: candidate.identity },
@@ -232,10 +244,11 @@ export async function preparePackageActivationJournal(
     sourceParentIdentity: packageActivationIdentity(path.dirname(entry.source), "parent"),
   }));
   // Preflight the sealed helper before creating any blocking recovery artifact.
-  const helperBytes = sealPackageActivationSqliteLibrary(
-    readPackageActivationRuntime(),
-    sqliteLibrary,
-  );
+  const source = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
+  if (!source.pathname.endsWith(".mjs")) {
+    throw new Error("Package publication recovery requires its built sealed helper.");
+  }
+  const helperBytes = sealPackageActivationSqliteLibrary(fs.readFileSync(source), sqliteLibrary);
   assertCurrent();
   assertRuntime();
   // These objects remain inside the existing stage cleanup owner's prefix
@@ -243,12 +256,10 @@ export async function preparePackageActivationJournal(
   // cannot create blocking artifacts over the prior completion receipt.
   const stagedAnchor = await fsp.mkdtemp(path.join(path.dirname(stageRoot), ".activation-anchor-"));
   const anchorIdentity = packageActivationIdentity(stagedAnchor, true);
-  const stagedControl = prior
-    ? undefined
-    : await fsp.mkdtemp(path.join(path.dirname(stageRoot), ".activation-control-"));
-  const stagedHelper = stagedControl
-    ? path.join(stagedControl, "recovery.mjs")
-    : `${stagedAnchor}.recovery.mjs`;
+  const stagedControl = await fsp.mkdtemp(
+    path.join(path.dirname(stageRoot), ".activation-control-"),
+  );
+  const stagedHelper = path.join(stagedControl, "recovery.mjs");
   assertCurrent();
   const helperFd = fs.openSync(stagedHelper, "wx", 0o600);
   try {
@@ -279,7 +290,7 @@ export async function preparePackageActivationJournal(
     },
     {
       name: "helper",
-      source: stagedControl ? resolvePackageActivationHelper(anchor) : stagedHelper,
+      source: resolvePackageActivationHelper(anchor),
       identity: helperIdentity,
       sourceParentIdentity: packageActivationIdentity(path.dirname(stagedHelper), "parent"),
     },
@@ -292,10 +303,7 @@ export async function preparePackageActivationJournal(
     authority,
     anchorIdentity,
     parentIdentity,
-    journalParentIdentity: packageActivationIdentity(
-      stagedControl ?? resolvePackageActivationControl(anchor),
-      true,
-    ),
+    journalParentIdentity: packageActivationIdentity(stagedControl, true),
     binDir,
     binIdentity,
     originalStageRoot: stageRoot,
@@ -310,36 +318,13 @@ export async function preparePackageActivationJournal(
     preparation,
     launchers,
   };
-  const journal =
-    priorJournal ??
-    createPackageActivationJournal(
-      anchor,
-      descriptor,
-      stagedControl!,
-      assertCurrent,
-      params.onCustody,
-    );
-  if (priorJournal && prior) {
-    // A reused slot owns the stage as soon as its CAS can commit, even if the
-    // acknowledgement is lost. First use latches only at control publication.
-    params.onCustody?.(true);
-    try {
-      priorJournal.replaceCompleted(prior, descriptor, assertCurrent);
-    } catch (error) {
-      // A proven rollback leaves all new objects in the existing stage owner's
-      // prefix. Lost commit acknowledgement or any read uncertainty retains it.
-      try {
-        assertCurrent();
-        priorJournal.assertCurrent(prior);
-        if (isPackageActivationComplete(anchor, prior)) {
-          params.onCustody?.(false);
-        }
-      } catch {
-        // Preserve the initiating failure and conservatively retain custody.
-      }
-      throw error;
-    }
-  }
+  const journal = createPackageActivationJournal(
+    anchor,
+    descriptor,
+    stagedControl,
+    assertCurrent,
+    params.onCustody,
+  );
   const command = packageActivationRecoveryCommand(
     node,
     anchor,
@@ -348,13 +333,6 @@ export async function preparePackageActivationJournal(
     sqliteLibrary,
   );
   assertCurrent();
-  // A replacement's bootstrap command is valid only while that recorded helper
-  // remains staged. Never advertise the stable name before its inode is present.
-  if (prior) {
-    params.options.onPrepared(
-      `${packageActivationRecoveryCommand(node, anchor, descriptor.operationId, stagedHelper, sqliteLibrary)} status`,
-    );
-  }
   await completePackageActivationCustody(anchor, journal, assertCurrent, () =>
     params.options.onPrepared(`${command} status`),
   );

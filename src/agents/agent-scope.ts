@@ -1,4 +1,3 @@
-/** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -98,7 +97,6 @@ function pruneAutoFallbackPrimaryProbeState(params: {
   pruneMapToMaxSize(params.state, maxKeys || 0);
 }
 
-/** Primary model probe metadata used to validate auto-fallback recovery. */
 export type AutoFallbackPrimaryProbe = {
   provider: string;
   model: string;

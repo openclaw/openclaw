@@ -20,7 +20,7 @@ import { prepareTtsPreferences, type PreparedTtsPreferences } from "./tts-prefer
 import {
   getResolvedSpeechProviderConfig,
   resolveSpeechProviderTimeoutMs,
-  resolveTtsProvider,
+  resolveTtsProviderAsync,
 } from "./tts-provider-resolution.js";
 import type { TtsStatusEntry } from "./tts-runtime-types.js";
 import {
@@ -134,7 +134,7 @@ export async function maybeApplyTtsToPayloadCore(
   if (!explicitTts && (autoMode === "off" || ttsMetadata?.commandReply)) {
     return params.payload;
   }
-  const activeProvider = resolveTtsProvider(config, prefsPath);
+  const activeProvider = await resolveTtsProviderAsync(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
@@ -181,7 +181,7 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const mode = config.mode ?? "final";
+  const mode = config.mode;
   if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
   }

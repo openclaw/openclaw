@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-/** Returns a channel config object when `channels.<id>` is present and object-shaped. */
 export function resolveChannelConfigRecord(
   cfg: OpenClawConfig,
   channelId: string,
@@ -21,7 +20,6 @@ export function hasMeaningfulChannelConfig(value: unknown, channelId?: string): 
   );
 }
 
-/** Checks whether a shallow channel config contains activation-relevant values. */
 export function hasMeaningfulChannelConfigShallow(value: unknown, channelId?: string): boolean {
   return (
     (isRecord(value) && value.enabled === true) || hasMeaningfulChannelConfig(value, channelId)

@@ -1,10 +1,11 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../infra/errors.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
+import { attachInternalToolResultContentSource } from "./runtime/internal-hooks.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 
 export {
@@ -23,6 +24,24 @@ const TOOL_TIMEOUT_ERROR_CODES = new Set([
 const NETWORK_TOOL_ERROR_MAX_CHARS = 4_000;
 const protectedNetworkToolErrors = new WeakSet<object>();
 const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
+const TOOL_RESULT_FAILURE_STATUSES = new Map<string, ToolResultFailureKind>([
+  ["error", "failed"],
+  ["failed", "failed"],
+  ["failure", "failed"],
+  ["timeout", "timed_out"],
+  ["timed_out", "timed_out"],
+  ["blocked", "blocked"],
+  ["denied", "blocked"],
+  ["forbidden", "blocked"],
+  ["unavailable", "failed"],
+  ["approval-unavailable", "blocked"],
+  ["disabled", "blocked"],
+  ["aborted", "cancelled"],
+  ["cancelled", "cancelled"],
+  ["canceled", "cancelled"],
+  ["killed", "cancelled"],
+  ["invalid", "failed"],
+]);
 
 function readToolErrorField(error: object, key: string): unknown {
   try {
@@ -97,24 +116,7 @@ export function isToolResultError(result: unknown): boolean {
   if (ok === false || success === false) {
     return true;
   }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
-  if (hasFailureStatus && !explicitlySuccessful) {
+  if (TOOL_RESULT_FAILURE_STATUSES.has(normalized ?? "") && !explicitlySuccessful) {
     return true;
   }
   const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
@@ -150,7 +152,7 @@ export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
   return isTrustedSecretSurfaceUnavailableError(error) || isTrustedToolInputError(error);
 }
 
-/** Format a redacted tool error without allowing hostile getters to escape observability. */
+/** Format a tool error without allowing hostile getters to escape observability. */
 export function formatToolExecutionErrorMessage(error: unknown, fallback: string): string {
   try {
     return formatErrorMessage(error) || fallback;
@@ -204,6 +206,8 @@ export function protectNetworkToolExecutionError(
     // Hostile reflection must never replace the already-protected network error.
   }
   protectedNetworkToolErrors.add(protectedError);
+  // Dispatchers rethrow this error under their own tool; keep its network origin for turn taint.
+  attachInternalToolResultContentSource(protectedError, "network");
   if (timedOut) {
     protectedNetworkToolTimeoutErrors.add(protectedError);
   }
@@ -215,28 +219,14 @@ export function resolveToolResultFailureKind(result: unknown): ToolResultFailure
   if (!isToolResultError(result)) {
     return undefined;
   }
-  const status = readToolResultStatus(result);
-  if (
-    status === "blocked" ||
-    status === "denied" ||
-    status === "forbidden" ||
-    status === "disabled" ||
-    status === "approval-unavailable"
-  ) {
+  const statusKind = TOOL_RESULT_FAILURE_STATUSES.get(readToolResultStatus(result) ?? "");
+  if (statusKind === "blocked") {
     return "blocked";
   }
   const details = readToolResultDetails(result);
   const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
-  if (timedOut === true || status === "timeout" || status === "timed_out") {
+  if (timedOut === true || statusKind === "timed_out") {
     return "timed_out";
   }
-  if (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed"
-  ) {
-    return "cancelled";
-  }
-  return "failed";
+  return statusKind ?? "failed";
 }

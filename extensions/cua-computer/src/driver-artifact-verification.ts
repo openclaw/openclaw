@@ -76,12 +76,8 @@ function resolveArtifactPlatform(
   return { kind: "not-applicable" };
 }
 
-function readJson(pathname: string): unknown {
-  return JSON.parse(fs.readFileSync(pathname, "utf8"));
-}
-
 export function readPackageIdentity(pathname: string): { name?: string; version?: string } {
-  const record = asOptionalRecord(readJson(pathname));
+  const record = asOptionalRecord(JSON.parse(fs.readFileSync(pathname, "utf8")));
   if (!record) {
     return {};
   }

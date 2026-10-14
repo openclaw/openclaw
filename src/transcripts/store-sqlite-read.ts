@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { InferResult } from "kysely";
 import {
@@ -10,6 +9,7 @@ import {
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import {
   meetingTranscriptDb,
@@ -27,14 +27,8 @@ import type { TranscriptSummarySnapshot } from "./store-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-type TranscriptSessionEntry = {
-  session: TranscriptSessionDescriptor;
-  selector: string;
-  hasSummary: boolean;
-};
-type TranscriptSessionMatchEntry = TranscriptSessionEntry & { inputRevision: string };
 
-export function readTranscriptCanonicalSessionRow(database: DatabaseSync, selector: string) {
+export function readTranscriptCanonicalSessionRow(database: EngineConnection, selector: string) {
   return executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)
@@ -45,7 +39,7 @@ export function readTranscriptCanonicalSessionRow(database: DatabaseSync, select
 }
 
 export function readTranscriptExportOwnership(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionIdentity,
 ) {
   return executeSqliteQueryTakeFirstSync(
@@ -57,7 +51,7 @@ export function readTranscriptExportOwnership(
   );
 }
 
-export function readTranscriptExportPathCollisions(database: DatabaseSync, exportKey: string) {
+export function readTranscriptExportPathCollisions(database: EngineConnection, exportKey: string) {
   return executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -68,7 +62,7 @@ export function readTranscriptExportPathCollisions(database: DatabaseSync, expor
   ).rows;
 }
 
-export function readTranscriptExportPathOwners(database: DatabaseSync, exportKey: string) {
+export function readTranscriptExportPathOwners(database: EngineConnection, exportKey: string) {
   return executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -89,7 +83,7 @@ type SummarySnapshotRow = Pick<
   | "created_at_ms"
   | "updated_at_ms"
 >;
-const summarySnapshotQuery = createSqliteQueryCache((database) =>
+const summarySnapshotQuery = createSqliteQueryCache((database: EngineConnection) =>
   prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>(
     database,
     (parameter) =>
@@ -120,7 +114,7 @@ const summarySnapshotQuery = createSqliteQueryCache((database) =>
 
 /** Runs inside the read worker's transaction so input and replacement basis agree. */
 export function readTranscriptSummarySnapshot(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionIdentity,
   maxUtterances: number,
 ): TranscriptSummarySnapshot | undefined {
@@ -138,7 +132,7 @@ export function readTranscriptSummarySnapshot(
   };
 }
 
-export function readTranscriptSessionEntries(database: DatabaseSync): TranscriptSessionEntry[] {
+export function readTranscriptSessionEntries(database: EngineConnection) {
   const rows = executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -157,7 +151,7 @@ export function readTranscriptSessionEntries(database: DatabaseSync): Transcript
 
 const sessionMatchQueries = createSqliteQueryCache(createTranscriptSessionMatchQueries);
 
-function createTranscriptSessionMatchQueries(database: DatabaseSync) {
+function createTranscriptSessionMatchQueries(database: EngineConnection) {
   const query = meetingTranscriptDb(database)
     .selectFrom("meeting_transcript_sessions")
     // Keep native integer validation; export ownership is not matching input.
@@ -239,15 +233,9 @@ function createTranscriptSessionMatchQueries(database: DatabaseSync) {
   };
 }
 
-export function readTranscriptSessionMatches(
-  database: DatabaseSync,
-  value: string,
-): {
-  qualified: TranscriptSessionMatchEntry[];
-  unqualified: TranscriptSessionMatchEntry[];
-} {
+export function readTranscriptSessionMatches(database: EngineConnection, value: string) {
   const queries = sessionMatchQueries(database);
-  const entries = (result: ReturnType<typeof queries.canonical>): TranscriptSessionMatchEntry[] =>
+  const entries = (result: ReturnType<typeof queries.canonical>) =>
     result.rows.map((row) => ({
       session: sessionFromRow(row),
       selector: row.selector,
@@ -273,7 +261,7 @@ export function readTranscriptSessionMatches(
 }
 
 export function readTranscriptSessionByIdentity(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionIdentity,
 ): TranscriptSessionDescriptor | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -284,7 +272,7 @@ export function readTranscriptSessionByIdentity(
 }
 
 export function readTranscriptUtterances(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionIdentity,
   maxUtterances?: number,
 ): TranscriptUtterance[] {
@@ -301,7 +289,7 @@ export function readTranscriptUtterances(
 }
 
 export function readStoredTranscriptSummary(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionIdentity,
 ): { summary?: TranscriptsSummary; markdown?: string } {
   const row = executeSqliteQueryTakeFirstSync(
@@ -323,7 +311,7 @@ export function readStoredTranscriptSummary(
 }
 
 export function readTranscriptJsonlDigest(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: TranscriptSessionIdentity,
 ): string {
   const query = meetingTranscriptUtteranceQuery(database, session)

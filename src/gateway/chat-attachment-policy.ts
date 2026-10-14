@@ -5,7 +5,7 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../shared/chat-attachment-frame-budget.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 
 const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
@@ -14,7 +14,6 @@ const MAX_ADVERTISED_ATTACHMENT_BYTES = resolveChatAttachmentFrameBudgetBytes(MA
 /** Default decoded-size ceiling when `agents.defaults.mediaMaxMb` is unset or invalid. */
 export const DEFAULT_CHAT_ATTACHMENT_MAX_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * 1024 * 1024;
 
-/** Resolve the maximum decoded attachment size accepted for chat inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb = asPositiveFiniteNumber(configured) ?? DEFAULT_CHAT_ATTACHMENT_MAX_MB;

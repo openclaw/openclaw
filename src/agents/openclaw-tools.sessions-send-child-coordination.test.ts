@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -14,7 +15,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "../gateway/session-utils-store-lookup.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -33,8 +34,8 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
     readAcpSessionMetaMock: vi.fn(),
     readAcpSessionMetaForEntryMock: vi.fn(),
   }));
+// mock-isolation: Keep ACP runtime access mocked while coordinating fixture session rows.
 vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionMeta: (params: unknown) => readAcpSessionMetaMock(params),
   readAcpSessionEntryAsync: async (params: {
     cfg?: OpenClawConfig;
     sessionKey: string;
@@ -43,7 +44,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   }) => {
     params.assertCurrent?.();
     const cfg = params.cfg ?? config;
-    const target = resolveGatewaySessionStoreTargetWithStore({
+    const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg,
       key: params.sessionKey,
       agentId: params.agentId,
@@ -70,13 +71,15 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
     };
   },
 }));
+// mock-isolation: Keep ACP database reads controlled by each coordination scenario.
 vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   const { rowToAcpSessionMeta } = await vi.importActual<
     typeof import("../acp/runtime/session-meta-readonly.js")
   >("../acp/runtime/session-meta-readonly.js");
   return {
     rowToAcpSessionMeta,
-    readAcpSessionMetaForEntry: (params: unknown) => readAcpSessionMetaForEntryMock(params),
+    readAcpSessionMetaForEntryAsync: async (params: unknown) =>
+      readAcpSessionMetaForEntryMock(params),
   };
 });
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
@@ -215,6 +218,7 @@ describe("sessions_send child coordination", () => {
       dmScope: "main",
       store: state.path("configured", "agents", "{agentId}", "sessions", "sessions.json"),
     };
+    setRuntimeConfigSnapshot(config);
     resetGatewayWorkAdmission();
     callGatewayMock.mockReset();
     calls.length = 0;
@@ -264,6 +268,15 @@ describe("sessions_send child coordination", () => {
       const previous = () => getSubagentRunByRunId("steer-A")!;
       const queueB = vi.fn(async () => {});
       const handleB = createEmbeddedRunHandle({ runId: "steer-B", queueMessage: queueB });
+      handleB.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          await queueB();
+          options?.onQueueAccepted?.(true);
+        },
+      };
       const completePrevious = async (delivered = false) => {
         await mutateSubagentRuns(["steer-A"], (rows) => {
           const current = rows.get("steer-A");
@@ -307,6 +320,15 @@ describe("sessions_send child coordination", () => {
         }
       });
       const handleA = createEmbeddedRunHandle({ runId: "steer-A", queueMessage: queueA });
+      handleA.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          await queueA();
+          options?.onQueueAccepted?.(true);
+        },
+      };
       setActiveEmbeddedRun(sessionId, handleA, childSessionKey);
       const deliver = sendDelivery.trySessionsSendActiveRunDelivery;
       const admission = vi
@@ -374,8 +396,6 @@ describe("sessions_send child coordination", () => {
 
   it.each([
     { acknowledgment: "acknowledged", watch: undefined },
-    { acknowledgment: "ACK lost", watch: false },
-    { acknowledgment: "acknowledged", watch: true },
     { acknowledgment: "ACK lost", watch: true },
   ] as const)(
     "delivers a queued child follow-up after its original wake was consumed ($acknowledgment, watch=$watch)",
@@ -814,17 +834,18 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionMeta>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({
+        (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
+          metadataRead.readAcpSessionMetaForEntryAsync({
             ...params,
             databasePath,
             entry: { sessionId, lifecycleRevision, sessionStartedAt: 50 },
           }),
       );
       readAcpSessionMetaForEntryMock.mockImplementation(
-        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntry>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
+        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntryAsync>[0]) =>
+          metadataRead.readAcpSessionMetaForEntryAsync({ ...params, databasePath }),
       );
+      await writeEntry(peerKey, { sessionId: "peer-session", updatedAt: 1 });
       await writeEntry(reusedKey, currentEntry);
       const result = await send(requesterKey, targetKey, direction === "target" ? 0 : 1);
       await settleSessionWork();
@@ -865,8 +886,18 @@ describe("sessions_send child coordination", () => {
     "sessions_send does not start reply turns for $name after timeoutSeconds=$timeoutSeconds",
     async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main" }) => {
       await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, ...entry });
+      await writeEntry(targetKey, { sessionId: "target", updatedAt: 1 });
       mockGatewayReply({ status: "timeout" });
       const result = await send(requesterKey, targetKey, timeoutSeconds);
+      if (entry.spawnedBy) {
+        expect(result.details).toMatchObject({
+          status: "forbidden",
+          error: "Session communication ancestry is invalid.",
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(calls.map((call) => call.method)).toEqual(["sessions.resolve"]);
+        return;
+      }
       expect(result.details).toMatchObject({
         status: "accepted",
         delivery: { status: "skipped" },

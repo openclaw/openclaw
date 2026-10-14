@@ -9,17 +9,32 @@ sidebarTitle: "Removal timeline"
 
 The dates and gates that govern when deprecated surfaces become removable. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+`pnpm plugin-sdk:surface:check` enforces the latest stable release's committed
+typed public surface independently of export-count budgets. Removing a shipped
+subpath or named export requires a covering `deprecated`, `removal-pending`, or
+`removed` compatibility record with a `removeAfter` date strictly before the
+current UTC date; a `removalGate` alone does not authorize removal. Packaged
+private runtime facades without a `types` export condition are excluded because
+they are not declared typed-public contracts.
+
 ## Removal timeline
 
-| When                                                     | What happens                                                                                                                                                                                                                                                                                                     |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Now**                                                  | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins.                                                                                                                                                                        |
-| **Pending owner decision**                               | Records without `removeAfter` or `removalGate` remain deprecated and ineligible until their owner publishes a gate.                                                                                                                                                                                              |
-| **Day after a `deprecated` record's `removeAfter` date** | At 00:00 UTC, that record becomes date-eligible and `pnpm plugins:boundary-report --fail-on-eligible-compat` exits non-zero. The date itself is the final compatibility day.                                                                                                                                     |
-| **A `removal-pending` record's `removeAfter` date**      | At 00:00 UTC, the report marks the record due for review and lists its blockers. It does not trigger the compatibility fail flag.                                                                                                                                                                                |
-| **Next Plugin SDK major**                                | `inbound-reply-dispatch`, synchronous plugin keyed stores, memory session inventory readers, synchronous Mention Inbox persistence methods, and synchronous session/extension/provider replay persistence reach their explicit `next-plugin-sdk-major` gate; none is date-eligible before that version boundary. |
+| When                                                     | What happens                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Now**                                                  | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins.                                                                                                                                                    |
+| **Pending owner decision**                               | Records without `removeAfter` or `removalGate` remain deprecated and ineligible until their owner publishes a gate.                                                                                                                                                                          |
+| **Day after a `deprecated` record's `removeAfter` date** | At 00:00 UTC, that record becomes date-eligible and `pnpm plugins:boundary-report --fail-on-eligible-compat` exits non-zero. The date itself is the final compatibility day.                                                                                                                 |
+| **A `removal-pending` record's `removeAfter` date**      | At 00:00 UTC, the report marks the record due for review and lists its blockers. It does not trigger the compatibility fail flag.                                                                                                                                                            |
+| **Later ordinary stable release — TBD**                  | Deprecated SQLite-backed APIs use `stable-deprecation-period`. Removal requires shipped replacement, diagnostics and migration guidance, an announced final compatibility date, completed reader/upgrade conditions, and explicit approval. No removal date is assigned by this preparation. |
+| **Other named version gates**                            | `inbound-reply-dispatch` and deprecated Mention Inbox signatures retain legacy `next-plugin-sdk-major` values. Owners must migrate these records to the later-stable-release policy and authorize removal; the gate does not set a release date.                                             |
 
-The remaining public SDK subpaths below have registry-backed removal windows.
+The remaining public SDK surfaces below have registry-backed removal windows.
+For the synchronous SQLite-backed families, the target stable release and
+`removeAfter` date remain **TBD**. Deprecation metadata written on main is not
+proof that a warning shipped in a stable release. Release notes must announce
+the window before removal, and the surface guard must still see a reached date.
+See [awaited migration instructions](/plugins/sdk-migration/how-to-migrate) and
+[transcript and TTS replacements](/plugins/sdk-migration/async-transcript-and-tts).
 The July 30 rows were removed after their early maintainer-authorized sweep:
 unused subpaths were deleted, earlier compatibility aliases were deleted, and
 bundled-only modules were demoted to private-local build mappings.
@@ -30,7 +45,7 @@ The August 15 compatibility subpaths `agent-config-primitives`,
 explicit SDK-owner approval in August 2026. Use the focused replacements in
 the [Plugin SDK subpath catalog](/plugins/sdk-subpaths), and import `zod`
 directly from the `zod` package. `inbound-reply-dispatch` remains available
-until the next Plugin SDK major.
+until owner-authorized removal in a later stable release.
 
 The beta.5 whole-session-store bridge was retired with explicit SDK-owner
 approval on September 30, 2026, ahead of its former October 12 deadline.
@@ -40,10 +55,11 @@ Upgrade affected plugins to scoped row and transcript-identity APIs before
 upgrading the host. The `session-store-runtime` subpath and `resolveStorePath`
 remain supported; see the [removed session APIs and replacements](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis).
 
-| Removal gate            | Tier                             | SDK subpaths                                                                                                                                                                                                                                                                                                                                                          |
-| ----------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `next-plugin-sdk-major` | Major-version compatibility gate | `inbound-reply-dispatch`; `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore`; `loadArchivedSessions` and `resolveMemorySessionTargets`; `mentionInbox.list`, `mentionInbox.dismiss`, `mentionInbox.recordCommittedInput`, and `mentionInbox.invalidate`; synchronous SessionManager, extension session, and provider replay persistence contracts |
-| `2026-10-01`            | Media legacy projection          | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates                                                                                                                                                                                   |
+| Removal gate                        | Tier                     | SDK subpaths                                                                                                                                                                                                                                                                                               |
+| ----------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Later ordinary stable release — TBD | Deprecation period       | Synchronous SQLite-backed session/transcript, plugin-state, binding, auth/provider, channel/approval, workspace, proxy-capture, skill-discovery, runtime-config and TTS preparation APIs documented in the migration guide. No removed exports or breaking signature changes are part of this preparation. |
+| Later stable release                | Owner migration required | `inbound-reply-dispatch` and deprecated Mention Inbox signatures require owner migration from their legacy version gates.                                                                                                                                                                                  |
+| `2026-10-01`                        | Media legacy projection  | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates                                                                                                                        |
 
 The five compatibility subpaths `channel-lifecycle`, `channel-message`,
 `channel-reply-pipeline`, `config-runtime`, and `infra-runtime` were retired

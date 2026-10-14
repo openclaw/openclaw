@@ -1,5 +1,5 @@
 // Doctor cron storage repair mechanics for quarantine, payloads, and Codex refs.
-import type { DatabaseSync } from "node:sqlite";
+
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -29,6 +29,7 @@ import {
   collectErrorGraphCandidates,
   formatErrorMessage as errorMessage,
 } from "../../../infra/errors.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { listRetiredCronStateFiles } from "../../../infra/state-migrations.retired-cron-files.js";
 import {
   assertNoRetiredStateFiles,
@@ -90,9 +91,16 @@ export type LegacyCronRepairResult = {
   codexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
 };
 
-function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
+export function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
   return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
     ?.store;
+}
+
+export function rethrowLegacyCronStoreError(error: unknown): void {
+  if (error instanceof RetiredStateFormatError) {
+    throw error;
+  }
+  rethrowSqliteSchemaVersionError(error);
 }
 
 function projectCronOwner(
@@ -366,7 +374,7 @@ export async function applyLegacyCronStoreRepair(params: {
           source.admission.assertCurrent();
           source.maintenanceScope?.assertDatabaseAccess(source.admission.databasePath);
         };
-        const assertSnapshotCurrent = (db: DatabaseSync): undefined => {
+        const assertSnapshotCurrent = (db: EngineConnection): undefined => {
           assertCurrent();
           if (
             !isDeepStrictEqual(
@@ -446,7 +454,7 @@ export async function applyLegacyCronStoreRepair(params: {
   }
   if (normalized.legacyTriggerScriptJobs.length > 0) {
     changes.push(
-      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to canonical direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
+      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
     );
   }
 
@@ -472,10 +480,7 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
       onlyIfLegacyDetected: true,
     });
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     return {
       changes: [],
       warnings: [
@@ -503,10 +508,7 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
       warnings: [],
     };
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     return {
       targets: [],
       warnings: [
@@ -567,10 +569,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
       ? await applyLegacyCronStoreRepair({ ...params, state })
       : { changes: [], warnings: [] };
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     return {
       changes: [],
       warnings: [

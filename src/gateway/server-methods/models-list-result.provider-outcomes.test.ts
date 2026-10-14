@@ -162,7 +162,7 @@ describe("models.list provider catalog outcomes", () => {
     });
   });
 
-  it("does not apply one profile rejection to a different selected profile", async () => {
+  it("does not apply one profile rejection to a different selected profile", () => {
     const config = {
       agents: {
         defaults: {
@@ -216,7 +216,7 @@ describe("models.list provider catalog outcomes", () => {
       },
     });
 
-    await expect(projector.evaluateEntry(model, [model])).resolves.toMatchObject({
+    expect(projector.evaluateEntry(model, [model])).toMatchObject({
       availability: true,
       selectedProfileId: "openai:accepted",
     });
@@ -258,7 +258,7 @@ describe("models.list provider catalog outcomes", () => {
       metadataSnapshot,
       preparedAuthStore: emptyAuthStore,
     });
-    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockResolvedValue({
+    const evaluateEntry = vi.spyOn(projector, "evaluateEntry").mockReturnValue({
       ...evaluation,
       routeResolution: null,
     });

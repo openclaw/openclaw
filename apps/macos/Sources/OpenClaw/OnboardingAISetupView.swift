@@ -332,7 +332,7 @@ struct OnboardingAISetupView: View {
                         }
                         Text(self.subtitle(for: candidate, status: status))
                             .font(.caption)
-                            .foregroundStyle(self.subtitleStyle(for: status))
+                            .foregroundStyle(Self.isFailed(status) ? Color.orange : Color.secondary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
@@ -376,15 +376,6 @@ struct OnboardingAISetupView: View {
         case .untried:
             "\(candidate.modelRef) · \(candidate.detail)"
         }
-    }
-
-    private func subtitleStyle(
-        for status: OnboardingAISetupModel.CandidateStatus) -> Color
-    {
-        if case .failed = status {
-            return .orange
-        }
-        return .secondary
     }
 
     @ViewBuilder
@@ -452,8 +443,8 @@ struct OnboardingAISetupView: View {
                     self.providerChoiceRow(
                         icon: option.icon,
                         brandCandidates: [option.brandId, option.id],
-                        label: option.label,
-                        hint: option.hint,
+                        label: Text(option.label),
+                        hint: self.providerHint(option.hint),
                         fallbackSymbol: "arrow.down.circle",
                         actionLabel: Text(option.actionLabel ?? String(localized: "Connect / Set up")))
                     {
@@ -527,54 +518,35 @@ struct OnboardingAISetupView: View {
     }
 
     private var apiKeysRow: some View {
-        Button {
+        self.providerChoiceRow(
+            icon: nil,
+            brandCandidates: [],
+            label: Text("API Keys"),
+            hint: Text("Connect with an API key or token"),
+            fallbackSymbol: "key.fill",
+            actionLabel: Text("Connect"),
+            selected: self.model.showManualEntry)
+        {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                 self.model.showManualEntry = true
                 // The form can already exist below the viewport; every tap must reveal it.
                 self.manualEntryRequest += 1
             }
-        } label: {
-            HStack(spacing: 10) {
-                OnboardingProviderArtwork(
-                    icon: nil,
-                    brandCandidates: [],
-                    fallbackSymbol: "key.fill")
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("API Keys")
-                        .font(.callout.weight(.semibold))
-                    Text("Connect with an API key or token")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                Text("Connect")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .openClawSelectableRowChrome(selected: self.model.showManualEntry)
         }
-        .buttonStyle(.plain)
-        .disabled(self.model.isBusy)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
-        let fallbackSymbol = switch option.kind {
-        case "device-code": "link.badge.plus"
-        case "install": "puzzlepiece.extension"
-        case "custom": "point.3.connected.trianglepath.dotted"
-        default: "person.crop.circle.badge.checkmark"
-        }
-        let actionLabel: LocalizedStringKey = switch option.kind {
-        case "device-code": "Pair"
-        case "install": "Set up…"
-        case "custom": "Configure…"
-        default: "Sign in"
+        let (fallbackSymbol, actionLabel): (String, LocalizedStringKey) = switch option.kind {
+        case "device-code": ("link.badge.plus", "Pair")
+        case "install": ("puzzlepiece.extension", "Set up…")
+        case "custom": ("point.3.connected.trianglepath.dotted", "Configure…")
+        default: ("person.crop.circle.badge.checkmark", "Sign in")
         }
         return self.providerChoiceRow(
             icon: option.icon,
             brandCandidates: [option.brandId, option.id],
-            label: option.label,
-            hint: option.hint,
+            label: Text(option.label),
+            hint: self.providerHint(option.hint),
             fallbackSymbol: fallbackSymbol,
             actionLabel: Text(actionLabel))
         {
@@ -582,13 +554,21 @@ struct OnboardingAISetupView: View {
         }
     }
 
+    @ViewBuilder
+    private func providerHint(_ hint: String?) -> some View {
+        if let hint, !hint.isEmpty {
+            Text(hint).multilineTextAlignment(.leading)
+        }
+    }
+
     private func providerChoiceRow(
         icon: String?,
         brandCandidates: [String?],
-        label: String,
-        hint: String?,
+        label: Text,
+        hint: some View,
         fallbackSymbol: String,
         actionLabel: Text,
+        selected: Bool = false,
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
@@ -598,21 +578,15 @@ struct OnboardingAISetupView: View {
                     brandCandidates: brandCandidates,
                     fallbackSymbol: fallbackSymbol)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(label)
-                        .font(.callout.weight(.semibold))
-                    if let hint, !hint.isEmpty {
-                        Text(hint)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.leading)
-                    }
+                    label.font(.callout.weight(.semibold))
+                    hint.font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
                 actionLabel
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
-            .openClawSelectableRowChrome(selected: false)
+            .openClawSelectableRowChrome(selected: selected)
         }
         .buttonStyle(.plain)
         .disabled(self.model.isBusy)

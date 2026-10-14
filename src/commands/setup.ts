@@ -1,9 +1,3 @@
-/**
- * Minimal setup command.
- *
- * Ensures config, default workspace, and session directories exist without
- * running the full onboarding wizard.
- */
 import fs from "node:fs/promises";
 import {
   listAgentEntries,
@@ -12,6 +6,7 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
@@ -24,11 +19,23 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { isRecord, shortenHomePath } from "../utils.js";
 
-/** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
   opts?: { workspace?: string; skipBootstrap?: boolean; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
-) {
+): Promise<void> {
+  return await runWithLocalStateOwner({
+    method: "setup",
+    params: {},
+    target: "agent roster and workspace",
+    onForeignOwner: "refuse",
+    runLocal: () => setupUnderOwner(opts, runtime),
+  });
+}
+
+async function setupUnderOwner(
+  opts: Parameters<typeof setupCommand>[0],
+  runtime: RuntimeEnv,
+): Promise<void> {
   const desiredWorkspace =
     typeof opts?.workspace === "string" && opts.workspace.trim()
       ? opts.workspace.trim()
@@ -182,7 +189,6 @@ export async function setupCommand(
     shouldWriteWorkspace ||
     shouldWriteGatewayMode ||
     shouldWriteSkipBootstrap;
-  let configStatus: "created" | "updated" | "unchanged";
   if (configChanged) {
     const explicitSetPaths: string[][] = [];
     if (snapshot.exists && shouldPersistRoster) {
@@ -220,7 +226,6 @@ export async function setupCommand(
           writeInheritedWorkspaceOverride || shouldWriteSkipBootstrap || shouldWriteGatewayMode,
       },
     });
-    configStatus = snapshot.exists ? "updated" : "created";
     if (!opts?.json && !snapshot.exists) {
       runtime.log(
         `Wrote ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
@@ -242,13 +247,10 @@ export async function setupCommand(
         suffix,
       });
     }
-  } else {
-    configStatus = "unchanged";
-    if (!opts?.json) {
-      runtime.log(
-        `Config OK: ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
-      );
-    }
+  } else if (!opts?.json) {
+    runtime.log(
+      `Config OK: ${(await import("../config/logging.js")).formatConfigFilePath(configPath)}`,
+    );
   }
 
   const ws = await (
@@ -269,7 +271,7 @@ export async function setupCommand(
     writeRuntimeJson(runtime, {
       ok: true,
       configPath,
-      configStatus,
+      configStatus: configChanged ? (snapshot.exists ? "updated" : "created") : "unchanged",
       workspaceDir: ws.dir,
       sessionsDir,
     });

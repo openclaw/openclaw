@@ -77,18 +77,13 @@ export function videoLightboxItem(
         observeChatMediaResourceSubscriber(onRequestUpdate, refresh);
       }
       const metadata = () => controller.handleLoadedMetadata(media, () => active);
-      const adopt = () => {
-        controller.applyPendingSource(media);
+      const reportAfter = (update: () => void) => () => {
+        update();
         report();
       };
-      const ended = () => {
-        controller.handleEnded(media);
-        report();
-      };
-      const error = () => {
-        controller.handleError(media);
-        report();
-      };
+      const adopt = reportAfter(() => controller.applyPendingSource(media));
+      const ended = reportAfter(() => controller.handleEnded(media));
+      const error = reportAfter(() => controller.handleError(media));
       media.addEventListener("loadedmetadata", metadata);
       media.addEventListener("play", adopt);
       media.addEventListener("seeking", adopt);

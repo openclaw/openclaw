@@ -52,6 +52,12 @@
     "properties": {}
   },
   "modelCatalog": {
+    "aliases": {
+      "kilo": {
+        "provider": "kilocode",
+        "api": "openai-completions"
+      }
+    },
     "modelsDev": {
       "kilocode": "kilo"
     },

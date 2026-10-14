@@ -1,7 +1,3 @@
-/**
- * Formats Codex command responses for safe chat display, including status,
- * lists, account summaries, and user-facing help text.
- */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
@@ -20,26 +16,21 @@ type CodexStatusProbes = Awaited<ReturnType<typeof readCodexStatusProbes>>;
 export function formatCodexStatus(probes: CodexStatusProbes): string {
   const connected =
     probes.models.ok || probes.account.ok || probes.limits.ok || probes.mcps.ok || probes.skills.ok;
-  const lines = [`Codex app-server: ${connected ? "connected" : "unavailable"}`];
-  if (probes.models.ok) {
-    lines.push(
-      `Models: ${
-        probes.models.value.models
+  return [
+    `Codex app-server: ${connected ? "connected" : "unavailable"}`,
+    `Models: ${formatProbe(
+      probes.models,
+      ({ models }) =>
+        models
           .map((model) => formatCodexDisplayText(model.id))
           .slice(0, 8)
-          .join(", ") || "none"
-      }`,
-    );
-  } else {
-    lines.push(`Models: ${formatCodexDisplayText(probes.models.error)}`);
-  }
-  lines.push(
+          .join(", ") || "none",
+    )}`,
     `Account: ${formatProbe(probes.account, formatCodexAccountSummary)}`,
     `Rate limits: ${formatProbe(probes.limits, formatCodexRateLimitSummary)}`,
     `MCP servers: ${formatProbe(probes.mcps, summarizeArrayLike)}`,
     `Skills: ${formatProbe(probes.skills, summarizeCodexSkills)}`,
-  );
-  return lines.join("\n");
+  ].join("\n");
 }
 
 function formatProbe<T>(probe: SafeValue<T>, format: (value: T) => string): string {
@@ -50,16 +41,13 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
   }
-  const lines = [
+  return [
     "Codex models:",
     ...result.models.map(
       (model) => `- ${formatCodexDisplayText(model.id)}${model.isDefault ? " (default)" : ""}`,
     ),
-  ];
-  if (result.truncated) {
-    lines.push("- More models available; output truncated.");
-  }
-  return lines.join("\n");
+    ...(result.truncated ? ["- More models available; output truncated."] : []),
+  ].join("\n");
 }
 
 export function formatThreads(response: JsonValue | undefined): string {
@@ -277,17 +265,12 @@ export function formatCodexAccountLine(value: string): string {
   if (!safe.trim()) {
     return "";
   }
-  const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
-  let formatted = "";
-  let lastIndex = 0;
-  for (const match of safe.matchAll(emailPattern)) {
-    const index = match.index ?? 0;
-    formatted += escapeCodexChatText(safe.slice(lastIndex, index));
-    formatted += escapeCodexChatTextPreservingAt(match[0]);
-    lastIndex = index + match[0].length;
-  }
-  formatted += escapeCodexChatText(safe.slice(lastIndex));
-  return formatted;
+  return safe
+    .split(/([^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+)/gu)
+    .map((part, index) =>
+      index % 2 === 1 ? escapeCodexChatTextPreservingAt(part) : escapeCodexChatText(part),
+    )
+    .join("");
 }
 
 export function buildHelp(): string {
@@ -340,10 +323,7 @@ function summarizeAccount(value: JsonValue | undefined): string {
 
 function summarizeArrayLike(value: JsonValue | undefined): string {
   const entries = extractArray(value);
-  if (entries.length === 0) {
-    return "none returned";
-  }
-  return `${entries.length}`;
+  return entries.length === 0 ? "none returned" : `${entries.length}`;
 }
 
 function readEnabledCodexSkills(value: JsonValue | undefined): {

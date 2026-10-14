@@ -209,7 +209,7 @@ export async function resolveSessionToolAccess(params: {
   readConfig?: () => OpenClawConfig;
   sandboxed?: boolean;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void }> {
+}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void; basis?: "scoped-grant" }> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
@@ -251,7 +251,7 @@ export async function resolveSessionToolAccess(params: {
     targetSessionKey: authorizationTargetSessionKey,
   });
   if (scoped) {
-    return { allowed: true, expectedSessionId: scoped.expectedSessionId };
+    return { allowed: true, expectedSessionId: scoped.expectedSessionId, basis: "scoped-grant" };
   }
   const createChecker = () => {
     const cfg = params.readConfig?.();
@@ -381,7 +381,6 @@ export async function resolveSessionToolAccess(params: {
   return initial.allowed ? finish(false) : deny(initial);
 }
 
-/** Resolves the requester context used to filter sandboxed session-tool access. */
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;

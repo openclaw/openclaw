@@ -7,13 +7,15 @@ import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import type { WorktreeCleanupMutation } from "./gc-removal.js";
 import { lockState } from "./git-lock.js";
-import { repairWorktreePackIndex } from "./git-maintenance.js";
 import { commandError, requireGit } from "./git.js";
-import { readRegistryWorktreeForMutation, requireActiveWorktreeRecord } from "./registry-read.js";
+import {
+  captureWorktreeRegistryReadGuard,
+  readRegistryWorktree,
+  requireActiveWorktreeRecord,
+} from "./registry-read.js";
 import {
   clearRegistryWorktreeProvisionedChunks,
   createWorktreeRemovalClaimsGuard,
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -27,6 +29,7 @@ import {
   requireManagedWorktreeHead,
   retireExactWorktree,
 } from "./removal-git.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval } from "./run-lease.js";
 import { rebindLiveWorktreeRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
@@ -72,10 +75,14 @@ export async function removeSettledManagedWorktree(
   timing?.markRemovalStage("preparation");
   params.signal?.throwIfAborted();
   params.commitGuard?.();
+  const registryContext = captureWorktreeRunEndContext(env);
+  const accept = captureWorktreeRegistryReadGuard(registryContext, "exact-owner");
   let record = requireActiveWorktreeRecord(
     params.id,
-    await readRegistryWorktreeForMutation({ ...params, env }),
+    await readRegistryWorktree(registryContext, params.id),
   );
+  const assertRecordCurrent = accept(record);
+  params.commitGuard?.();
   // Admission already excludes run leases and competing removers. Retain its
   // exact claim through snapshot, deletion, and terminal publication.
   const claimToken = params.claimToken;
@@ -85,6 +92,7 @@ export async function removeSettledManagedWorktree(
   if (params.exactState) {
     const expected = params.exactState;
     const original = record;
+    assertExactStateOwner(original, expected);
     params = {
       ...params,
       workerAuthority: {
@@ -99,15 +107,7 @@ export async function removeSettledManagedWorktree(
         if (exactFinalized) {
           return;
         }
-        const current = requireActiveWorktreeRecord(params.id, getRegistryWorktree(env, params.id));
-        assertExactStateOwner(current, expected);
-        if (
-          current.path !== original.path ||
-          current.branch !== original.branch ||
-          current.repoRoot !== original.repoRoot
-        ) {
-          throw new Error("Worktree exact-state binding changed; checkout preserved");
-        }
+        assertRecordCurrent();
         assertClaim();
       },
     };
@@ -158,11 +158,6 @@ export async function removeSettledManagedWorktree(
         killProcessTree: true,
       });
     }
-    timing?.markRemovalStage("packRepair");
-    await repairWorktreePackIndex(record.repoRoot, {
-      signal: params.signal,
-      commitGuard: params.commitGuard,
-    });
     timing?.markRemovalStage("snapshot");
     const retirementName = params.exactState ? `.openclaw-retiring-${randomUUID()}` : undefined;
     let snapshotRef: string | undefined;

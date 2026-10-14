@@ -1,7 +1,7 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -17,6 +17,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
@@ -81,12 +82,7 @@ async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>
   const errors = [
     ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
   ];
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "node-host runtime cleanup failed");
-  }
+  throwNodeHostCleanupErrors(errors, "node-host runtime cleanup failed");
 }
 
 export async function prepareNodeHostRuntime(params?: {
@@ -107,7 +103,7 @@ export async function prepareNodeHostRuntime(params?: {
   if (!commandAllowlist) {
     void ensureTerminalUploadCleanup();
   }
-  const config = params?.config ?? getRuntimeConfig();
+  const config = params?.config ?? (await captureRuntimeConfigAsyncReader()());
   const env = params?.env ?? process.env;
   const platform = params?.platform ?? process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
@@ -137,7 +133,11 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     !commandAllowlist &&
     (params?.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
-  const workspaceOptions = { env, ephemeral: params?.ephemeral };
+  const workspaceOptions = {
+    env,
+    ephemeral: params?.ephemeral,
+    folders: config.nodeHost?.workerRuns?.folders,
+  };
   let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
@@ -236,6 +236,9 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    ...(workerRunsEnabled && workspaceOptions.folders?.length !== 0
+      ? { deviceFoldersEnabled: true as const }
+      : {}),
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
     nativeInferenceEnabled: workerRunsEnabled && nativeInferenceSnapshot !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
@@ -256,7 +259,6 @@ export async function prepareNodeHostRuntime(params?: {
     }) {
       const mcpAbort = new AbortController();
       let closing = false;
-      let inFlightInvokes = 0;
       let connectionGeneration = 0;
       let closePromise: Promise<void> | undefined;
       let supervisorClose: Promise<void> | undefined;
@@ -315,6 +317,7 @@ export async function prepareNodeHostRuntime(params?: {
       }
       let skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
+      const pendingInvokes = new Set<Promise<void>>();
       let disconnectCleanup: Promise<void> = Promise.resolve();
       let pendingDisconnectCleanups = 0;
       let disconnectCleanupFailed = false;
@@ -395,7 +398,7 @@ export async function prepareNodeHostRuntime(params?: {
         hasLocalActiveWork: () =>
           closing ||
           !mcpStartupComplete ||
-          inFlightInvokes > 0 ||
+          pendingInvokes.size > 0 ||
           pendingDisconnectCleanups > 0 ||
           disconnectCleanupFailed ||
           hasRegisteredNodeHostCommandActiveWork() ||
@@ -410,6 +413,9 @@ export async function prepareNodeHostRuntime(params?: {
       });
       return {
         async invoke(frame: NodeInvokeRequestPayload) {
+          if (closing) {
+            return;
+          }
           if (updatePause.isPaused) {
             await createNodeInvokeResponder(client, frame).error(
               "UNAVAILABLE",
@@ -419,7 +425,8 @@ export async function prepareNodeHostRuntime(params?: {
           }
           // Admission precedes the first await; disconnects and duplicate IDs do
           // not release update ownership before the original command settles.
-          inFlightInvokes += 1;
+          const settled = createDeferredCore();
+          pendingInvokes.add(settled.promise);
           try {
             const generation = connectionGeneration;
             try {
@@ -480,6 +487,7 @@ export async function prepareNodeHostRuntime(params?: {
                   client,
                   frame,
                   idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+                  signal: controller.signal,
                   onError: () => controller.abort(),
                 })
               : undefined;
@@ -570,7 +578,8 @@ export async function prepareNodeHostRuntime(params?: {
               }
             }
           } finally {
-            inFlightInvokes -= 1;
+            pendingInvokes.delete(settled.promise);
+            settled.resolve();
           }
         },
         handleInput(invokeId: string, seq: number, payloadJSON: string) {
@@ -652,7 +661,15 @@ export async function prepareNodeHostRuntime(params?: {
               });
             // MCP close is terminal: another call after failure can return an empty success.
             mcpClose ??= startup.then((resolved) => resolved?.close());
-            await settleNodeHostCleanup([watcherClose, disconnectClose, supervisorClose, mcpClose]);
+            // Aborting an invocation does not settle its subprocess, stream or
+            // finally block. Join those tails before registrations can be retired.
+            await settleNodeHostCleanup([
+              watcherClose,
+              disconnectClose,
+              supervisorClose,
+              mcpClose,
+              ...pendingInvokes,
+            ]);
           };
           void closeOwners().then(completion.resolve, (error: unknown) => {
             closePromise = undefined;

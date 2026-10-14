@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
@@ -8,18 +9,21 @@ import {
   mergeAllowlist,
   resolveChannelMediaMaxBytes,
   summarizeMapping,
+  type MSTeamsConfig,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
+import { resolveMSTeamsRuntimeAccount, withAccountScopedMSTeamsConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
-import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { createMSTeamsMonitorStores } from "./monitor-account-stores.js";
 import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import { createMSTeamsHandlerConfigReader } from "./monitor-handler/config.js";
 import {
   publishMSTeamsBlocked,
   publishMSTeamsReady,
@@ -27,11 +31,7 @@ import {
   type MSTeamsStatusSink,
 } from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
-import {
-  createMSTeamsPollStoreState,
-  extractMSTeamsPollVote,
-  type MSTeamsPollStore,
-} from "./polls.js";
+import { extractMSTeamsPollVote, type MSTeamsPollStore } from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
@@ -52,12 +52,17 @@ import {
   type MSTeamsCardActionResponse,
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
-import { resolveMSTeamsCredentials } from "./token.js";
 import { createMSTeamsWebhookHandler } from "./webhook-handler.js";
-import { resolveMSTeamsLegacyWebhook, resolveMSTeamsWebhookPathIssue } from "./webhook-route.js";
+import {
+  resolveMSTeamsLegacyWebhook,
+  resolveMSTeamsWebhookPathIssue,
+  resolveMSTeamsWebhookCollisionIssue,
+} from "./webhook-route.js";
 
 type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
+  accountId?: string;
+  msteamsCfg?: MSTeamsConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
@@ -75,19 +80,25 @@ export async function monitorMSTeamsProvider(
 ): Promise<MonitorMSTeamsResult> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
-  let cfg = opts.cfg;
-  let msteamsCfg = cfg.channels?.msteams;
-  if (!msteamsCfg?.enabled) {
+  const account = resolveMSTeamsRuntimeAccount(opts);
+  const { accountId, credentials: creds } = account;
+  const accountPolicyCfg = opts.cfg;
+  let cfg = accountPolicyCfg;
+  let msteamsCfg = account.config;
+  if (opts.cfg.channels?.msteams?.enabled !== true || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
     return { app: null, shutdown: async () => {} };
   }
 
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     log.error("msteams credentials not configured");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
     return { app: null, shutdown: async () => {} };
+  }
+  const collisionIssue = resolveMSTeamsWebhookCollisionIssue(accountPolicyCfg);
+  if (collisionIssue) {
+    throw new Error(collisionIssue);
   }
   const appId = creds.appId;
 
@@ -98,6 +109,8 @@ export async function monitorMSTeamsProvider(
       throw new Error(`exit ${code}`);
     },
   };
+
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
 
   const configuredAllowFrom = msteamsCfg.allowFrom;
   const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
@@ -122,10 +135,7 @@ export async function monitorMSTeamsProvider(
     !looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(entry));
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
-    if (entries.length === 0) {
-      return { additions: [], unresolved: [] };
-    }
-    const resolved = await resolveMSTeamsUserAllowlist({ cfg, entries });
+    const resolved = await resolveMSTeamsUserAllowlist({ cfg, accountId, entries });
     const additions: string[] = [];
     const unresolved: string[] = [];
     for (const entry of resolved) {
@@ -162,6 +172,7 @@ export async function monitorMSTeamsProvider(
     if (msteamsCfg.teams && Object.keys(msteamsCfg.teams).length > 0) {
       const resolved = await resolveMSTeamsTeamsConfig({
         cfg,
+        accountId,
         teamIdMode: "bot-framework",
         teams: msteamsCfg.teams,
       });
@@ -187,16 +198,14 @@ export async function monitorMSTeamsProvider(
     groupAllowFrom,
     teams: teamsConfig,
   };
-  cfg = {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: msteamsCfg,
-    },
-  };
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
 
   const legacyListener = resolveMSTeamsLegacyWebhook(msteamsCfg);
-  const pathIssue = resolveMSTeamsWebhookPathIssue({ cfg });
+  const pathIssue = resolveMSTeamsWebhookPathIssue({
+    cfg: accountPolicyCfg,
+    accountId,
+    accountConfig: msteamsCfg,
+  });
   if (pathIssue) {
     if (!legacyListener) {
       throw new Error(pathIssue);
@@ -209,8 +218,7 @@ export async function monitorMSTeamsProvider(
       cfg,
       resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
     }) ?? 8 * 1024 * 1024;
-  const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
-  const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
+  const { conversationStore, pollStore } = createMSTeamsMonitorStores(accountId, opts);
 
   log.info("starting provider on Gateway HTTP routes");
 
@@ -260,7 +268,7 @@ export async function monitorMSTeamsProvider(
 
   // Existing Azure Bot registrations may retain /api/messages after webhook.path changes.
   // Forward requests the SDK did not claim until operators update those registrations.
-  if (configuredPath !== "/api/messages") {
+  if (accountId === DEFAULT_ACCOUNT_ID && configuredPath !== "/api/messages") {
     let warnedLegacyMessagesRoute = false;
     expressApp.post(
       "/api/messages",
@@ -283,7 +291,7 @@ export async function monitorMSTeamsProvider(
 
   const ssoDeps = ssoConnectionName
     ? {
-        tokenStore: createMSTeamsSsoTokenStoreFs(),
+        tokenStore: createMSTeamsSsoTokenStoreFs({ accountId }),
         connectionName: ssoConnectionName,
       }
     : undefined;
@@ -295,6 +303,8 @@ export async function monitorMSTeamsProvider(
 
   const handlerDeps: MSTeamsMessageHandlerDeps = {
     cfg,
+    accountPolicyCfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -305,8 +315,11 @@ export async function monitorMSTeamsProvider(
     pollStore,
     log,
   };
+  handlerDeps.readConfig = createMSTeamsHandlerConfigReader(handlerDeps);
   const handleActivity = createMSTeamsActivityHandler(handlerDeps);
 
+  // Durable activities belong to the bot identity, not its mutable config label.
+  // Preserve shipped appId queues for every bot, including after account renames.
   const ingress = createMSTeamsIngress({
     accountId: appId,
     runtime,
@@ -319,7 +332,12 @@ export async function monitorMSTeamsProvider(
       }
       const context =
         liveContext ??
-        createMSTeamsReplayContext(activity, app, resolveMSTeamsSdkCloudOptions(msteamsCfg));
+        createMSTeamsReplayContext(
+          activity,
+          app,
+          resolveMSTeamsSdkCloudOptions(msteamsCfg),
+          accountId,
+        );
       return await handleActivity(context, lifecycle);
     },
   });
@@ -468,6 +486,7 @@ export async function monitorMSTeamsProvider(
         await Promise.all(
           userIds.map((userId) =>
             ssoDeps.tokenStore.save({
+              ...(accountId === DEFAULT_ACCOUNT_ID ? {} : { accountId }),
               connectionName,
               userId,
               token: ctx.token.token,
@@ -539,7 +558,7 @@ export async function monitorMSTeamsProvider(
         auth: "plugin",
         pluginId: "msteams",
         source: "msteams-webhook",
-        accountId: appId,
+        accountId,
         handler: webhook.handler,
         legacyListener: legacyListener
           ? {
@@ -551,14 +570,14 @@ export async function monitorMSTeamsProvider(
         log: (message) => log.warn?.(message),
       }),
     );
-    if (configuredPath !== "/api/messages") {
+    if (accountId === DEFAULT_ACCOUNT_ID && configuredPath !== "/api/messages") {
       unregisterRoutes.push(
         registerPluginHttpRoute({
           path: "/api/messages",
           auth: "plugin",
           pluginId: "msteams",
           source: "msteams-webhook-alias",
-          accountId: appId,
+          accountId,
           handler: webhook.handler,
           log: (message) => log.warn?.(message),
         }),

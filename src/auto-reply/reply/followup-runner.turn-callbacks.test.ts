@@ -19,6 +19,7 @@ import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import { FollowupRunDeferredError, type FollowupRun } from "./queue/types.js";
+import type { SessionEventExecution } from "./session-event-contract.js";
 
 // mock-isolation: Keep database admission outside this queue-to-execution ownership proof.
 vi.mock("./followup-turn-admission.js", () => ({
@@ -52,7 +53,8 @@ const key = "followup-turn-callback-ownership";
 
 function createObservers() {
   return {
-    onAgentRunStart: vi.fn<NonNullable<FollowupRunObservers["onAgentRunStart"]>>(),
+    onDeliberateSilentTerminalReply: vi.fn(),
+    onPreparedAgentRunStart: vi.fn<NonNullable<FollowupRunObservers["onPreparedAgentRunStart"]>>(),
     onAgentRunTerminalOutcome:
       vi.fn<NonNullable<FollowupRunObservers["onAgentRunTerminalOutcome"]>>(),
     onModelSelected: vi.fn<NonNullable<FollowupRunObservers["onModelSelected"]>>(),
@@ -99,7 +101,16 @@ describe("queued turn callback ownership", () => {
           throw new Error("Followup execution did not bind its run ID");
         }
         executed.push(item);
-        params.opts?.onAgentRunStart?.(runId);
+        expect(params.opts?.internalEventExecution).toBe(
+          params.followupRun.run.internalEventExecution,
+        );
+        expect(params.opts?.sourceReplyDeliveryMode).toBe(
+          params.followupRun.run.sourceReplyDeliveryMode,
+        );
+        params.opts?.internalEventExecution?.onStarted(runId);
+        await params.opts?.internalEventExecution?.onTerminal(runId, "completed");
+        params.opts?.onDeliberateSilentTerminalReply?.();
+        params.opts?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
         params.opts?.onModelSelected?.({ provider: "test", model: item, thinkLevel: undefined });
         params.opts?.prepareAssistantTranscriptMessage?.(message, item);
         await params.opts?.resolveReplyDelivery?.(1);
@@ -107,6 +118,13 @@ describe("queued turn callback ownership", () => {
         // End at the execution seam without introducing transport or accounting work.
         return { runId, outcome: { kind: "aborted", reason: "user" } };
       });
+      const createEventExecution = () => ({
+        deliver: false as const,
+        onStarted: vi.fn<SessionEventExecution["onStarted"]>(),
+        onTerminal: vi.fn<SessionEventExecution["onTerminal"]>(),
+      });
+      const ownedEvent = createEventExecution();
+      const decoyEvent = createEventExecution();
       const decoys: ReturnType<typeof createObservers>[] = [];
       const runner = () => {
         const opts = createObservers();
@@ -115,7 +133,11 @@ describe("queued turn callback ownership", () => {
           typing: createFollowupTurnTestTypingController(),
           typingMode: "never",
           defaultModel: "gpt-test",
-          opts,
+          opts: {
+            ...opts,
+            internalEventExecution: decoyEvent,
+            sourceReplyDeliveryMode: "message_tool_only",
+          },
         });
       };
       const activeRunner = runner();
@@ -125,6 +147,10 @@ describe("queued turn callback ownership", () => {
         const run = createQueueTestRun({ prompt: item, messageId: item });
         run.run.sessionKey = key;
         run.runObservers = observers[index];
+        if (index === 0) {
+          run.run.internalEventExecution = ownedEvent;
+          run.run.sourceReplyDeliveryMode = "automatic";
+        }
         run.turnAdoptionLifecycle = {
           admission: "cancel-only",
           onAdopted: () => {},
@@ -153,7 +179,11 @@ describe("queued turn callback ownership", () => {
         expect(executed).toEqual(["B", "C"]);
         for (const [index, item] of ["B", "C"].entries()) {
           const own = observers[index]!;
-          expect(own.onAgentRunStart).toHaveBeenCalledExactlyOnceWith(`execution-${item}`);
+          expect(own.onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
+          expect(own.onPreparedAgentRunStart).toHaveBeenCalledExactlyOnceWith({
+            runId: `execution-${item}`,
+            transcriptStart: null,
+          });
           expect(own.onModelSelected).toHaveBeenCalledExactlyOnceWith({
             provider: "test",
             model: item,
@@ -166,6 +196,10 @@ describe("queued turn callback ownership", () => {
           );
           expect(own.resolveReplyDelivery.mock.calls).toEqual([[1], [2]]);
         }
+        expect(ownedEvent.onStarted).toHaveBeenCalledExactlyOnceWith("execution-B");
+        expect(ownedEvent.onTerminal).toHaveBeenCalledExactlyOnceWith("execution-B", "completed");
+        expect(decoyEvent.onStarted).not.toHaveBeenCalled();
+        expect(decoyEvent.onTerminal).not.toHaveBeenCalled();
         for (const decoy of decoys) {
           for (const observer of Object.values(decoy)) {
             expect(observer).not.toHaveBeenCalled();

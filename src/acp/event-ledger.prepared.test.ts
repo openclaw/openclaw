@@ -1,27 +1,28 @@
 import path from "node:path";
 import { constants } from "node:sqlite";
-import { SqliteQueryCompiler } from "kysely";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { expectAcpReplayUtf8Accounting } from "./event-ledger.test-support.js";
+import { normalizeAcpLedgerOptions } from "./event-ledger.types.js";
+import { acpReplayOperations } from "./event-ledger.worker.js";
 
 const update = (text: string) => ({
   sessionUpdate: "agent_message_chunk" as const,
   content: { type: "text" as const, text },
 });
 
-describe("ACP prepared queries", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
-  });
+describe("ACP replay worker", () => {
+  afterEach(closeOpenClawStateDatabaseAsync);
 
-  it("reuses warm append queries while binding fresh metadata, sequence and payload values", async () => {
+  it("binds fresh metadata, sequence and payload values across worker appends", async () => {
     await withTestDir({ prefix: "openclaw-acp-prepared-" }, async (dir) => {
       const options = { path: path.join(dir, "state.sqlite") };
       let now = 100;
@@ -31,27 +32,14 @@ describe("ACP prepared queries", () => {
       for (let index = 0; index < 3; index++) {
         await ledger.recordUpdate({ ...session, update: update(`warm-${index}`) });
       }
-      const { db } = openOpenClawStateDatabase(options);
-      const prepare = vi.spyOn(db, "prepare");
-      const compile = vi.spyOn(SqliteQueryCompiler.prototype, "compileQuery");
-      try {
-        for (let index = 0; index < 4; index++) {
-          await ledger.recordUpdate({
-            sessionId: session.sessionId,
-            sessionKey: `key-${index}-漢😀`,
-            runId: index % 2 ? `run-${index}` : undefined,
-            update: update(`payload-${index}-漢\0\ud800`),
-          });
-        }
-        expect(prepare.mock.calls.filter(([sql]) => sql.includes("acp_replay_"))).toHaveLength(0);
-        expect(
-          compile.mock.results.filter(
-            (result) => result.type === "return" && result.value.sql.includes("acp_replay_"),
-          ),
-        ).toHaveLength(0);
-      } finally {
-        prepare.mockRestore();
-        compile.mockRestore();
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
+      for (let index = 0; index < 4; index++) {
+        await ledger.recordUpdate({
+          sessionId: session.sessionId,
+          sessionKey: `key-${index}-漢😀`,
+          runId: index % 2 ? `run-${index}` : undefined,
+          update: update(`payload-${index}-漢\0\ud800`),
+        });
       }
       const replay = await ledger.readReplayBySessionId(session);
       expect(replay).toMatchObject({ complete: true, sessionKey: "key-3-漢😀" });
@@ -74,15 +62,56 @@ describe("ACP prepared queries", () => {
       expect(replay.events.slice(3).map((event) => event.at)).toEqual([108, 110, 112, 114]);
       expectAcpReplayUtf8Accounting(db);
 
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       await ledger.recordUpdate({ ...session, update: update("after reopen") });
       const reopened = await ledger.readReplayBySessionId(session);
       expect(reopened.events.at(-1)).toMatchObject({ seq: 8, update: update("after reopen") });
-      expectAcpReplayUtf8Accounting(openOpenClawStateDatabase(options).db);
+      expectAcpReplayUtf8Accounting(
+        requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
+      );
     });
   });
 
-  it("keeps oversized bindings fresh and honors authorization after statements warm", async () => {
+  it("appends without reading earlier payload columns", async () => {
+    await withTestDir({ prefix: "openclaw-acp-payload-" }, async (dir) => {
+      const options = { path: path.join(dir, "state.sqlite") };
+      const ledger = createSqliteAcpEventLedger(options);
+      const session = { sessionId: "session", sessionKey: "key", cwd: "/work", complete: true };
+      await ledger.startSession(session);
+      await ledger.recordUpdate({ ...session, update: update("prior payload") });
+      await closeOpenClawStateDatabaseAsync();
+      const database = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(database.db);
+      const context: WorkerWriteOperationContext = {
+        open: () => database,
+        stateOptions: () => ({ path: options.path, env: process.env }),
+        write: (operation) => runOpenClawStateWriteTransaction(operation, options),
+        writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
+      };
+      const { now: _now, ...limits } = normalizeAcpLedgerOptions();
+      db.setAuthorizer((action, table, column) =>
+        action === constants.SQLITE_READ &&
+        table === "acp_replay_events" &&
+        column === "update_json"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      try {
+        acpReplayOperations["acpReplay.append"](
+          { session, limits, events: [{ update: update("next payload"), createdAt: 10, at: 11 }] },
+          context,
+        );
+      } finally {
+        db.setAuthorizer(null);
+      }
+      expect(database.db.prepare("SELECT COUNT(*) AS count FROM acp_replay_events").get()).toEqual({
+        count: 2,
+      });
+      expectAcpReplayUtf8Accounting(db);
+    });
+  });
+
+  it("rolls back sequence and byte accounting when an event insert fails", async () => {
     await withTestDir({ prefix: "openclaw-acp-prepared-" }, async (dir) => {
       const options = { path: path.join(dir, "state.sqlite") };
       const ledger = createSqliteAcpEventLedger(options);
@@ -94,18 +123,15 @@ describe("ACP prepared queries", () => {
       const large = "漢".repeat(32 * 1024);
       await ledger.recordUpdate({ ...session, update: update(large) });
       await ledger.recordUpdate({ ...session, update: update("small after large") });
-      const { db } = openOpenClawStateDatabase(options);
-      db.setAuthorizer((action, table) =>
-        action === constants.SQLITE_INSERT && table === "acp_replay_events"
-          ? constants.SQLITE_DENY
-          : constants.SQLITE_OK,
-      );
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
+      db.exec(`CREATE TRIGGER reject_replay_event BEFORE INSERT ON acp_replay_events
+        BEGIN SELECT RAISE(ABORT, 'replay event rejected'); END`);
       try {
         await expect(
           ledger.recordUpdate({ ...session, update: update("refused") }),
-        ).rejects.toThrow(/not authorized/i);
+        ).rejects.toThrow(/replay event rejected/);
       } finally {
-        db.setAuthorizer(null);
+        db.exec("DROP TRIGGER reject_replay_event");
       }
       await ledger.recordUpdate({ ...session, update: update("accepted") });
       const replay = await ledger.readReplayBySessionId(session);
@@ -132,7 +158,7 @@ describe("ACP prepared queries", () => {
           { type: "text", text: "tail" },
         ],
       });
-      const { db } = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
       expect(db.prepare("SELECT seq, update_json FROM acp_replay_events").all()).toEqual([
         {
           seq: 2,
@@ -170,7 +196,7 @@ describe("ACP prepared queries", () => {
           await roomy.recordUpdate({ ...session, update: update(`${sessionId}-${index}`) });
         }
       }
-      const { db } = openOpenClawStateDatabase(options);
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
       // Imported/retained history can have gaps; next_seq is not an event count.
       db.exec(
         "UPDATE acp_replay_events SET seq = seq * 10; UPDATE acp_replay_sessions SET next_seq = 31",

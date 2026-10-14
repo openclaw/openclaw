@@ -830,7 +830,7 @@ export function scheduleGatewayRestart(opts?: {
   skipDeferral?: boolean;
   successorOwner?: GatewayRestartIntent["successorOwner"];
 }): ScheduledRestart {
-  const delayMs = normalizeGatewayRestartDelayMs(opts?.delayMs);
+  const requestedDelayMs = normalizeGatewayRestartDelayMs(opts?.delayMs);
   const reason = normalizeRestartIntentReason(opts?.reason);
   const mode: ScheduledRestart["mode"] =
     process.listenerCount("SIGUSR2") > 0
@@ -851,7 +851,12 @@ export function scheduleGatewayRestart(opts?: {
     mode,
     cooldownMsApplied,
   };
-  const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
+  const result = (
+    delayMs: number,
+    coalesced: boolean,
+    emitHooksQueued: boolean,
+  ): ScheduledRestart => ({ ...restartResultBase, delayMs, coalesced, emitHooksQueued });
+  const requestedDueAt = nowMs + requestedDelayMs + cooldownMsApplied;
   const skipDeferral = opts?.skipDeferral === true;
   let nextPendingSessionKey = opts?.sessionKey;
   let nextPendingReason = reason;
@@ -875,13 +880,8 @@ export function scheduleGatewayRestart(opts?: {
     restartLog.warn(
       `restart request coalesced (already in-flight) reason=${reason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
     );
-    return {
-      ...restartResultBase,
-      delayMs: 0,
-      coalesced: true,
-      // SIGUSR2 already emitted; the new caller's hooks cannot run for this cycle.
-      emitHooksQueued: false,
-    };
+    // SIGUSR2 already emitted; the new caller's hooks cannot run for this cycle.
+    return result(0, true, false);
   }
 
   const requestOwner = (pendingRestartRequest ??= new PendingGatewayRestart());
@@ -910,12 +910,7 @@ export function scheduleGatewayRestart(opts?: {
       void emitPreparedGatewayRestart(undefined, reason, undefined, {
         scheduledRequest: requestOwner,
       });
-      return {
-        ...restartResultBase,
-        delayMs: 0,
-        coalesced: false,
-        emitHooksQueued: opts?.emitHooks !== undefined,
-      };
+      return result(0, false, opts?.emitHooks !== undefined);
     }
     const shouldPullEarlier =
       !pendingRestartPreparing &&
@@ -939,12 +934,7 @@ export function scheduleGatewayRestart(opts?: {
         pendingRestartSuccessorOwner = nextPendingSuccessorOwner;
         pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
         armPendingRestartTimer(requestedDueAt, nowMs);
-        return {
-          ...restartResultBase,
-          delayMs: Math.max(0, requestedDueAt - nowMs),
-          coalesced: true,
-          emitHooksQueued: false,
-        };
+        return result(Math.max(0, requestedDueAt - nowMs), true, false);
       }
       if (preservePendingHooks) {
         nextPendingEmitHooks = requestOwner.emitHooks;
@@ -981,12 +971,7 @@ export function scheduleGatewayRestart(opts?: {
           `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts.sessionKey ?? "unspecified"} pendingSessionKey=${requestOwner.sessionKey ?? "unspecified"})`,
         );
       }
-      return {
-        ...restartResultBase,
-        delayMs: remainingMs,
-        coalesced: true,
-        emitHooksQueued,
-      };
+      return result(remainingMs, true, emitHooksQueued);
     }
   }
 
@@ -998,11 +983,6 @@ export function scheduleGatewayRestart(opts?: {
   requestOwner.sessionKey = nextPendingSessionKey;
   pendingRestartSkipDeferral = skipDeferral;
   armPendingRestartTimer(requestedDueAt, nowMs);
-  return {
-    ...restartResultBase,
-    delayMs: Math.max(0, requestedDueAt - nowMs),
-    coalesced: false,
-    emitHooksQueued: opts?.emitHooks !== undefined,
-  };
+  return result(Math.max(0, requestedDueAt - nowMs), false, opts?.emitHooks !== undefined);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

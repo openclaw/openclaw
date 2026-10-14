@@ -87,7 +87,6 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ],
   ["extensions/openai/realtime-quicksilver.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   ["extensions/openai/realtime-talk-defaults.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
-  ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
   ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
   ["src/gateway/gateway-acp-bind.live.test.ts", ["OPENCLAW_LIVE_ACP_BIND"]],
@@ -368,6 +367,7 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
       return files.filter(
         (file) =>
           file.startsWith("src/agents/") ||
+          file.startsWith("src/decisions/") ||
           file.startsWith("src/llm/") ||
           file.startsWith("src/skills/"),
       );

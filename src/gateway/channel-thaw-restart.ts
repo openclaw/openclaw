@@ -70,6 +70,7 @@ export async function restartRunningChannelAccounts(
         continue;
       }
       let startOutcomes = await manager.startChannel(channelId, accountId, {
+        reason: "host-thaw",
         preserveManualStop: true,
       });
       let startOutcome = startOutcomes.get(accountId);
@@ -83,6 +84,7 @@ export async function restartRunningChannelAccounts(
         // A timed-out stop uses a two-call recovery contract: the first call
         // requests replacement and the second discards the stale task.
         startOutcomes = await manager.startChannel(channelId, accountId, {
+          reason: "host-thaw",
           preserveManualStop: true,
         });
         startOutcome = startOutcomes.get(accountId);

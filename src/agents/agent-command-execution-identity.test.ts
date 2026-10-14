@@ -51,6 +51,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       taskSuggestionDeliveryMode: "gateway",
       assertSourceCurrent: () => {},
       beforeTerminalDelivery: async () => {},
+      isTerminalOutcomeObserved: () => true,
       prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
       internalDeliverySuppressErrors: true,
       operatorAuthority: {
@@ -73,6 +74,7 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
       taskSuggestionDeliveryMode: undefined,
       assertSourceCurrent: undefined,
       beforeTerminalDelivery: undefined,
+      isTerminalOutcomeObserved: undefined,
       prepareAssistantTranscriptMessage: undefined,
       internalDeliverySuppressErrors: undefined,
       operatorAuthority: undefined,
@@ -101,7 +103,6 @@ describe("Gateway agent command execution identity", () => {
     const sessionEntry = {
       sessionId: "recovery-session",
       updatedAt: 100,
-      status: "running" as const,
       abortedLastRun: false,
       lifecycleRunId: "recovery-run",
       restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],

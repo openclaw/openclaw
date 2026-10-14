@@ -13,13 +13,8 @@ import type { AttachmentItem } from "./chat-message-media.ts";
 
 registerChatMessageMetadataEnglish();
 
-type AttachmentCardKind = Extract<
-  AttachmentItem["attachment"]["kind"],
-  "audio" | "document" | "image" | "video"
->;
-
 export type AttachmentCardHeaderOptions = {
-  kind: AttachmentCardKind;
+  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -85,41 +80,48 @@ export function openAttachmentCardFromClick(
   onOpen();
 }
 
-function attachmentTypeLabel(
-  kind: AttachmentCardKind,
-  label: string,
-  mimeType: string | undefined,
-): string {
-  if (kind === "audio") {
-    return t("chat.attachments.audio");
-  }
-  if (kind === "video") {
-    return t("chat.attachments.video");
-  }
-  if (kind === "image") {
-    return t("chat.attachments.attachedFile");
-  }
-  return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
+const attachmentTypeLabels = new Map([
+  ["audio", "chat.attachments.audio"],
+  ["video", "chat.attachments.video"],
+  ["image", "chat.attachments.attachedFile"],
+]);
+
+export function prepareAttachmentCardHeader(options: AttachmentCardHeaderOptions, translate = t) {
+  const formattedSize =
+    options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
+  const typeLabelKey = attachmentTypeLabels.get(options.kind);
+  const typeLabel = typeLabelKey
+    ? translate(typeLabelKey)
+    : resolveAttachmentFileIcon(options.label, options.mimeType).extensionLabel;
+  return {
+    compactPreview: options.visualMode === "preview-with-favicon",
+    formattedSize,
+    metadata: [typeLabel, formattedSize].filter(Boolean).join(" · "),
+    downloadLabel: options.kind === "document" ? translate("chat.attachments.download") : "",
+    downloadTitle: translate("chat.mediaPlayer.download", { filename: options.label }),
+    expandLabel:
+      options.expandLabel ?? translate("chat.attachments.expand", { filename: options.label }),
+  };
 }
 
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
   const skeleton = options.loading ? "skeleton" : "";
-  const compactPreview = options.visualMode === "preview-with-favicon";
-  const formattedSize =
-    options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
-  const typeLabel = attachmentTypeLabel(options.kind, options.label, options.mimeType);
-  const metadata = [typeLabel, formattedSize].filter(Boolean).join(" · ");
-  const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
+  const view = prepareAttachmentCardHeader(options);
   const hasOpenAction = options.onExpand !== undefined;
-  const expandLabel =
-    options.expandLabel ?? t("chat.attachments.expand", { filename: options.label });
   const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
-    hasOpenAction ? "chat-assistant-attachment-card__download--secondary" : ""
+    view.downloadLabel
+      ? "chat-assistant-attachment-card__action--labeled"
+      : hasOpenAction
+        ? "chat-assistant-attachment-card__download--secondary"
+        : ""
   }`;
+  const downloadContent = view.downloadLabel
+    ? html`${icons.download}<span>${view.downloadLabel}</span>`
+    : icons.download;
   return html`
     <div
       class="chat-assistant-attachment-card__header ${
-        compactPreview ? "chat-assistant-attachment-card__header--preview" : ""
+        view.compactPreview ? "chat-assistant-attachment-card__header--preview" : ""
       }"
     >
       <div class="chat-assistant-attachment-card__identity">
@@ -131,28 +133,28 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
         })}
         <span
           class="chat-assistant-attachment-card__details ${
-            compactPreview ? "chat-assistant-attachment-card__details--preview" : ""
+            view.compactPreview ? "chat-assistant-attachment-card__details--preview" : ""
           }"
         >
           <span class="chat-assistant-attachment-card__title ${skeleton}" title=${options.label}
             >${options.label}</span
           >
           ${
-            compactPreview
-              ? formattedSize
+            view.compactPreview
+              ? view.formattedSize
                 ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
                       >·</span
                     ><span class="chat-assistant-attachment-card__meta ${skeleton}"
-                      >${formattedSize}</span
+                      >${view.formattedSize}</span
                     >`
                 : null
-              : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`
+              : html`<span class="chat-assistant-attachment-card__meta">${view.metadata}</span>`
           }
         </span>
       </div>
       <span class="chat-assistant-attachment-card__actions">
         ${
-          options.voiceNote && !compactPreview
+          options.voiceNote && !view.compactPreview
             ? html`<span class="chat-assistant-attachment-badge"
                 >${t("chat.messages.voiceNote")}</span
               >`
@@ -164,11 +166,11 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
                 type="button"
                 class=${`${downloadClass} ${skeleton}`}
                 ?disabled=${options.downloadPending}
-                aria-label=${downloadTitle}
-                title=${downloadTitle}
+                aria-label=${view.downloadTitle}
+                title=${view.downloadTitle}
                 @click=${options.onDownload}
               >
-                ${icons.download}
+                ${downloadContent}
               </button>`
             : options.downloadHref || options.downloadPending
               ? html`<a
@@ -180,9 +182,9 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
                   download=${options.label}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label=${downloadTitle}
-                  title=${downloadTitle}
-                  >${icons.download}</a
+                  aria-label=${view.downloadTitle}
+                  title=${view.downloadTitle}
+                  >${downloadContent}</a
                 >`
               : null
         }
@@ -191,16 +193,16 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             ? html`<button
                 type="button"
                 class="chat-assistant-attachment-card__action ${
-                  compactPreview
+                  view.compactPreview
                     ? "chat-assistant-attachment-card__expand--icon"
                     : "chat-assistant-attachment-card__action--labeled"
                 } chat-assistant-attachment-card__expand"
-                aria-label=${expandLabel}
-                title=${expandLabel}
+                aria-label=${view.expandLabel}
+                title=${view.expandLabel}
                 @click=${options.onExpand}
               >
                 ${
-                  compactPreview
+                  view.compactPreview
                     ? icons.chevronsUpDown
                     : html`<span>${t("chat.attachments.open")}</span>`
                 }

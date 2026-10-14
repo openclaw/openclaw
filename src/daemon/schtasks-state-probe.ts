@@ -58,6 +58,7 @@ const READ_TASK = [
 function queryTaskScheduler(
   taskName: string | undefined,
   timeoutMs?: number,
+  checkUpdateAccess = false,
 ): { status: "ok"; value: unknown } | Exclude<ScheduledTaskStateProbe, { status: "found" }> {
   if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 1)) {
     return {
@@ -68,11 +69,24 @@ function queryTaskScheduler(
     };
   }
   // spawnSync requires an integer; rounding up or using zero would extend the allowance.
-  const probeTimeoutMs = resolvePositiveTimerTimeoutMs(
-    timeoutMs,
+  const probeTimeoutMs = Math.min(
+    resolvePositiveTimerTimeoutMs(timeoutMs, WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS),
     WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
   );
   const encodedTaskName = Buffer.from(taskName ?? "", "utf8").toString("base64");
+  // Observe the actual principal and token; token filtering alone says nothing
+  // about permission to manage the caller's per-user task.
+  const readTask = checkUpdateAccess
+    ? [
+        "$identity=[Security.Principal.WindowsIdentity]::GetCurrent()",
+        "$principal=[Security.Principal.WindowsPrincipal]::new($identity)",
+        "$taskPrincipal=$task.Definition.Principal",
+        "$result=@{callerSid=[string]$identity.User.Value;callerElevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);taskUserSid=$null;taskRunLevel=[int]$taskPrincipal.RunLevel}",
+        "$userId=[string]$taskPrincipal.UserId",
+        "if($userId) { try { $result.taskUserSid=if($userId -match '^S-1-\\d+(-\\d+)+$') { ([Security.Principal.SecurityIdentifier]::new($userId)).Value } else { ([Security.Principal.NTAccount]::new($userId)).Translate([Security.Principal.SecurityIdentifier]).Value } } catch {} }",
+        "$result | ConvertTo-Json -Compress",
+      ].join("; ")
+    : "Read-Task $task | ConvertTo-Json -Depth 4 -Compress";
   const script = [
     "$ErrorActionPreference='Stop'",
     "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
@@ -82,7 +96,7 @@ function queryTaskScheduler(
     "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect() } catch { Write-Output $_.Exception.HResult; exit 2 }",
     taskName === undefined
       ? "function Read-Folder($folder) { foreach($task in $folder.GetTasks(1)) { Read-Task $task }; foreach($child in $folder.GetFolders(0)) { Read-Folder $child } }; try { $tasks=@(Read-Folder ($service.GetFolder('\\'))); ConvertTo-Json -InputObject $tasks -Depth 4 -Compress; exit 0 } catch { Write-Output $_.Exception.HResult; exit 2 }"
-      : "try { $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false; Read-Task $task | ConvertTo-Json -Depth 4 -Compress; exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }",
+      : `try { $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false; ${readTask}; exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }`,
   ].join("; ");
   const probe = spawnSync(
     getWindowsPowerShellExePath(),
@@ -150,6 +164,41 @@ function queryTaskScheduler(
             : {}),
         },
       };
+}
+
+/** Read-only admission; lifecycle owners still revalidate before each mutation. */
+export function probeScheduledTaskUpdateAccess(
+  taskName: string,
+  timeoutMs?: number,
+):
+  | { status: "allowed" | "elevation-required" }
+  | Exclude<ScheduledTaskStateProbe, { status: "found" }> {
+  const result = queryTaskScheduler(taskName, timeoutMs, true);
+  if (result.status !== "ok") {
+    return result;
+  }
+  const facts = asOptionalRecord(result.value);
+  const { callerSid, callerElevated, taskUserSid, taskRunLevel } = facts ?? {};
+  const sid = /^S-1-\d+(?:-\d+)+$/u;
+  if (
+    typeof callerSid !== "string" ||
+    !sid.test(callerSid) ||
+    typeof callerElevated !== "boolean" ||
+    (taskUserSid !== null && (typeof taskUserSid !== "string" || !sid.test(taskUserSid))) ||
+    (taskRunLevel !== 0 && taskRunLevel !== 1)
+  ) {
+    return {
+      status: "unknown",
+      detail: "Scheduled Task access check returned invalid facts.",
+      diagnostic: { kind: "invalid-response" },
+    };
+  }
+  // Group principals and unresolved accounts do not establish a different user.
+  // Their actual control permissions remain with Task Scheduler.
+  return !callerElevated &&
+    (taskRunLevel === 1 || (taskUserSid !== null && taskUserSid !== callerSid))
+    ? { status: "elevation-required" }
+    : { status: "allowed" };
 }
 
 function readTaskSnapshot(value: unknown): ScheduledTaskSnapshot | undefined {

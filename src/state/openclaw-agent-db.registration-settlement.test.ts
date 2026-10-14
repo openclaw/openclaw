@@ -7,7 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createSessionRowProjection } from "../gateway/session-row-projection.js";
-import { prepareSessionMutationFacts } from "../gateway/session-sharing-preparation.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "../gateway/session-sharing-preparation.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -21,7 +24,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -139,7 +142,7 @@ function observeStores(database: ReturnType<typeof openOpenClawStateDatabase>) {
 }
 
 describe("agent registration native settlement", () => {
-  it("refuses retained sharing facts when a worker loses its registration COMMIT receipt", async () => {
+  it("revokes captured absence when a worker loses its registration COMMIT receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const agentId = lostReceipt.agentId;
       const sessionKey = `agent:${agentId}:existing`;
@@ -200,8 +203,8 @@ describe("agent registration native settlement", () => {
         expect(lostReceipt.events).toEqual(["native-exit", "read-rejected"]);
         expect(receipts).toEqual([]);
         expect(registrations()).toEqual([expect.objectContaining({ agentId, path: storePath })]);
-        // Neither fresh discovery nor global cleanup may rescue the retained reader.
-        expect(() => prepared.readCurrent(cfg)).toThrow("Session access facts are unavailable");
+        // Unknown registration settlement revokes this lease; a fresh read discovers the store.
+        expect(() => prepared.readCurrent(cfg)).toThrow(SessionMutationFactsUnavailableError);
         expect(observed.facts).toEqual([true]);
         const current = await prepareSessionMutationFacts({ cfg, agentId, sessionKey });
         try {
@@ -357,7 +360,9 @@ describe("agent registration native settlement", () => {
           await projection.ensureMaterialized();
           expect(projection.capture(query)?.entry).toMatchObject(entry);
           expect(observed.trace).toEqual([{ kind: "stores", inTransaction: false }]);
-          expect(snapshot.assertCurrent).toThrow(registryListing.AgentDatabaseRegistryChangedError);
+          expect(snapshot.assertCurrent).toThrow(
+            expect.objectContaining({ name: "AgentDatabaseRegistryChangedError" }),
+          );
         } finally {
           endScope.resolve();
           deliverCommitted?.();

@@ -8,95 +8,51 @@ import type {
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
-import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
-import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import {
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import {
+  withSessionHistoryWorkerDatabase,
+  type SessionHistoryWorkerDatabase,
+} from "../config/sessions/session-transcript-worker-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import { collectErrorGraphCandidates, extractErrorCode, readErrorName } from "../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { isSqliteWorkerError, type SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import {
+  readDatabasePathIdentitySync,
+  type DatabaseFileIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
 import {
-  getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseAsync,
   withOpenClawAgentDatabaseRuntime,
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import {
-  openOpenClawAgentSqliteWorkerStore,
-  type OpenClawAgentSqliteWorkerStore,
-} from "../state/openclaw-agent-worker-store.js";
+import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
 import { BoardValidationError } from "./board-layout.js";
-import {
-  cloneBoardSnapshot,
-  normalizeBoardWidgetPutParams,
-  type BoardSessionTarget,
-  type BoardStore,
-  type BoardWriteOptions,
-  type BoardWidgetWriteOptions,
-  type BoardWidgetDocument,
-  type BoardSnapshotWithHtmlViewMetadata,
-  type BoardWidgetMcpAppDocument,
-} from "./board-store.js";
-import {
-  prepareBoardSourceAuthority,
-  reportBoardCleanupFailure,
-} from "./sqlite-board-authority.js";
+import { hasUnknownBoardWriteOutcome, restoreBoardError } from "./board-store-errors.js";
 import type {
-  BoardReadOperations,
-  BoardWriteOperations,
-  BoardWriteOutcome,
-} from "./sqlite-board-operations.js";
-import {
-  ensureBoardSchema,
-  hasBoardSession,
-  readBoardSnapshotWithHtmlViewMetadata,
-  readBoardWidgetDocument,
-  applyBoardOpsToDatabase,
-  putBoardWidgetInDatabase,
-  grantBoardWidgetInDatabase,
-  type BoardSessionIdentity,
-} from "./sqlite-board-store.kernel.js";
+  BoardSessionTarget,
+  BoardStore,
+  BoardWriteOptions,
+  BoardWidgetWriteOptions,
+  BoardWidgetDocument,
+  BoardSnapshotWithHtmlViewMetadata,
+  BoardWidgetMcpAppDocument,
+} from "./board-store.js";
+import { createSessionActorBoardStore } from "./session-actor-board-store.js";
+import { reportBoardCleanupFailure } from "./sqlite-board-authority.js";
+import type { BoardWriteOperations, BoardWriteOutcome } from "./sqlite-board-operations.js";
+import type { BoardSessionIdentity } from "./sqlite-board-store.kernel.js";
 import type { BoardWorkerInput } from "./sqlite-board-store.worker.js";
-
-function restoreBoardError(error: unknown): unknown {
-  if (
-    error instanceof Error &&
-    error.name === "BoardValidationError" &&
-    "code" in error &&
-    (error.code === "conflict" || error.code === "invalid_operation" || error.code === "not_found")
-  ) {
-    return new BoardValidationError(error.code, error.message);
-  }
-  return error;
-}
-
-/** Invalidation never grants retries; transported post-execution failures are plain Errors. */
-function hasUnknownBoardWriteOutcome(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) =>
-    current instanceof AggregateError ? [current.cause] : [],
-  ).some(
-    (current) =>
-      isSqliteWorkerError(current, "outcome-unknown") ||
-      (current instanceof Error &&
-        readErrorName(current) === "SqliteWorkerError" &&
-        extractErrorCode(current) === "outcome-unknown"),
-  );
-}
 
 type SqliteBoardStoreOptions = {
   resolveSession: (target: BoardSessionTarget) => {
@@ -105,17 +61,12 @@ type SqliteBoardStoreOptions = {
     sessionKey: string;
     /** Captured logical routing authority; worker grants must not repeat database discovery. */
     assertCurrent?: () => void;
-    /** Captured by the future activation owner; ordinary production routing remains native. */
-    incognito?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority };
+    absent?: { assertCurrent(): void };
   };
   env?: NodeJS.ProcessEnv;
 };
 
 type ResolvedBoardSession = ReturnType<SqliteBoardStoreOptions["resolveSession"]>;
-
-function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
-  return { sessionKey, revision: 0, tabs: [], widgets: [] };
-}
 
 export class SqliteBoardStore implements BoardStore {
   constructor(private readonly options: SqliteBoardStoreOptions) {}
@@ -135,43 +86,57 @@ export class SqliteBoardStore implements BoardStore {
     }
   }
 
-  private requireExistingSession(
-    resolved: { agentId: string; path?: string; sessionKey: string },
-    env: NodeJS.ProcessEnv,
-  ): void {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => hasBoardSession(database, resolved.sessionKey),
+  private useMemory<T>(
+    target: BoardSessionTarget,
+    consume: (store: BoardStore) => Promise<T>,
+    missing?: () => T | Promise<T>,
+  ): Promise<{ value: T }> | undefined {
+    const resolved = this.options.resolveSession(target);
+    const assertCurrent = () => this.assertTargetCurrent(target, resolved);
+    const authority = { assertCurrent, authorize: assertCurrent };
+    const scope = { ...resolved, storePath: resolved.path, env: this.options.env };
+    const memory = captureSessionActorStorageOwner(scope, authority);
+    if (!memory) {
+      return undefined;
+    }
+    return withSessionActorStorage(
+      scope,
       {
-        agentId: resolved.agentId,
-        ...(resolved.path ? { path: resolved.path } : {}),
-        env,
+        authority: memory.authority,
+        lifetime: { assertCurrent, assertReadable: assertCurrent },
       },
-    );
-    if (!result.found || !result.value) {
+      async (binding) => ({ value: await consume(createSessionActorBoardStore(() => binding)) }),
+    ).then(async (result) => {
+      if (result) {
+        return result;
+      }
+      assertCurrent();
+      if (missing) {
+        return { value: await missing() };
+      }
       throw new BoardValidationError(
         "not_found",
         `board session not found: ${resolved.sessionKey}`,
       );
-    }
+    });
   }
 
   private write<T>(
     target: BoardSessionTarget,
     options: BoardWriteOptions | undefined,
-    operationLabel: string,
-    native: (database: OpenClawAgentDatabase, sessionKey: string) => T,
     worker: (
       scope: Pick<SqliteWorkerStore<BoardWriteOperations>, "execute">,
-      sessionKey: string,
-    ) => Promise<BoardWriteOutcome<T>>,
-    actorWrite: (
-      actor: IncognitoSessionActor,
-      authority: IncognitoSessionAuthority,
       sessionKey: string,
     ) => Promise<BoardWriteOutcome<T>>,
     prepare?: () => Promise<void>,
   ): Promise<T> {
     const resolved = this.options.resolveSession(target);
+    if (resolved.absent) {
+      options?.assertCurrent?.();
+      this.assertTargetCurrent(target, resolved);
+      resolved.absent.assertCurrent();
+      throw new IncognitoSessionMissingError();
+    }
     const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     const databaseOptions = {
@@ -179,86 +144,14 @@ export class SqliteBoardStore implements BoardStore {
       env,
       path: resolveOpenClawAgentSqlitePath({ ...resolved, env }),
     };
-    const assertCurrent = () => {
-      options?.assertCurrent?.();
-      this.assertTargetCurrent(target, resolved);
-    };
-    if (resolved.incognito) {
-      const { actor, authority } = resolved.incognito;
-      if (actor.agentId !== resolved.agentId || actor.path !== databaseOptions.path) {
-        throw new Error("Board target differs from its captured incognito actor");
-      }
-      const currentAuthority: IncognitoSessionAuthority = {
-        assertCurrent() {
-          assertCurrent();
-          authority.assertCurrent();
-          actor.assertCurrent();
-        },
-        authorize: (stage, facts) => authority.authorize?.(stage, facts),
-      };
-      currentAuthority.assertCurrent();
-      const execute = async (writeAuthority: IncognitoSessionAuthority) => {
-        try {
-          const committed = await actorWrite(actor, writeAuthority, resolved.sessionKey);
-          sessionChanges.emitBatch(committed.changes);
-          return committed.value;
-        } catch (error) {
-          // Disclosure can fail after the actor acknowledges COMMIT; invalidate without replay.
-          sessionChanges.emit({ sessionKey: resolved.sessionKey, storePath: actor.path });
-          throw restoreBoardError(error);
-        }
-      };
-      return actor.sessions
-        .withSharedState(async () => {
-          if (!prepare) {
-            return execute(currentAuthority);
-          }
-          const source = await actor.sessions.read(currentAuthority, {
-            sessionKey: resolved.sessionKey,
-          });
-          if (!source.entry) {
-            throw new BoardValidationError(
-              "not_found",
-              `board session not found: ${resolved.sessionKey}`,
-            );
-          }
-          await prepare();
-          source.claim.assertCurrent();
-          const expected = source.entry;
-          const writeAuthority: IncognitoSessionAuthority = {
-            ...currentAuthority,
-            authorize(stage, facts) {
-              if (
-                facts.sharing?.entry?.sessionId !== expected.sessionId ||
-                facts.sharing.entry.lifecycleRevision !== expected.lifecycleRevision
-              ) {
-                throw new BoardValidationError("invalid_operation", "board session changed; retry");
-              }
-              return currentAuthority.authorize?.(stage, facts);
-            },
-          };
-          return execute(writeAuthority);
-        })
-        .then((result) => {
-          currentAuthority.assertCurrent();
-          actor.assertReadable();
-          return result;
-        });
-    }
-    const incognito = isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions);
-    const assertOpenCurrent = () => {
-      assertCurrent();
-      if (incognito) {
-        this.requireExistingSession({ ...resolved, path: databaseOptions.path }, env);
-      }
-    };
-    assertOpenCurrent();
+    const assertCurrent = () => this.assertTargetCurrent(target, resolved);
+    assertCurrent();
     return runOpenClawAgentWriteAdmission(
       databaseOptions,
       async (identity, assertDatabaseCurrent) => {
-        let expectedSession: BoardSessionIdentity | undefined;
-        if (!incognito) {
-          const source = await withSessionHistoryWorkerDatabase(databaseOptions, (reader) =>
+        const source = await withSessionHistoryWorkerDatabase(
+          databaseOptions,
+          (reader) =>
             reader.readExactEntries({
               env,
               sessionKeys: [resolved.sessionKey],
@@ -266,94 +159,49 @@ export class SqliteBoardStore implements BoardStore {
               snapshotFields: [],
               expectedIdentity: identity,
             }),
+          targetDiscoveryLane,
+        );
+        assertDatabaseCurrent();
+        assertCurrent();
+        const entry = source.entries[0]?.entry;
+        if (!entry) {
+          throw new BoardValidationError(
+            "not_found",
+            `board session not found: ${resolved.sessionKey}`,
           );
-          assertDatabaseCurrent();
-          assertOpenCurrent();
-          const entry = source.entries[0]?.entry;
-          if (!entry) {
-            throw new BoardValidationError(
-              "not_found",
-              `board session not found: ${resolved.sessionKey}`,
-            );
-          }
-          expectedSession = {
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-          };
         }
-        const authority = await prepareBoardSourceAuthority(options?.assertCurrent, identity);
-        const nativeSource = incognito || authority.nativeSource;
+        const expectedSession: BoardSessionIdentity = {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        };
         const assertPreparedCurrent = () => {
           assertDatabaseCurrent();
-          this.assertTargetCurrent(target, resolved);
-          if (nativeSource) {
-            assertOpenCurrent();
-          } else {
-            authority.assertCurrent();
-          }
+          assertCurrent();
         };
-        const withDatabase = nativeSource
-          ? withOpenClawAgentDatabaseAsync
-          : withOpenClawAgentDatabaseRuntime;
-        return withDatabase(
+        return withOpenClawAgentDatabaseRuntime(
           databaseOptions,
           async (database) => {
             if (prepare) {
               await prepare();
             }
             assertPreparedCurrent();
-            if (prepare && getOpenClawAgentDatabaseIfOpen(databaseOptions) !== database) {
-              throw new BoardValidationError(
-                "invalid_operation",
-                "board database closed or changed; retry",
-              );
-            }
-            // First-use schema work must precede the worker's strict native-open validation.
-            ensureBoardSchema(database);
-            if (
-              nativeSource ||
-              typeof readOpenClawAgentDatabaseIdentity(database).identity === "symbol"
-            ) {
-              // Released opaque/cross-store guards keep synchronous authority and mutation together.
-              return runOpenClawAgentWriteTransaction(
-                (current) => {
-                  assertPreparedCurrent();
-                  if (
-                    expectedSession &&
-                    !hasBoardSession(current, resolved.sessionKey, expectedSession)
-                  ) {
-                    throw new BoardValidationError(
-                      "invalid_operation",
-                      "board session changed; retry",
-                    );
-                  }
-                  const value = native(current, resolved.sessionKey);
-                  assertPreparedCurrent();
-                  return value;
-                },
-                databaseOptions,
-                { operationLabel },
-              );
-            }
             const publication = await openOpenClawAgentSqliteWorkerStore<BoardWriteOperations>(
               databaseOptions,
               database.db,
               {
                 moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
-                input: (expectedSession
-                  ? {
-                      agentId: databaseOptions.agentId,
-                      sessionKey: resolved.sessionKey,
-                      expectedSession,
-                      sources: authority.checks.map(({ predicate }) => predicate),
-                    }
-                  : undefined) satisfies BoardWorkerInput,
-                assertAdmission: authority.assertAdmission,
+                input: {
+                  agentId: databaseOptions.agentId,
+                  sessionKey: resolved.sessionKey,
+                  expectedSession,
+                } satisfies BoardWorkerInput,
               },
             );
             let outcome: Result<T, unknown>;
             try {
               const value = await publication.run(async (scope) => {
+                // Source revocation blocks new admissions; admitted writes may finish their commit.
+                options?.assertCurrent?.();
                 let committed: BoardWriteOutcome<T>;
                 try {
                   committed = await worker(scope, resolved.sessionKey);
@@ -396,19 +244,9 @@ export class SqliteBoardStore implements BoardStore {
             }
             return outcome.value;
           },
-          assertPreparedCurrent,
-        ).then(
-          async (value) => {
-            try {
-              await releaseSessionSourceAuthorities([authority]);
-            } catch (error) {
-              reportBoardCleanupFailure(error);
-            }
-            return value;
-          },
-          async (error: unknown) => {
-            await releaseSessionSourceAuthorities([authority], [error]);
-            throw error;
+          () => {
+            options?.assertCurrent?.();
+            assertPreparedCurrent();
           },
         );
       },
@@ -423,30 +261,41 @@ export class SqliteBoardStore implements BoardStore {
   async getSnapshotWithHtmlViewMetadata(
     target: BoardSessionTarget,
   ): Promise<BoardSnapshotWithHtmlViewMetadata> {
+    const memory = this.useMemory<BoardSnapshotWithHtmlViewMetadata>(
+      target,
+      (store) => store.getSnapshotWithHtmlViewMetadata(target),
+      () => ({
+        snapshot: { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
+        htmlViewMetadata: new Map(),
+      }),
+    );
+    if (memory) {
+      return (await memory).value;
+    }
     return this.consumeSnapshotWithHtmlViewMetadata(target, (snapshot) => snapshot);
   }
 
   private async consumeRead<Value, T>(
     target: BoardSessionTarget,
-    native: (
-      database: Pick<OpenClawAgentDatabase, "db" | "path">,
-      sessionKey: string,
-    ) => Value | undefined,
     worker: (
-      scope: Pick<SqliteWorkerStore<BoardReadOperations>, "execute">,
+      reader: SessionHistoryWorkerDatabase,
       sessionKey: string,
-    ) => Promise<Value | undefined>,
-    actorRead: (
-      actor: IncognitoSessionActor,
-      authority: IncognitoSessionAuthority,
-      sessionKey: string,
+      env: NodeJS.ProcessEnv,
+      expectedIdentity: DatabaseFileIdentity,
     ) => Promise<Value | undefined>,
     consume: (value: Value | undefined, sessionKey: string) => T,
   ): Promise<Awaited<T>> {
     const capturedTarget = { ...target };
     const resolved = this.options.resolveSession(capturedTarget);
-    const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
-    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+    if (resolved.absent) {
+      this.assertTargetCurrent(capturedTarget, resolved);
+      resolved.absent.assertCurrent();
+      const result = await consume(undefined, resolved.sessionKey);
+      this.assertTargetCurrent(capturedTarget, resolved);
+      resolved.absent.assertCurrent();
+      return result;
+    }
+    const env = captureSessionTranscriptStorageEnvironment(this.options.env ?? process.env);
     const captured = {
       agentId: resolved.agentId,
       sessionKey: resolved.sessionKey,
@@ -464,108 +313,47 @@ export class SqliteBoardStore implements BoardStore {
       }
       return { value: result };
     };
-    if (resolved.incognito) {
-      const { actor, authority } = resolved.incognito;
-      if (actor.agentId !== captured.agentId || actor.path !== captured.path) {
-        throw new Error("Board target differs from its captured incognito actor");
-      }
-      const currentAuthority: IncognitoSessionAuthority = {
-        assertCurrent: () => {
-          this.assertTargetCurrent(capturedTarget, resolved);
-          authority.assertCurrent();
-          actor.assertCurrent();
-        },
-        authorize: (stage, facts) => authority.authorize?.(stage, facts),
-      };
-      const result = await actor.sessions.withSharedState(async () => {
-        // Retain the composition for dependent writes, outside the reader's FIFO grant.
-        const runInRetainedContext = AsyncLocalStorage.snapshot();
-        try {
-          const value = await actorRead(actor, currentAuthority, captured.sessionKey);
-          currentAuthority.assertCurrent();
-          actor.assertReadable();
-          return await runInRetainedContext(consume, value, captured.sessionKey);
-        } catch (error) {
-          throw restoreBoardError(error);
-        }
-      });
-      currentAuthority.assertCurrent();
-      actor.assertReadable();
-      return result;
-    }
-    if (isIncognitoOpenClawAgentSqlitePath(captured.path, captured)) {
-      // The excluded process-held owner cannot be reopened by a durable worker.
-      const result = await runOpenClawAgentWorkerWrite(captured, async () => {
-        this.assertTargetCurrent(capturedTarget, resolved);
-        const read = withOpenClawAgentDatabaseReadOnly(
-          (database) => native(database, captured.sessionKey),
-          captured,
-        );
-        return accept(read.found ? read.value : undefined);
-      });
-      return await result.value;
-    }
     const identity = readDatabasePathIdentitySync(captured.path);
     if (!identity.key.startsWith("file:")) {
       const result = await runOpenClawAgentWorkerWrite(captured, async () => accept(undefined));
       return await result.value;
     }
-    const execution = captureOpenClawAgentDatabaseExecution(captured, {
-      expectedIdentity: {
-        kind: "file",
-        physicalIdentity: identity.key.slice("file:".length),
-        nativeLocation: identity.canonicalPath,
-        birthtime: identity.birthtime,
-      },
-    });
-    const assertCurrent = () => {
-      execution.assertCurrent();
-      this.assertTargetCurrent(capturedTarget, resolved);
-    };
-    let publication: OpenClawAgentSqliteWorkerStore<BoardReadOperations> | undefined;
-    let result: { value: T } | undefined;
-    const failures: unknown[] = [];
-    try {
-      // Reserve before yielding; the publication installs the non-reentrant worker grant.
-      result = await runOpenClawAgentWriteAdmission(
-        captured,
-        async () => {
-          publication = await openOpenClawAgentSqliteWorkerStore<BoardReadOperations>(
-            captured,
-            { execution },
-            {
-              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
-              input: "read",
-            },
-          );
-          return publication.run(async (scope) => {
-            const value = await worker(scope, captured.sessionKey);
-            assertCurrent();
+    // FIFO-held reads and their failure cleanup use the writer-safe discovery lane.
+    const result = await withSessionHistoryWorkerDatabase(
+      { ...captured, path: identity.canonicalPath, requestedPaths: [captured.path] },
+      (reader) =>
+        runOpenClawAgentWriteAdmission(
+          captured,
+          async () => {
+            this.assertTargetCurrent(capturedTarget, resolved);
+            const value = await worker(reader, captured.sessionKey, env, identity);
+            reader.assertCurrent();
             return accept(value);
-          }, assertCurrent);
-        },
-        true,
-      );
-    } catch (error) {
-      failures.push(restoreBoardError(error));
-    } finally {
-      for (const close of [() => publication?.close(), () => execution.release()]) {
-        try {
-          await close();
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-    }
-    throwSqliteLifecycleErrors(failures, "Board read and cleanup failed");
+          },
+          true,
+        ),
+      targetDiscoveryLane,
+    ).catch((error: unknown) => {
+      throw restoreBoardError(error);
+    });
     // External consumer work must not hold the database's FIFO lane.
-    return await result!.value;
+    return await result.value;
   }
 
   async useSnapshot<T>(
     target: BoardSessionTarget,
     consume: (snapshot: BoardSnapshot) => T,
   ): Promise<Awaited<T>> {
+    const memory = this.useMemory(
+      target,
+      (store) => store.useSnapshot(target, consume),
+      async () => consume({ sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] }),
+    );
+    if (memory) {
+      return await (
+        await memory
+      ).value;
+    }
     return this.consumeSnapshotWithHtmlViewMetadata(target, ({ snapshot }) => consume(snapshot));
   }
 
@@ -574,6 +362,16 @@ export class SqliteBoardStore implements BoardStore {
     name: string,
     consume: (document: BoardWidgetDocument | undefined) => T,
   ): Promise<Awaited<T>> {
+    const memory = this.useMemory(
+      target,
+      (store) => store.useWidgetDocument(target, name, consume),
+      async () => consume(undefined),
+    );
+    if (memory) {
+      return await (
+        await memory
+      ).value;
+    }
     return this.consumeWidgetDocument(target, name, consume);
   }
 
@@ -583,18 +381,15 @@ export class SqliteBoardStore implements BoardStore {
   ): Promise<Awaited<T>> {
     return this.consumeRead(
       target,
-      readBoardSnapshotWithHtmlViewMetadata,
-      (scope, sessionKey) => scope.execute({ type: "boards.readSnapshot", input: { sessionKey } }),
-      (actor, authority, sessionKey) =>
-        actor.sessions.sideData(authority, {
-          type: "session.boards.readSnapshot",
-          input: { sessionKey },
-        }),
+      (reader, sessionKey, env, expectedIdentity) =>
+        reader.readBoardSnapshot({ sessionKey, env, expectedIdentity }),
       (stored, sessionKey) =>
-        consume({
-          snapshot: cloneBoardSnapshot(stored?.snapshot ?? emptyBoardSnapshot(sessionKey)),
-          htmlViewMetadata: stored?.htmlViewMetadata ?? new Map(),
-        }),
+        consume(
+          stored ?? {
+            snapshot: { sessionKey, revision: 0, tabs: [], widgets: [] },
+            htmlViewMetadata: new Map(),
+          },
+        ),
     );
   }
 
@@ -607,36 +402,33 @@ export class SqliteBoardStore implements BoardStore {
       return this.getSnapshot(target);
     }
     const capturedOps = structuredClone(ops);
-    return this.write(
-      target,
-      options,
-      "board.apply-ops",
-      (database, sessionKey) => applyBoardOpsToDatabase(database, sessionKey, capturedOps),
-      (scope, sessionKey) =>
-        scope.execute({
-          type: "boards.applyOps",
-          input: { sessionKey, ops: capturedOps },
-        }),
-      (actor, authority, sessionKey) =>
-        actor.sessions.sideData(authority, {
-          type: "session.boards.applyOps",
-          input: { sessionKey, ops: capturedOps },
-        }),
+    const memory = this.useMemory(target, (store) => store.applyOps(target, capturedOps, options));
+    if (memory) {
+      return (await memory).value;
+    }
+    return this.write(target, options, (scope, sessionKey) =>
+      scope.execute({
+        type: "boards.applyOps",
+        input: { sessionKey, ops: capturedOps },
+      }),
     );
   }
 
   async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWidgetWriteOptions) {
-    const capturedParams = structuredClone(params);
+    let preparedParams = structuredClone(params);
+    const memory = this.useMemory(params, (store) => store.putWidget(preparedParams, options));
+    if (memory) {
+      return (await memory).value;
+    }
     const viewGeneration = randomBytes(16).toString("hex");
-    let preparedParams = capturedParams;
-    const content = capturedParams.content;
+    const content = preparedParams.content;
     const resolveInteraction = options?.resolveMcpAppInteraction;
     const prepare =
       content.kind === "mcp-app" && content.interactive && resolveInteraction
         ? async () => {
             if (!(await resolveInteraction())) {
               preparedParams = {
-                ...capturedParams,
+                ...preparedParams,
                 content: { ...content, interactive: false },
                 declared: undefined,
               };
@@ -646,22 +438,9 @@ export class SqliteBoardStore implements BoardStore {
     return this.write(
       params,
       options,
-      "board.put-widget",
-      (database, sessionKey) =>
-        putBoardWidgetInDatabase(
-          database,
-          sessionKey,
-          normalizeBoardWidgetPutParams(preparedParams, sessionKey),
-          viewGeneration,
-        ),
       (scope, sessionKey) =>
         scope.execute({
           type: "boards.putWidget",
-          input: { sessionKey, params: preparedParams, viewGeneration },
-        }),
-      (actor, authority, sessionKey) =>
-        actor.sessions.sideData(authority, {
-          type: "session.boards.putWidget",
           input: { sessionKey, params: preparedParams, viewGeneration },
         }),
       prepare,
@@ -676,22 +455,17 @@ export class SqliteBoardStore implements BoardStore {
     instanceId?: string,
     options?: BoardWriteOptions,
   ): Promise<BoardSnapshot> {
-    return this.write(
-      target,
-      options,
-      "board.grant-widget",
-      (database, sessionKey) =>
-        grantBoardWidgetInDatabase(database, sessionKey, name, decision, revision, instanceId),
-      (scope, sessionKey) =>
-        scope.execute({
-          type: "boards.grant",
-          input: { sessionKey, name, decision, revision, instanceId },
-        }),
-      (actor, authority, sessionKey) =>
-        actor.sessions.sideData(authority, {
-          type: "session.boards.grant",
-          input: { sessionKey, name, decision, revision, instanceId },
-        }),
+    const memory = this.useMemory(target, (store) =>
+      store.grant(target, name, decision, revision, instanceId, options),
+    );
+    if (memory) {
+      return (await memory).value;
+    }
+    return this.write(target, options, (scope, sessionKey) =>
+      scope.execute({
+        type: "boards.grant",
+        input: { sessionKey, name, decision, revision, instanceId },
+      }),
     );
   }
 
@@ -703,17 +477,8 @@ export class SqliteBoardStore implements BoardStore {
   ): Promise<Awaited<T>> {
     return this.consumeRead(
       target,
-      (database, sessionKey) => readBoardWidgetDocument(database, sessionKey, name, contentKind),
-      (scope, sessionKey) =>
-        scope.execute({
-          type: "boards.readWidgetDocument",
-          input: { sessionKey, name, contentKind },
-        }),
-      (actor, authority, sessionKey) =>
-        actor.sessions.sideData(authority, {
-          type: "session.boards.readWidgetDocument",
-          input: { sessionKey, name, contentKind },
-        }),
+      (reader, sessionKey, env, expectedIdentity) =>
+        reader.readBoardWidgetDocument({ sessionKey, name, contentKind, env, expectedIdentity }),
       consume,
     );
   }
@@ -722,6 +487,14 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     name: string,
   ): Promise<BoardWidgetMcpAppDocument | undefined> {
+    const memory = this.useMemory(
+      target,
+      (store) => store.readWidgetMcpApp(target, name),
+      () => undefined,
+    );
+    if (memory) {
+      return (await memory).value;
+    }
     return this.consumeWidgetDocument(
       target,
       name,

@@ -15,6 +15,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -193,7 +194,8 @@ suite.define(() => {
           });
         });
         const response = await page.goto(url.toString());
-        expect(response?.status()).toBe(200);
+        expect(response?.status()).toBe(404);
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const outer = page
           .locator("openclaw-canvas-widget-view .chat-tool-card__preview-frame")
@@ -364,9 +366,7 @@ suite.define(() => {
           expect(await article.evaluate((element) => element.scrollTop)).toBe(articleScrollTop);
         }
         await page.locator("openclaw-app-sidebar .sidebar-identity-card").click();
-        await page
-          .locator('openclaw-app-sidebar wa-dropdown-item[value="command:settings"]')
-          .click();
+        await page.locator('openclaw-app-sidebar [data-value="command:settings"]').click();
         await page.locator(".settings-sidebar__back").waitFor();
         const parked = {
           frameConnected: await originalFrame.evaluate((element) => element.isConnected),

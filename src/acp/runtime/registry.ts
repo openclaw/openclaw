@@ -51,7 +51,6 @@ export function isAcpRuntimeBackendHealthy(backend: AcpRuntimeBackend): boolean 
   }
 }
 
-/** Registers or replaces an ACP runtime backend by normalized id. */
 export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   const id = normalizeOptionalLowercaseString(backend.id) || "";
   if (!id) {
@@ -66,7 +65,6 @@ export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   });
 }
 
-/** Removes a registered ACP runtime backend by id. */
 export function unregisterAcpRuntimeBackend(id: string): void {
   const normalized = normalizeOptionalLowercaseString(id) || "";
   if (!normalized) {

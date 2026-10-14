@@ -15,7 +15,11 @@ export function isUsableNode(
     acceptVersion?: (version: string) => boolean;
   },
 ): boolean;
-export function runRespawnedChild(command: string, args: string[], env: NodeJS.ProcessEnv): true;
+export function runRespawnedChild(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<true>;
 export function recoverNodeRuntime(options?: {
   homeDir?: string;
   allowInstall?: boolean;

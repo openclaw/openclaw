@@ -16,17 +16,14 @@ const acpAgent = {
 } satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 
 describe("subagent initial model plan", () => {
-  it.each(["auto", "ultrafast"] as const)(
-    "threads explicit %s into the initial child session patch",
-    async (fastMode) => {
-      const plan = await resolveSubagentModelAndThinkingPlan({
-        cfg: {},
-        targetAgentId: "research",
-        fastMode,
-      });
-      expect(plan).toMatchObject({ status: "ok", initialSessionPatch: { fastMode } });
-    },
-  );
+  it("threads explicit fast mode into the initial child session patch", async () => {
+    const plan = await resolveSubagentModelAndThinkingPlan({
+      cfg: {},
+      targetAgentId: "research",
+      fastMode: "ultrafast",
+    });
+    expect(plan).toMatchObject({ status: "ok", initialSessionPatch: { fastMode: "ultrafast" } });
+  });
   it("applies an explicit native model instead of ACP defaults", async () => {
     const plan = await resolveSubagentModelAndThinkingPlan({
       cfg: {

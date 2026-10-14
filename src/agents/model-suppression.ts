@@ -1,13 +1,7 @@
-/**
- * Built-in model suppression helpers.
- * Resolves prepared plugin manifest suppression rules so
- * built-in catalog entries can be hidden or blocked consistently.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
-/** Resolves one provider-owned rule against the caller's concrete model route. */
 export function resolveBuiltInModelSuppressionFromManifest(params: {
   provider?: string | null;
   id?: string | null;
@@ -42,7 +36,6 @@ export function shouldUnconditionallySuppress(params: {
   );
 }
 
-/** Resolve the user-facing suppression error message for a built-in model. */
 export function buildSuppressedBuiltInModelError(params: {
   provider?: string | null;
   id?: string | null;
@@ -53,7 +46,6 @@ export function buildSuppressedBuiltInModelError(params: {
   return resolveBuiltInModelSuppressionFromManifest(params)?.errorMessage;
 }
 
-/** Build a reusable suppression predicate for repeated catalog filtering. */
 export function buildShouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;

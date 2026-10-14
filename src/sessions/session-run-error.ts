@@ -3,16 +3,18 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
+  renderAssistantRequestFailureCopy,
+  renderStorageFailureSummary,
+} from "../agents/failover/assistant-request-failure-copy.js";
+import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
+import {
   appendSessionTranscriptReport,
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
-import { settleStartupSession } from "../config/sessions/session-accessor.sqlite-transcript-reports.js";
-import type {
-  StartupSessionObservation,
-  CustomMessageReportAppend,
-} from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
+import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
@@ -29,76 +31,48 @@ type GatewaySessionRunFailure = {
   runId: string;
   error: unknown;
   errorKind?: "state_contention";
-} & (
-  | {
-      startupInterruption: StartupSessionObservation;
-      assertCommitAllowed: () => void;
-      sessionEntryCurrent?: never;
-    }
-  | {
-      startupInterruption?: undefined;
-      assertCommitAllowed?: () => void;
-      sessionEntryCurrent?: SessionEntryCurrentCheck;
-    }
-);
+  assertCommitAllowed?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+};
 
-export function recordGatewaySessionRunFailure(
-  params: GatewaySessionRunFailure & { startupInterruption?: undefined },
-): Promise<void>;
-export function recordGatewaySessionRunFailure(
-  params: GatewaySessionRunFailure,
-): Promise<void | "retained">;
-/** Shared failure receipt; startup interruption is an atomic worker-owned entry/report command. */
 export async function recordGatewaySessionRunFailure(
   params: GatewaySessionRunFailure,
-): Promise<void | "retained"> {
+): Promise<void> {
   const { runId } = params;
+  const storageFailure = classifyGatewayStorageFailure(params.error);
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
-        : `Your request couldn't be completed: ${error}`,
+        : (renderAssistantRequestFailureCopy({ storageFailure }) ??
+          renderCodexAppServerFailureCopy(error) ??
+          `Your request couldn't be completed: ${error}`),
     display: true,
+    excludeFromContext: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };
-  const result = params.startupInterruption
-    ? await settleStartupSession(
+  const result = await withSessionTranscriptWriteAssertion(
+    params.target,
+    () => params.assertCommitAllowed?.(),
+    () =>
+      appendSessionTranscriptReport(
         params.target,
         {
-          kind: "interrupt",
-          observation: params.startupInterruption,
-          runId,
-          error,
-          report,
+          kind: "custom",
+          customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
+          selectReport: (latest) => {
+            params.assertCommitAllowed?.();
+            return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;
+          },
         },
-        params.assertCommitAllowed,
-      )
-    : await withSessionTranscriptWriteAssertion(
-        params.target,
-        () => params.assertCommitAllowed?.(),
-        () =>
-          appendSessionTranscriptReport(
-            params.target,
-            {
-              kind: "custom",
-              customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-              suppressWhenAssistantRun: runId,
-              selectReport: (latest) => {
-                params.assertCommitAllowed?.();
-                return isRecord(latest?.details) && latest.details.runId === runId
-                  ? undefined
-                  : report;
-              },
-            },
-            { sessionEntryCurrent: params.sessionEntryCurrent },
-          ),
-      );
+        { sessionEntryCurrent: params.sessionEntryCurrent },
+      ),
+  );
   if (!result.ok) {
     throw new Error(`Failed run notice could not be appended: ${result.error.code}`);
   }
-  return result.value === "retained" ? "retained" : undefined;
 }
 
 export function resolveSessionRunError(
@@ -115,7 +89,9 @@ export function resolveSessionRunError(
   if (outcome.errorKind === "state_contention") {
     return STATE_CONTENTION_SUMMARY;
   }
-  const error = sanitizeSessionRunError(outcome.error);
+  const error =
+    renderStorageFailureSummary(classifyGatewayStorageFailure(outcome.error)) ??
+    sanitizeSessionRunError(outcome.error);
   if (error.length <= SESSION_RUN_ERROR_MAX_CHARS) {
     return error || undefined;
   }

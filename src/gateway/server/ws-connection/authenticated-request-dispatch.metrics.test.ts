@@ -33,6 +33,7 @@ import {
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
+import { GatewayRequestStartTimeoutError } from "./request-start.js";
 // Compile the real router before timed cases; family preparation remains controlled below.
 import "../../server-methods.js";
 
@@ -100,11 +101,11 @@ describe("authenticated Gateway RPC diagnostics", () => {
   it.each([
     { source: "dashboard", rowMode: "compact", bytes: 204_800, elapsed: 0 },
     { source: "arbitrary-private-caller", rowMode: undefined, bytes: 100, elapsed: 1_000 },
-  ])("attributes slow or large session lists without private filters ($source)", async (query) => {
+  ])("attributes session list diagnostics without private filters ($source)", async (query) => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const output = vi.fn();
-    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    setLoggerOverride({ level: "silent", consoleLevel: "debug" });
     loggingState.rawConsole = { log: output, info: output, warn: output, error: output };
     onTestFinished(() => {
       setLoggerOverride(null);
@@ -501,15 +502,17 @@ describe("authenticated Gateway RPC diagnostics", () => {
     },
   );
 
-  it.each(["authorization", "capacity"])(
+  it.each(["authorization", "capacity", "timeout"])(
     "records %s rejection without a handler sample",
     async (reason) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true));
       const fixture = createRequest(handler, "sessions.list");
       if (reason === "authorization") {
         fixture.client.connect.scopes = [];
-      } else {
+      } else if (reason === "capacity") {
         scheduling.start.mockReturnValue(null);
+      } else {
+        scheduling.start.mockRejectedValue(new GatewayRequestStartTimeoutError());
       }
       await fixture.dispatch();
       await fixture.finished;
@@ -523,6 +526,18 @@ describe("authenticated Gateway RPC diagnostics", () => {
       );
       if (reason === "capacity") {
         expect(fixture.events.at(-1)).not.toHaveProperty("queueWaitMs");
+      } else if (reason === "timeout") {
+        expect(fixture.events.at(-1)).toHaveProperty("queueWaitMs");
+        expect(fixture.send).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({
+              code: "UNAVAILABLE",
+              retryable: true,
+              details: { reason: "request-start-timeout" },
+            }),
+          }),
+        );
       }
     },
   );

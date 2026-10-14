@@ -17,7 +17,9 @@ import { request } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setTimeout as abortableDelay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../gateway-shutdown-budget.mjs";
 import type { ModelsListResult } from "../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
@@ -36,7 +38,8 @@ import {
   type BrowserSessionClick,
   type BrowserSessionTarget,
 } from "./lib/gateway-bench-browser.ts";
-import { delay, stopChild } from "./lib/gateway-bench-child.ts";
+import { delay, stopChild, stopGatewayGracefully } from "./lib/gateway-bench-child.ts";
+import { runControlUiLoad, type ControlUiLoadOptions } from "./lib/gateway-bench-control-ui.ts";
 import {
   configureLiveGatewayBenchmark,
   createLiveGatewayEvidence,
@@ -44,6 +47,10 @@ import {
   redactLiveBenchmarkText,
   type LiveGatewayEvidence,
 } from "./lib/gateway-bench-live.ts";
+import {
+  createGatewayLoadResources,
+  gatewayAffinityMatches,
+} from "./lib/gateway-bench-load-resources.ts";
 import {
   type GatewayMemorySample,
   type GatewayRpc,
@@ -231,6 +238,7 @@ type BenchmarkPartialRun = Partial<
     | "liveProof"
   >
 > & {
+  controlUiResources?: unknown;
   memory: {
     before: GatewayMemorySample | null;
     after: GatewayMemorySample | null;
@@ -263,6 +271,7 @@ type FailedBenchmarkAttempt = Extract<BenchmarkAttempt, { status: "failure" }> &
 };
 
 type CliOptions = GatewayBenchRuntimeOptions & {
+  controlUiLoad?: ControlUiLoadOptions & { cgroupParent: string; transpilerCache: string };
   provider: "mock" | "openai";
   agentCount: number;
   agentWarmupTurns: number;
@@ -350,6 +359,12 @@ const BOOLEAN_FLAGS = new Set([
   "--workspace-fanout",
 ]);
 const VALUE_FLAGS = new Set([
+  "--control-ui-clients",
+  "--active-clients",
+  "--drivers",
+  "--duration-ms",
+  "--resource-cgroup",
+  "--transpiler-cache",
   "--provider",
   "--agent-count",
   "--agent-warmup-turns",
@@ -443,6 +458,65 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     warmup: boundedInt("--warmup", DEFAULT_WARMUP, MAX_WARMUP, true),
     workspaceFanout: flags.has("--workspace-fanout"),
   };
+  if (flags.has("--control-ui-clients")) {
+    const totalClients = boundedInt("--control-ui-clients", 50, 200);
+    const activeClients = boundedInt("--active-clients", Math.min(25, totalClients), totalClients);
+    const cgroupParent = flags.get("--resource-cgroup")?.[0];
+    const transpilerCache = flags.get("--transpiler-cache")?.[0];
+    if (!cgroupParent || !transpilerCache || process.platform !== "linux") {
+      throw new CliArgumentError(
+        "Control UI load requires Linux, --resource-cgroup and --transpiler-cache",
+      );
+    }
+    const allowed = new Set([
+      "--control-ui-clients",
+      "--active-clients",
+      "--drivers",
+      "--duration-ms",
+      "--resource-cgroup",
+      "--transpiler-cache",
+      "--gateway-runtime",
+      "--gateway-cpus",
+      "--entry",
+      "--timeout-ms",
+      "--stream-chunk-delay-ms",
+      "--output",
+      "--json",
+      "--runs",
+      "--warmup",
+      "--no-diagnostics-timeline",
+    ]);
+    for (const flag of flags.keys()) {
+      if (!allowed.has(flag)) {
+        throw new CliArgumentError(`${flag} is not part of the Control UI workload`);
+      }
+    }
+    if (options.runs !== 1 || options.warmup !== 0) {
+      throw new CliArgumentError(
+        "Control UI load requires --runs 1 --warmup 0; interleave independent invocations",
+      );
+    }
+    options.concurrency = activeClients;
+    options.controlUiLoad = {
+      totalClients,
+      activeClients,
+      drivers: boundedInt("--drivers", Math.min(4, totalClients), totalClients),
+      durationMs: boundedInt("--duration-ms", 60_000, 600_000),
+      timeoutMs: options.timeoutMs,
+      cgroupParent: path.resolve(cgroupParent),
+      transpilerCache: path.resolve(transpilerCache),
+    };
+  } else if (
+    [
+      "--active-clients",
+      "--drivers",
+      "--duration-ms",
+      "--resource-cgroup",
+      "--transpiler-cache",
+    ].some((flag) => flags.has(flag))
+  ) {
+    throw new CliArgumentError("Control UI load options require --control-ui-clients");
+  }
   if (options.activitySummaryDiagnostics && provider !== "mock") {
     throw new CliArgumentError("--activity-summary-diagnostics requires the mock provider");
   }
@@ -502,6 +576,12 @@ Usage:
   node scripts/bench-gateway-concurrency.ts [options]
 
 Options:
+  --control-ui-clients <n> Fixed-duration Control UI protocol workload (Linux, 1–200 connections)
+  --active-clients <n> Closed-loop senders; remaining clients select their own idle sessions (default: 25)
+  --drivers <n> Coordinated Node driver processes (default: 4)
+  --duration-ms <ms> Measured admission window (default: 60000)
+  --resource-cgroup <path> Writable delegated cgroup-v2 parent; benchmark owns a unique child
+  --transpiler-cache <path> Explicit Gateway Bun transpiler-cache directory (prime separately)
   --provider <name> mock (default) or openai (live ${LIVE_GATEWAY_MODEL_ID}; requires OPENAI_API_KEY)
   --agent-count <n> Configured agents sharing the fixed session inventory (default: 1, max: ${MAX_AGENT_COUNT})
   --browser-history-messages <n> Messages per browser click target, independent of inventory history (default: 80, max: 500)
@@ -624,8 +704,8 @@ function remainingMs(deadlineAt: number): number {
   return Math.max(0, deadlineAt - performance.now());
 }
 
-function requireRemainingMs(deadlineAt: number, label: string): number {
-  const remaining = remainingMs(deadlineAt);
+function requireRemainingMs(deadlineAt: number, label: string, now = performance.now()): number {
+  const remaining = Math.max(0, deadlineAt - now);
   if (remaining <= 0) {
     throw new Error(`benchmark timed out while ${label}`);
   }
@@ -633,11 +713,13 @@ function requireRemainingMs(deadlineAt: number, label: string): number {
 }
 
 async function requestHttp(params: {
+  signal?: AbortSignal;
   accept: string;
   deadlineAt: number;
   path: string;
   port: number;
 }): Promise<{ body: string; latencyMs: number; status: number }> {
+  params.signal?.throwIfAborted();
   const startedAt = performance.now();
   const requestDeadlineAt = Math.min(params.deadlineAt, startedAt + HTTP_TIMEOUT_MS);
   requireRemainingMs(requestDeadlineAt, `requesting ${params.path}`);
@@ -663,6 +745,7 @@ async function requestHttp(params: {
         method: "GET",
         path: params.path,
         port: params.port,
+        signal: params.signal,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -786,15 +869,21 @@ function formatRunFailure(
     .join("\n");
 }
 
-async function waitForMockServer(port: number, deadlineAt: number): Promise<void> {
+async function waitForMockServer(
+  port: number,
+  deadlineAt: number,
+  signal?: AbortSignal,
+): Promise<void> {
   let lastError: unknown;
   while (remainingMs(deadlineAt) > 0) {
+    signal?.throwIfAborted();
     try {
       const result = await requestHttp({
         accept: "application/json",
         deadlineAt,
         path: "/health",
         port,
+        signal,
       });
       if (result.status === 200) {
         return;
@@ -802,7 +891,7 @@ async function waitForMockServer(port: number, deadlineAt: number): Promise<void
     } catch (error) {
       lastError = error;
     }
-    await delay(Math.min(25, remainingMs(deadlineAt)));
+    await abortableDelay(Math.min(25, remainingMs(deadlineAt)), undefined, { signal });
   }
   const detail =
     lastError instanceof Error
@@ -816,12 +905,14 @@ async function waitForMockServer(port: number, deadlineAt: number): Promise<void
 async function waitForGatewayDispatchReady(
   readOutput: () => string,
   deadlineAt: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   while (remainingMs(deadlineAt) > 0) {
+    signal?.throwIfAborted();
     if (readOutput().includes("startup trace: sidecars.ready ")) {
       return;
     }
-    await delay(Math.min(25, remainingMs(deadlineAt)));
+    await abortableDelay(Math.min(25, remainingMs(deadlineAt)), undefined, { signal });
   }
   throw new Error("gateway did not finish dispatch-ready sidecars");
 }
@@ -849,13 +940,18 @@ function parseMockRequests(value: unknown, beforeMs: number, afterMs: number): M
   };
 }
 
-async function readMockRequests(port: number, deadlineAt: number): Promise<MockRequestSnapshot> {
+async function readMockRequests(
+  port: number,
+  deadlineAt: number,
+  signal?: AbortSignal,
+): Promise<MockRequestSnapshot> {
   const beforeMs = performance.now();
   const response = await requestHttp({
     accept: "application/json",
     port,
     path: "/health",
     deadlineAt,
+    signal,
   });
   const afterMs = performance.now();
   if (response.status !== 200) {
@@ -1121,17 +1217,38 @@ async function connectGateway(
     params: unknown,
     requestedTimeoutMs?: number,
   ): Promise<T> => {
-    const response = await client.request(
-      method,
-      params,
-      Math.max(
-        1,
-        Math.min(
-          requestedTimeoutMs ?? 65_000,
-          requireRemainingMs(requestDeadlineAt, `waiting for ${method}`),
-        ),
-      ),
+    // A later phase may advance the client's deadline while this request is pending.
+    // Keep its original budget with the failure; transport errors are not timer verdicts.
+    const issuedAtMs = performance.now();
+    const deadlineAtMs = requestDeadlineAt;
+    const remainingAtIssueMs = requireRemainingMs(
+      deadlineAtMs,
+      `waiting for ${method}`,
+      issuedAtMs,
     );
+    const requestedCapMs = requestedTimeoutMs ?? 65_000;
+    const selectedTimeoutMs = Math.max(1, Math.min(requestedCapMs, remainingAtIssueMs));
+    let response: Awaited<ReturnType<typeof client.request>>;
+    try {
+      response = await client.request(method, params, selectedTimeoutMs);
+    } catch (cause) {
+      const rejectedAtMs = performance.now();
+      const timing = {
+        method,
+        issuedAtMs,
+        deadlineAtMs,
+        remainingAtIssueMs,
+        requestedCapMs,
+        selectedTimeoutMs,
+        scheduledExpiryAtMs: issuedAtMs + selectedTimeoutMs,
+        rejectedAtMs,
+        remainingAtRejectionMs: Math.max(0, deadlineAtMs - rejectedAtMs),
+      };
+      throw new Error(
+        `${cause instanceof Error ? cause.message : String(cause)}\nRPC failure timing: ${JSON.stringify(timing)}`,
+        { cause },
+      );
+    }
     if (!response.ok) {
       const message =
         response.error && typeof response.error === "object" && "message" in response.error
@@ -1683,8 +1800,22 @@ function observeBenchmarkChild(child: ChildProcess) {
 async function runGatewaySample(
   options: Omit<CliOptions, "json" | "maxControlMs" | "maxHandshakeMs" | "runs" | "warmup"> & {
     deadlineAt: number;
+    signal?: AbortSignal;
   },
-): Promise<BenchmarkAttempt> {
+): Promise<
+  | BenchmarkAttempt
+  | {
+      status: "control-ui";
+      run: Awaited<ReturnType<typeof runControlUiLoad>>;
+      resources: unknown;
+      workers: unknown[];
+      gatewayExit: unknown;
+      shutdown: unknown;
+      errors: unknown[];
+      forcedCleanup: boolean;
+      placement: unknown;
+    }
+> {
   let runStartedAt = performance.now();
   const partialRun: BenchmarkPartialRun = {
     controlPlane: [],
@@ -1703,6 +1834,16 @@ async function runGatewaySample(
   const errors: Array<{ phase: BenchmarkFailurePhase; error: string }> = [];
   const cleanup: { rootRemoved: boolean | null } = { rootRemoved: null };
   let root: string | undefined;
+  let loadResources: ReturnType<typeof createGatewayLoadResources> | undefined;
+  let controlUiRun: Awaited<ReturnType<typeof runControlUiLoad>> | undefined;
+  let resourceReport:
+    | ReturnType<ReturnType<typeof createGatewayLoadResources>["finish"]>
+    | undefined;
+  let forcedCleanup = false;
+  let shutdown: Awaited<ReturnType<typeof stopGatewayGracefully>> | undefined;
+  let controlUiProviderAffinity: string | undefined;
+  let workerReport: unknown[] = [];
+  const controlUiToken = options.controlUiLoad ? randomUUID() : undefined;
   let activityDiagnostics: ReturnType<typeof createActivitySummaryDiagnostics> | undefined;
   let live: LiveGatewayEvidence | undefined;
   const agentIds = Array.from({ length: options.agentCount }, (_, index) =>
@@ -1793,7 +1934,10 @@ async function runGatewaySample(
         ? createLiveGatewayEvidence(agentIds, options.turnsPerSession)
         : undefined;
     const timelinePath = path.join(fixtureRoot, "diagnostics-timeline.jsonl");
-    const requestLogPath = path.join(fixtureRoot, "mock-provider-requests.jsonl");
+    const requestLogPath = path.join(
+      mkdtempSync(path.join(fixtureRoot, "telemetry-")),
+      "mock-provider-requests.jsonl",
+    );
     const responseControlPath = path.join(fixtureRoot, "mock-provider-responses.json");
     const heapProfilePath = options.heapProfDir
       ? path.resolve(options.heapProfDir, `gateway-load-${randomUUID()}.heapprofile`)
@@ -1802,7 +1946,7 @@ async function runGatewaySample(
       ? path.resolve(options.loadCpuProfDir, `gateway-load-${randomUUID()}.cpuprofile`)
       : undefined;
     const protocolVersion = await readGatewayProtocolVersion(options.entry);
-    try {
+    workload: try {
       const configPath = buildConfig(
         fixtureRoot,
         mockPort,
@@ -1813,6 +1957,16 @@ async function runGatewaySample(
         options.provider,
         Boolean(activityDiagnostics),
       );
+      const workersPath = path.join(fixtureRoot, "workers.jsonl");
+      if (options.controlUiLoad) {
+        const config = JSON.parse(readFileSync(configPath, "utf8"));
+        config.gateway.auth = { mode: "token", token: controlUiToken };
+        config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
+        writeFileSync(configPath, JSON.stringify(config));
+        loadResources = createGatewayLoadResources(options.controlUiLoad.cgroupParent);
+        loadResources.start();
+        mkdirSync(options.controlUiLoad.transpilerCache, { recursive: true });
+      }
       if (!live) {
         writeFileSync(
           responseControlPath,
@@ -1845,8 +1999,14 @@ async function runGatewaySample(
         await once(mockProvider, "spawn");
         spawnedChildren.push(mockProvider);
         mockOutput = captureChildOutput(mockProvider);
-        await waitForMockServer(mockPort, options.deadlineAt);
-        mockCheckpoints.push(await readMockRequests(mockPort, options.deadlineAt));
+        await waitForMockServer(mockPort, options.deadlineAt, options.signal);
+        if (options.controlUiLoad) {
+          controlUiProviderAffinity = readFileSync(
+            `/proc/${mockProvider.pid}/status`,
+            "utf8",
+          ).match(/^Cpus_allowed_list:\s*(.+)$/mu)?.[1];
+        }
+        mockCheckpoints.push(await readMockRequests(mockPort, options.deadlineAt, options.signal));
       }
 
       if (options.cpuProfDir) {
@@ -1855,8 +2015,20 @@ async function runGatewaySample(
       const gatewayArgs = buildGatewayBenchChildArgs(options.entry, port);
       gatewayArgs.unshift(
         "--import",
-        new URL("./lib/gateway-bench-profile-preload.ts", import.meta.url).href,
+        new URL(
+          options.controlUiLoad
+            ? "./lib/gateway-bench-load-preload.mjs"
+            : "./lib/gateway-bench-profile-preload.ts",
+          import.meta.url,
+        ).href,
       );
+      if (options.controlUiLoad) {
+        gatewayArgs[gatewayArgs.indexOf("--auth") + 1] = "token";
+        const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
+        stopPreload.searchParams.set("parentPid", String(process.pid));
+        stopPreload.searchParams.set("entry", path.resolve(options.entry));
+        gatewayArgs.unshift("--import", stopPreload.href);
+      }
       if (heapProfilePath || loadCpuProfilePath) {
         for (const profilePath of [heapProfilePath, loadCpuProfilePath]) {
           if (profilePath) {
@@ -1875,6 +2047,14 @@ async function runGatewaySample(
         env: {
           ...createGatewayBenchEnv(fixtureRoot, configPath, {
             caseEnv: {
+              ...(options.controlUiLoad
+                ? {
+                    OPENCLAW_BENCH_PARENT_PID: String(process.pid),
+                    OPENCLAW_BENCH_CGROUP: loadResources!.directory,
+                    OPENCLAW_BENCH_WORKERS: workersPath,
+                    BUN_RUNTIME_TRANSPILER_CACHE_PATH: options.controlUiLoad.transpilerCache,
+                  }
+                : {}),
               ...(options.diagnosticsTimeline
                 ? {
                     OPENCLAW_DIAGNOSTICS: "timeline",
@@ -1894,7 +2074,10 @@ async function runGatewaySample(
       gatewayOutput = captureChildOutput(gateway, activityDiagnostics?.onOutput);
       const ready = await waitForInitialProbe({
         deadlineAt: options.deadlineAt,
-        isDone: () => gateway?.exitCode != null || gateway?.signalCode != null,
+        isDone: () =>
+          options.signal?.aborted === true ||
+          gateway?.exitCode != null ||
+          gateway?.signalCode != null,
         path: "/readyz",
         port,
         startAt: runStartedAt,
@@ -1902,7 +2085,27 @@ async function runGatewaySample(
       if (ready.status !== 200) {
         throw new Error(`gateway did not become ready\n${gatewayOutput.readFailureOutput()}`);
       }
-      await waitForGatewayDispatchReady(gatewayOutput.readOutput, options.deadlineAt);
+      await waitForGatewayDispatchReady(
+        gatewayOutput.readOutput,
+        options.deadlineAt,
+        options.signal,
+      );
+      if (options.controlUiLoad && loadResources && controlUiToken) {
+        if (!gateway.pid) {
+          throw new Error("Gateway PID missing");
+        }
+        controlUiRun = await runControlUiLoad({
+          ...options.controlUiLoad,
+          port,
+          protocolVersion,
+          token: controlUiToken,
+          resources: loadResources,
+          gatewayPid: gateway.pid,
+          journalDir: fixtureRoot,
+          signal: options.signal,
+        });
+        break workload;
+      }
       client = await connectGateway(port, options.deadlineAt, protocolVersion, true, (event) => {
         activityDiagnostics?.onEvent(event);
         turnEvidence.onEvent(event);
@@ -2628,7 +2831,20 @@ async function runGatewaySample(
       });
       await captureFailure("cleanup", async () => {
         if (gateway) {
-          gatewayExit = await stopChild(gateway);
+          try {
+            if (options.controlUiLoad) {
+              shutdown = await stopGatewayGracefully(gateway, GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+            }
+          } finally {
+            gatewayExit = await stopChild(gateway, {
+              onForceKill: () => {
+                forcedCleanup = true;
+              },
+            });
+            if (shutdown) {
+              gatewayExit.exitedBeforeTeardown = false;
+            }
+          }
         }
       });
       // Keep the event client through Gateway drain, then join every acquired task.
@@ -2643,6 +2859,21 @@ async function runGatewaySample(
       });
     }
     await captureFailure("diagnostics", async () => {
+      if (controlUiRun && loadResources) {
+        const startMs = controlUiRun.startNs ? Number(BigInt(controlUiRun.startNs)) / 1e6 : null;
+        resourceReport = loadResources.finish(
+          startMs === null ? undefined : { startMs, endMs: startMs + controlUiRun.durationMs },
+        );
+        workerReport = readFileSync(path.join(fixtureRoot, "workers.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        if (gatewayExit?.exitCode !== 0 || gatewayExit.signal !== null) {
+          throw new Error("Control UI Gateway did not exit cleanly");
+        }
+        return;
+      }
       if (options.diagnosticsTimeline && gateway) {
         if (!gatewayExit || gatewayExit.exitCode !== 0 || gatewayExit.signal !== null) {
           throw new Error(
@@ -2717,7 +2948,12 @@ async function runGatewaySample(
         mockProviderExit = await stopChild(mockProvider);
       }
     });
-    await captureFailure("cleanup", () => {
+    await captureFailure("cleanup", async () => {
+      if (loadResources) {
+        resourceReport ??= loadResources.finish();
+        const resourceCleanup = await loadResources.close();
+        forcedCleanup ||= resourceCleanup.forced;
+      }
       if (
         spawnedChildren.some(
           (child) => inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) !== "dead",
@@ -2731,10 +2967,51 @@ async function runGatewaySample(
       }
     });
   }
+  if (controlUiRun) {
+    if (
+      options.gatewayCpus &&
+      resourceReport?.threads.some(
+        (thread) => !gatewayAffinityMatches(thread.affinity, options.gatewayCpus!),
+      )
+    ) {
+      errors.push({
+        phase: "diagnostics",
+        error: "Observed Gateway thread outside requested CPU affinity",
+      });
+    }
+    if (forcedCleanup || resourceReport?.errors.length) {
+      errors.push({
+        phase: "cleanup",
+        error: "Forced Gateway cleanup or incomplete resource observations",
+      });
+    }
+    return {
+      status: "control-ui",
+      run: controlUiRun,
+      resources: resourceReport,
+      workers: workerReport,
+      gatewayExit,
+      shutdown,
+      errors,
+      forcedCleanup,
+      placement: {
+        controller: {
+          pid: process.pid,
+          affinity: readFileSync("/proc/self/status", "utf8").match(
+            /^Cpus_allowed_list:\s*(.+)$/mu,
+          )?.[1],
+        },
+        mockProvider: { pid: mockProvider?.pid, affinity: controlUiProviderAffinity },
+      },
+    };
+  }
   if (completedRun && errors.length === 0) {
     return { status: "success", run: completedRun };
   }
   partialRun.durationMs = performance.now() - runStartedAt;
+  if (options.controlUiLoad) {
+    partialRun.controlUiResources = { resourceReport, forcedCleanup, workerReport };
+  }
   partialRun.turnAccounting = turnAccounting;
   if (live) {
     partialRun.liveProof = live.snapshot();
@@ -2834,6 +3111,8 @@ function summarizeRuns(
   runs: readonly BenchmarkRun[],
   options: Pick<CliOptions, "maxControlMs" | "maxHandshakeMs"> = {},
 ) {
+  const summarize = <T>(samples: readonly T[], read: (sample: T) => number | null | undefined) =>
+    summarizeNumbers(samples.map(read).filter((value): value is number => value != null));
   const controlPlane = runs.flatMap((run) => run.controlPlane);
   const browserClicks = runs.flatMap((run) => run.browser?.clicks ?? []);
   const controlUi = runs.flatMap((run) => run.controlUi);
@@ -2914,93 +3193,72 @@ function summarizeRuns(
         }
       : {}),
     budgetViolations,
-    gatewayProcessCpuMs: summarizeNumbers(runs.map((run) => run.cpuUsage.process.totalMs)),
-    gatewayProcessCpuMsPerTurn: summarizeNumbers(
-      runs.map((run) => run.cpuUsage.process.totalMs / run.turnCount),
+    gatewayProcessCpuMs: summarize(runs, (run) => run.cpuUsage.process.totalMs),
+    gatewayProcessCpuMsPerTurn: summarize(
+      runs,
+      (run) => run.cpuUsage.process.totalMs / run.turnCount,
     ),
-    gatewayMainThreadCpuMs: summarizeNumbers(runs.map((run) => run.cpuUsage.mainThread.totalMs)),
-    gatewayProcessCpuCoreRatio: summarizeNumbers(
-      runs.map((run) => run.cpuUsage.process.totalMs / run.cpuUsage.wallMs),
+    gatewayMainThreadCpuMs: summarize(runs, (run) => run.cpuUsage.mainThread.totalMs),
+    gatewayProcessCpuCoreRatio: summarize(
+      runs,
+      (run) => run.cpuUsage.process.totalMs / run.cpuUsage.wallMs,
     ),
-    gatewaySampledAllocatedBytes: summarizeNumbers(
-      runs.flatMap((run) => (run.heapProfile ? [run.heapProfile.sampledAllocatedBytes] : [])),
-    ),
-    gatewaySampledAllocatedBytesPerTurn: summarizeNumbers(
-      runs.flatMap((run) =>
-        run.heapProfile ? [run.heapProfile.sampledAllocatedBytes / run.turnCount] : [],
-      ),
+    gatewaySampledAllocatedBytes: summarize(runs, (run) => run.heapProfile?.sampledAllocatedBytes),
+    gatewaySampledAllocatedBytesPerTurn: summarize(
+      runs,
+      (run) => run.heapProfile && run.heapProfile.sampledAllocatedBytes / run.turnCount,
     ),
     controlPlane: Object.fromEntries(
       controlMethodProbes.map(({ method, samples }) => [
         method,
         {
           failedSamples: samples.filter((sample) => !sample.ok).length,
-          latencyMs: summarizeNumbers(samples.map((sample) => sample.latencyMs)),
+          latencyMs: summarize(samples, (sample) => sample.latencyMs),
         },
       ]),
     ),
     controlUiFailedSamples: controlUi.filter((sample) => !sample.ok).length,
-    controlUiLatencyMs: summarizeNumbers(controlUi.map((sample) => sample.latencyMs)),
-    cpuCoreRatio: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.cpuCoreRatio == null ? [] : [sample.cpuCoreRatio])),
-    ),
+    controlUiLatencyMs: summarize(controlUi, (sample) => sample.latencyMs),
+    cpuCoreRatio: summarize(readyz, (sample) => sample.cpuCoreRatio),
     degradedSamples: readyz.filter((sample) => sample.degraded === true).length,
-    eventLoopDelayMaxMs: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.delayMaxMs == null ? [] : [sample.delayMaxMs])),
-    ),
-    eventLoopDelayP99Ms: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.delayP99Ms == null ? [] : [sample.delayP99Ms])),
-    ),
-    eventLoopUtilization: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.utilization == null ? [] : [sample.utilization])),
-    ),
+    eventLoopDelayMaxMs: summarize(readyz, (sample) => sample.delayMaxMs),
+    eventLoopDelayP99Ms: summarize(readyz, (sample) => sample.delayP99Ms),
+    eventLoopUtilization: summarize(readyz, (sample) => sample.utilization),
     freshConnectionFailedRuns: runs.filter((run) => !run.freshConnection.ok).length,
-    freshConnectionLatencyMs: summarizeNumbers(runs.map((run) => run.freshConnection.latencyMs)),
+    freshConnectionLatencyMs: summarize(runs, (run) => run.freshConnection.latencyMs),
     gatewayUncleanExits: runs.filter(
       (run) =>
         run.gatewayExit && (run.gatewayExit.exitCode !== 0 || run.gatewayExit.signal !== null),
     ).length,
-    gatewayExternalGrowthMb: summarizeNumbers(
-      runs.flatMap((run) => {
-        const before = run.memory.before.externalMb;
-        const after = run.memory.after.externalMb;
-        return before === undefined || after === undefined ? [] : [after - before];
-      }),
+    gatewayExternalGrowthMb: summarize(runs, (run) => {
+      const before = run.memory.before.externalMb;
+      const after = run.memory.after.externalMb;
+      return before === undefined || after === undefined ? undefined : after - before;
+    }),
+    gatewayExternalMb: summarize(runs, (run) => run.memory.after.externalMb),
+    gatewayArrayBuffersGrowthMb: summarize(runs, (run) => {
+      const before = run.memory.before.arrayBuffersMb;
+      const after = run.memory.after.arrayBuffersMb;
+      return before === undefined || after === undefined ? undefined : after - before;
+    }),
+    gatewayArrayBuffersMb: summarize(runs, (run) => run.memory.after.arrayBuffersMb),
+    gatewayHeapGrowthMb: summarize(
+      runs,
+      (run) => run.memory.after.heapUsedMb - run.memory.before.heapUsedMb,
     ),
-    gatewayExternalMb: summarizeNumbers(
-      runs.flatMap((run) =>
-        run.memory.after.externalMb === undefined ? [] : [run.memory.after.externalMb],
-      ),
-    ),
-    gatewayArrayBuffersGrowthMb: summarizeNumbers(
-      runs.flatMap((run) => {
-        const before = run.memory.before.arrayBuffersMb;
-        const after = run.memory.after.arrayBuffersMb;
-        return before === undefined || after === undefined ? [] : [after - before];
-      }),
-    ),
-    gatewayArrayBuffersMb: summarizeNumbers(
-      runs.flatMap((run) =>
-        run.memory.after.arrayBuffersMb === undefined ? [] : [run.memory.after.arrayBuffersMb],
-      ),
-    ),
-    gatewayHeapGrowthMb: summarizeNumbers(
-      runs.map((run) => run.memory.after.heapUsedMb - run.memory.before.heapUsedMb),
-    ),
-    gatewayHeapUsedMb: summarizeNumbers(runs.map((run) => run.memory.after.heapUsedMb)),
-    gatewayPeakRssMb: summarizeNumbers(runs.map((run) => run.memory.peakRssMb)),
-    gatewayRssGrowthMb: summarizeNumbers(
-      runs.map((run) => run.memory.after.rssMb - run.memory.before.rssMb),
-    ),
+    gatewayHeapUsedMb: summarize(runs, (run) => run.memory.after.heapUsedMb),
+    gatewayPeakRssMb: summarize(runs, (run) => run.memory.peakRssMb),
+    gatewayRssGrowthMb: summarize(runs, (run) => run.memory.after.rssMb - run.memory.before.rssMb),
     historyFailedSamples: history.filter((sample) => !sample.ok).length,
-    historyLatencyMs: summarizeNumbers(history.map((sample) => sample.latencyMs)),
+    historyLatencyMs: summarize(history, (sample) => sample.latencyMs),
     historySampleCount: history.length,
     messageSubscriptionFailedSamples: subscriptions.filter((sample) => !sample.ok).length,
-    messageSubscriptionLatencyMs: summarizeNumbers(subscriptions.map((sample) => sample.latencyMs)),
+    messageSubscriptionLatencyMs: summarize(subscriptions, (sample) => sample.latencyMs),
     messageSubscriptionLoadFailedSamples: subscriptionsDuringLoad.filter((sample) => !sample.ok)
       .length,
-    messageSubscriptionLoadLatencyMs: summarizeNumbers(
-      subscriptionsDuringLoad.map((sample) => sample.latencyMs),
+    messageSubscriptionLoadLatencyMs: summarize(
+      subscriptionsDuringLoad,
+      (sample) => sample.latencyMs,
     ),
     ...(mockRequests.length === runs.length
       ? {
@@ -3028,18 +3286,18 @@ function summarizeRuns(
       (sum, run) => sum + run.pluginMetadataScans.totalDurationMs,
       0,
     ),
-    readyzLatencyMs: summarizeNumbers(readyz.map((sample) => sample.latencyMs)),
+    readyzLatencyMs: summarize(readyz, (sample) => sample.latencyMs),
     readyzFailedSamples: readyz.filter((sample) => !sample.ok).length,
     sampleCount: readyz.length,
-    sessionSeedDurationMs: summarizeNumbers(runs.map((run) => run.sessionSeedDurationMs)),
-    sessionsListLatencyMs: summarizeNumbers(sessionsList.map((sample) => sample.latencyMs)),
+    sessionSeedDurationMs: summarize(runs, (run) => run.sessionSeedDurationMs),
+    sessionsListLatencyMs: summarize(sessionsList, (sample) => sample.latencyMs),
     sessionsListFailedSamples: sessionsList.filter((sample) => !sample.ok).length,
     sessionUpdateFailedSamples: sessionUpdates.filter((sample) => !sample.ok).length,
-    sessionUpdateLatencyMs: summarizeNumbers(sessionUpdates.map((sample) => sample.latencyMs)),
+    sessionUpdateLatencyMs: summarize(sessionUpdates, (sample) => sample.latencyMs),
     sessionUpdateSampleCount: sessionUpdates.length,
-    setupDurationMs: summarizeNumbers(runs.map((run) => run.setupDurationMs)),
+    setupDurationMs: summarize(runs, (run) => run.setupDurationMs),
     turnCount: runs.reduce((sum, run) => sum + run.turnCount, 0),
-    turnsDurationMs: summarizeNumbers(runs.map((run) => run.turnsDurationMs)),
+    turnsDurationMs: summarize(runs, (run) => run.turnsDurationMs),
   };
 }
 
@@ -3063,6 +3321,9 @@ async function runBenchmarkSamples(params: {
     // runGatewaySample extends this deadline by its probe warmup before load starts.
     const deadlineAt = now() + params.options.timeoutMs;
     const attempt = await runSample({ ...params.options, deadlineAt });
+    if (attempt.status === "control-ui") {
+      throw new Error("Control UI runs use their fixed-duration report");
+    }
     if (attempt.status === "failure") {
       return {
         runs,
@@ -3097,6 +3358,48 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(argv);
+  if (options.controlUiLoad) {
+    if (process.versions.bun) {
+      throw new CliArgumentError(
+        "Control UI load requires a Node controller; select Bun with --gateway-runtime",
+      );
+    }
+    const controller = new AbortController();
+    const cancel = () => controller.abort(new Error("Control UI benchmark interrupted"));
+    process.on("SIGINT", cancel);
+    process.on("SIGTERM", cancel);
+    const attempt = await runGatewaySample({
+      ...options,
+      deadlineAt: performance.now() + options.timeoutMs,
+      signal: controller.signal,
+    }).finally(() => {
+      process.off("SIGINT", cancel);
+      process.off("SIGTERM", cancel);
+    });
+    const payload = {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      gatewayRuntime: options.gatewayRuntime,
+      gatewayCpus: options.gatewayCpus,
+      cache: {
+        policy: "explicit-retained-directory",
+        transpilerCache: options.controlUiLoad.transpilerCache,
+      },
+      ...attempt,
+    };
+    const json = `${JSON.stringify(payload, null, 2)}\n`;
+    if (options.output) {
+      mkdirSync(path.dirname(options.output), { recursive: true });
+      writeFileSync(options.output, json);
+    }
+    if (options.json || !options.output) {
+      console.log(json);
+    }
+    if (attempt.status !== "control-ui" || !attempt.run.valid || attempt.errors.length > 0) {
+      throw new Error("Control UI load failed; inspect retained report");
+    }
+    return;
+  }
   const { runs, warmupRuns, failedAttempt } = await runBenchmarkSamples({
     onProgress: console.error,
     options,
@@ -3182,6 +3485,8 @@ async function main(): Promise<void> {
 }
 
 export const testing = {
+  connectGateway,
+  waitForGatewayDispatchReady,
   parseOptions,
   parseMockRequests,
   summarizeMockRequests,

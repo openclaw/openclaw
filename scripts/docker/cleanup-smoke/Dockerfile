@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.27.0
+# syntax=docker/dockerfile:1.27.1
 
 FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 
@@ -26,6 +26,7 @@ COPY node-host-launcher.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY packages ./packages
 COPY extensions ./extensions
+COPY --parents examples/*/package.json ./
 COPY patches ./patches
 COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/prepare-git-hooks.mjs scripts/windows-cmd-helpers.mjs scripts/check-install-dependency-ownership.mjs ./scripts/
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs

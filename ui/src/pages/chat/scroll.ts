@@ -4,7 +4,6 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-/** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
 /** Shared semantic boundary for treating the transcript as settled at its end. */
 export const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
@@ -19,10 +18,8 @@ export type ChatSessionScrollPosition = {
 const transcriptScrollTopByPane = new Map<string, Map<string, ChatSessionScrollPosition>>();
 
 function getPaneScrollTops(paneId: string): Map<string, ChatSessionScrollPosition> {
-  const existing = transcriptScrollTopByPane.get(paneId);
+  const existing = getSessionCacheValue(transcriptScrollTopByPane, paneId);
   if (existing) {
-    transcriptScrollTopByPane.delete(paneId);
-    transcriptScrollTopByPane.set(paneId, existing);
     return existing;
   }
   const created = new Map<string, ChatSessionScrollPosition>();
@@ -307,10 +304,15 @@ function updateChatScrollPosition(
   // smooth-scroll frames. A real user scroll-up must still pass through so
   // streaming stops pinning them back to the bottom.
   const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   if (host.chatIsProgrammaticScroll?.() && !isUserScrollUp) {
+    // A measured arrival clears the affordance even when maintenance must not
+    // change the reader's follow policy.
+    if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+      setNewMessagesBelow(host, false);
+    }
     return;
   }
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   const wasReadingHistory = host.chatReadingHistory;
   if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
     // Taking control before initial history settles must retire its queued

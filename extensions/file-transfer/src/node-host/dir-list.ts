@@ -98,7 +98,7 @@ export async function handleDirList(params: DirListParams) {
       return {
         ok: false as const,
         code: "CANONICAL_PATH_CHANGED",
-        message: "canonical path differs from the authorized target",
+        message: "resolved path differs from the authorized target",
         canonicalPath: canonical,
       };
     }

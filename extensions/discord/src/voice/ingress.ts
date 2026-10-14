@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as realtimeBootstrapSdk from "openclaw/plugin-sdk/realtime-bootstrap-context";
-import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,11 +18,6 @@ const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 
 const logger = createSubsystemLogger("discord/voice");
 
-// Retire the 2026.9.6 profile path when the supported host floor supplies the shared composer.
-const contextSdk: Partial<
-  Pick<typeof realtimeBootstrapSdk, "resolveRealtimeVoiceAgentContextInstructions">
-> = realtimeBootstrapSdk;
-
 export type DiscordVoiceIngressContext = VoiceRealtimeSpeakerContext & {
   isCurrent?: () => boolean;
 };
@@ -35,21 +29,11 @@ type DiscordVoiceAgentTurnResult = Awaited<
 function summarizeAgentTurnPayloads(
   payloads: NonNullable<DiscordVoiceAgentTurnResult["payloads"]>,
 ): string {
-  let nonEmptyTextPayloads = 0;
-  let errorPayloads = 0;
-  let mediaPayloads = 0;
-
-  for (const payload of payloads) {
-    if (payload.text.trim()) {
-      nonEmptyTextPayloads += 1;
-    }
-    if (payload.isError === true) {
-      errorPayloads += 1;
-    }
-    if (payload.mediaUrl != null || payload.mediaUrls?.length) {
-      mediaPayloads += 1;
-    }
-  }
+  const nonEmptyTextPayloads = payloads.filter((payload) => payload.text.trim()).length;
+  const errorPayloads = payloads.filter((payload) => payload.isError === true).length;
+  const mediaPayloads = payloads.filter(
+    (payload) => payload.mediaUrl != null || payload.mediaUrls?.length,
+  ).length;
 
   return `payloadCount=${payloads.length} textPayloads=${payloads.length} nonEmptyTextPayloads=${nonEmptyTextPayloads} reasoningPayloads=0 errorPayloads=${errorPayloads} mediaPayloads=${mediaPayloads}`;
 }
@@ -188,21 +172,5 @@ export async function resolveDiscordVoiceRealtimeAgentContext(params: {
     files: params.discordConfig.voice?.realtime?.bootstrapContextFiles,
     warn: (message: string) => logger.warn(`discord voice: realtime agent context: ${message}`),
   };
-  if (contextSdk.resolveRealtimeVoiceAgentContextInstructions) {
-    return await contextSdk.resolveRealtimeVoiceAgentContextInstructions(contextParams);
-  }
-  if (contextParams.files?.length === 0) {
-    return undefined;
-  }
-  try {
-    return await resolveRealtimeBootstrapContextInstructions({
-      ...contextParams,
-      warn: (message) => logger.warn(`discord voice: realtime bootstrap context: ${message}`),
-    });
-  } catch (error) {
-    logger.warn(
-      `discord voice: realtime bootstrap context unavailable: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return undefined;
-  }
+  return await resolveRealtimeVoiceAgentContextInstructions(contextParams);
 }

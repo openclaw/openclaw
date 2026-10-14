@@ -1,5 +1,8 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -8,6 +11,7 @@ import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plu
 import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
@@ -214,6 +218,7 @@ describe("late exact requester recovery", () => {
       throw new Error("unexpected recovery dispatch");
     };
     const unregister = registerGatewayRecoveryRuntime({
+      prepareRestartRecovery: unused,
       dispatchSessionMethod: unused,
       dispatchAgent: unused,
       waitForAgent: unused,
@@ -428,7 +433,7 @@ describe("late exact requester recovery", () => {
     },
     {
       name: "permanent failure",
-      error: new Error("unsupported channel: fixture"),
+      error: Object.assign(new Error("unsupported channel: fixture"), { code: "UNSUPPORTED" }),
       delivered: false,
       disposition: "permanent_failure",
     },
@@ -448,6 +453,8 @@ describe("late exact requester recovery", () => {
     },
   ])("preserves the original $name", async (outcome) => {
     const fixture = setup();
+    const onDeliveryError = vi.fn();
+    fixture.params.onDeliveryError = onDeliveryError;
     const delivery = fixture.startDelivery();
     await fixture.dispatchEntered.promise;
     fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
@@ -460,6 +467,12 @@ describe("late exact requester recovery", () => {
     const result = await delivery;
     expect(result.delivered).toBe(outcome.delivered);
     expect(result.disposition).toBe(outcome.disposition);
+    if ("error" in outcome && outcome.error) {
+      expect(onDeliveryError).toHaveBeenCalledWith(outcome.error);
+      expect(result.error).toBe(outcome.error.message);
+    } else {
+      expect(onDeliveryError).not.toHaveBeenCalled();
+    }
     expect(fixture.read).not.toHaveBeenCalled();
     expect(fixture.dispatch).toHaveBeenCalledOnce();
     expect(fixture.send).not.toHaveBeenCalled();
@@ -476,9 +489,21 @@ describe("late exact requester recovery", () => {
       } else {
         fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
         fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
+        const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+        onTestFinished(() =>
+          memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
+        );
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: fixture.params.requesterSessionKey, storePath },
+          { ...fixture.state.entry, incognito: true },
+        );
       }
       const delivery = fixture.startDelivery();
-      await fixture.dispatchEntered.promise;
+      await awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "Announcement did not reach direct delivery",
+      );
       fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
       fixture.dispatchDone.resolve({ status: "ok", result: { payloads: [] } });
       await expect(delivery).resolves.toMatchObject({ delivered: false });

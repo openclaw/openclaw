@@ -12,6 +12,7 @@ import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:speech-supplement";
@@ -295,6 +296,7 @@ suite.define(() => {
                 );
               });
               await page.goto(url.href);
+              await enterControlUiSession(page);
               await waitForControlUiGatewayReady(page);
               const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
               const send = async (text: string) => {
@@ -315,13 +317,15 @@ suite.define(() => {
                   element.load();
                 });
                 await expect
-                  .poll(() =>
-                    audio.evaluate(
-                      (element) =>
-                        element instanceof HTMLAudioElement &&
-                        element.readyState >= 2 &&
-                        element.duration > 0,
-                    ),
+                  .poll(
+                    () =>
+                      audio.evaluate(
+                        (element) =>
+                          element instanceof HTMLAudioElement &&
+                          element.readyState >= 2 &&
+                          element.duration > 0,
+                      ),
+                    { message: "The speech attachment must have decoded audio" },
                   )
                   .toBe(true);
                 await audio.evaluate(async (element) => {
@@ -343,7 +347,11 @@ suite.define(() => {
               await page.locator(".chat-bubble").getByText("TTS enabled for this chat.").waitFor();
               for (const [index, text] of replies.slice(0, 2).entries()) {
                 await send(`Please give spoken answer ${index + 1}.`);
-                await answer(text).waitFor();
+                await expect
+                  .poll(() => answer(text).isVisible(), {
+                    message: "The spoken answer must be visible before speech is released",
+                  })
+                  .toBe(true);
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
                 if (index === 1) {
                   // The first turn covers live delivery; this turn covers speech after hydration.
@@ -361,78 +369,84 @@ suite.define(() => {
                   await page.reload();
                   await waitForControlUiGatewayReady(page);
                   await expect
-                    .poll(async () => {
-                      // A hydrated answer can be validated by an empty history delta.
-                      const hydrationResponses = history.filter(
-                        ({ connection }) => connection > previousConnection,
-                      );
-                      if (hydrationResponses.length === 0) {
-                        return false;
-                      }
-                      const cursors = hydrationResponses.flatMap(({ frame }) =>
-                        frame.payload?.deltaCursor ? [frame.payload.deltaCursor] : [],
-                      );
-                      const snapshotHost = await page.evaluate(() => {
-                        const state = document.querySelector<
-                          HTMLElement & { state?: ChatPageHost }
-                        >(".chat-pane-cache__pane--active")?.state;
-                        if (!state?.client?.recoveryScopeReady || !state.client.recoveryScope) {
-                          return null;
+                    .poll(
+                      async () => {
+                        // A hydrated answer can be validated by an empty history delta.
+                        const hydrationResponses = history.filter(
+                          ({ connection }) => connection > previousConnection,
+                        );
+                        if (hydrationResponses.length === 0) {
+                          return false;
                         }
-                        return {
-                          settings: { gatewayUrl: state.settings.gatewayUrl },
-                          client: {
-                            recoveryScopeReady: true,
-                            recoveryScope: state.client.recoveryScope,
-                          },
-                          agentsList: state.agentsList,
-                          hello: state.hello,
-                          assistantAgentId: state.assistantAgentId,
-                        };
-                      });
-                      if (!snapshotHost) {
-                        return false;
-                      }
-                      const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey });
-                      return page.evaluate(
-                        ({
-                          sessionKey: expectedSessionKey,
-                          snapshotKey: expectedSnapshotKey,
-                          gatewayUrl: expectedGatewayUrl,
-                          recoveryScope: expectedRecoveryScope,
-                          text: expectedText,
-                          cursors: hydrationCursors,
-                          consumedAfterResponse,
-                        }) => {
+                        const cursors = hydrationResponses.flatMap(({ frame }) =>
+                          frame.payload?.deltaCursor ? [frame.payload.deltaCursor] : [],
+                        );
+                        const snapshotHost = await page.evaluate(() => {
                           const state = document.querySelector<
                             HTMLElement & { state?: ChatPageHost }
                           >(".chat-pane-cache__pane--active")?.state;
-                          const snapshot =
-                            state?.chatMessagesBySession?.get(expectedSnapshotKey)?.snapshot;
-                          return (
-                            state?.sessionKey === expectedSessionKey &&
-                            state.settings.gatewayUrl === expectedGatewayUrl &&
-                            state.client?.recoveryScopeReady === true &&
-                            state.client.recoveryScope === expectedRecoveryScope &&
-                            !state.chatLoading &&
-                            (hydrationCursors.includes(snapshot?.deltaCursor ?? "") ||
-                              consumedAfterResponse) &&
-                            JSON.stringify(snapshot?.messages ?? []).includes(expectedText)
-                          );
-                        },
-                        {
-                          sessionKey,
-                          snapshotKey,
-                          gatewayUrl: snapshotHost.settings.gatewayUrl,
-                          recoveryScope: snapshotHost.client.recoveryScope,
-                          text,
-                          cursors,
-                          consumedAfterResponse: hydrationResponses.some(
-                            (response) => response.consumedAfterResponse,
-                          ),
-                        },
-                      );
-                    })
+                          if (!state?.client?.recoveryScopeReady || !state.client.recoveryScope) {
+                            return null;
+                          }
+                          return {
+                            settings: { gatewayUrl: state.settings.gatewayUrl },
+                            client: {
+                              recoveryScopeReady: true,
+                              recoveryScope: state.client.recoveryScope,
+                            },
+                            agentsList: state.agentsList,
+                            hello: state.hello,
+                            assistantAgentId: state.assistantAgentId,
+                          };
+                        });
+                        if (!snapshotHost) {
+                          return false;
+                        }
+                        const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey });
+                        return page.evaluate(
+                          ({
+                            sessionKey: expectedSessionKey,
+                            snapshotKey: expectedSnapshotKey,
+                            gatewayUrl: expectedGatewayUrl,
+                            recoveryScope: expectedRecoveryScope,
+                            text: expectedText,
+                            cursors: hydrationCursors,
+                            consumedAfterResponse,
+                          }) => {
+                            const state = document.querySelector<
+                              HTMLElement & { state?: ChatPageHost }
+                            >(".chat-pane-cache__pane--active")?.state;
+                            const snapshot =
+                              state?.chatMessagesBySession?.get(expectedSnapshotKey)?.snapshot;
+                            return (
+                              state?.sessionKey === expectedSessionKey &&
+                              state.settings.gatewayUrl === expectedGatewayUrl &&
+                              state.client?.recoveryScopeReady === true &&
+                              state.client.recoveryScope === expectedRecoveryScope &&
+                              !state.chatLoading &&
+                              (hydrationCursors.includes(snapshot?.deltaCursor ?? "") ||
+                                consumedAfterResponse) &&
+                              JSON.stringify(snapshot?.messages ?? []).includes(expectedText)
+                            );
+                          },
+                          {
+                            sessionKey,
+                            snapshotKey,
+                            gatewayUrl: snapshotHost.settings.gatewayUrl,
+                            recoveryScope: snapshotHost.client.recoveryScope,
+                            text,
+                            cursors,
+                            consumedAfterResponse: hydrationResponses.some(
+                              (response) => response.consumedAfterResponse,
+                            ),
+                          },
+                        );
+                      },
+                      {
+                        message:
+                          "Reload must hydrate the original answer before speech is released",
+                      },
+                    )
                     .toBe(true);
                 }
                 provider.release(index);

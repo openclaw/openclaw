@@ -63,6 +63,7 @@ function sweeperFixture(): TimerFixture {
     startSubagentAnnounceCleanupFlow: unexpected,
     completeCleanupBookkeeping: unexpected,
     isCleanupOwnerCurrent: unexpected,
+    isTerminalTailActive: unexpected,
     sessionEffectsHostCurrent: unexpected,
     shouldSuppressSessionEffects: unexpected,
     discardTerminalDelivery: unexpected,

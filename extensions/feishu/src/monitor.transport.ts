@@ -7,7 +7,7 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   applyBasicWebhookRequestGuards,
   getWebhookLegacyListener,
@@ -100,15 +100,6 @@ function buildFeishuWebhookEnvelope(
     }
   }
   return envelope;
-}
-
-function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(rawBody) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function isFeishuWebhookTimestampFresh(timestamp: string): boolean {
@@ -320,7 +311,6 @@ export async function monitorWebSocket({
         break;
       }
 
-      // WS start failed (e.g. handshake / auth) — publish disconnected.
       const failedAt = Date.now();
       // The SDK classifier is the only terminal contract here. App-secret/auth refinement is
       // deferred until Feishu exposes a structured authentication failure at this boundary.
@@ -518,8 +508,8 @@ async function handleFeishuWebhook(
     }
 
     const { encryptKey, eventDispatcher, invokeWebhookEvent } = selectedTarget;
-    const payload = parseFeishuWebhookPayload(rawBody);
-    if (!payload) {
+    const payload = safeParseJson(rawBody);
+    if (!isRecord(payload)) {
       respondText(res, 400, "Invalid JSON");
       return;
     }
@@ -573,7 +563,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
   const rawPath = account.config.webhookPath ?? DEFAULT_FEISHU_WEBHOOK_PATH;
   if (normalizeFeishuWebhookPath(rawPath) !== rawPath) {
     throw new Error(
-      `Feishu account "${accountId}" webhookPath must be a canonical HTTP request path; ` +
+      `Feishu account "${accountId}" webhookPath must be a normalized HTTP request path; ` +
         'run "openclaw doctor --fix" to repair it',
     );
   }

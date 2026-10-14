@@ -5,21 +5,22 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
-import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import { runScopedSqliteReadOnlyOperation } from "./sqlite-readonly-worker.js";
 import {
-  prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
+  withSqliteSnapshotWorker,
 } from "./sqlite-snapshot-source.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
-const [root, mode] = process.argv.slice(2);
+const [root] = process.argv.slice(2);
 assert.ok(root, "SQLite compile-cache fixture requires its temporary directory");
-assert.ok(mode === "sync" || mode === "async" || mode === "scoped");
 const installRoot = path.join(root, "installed");
 fs.mkdirSync(installRoot);
 fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}');
 assert.equal(getCompileCacheDir(), undefined);
 const beforeEnable = { ...process.env };
 enableOpenClawCompileCache({
+  currentFile: path.join(installRoot, "dist", "entry.js"),
   installRoot,
   env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
 });
@@ -41,7 +42,15 @@ fs.writeFileSync(
    fs.writeFileSync(path.join(${JSON.stringify(probes)}, process.pid + ".json"), JSON.stringify({
      directory: getCompileCacheDir() ?? null,
      disable: process.env.NODE_DISABLE_COMPILE_CACHE ?? null,
-   }));`,
+   }));
+   if (process.send) {
+     const send = process.send.bind(process);
+     // Let the real worker's deferred cache flush run before forwarding its reply.
+     process.send = (...args) => {
+       setImmediate(() => setImmediate(() => send(...args)));
+       return true;
+     };
+   }`,
 );
 process.env.NODE_OPTIONS = "--import=" + pathToFileURL(probe).href;
 const callEnv = { ...process.env };
@@ -54,18 +63,42 @@ try {
   database.close();
 }
 const before = fs.readFileSync(source);
-const prepared =
-  mode === "sync"
-    ? prepareSqliteReadOnlyLocationSync(source)
-    : mode === "scoped"
-      ? await withSqliteReadOnlyWorkerScope(() =>
-          prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
-        )
-      : await prepareSqliteReadOnlyLocation(source);
+const cacheEntries = () =>
+  fs
+    .readdirSync(activeDirectory, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile()).length;
+let retainedLocation: string | undefined;
+await withSqliteSnapshotWorker(new AbortController().signal, async (worker, directory) => {
+  const location = await worker.run(source, { mode: "sync", stagingRoot: directory });
+  assert.ok(typeof location === "string");
+  retainedLocation = location;
+  assert.deepEqual(fs.readFileSync(location), before);
+  const startupEntries = cacheEntries();
+  assert.ok(startupEntries > 0, "retained child must persist startup bytecode before close");
+
+  const result = await runScopedSqliteReadOnlyOperation(
+    worker,
+    source,
+    { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: [] } },
+    {
+      source: "snapshot",
+      expectedIdentity: readDatabasePathIdentitySync(source).key,
+      env: process.env,
+    },
+  );
+  assert.deepEqual(result, []);
+  assert.ok(
+    cacheEntries() > startupEntries,
+    "retained child must persist later operation bytecode before close",
+  );
+  assert.equal(worker.isRetired(), false);
+});
+assert.ok(retainedLocation);
+assert.equal(fs.existsSync(retainedLocation), false);
+
+const prepared = prepareSqliteReadOnlyLocationSync(source);
 try {
-  if (mode === "sync") {
-    assert.deepEqual(fs.readFileSync(prepared.location), before);
-  }
+  assert.deepEqual(fs.readFileSync(prepared.location), before);
   const snapshot = new DatabaseSync(prepared.location, { readOnly: true });
   try {
     assert.deepEqual(
@@ -104,9 +137,4 @@ for (const child of observed) {
     "readonly parent/child native directory must match exactly",
   );
 }
-assert.ok(
-  fs
-    .readdirSync(activeDirectory, { recursive: true, withFileTypes: true })
-    .some((entry) => entry.isFile()),
-);
 process.stdout.write("readonly-cache:verified");

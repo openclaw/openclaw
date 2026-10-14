@@ -46,6 +46,10 @@ class WearScreenshotModeTest {
     assertEquals(WearHomePage.Chat, WearScreenshotScene.Chat.initialPage)
     assertEquals(WearHomePage.Voice, WearScreenshotScene.Voice.initialPage)
     assertEquals(WearHomePage.Controls, WearScreenshotScene.Controls.initialPage)
+    assertEquals(WearHomePage.Chat, WearScreenshotScene.CheckingPhone.initialPage)
+    assertEquals(WearHomePage.Chat, WearScreenshotScene.PhoneUnavailable.initialPage)
+    assertEquals(WearScreenshotScene.CheckingPhone, WearScreenshotScene.fromRawValue("checking-phone"))
+    assertEquals(WearScreenshotScene.PhoneUnavailable, WearScreenshotScene.fromRawValue("phone-unavailable"))
   }
 
   @Test

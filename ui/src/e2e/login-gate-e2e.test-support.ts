@@ -425,48 +425,18 @@ export async function renderLoginGate(
   return gateway;
 }
 
-async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+export async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
-    const app = document.querySelector<
-      HTMLElement & {
-        runtime: { context: { gateway: { stop(): void } } };
-        requestUpdate(): void;
-        updateComplete: Promise<unknown>;
-      }
-    >("openclaw-app")!;
-    if (failureMessage === null) {
-      // The app must also own the no-error state before it can render the gate again.
-      app.runtime.context.gateway.stop();
-      await app.updateComplete;
-    }
-    // Keep the production app wrapper: it owns the safe-area and viewport budget.
+    // This remaining Lit component owns its fixture props; keep all real root callbacks.
     const gate = document.querySelector("openclaw-login-gate") as
       | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
       | null;
     if (!gate) {
       throw new Error("Missing mounted login gate");
     }
-    gate.props = {
-      resourceBasePath: "",
-      connected: false,
-      lastError: failureMessage,
-      lastErrorCode: null,
-      hasToken: false,
-      hasPassword: false,
-      gatewayUrl: "ws://127.0.0.1:18789",
-      secret: "",
-      showGatewaySecret: false,
-      onGatewayUrlChange: () => {},
-      onSecretChange: () => {},
-      onToggleGatewaySecret: () => {},
-      onConnect: gate.props.onConnect,
-    };
+    gate.props = { ...gate.props, lastError: failureMessage, lastErrorCode: null };
     await gate.updateComplete;
-    if (failureMessage === null) {
-      app.requestUpdate();
-      await app.updateComplete;
-      await gate.updateComplete;
-    }
   }, lastError);
 }

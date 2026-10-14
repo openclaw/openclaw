@@ -233,18 +233,30 @@ describe("buildAgentSystemPrompt", () => {
 
   it.each<PromptCase>([
     [
-      "uses Slack typed presentation hints instead of generic inline button config guidance",
+      "keeps generic callback guidance without a plugin override",
       {
         toolNames: ["message"],
         runtimeInfo: {
-          channel: "slack",
+          channel: "custom",
+          capabilities: ["inlineButtons"],
         },
-        messageToolHints: [
-          "- Use `presentation` buttons/selects for discrete choices or parameter picks instead of asking the user to type one.",
-        ],
       },
-      ["`presentation` buttons/selects"],
-      ["Inline buttons not enabled for slack", 'presentation={"blocks":[{"type":"buttons"'],
+      ['"action":{"type":"callback"'],
+      [],
+    ],
+    [
+      "leaves custom button guidance to the plugin regardless of channel",
+      {
+        toolNames: ["message"],
+        runtimeInfo: {
+          channel: "custom",
+          capabilities: ["inlineButtons"],
+          customInlineButtonHint: true,
+        },
+        messageToolHints: ["- Custom button guidance."],
+      },
+      ["- Custom button guidance."],
+      ['"action":{"type":"callback"', "Inline buttons OFF"],
     ],
   ])("%s", expectPromptCase);
   it("advertises YouTube embeds only in full webchat prompts below the cache boundary", () => {
@@ -420,22 +432,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompts[2]).toBe(prompts[0]);
   });
 
-  it("keeps date rollover and timezone changes below the prompt-cache boundary", () => {
-    const build = (userDate: string, userTimezone: string) =>
-      buildPromptParts({ toolNames: ["session_status"], userDate, userTimezone });
-    const first = build("2026-01-05", "America/Chicago");
-    const nextDay = build("2026-01-06", "America/Chicago");
-    const nextZone = build("2026-01-06", "Asia/Tokyo");
-    expect(first.prefix).toBe(nextDay.prefix);
-    expect(first.prefix).toBe(nextZone.prefix);
-    expect(first.prefix).not.toContain("2026-01-05");
-    expect(first.prefix).not.toContain("America/Chicago");
-    expect(first.suffix).toContain("## Temporal Context");
-    expect(first.suffix).toContain("Time zone: America/Chicago");
-    expect(first.suffix).toContain("Current date: 2026-01-05");
-    expect(nextDay.suffix).toContain("Current date: 2026-01-06");
-    expect(nextZone.suffix).toContain("Time zone: Asia/Tokyo");
-  });
+  it.each(["full", "minimal", "none"] as const)(
+    "keeps the entire %s system prompt byte-identical across midnight",
+    (promptMode) => {
+      const clock = vi.spyOn(Date, "now");
+      const build = (now: string) => {
+        clock.mockReturnValue(Date.parse(now));
+        return renderPrompt({
+          ...buildSystemPromptParams({
+            config: { agents: { defaults: { userTimezone: "America/Chicago" } } },
+            runtime: { host: "host", os: "os", arch: "arch", node: "node", model: "model" },
+          }),
+          promptMode,
+          toolNames: ["session_status"],
+        });
+      };
+      try {
+        const beforeMidnight = build("2026-01-06T05:59:59Z");
+        const afterMidnight = build("2026-01-06T06:00:01Z");
+        expect(afterMidnight).toBe(beforeMidnight);
+        expect(beforeMidnight).not.toContain("Current date:");
+        expect(beforeMidnight).not.toContain("Time zone:");
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it.each<PromptCase>([
     [
@@ -667,17 +689,36 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("keeps automatic tool discovery in the stable prompt-cache prefix", () => {
+  it("keeps automatic tool discovery after the stable prompt-cache prefix", () => {
     const toolSchemaDirectoryPrompt =
       "Available deferred-schema tools:\n- fake_calendar: Schedule an event";
     const prompt = renderPrompt({
-      toolNames: ["tool_search", "tool_describe", "tool_call"],
+      toolNames: ["tool_search", "tool_describe", "dispatch_action"],
       toolSchemaDirectoryPrompt,
     });
     const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     expect(prompt).toContain("### Deferred Tool Schemas");
-    expect(boundary).toBeGreaterThan(prompt.indexOf("### Deferred Tool Schemas"));
-    expect(prompt.slice(0, boundary)).toContain(toolSchemaDirectoryPrompt);
+    expect(prompt.indexOf("### Deferred Tool Schemas")).toBeGreaterThan(boundary);
+    expect(prompt.slice(boundary)).toContain(toolSchemaDirectoryPrompt);
+  });
+
+  it("keeps changing Code Mode catalogs after the stable prompt-cache prefix", () => {
+    const prompts = ["calendar.create", "calendar.create\ncalendar.list"].map(
+      (toolSchemaDirectoryPrompt) =>
+        renderPrompt({
+          toolNames: ["exec", "wait"],
+          codeModeActive: true,
+          toolSchemaDirectoryPrompt,
+        }),
+    );
+    const [first, next] = prompts.map((prompt) => {
+      const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+      return { prefix: prompt.slice(0, boundary), suffix: prompt.slice(boundary) };
+    });
+    expect(next!.prefix).toBe(first!.prefix);
+    expect(first!.prefix).not.toContain("calendar.create");
+    expect(first!.suffix).toContain("calendar.create");
+    expect(next!.suffix).toContain("calendar.list");
   });
 });
 
@@ -756,13 +797,76 @@ describe("system prompt memory and runtime cache boundary", () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps refreshed memory recall instructions after the cached project context", async () => {
+    let recall = "Recall from the first index.";
+    registerMemoryPromptPreparation("memory-wiki", async () => ["## Memory Recall", recall]);
+    const params = {
+      toolNames: ["wiki_search"],
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    };
+    const first = buildPromptParts({
+      preparedMemoryPrompt: await prepareAgentMemoryPrompt({ enabled: true, ...params }),
+      toolNames: params.toolNames,
+      runtimeInfo: { agentId: params.agentId, sessionKey: params.agentSessionKey },
+    });
+    recall = "Recall from the refreshed index.";
+    const next = buildPromptParts({
+      preparedMemoryPrompt: await prepareAgentMemoryPrompt({ enabled: true, ...params }),
+      toolNames: params.toolNames,
+      runtimeInfo: { agentId: params.agentId, sessionKey: params.agentSessionKey },
+    });
+    expect(next.prefix).toBe(first.prefix);
+    expect(first.prefix).not.toContain("## Memory Recall");
+    expect(first.suffix).toContain("## Memory Recall\nRecall from the first index.");
+    expect(next.suffix).toContain("## Memory Recall\nRecall from the refreshed index.");
+    expect(next.suffix).not.toContain("Recall from the first index.");
+  });
+
+  it.each([
+    {
+      name: "Skills",
+      params: { toolNames: ["read"], skillsPrompt: SKILLS },
+      update: { skillsPrompt: SKILLS.replaceAll("demo", "updated") },
+      first: "/skills/demo/SKILL.md",
+      next: "/skills/updated/SKILL.md",
+    },
+    {
+      name: "Model Aliases",
+      params: { modelAliasLines: ["- fast: provider/model-a"] },
+      update: { modelAliasLines: ["- fast: provider/model-b"] },
+      first: "- fast: provider/model-a",
+      next: "- fast: provider/model-b",
+    },
+    {
+      name: "Runtime Context",
+      params: { toolNames: ["read"] },
+      update: { toolNames: ["read", "process", "sessions_spawn"] },
+      first: "- read: Read files",
+      next: "Before input: process log;",
+    },
+  ])(
+    "keeps changing $name after the cached project context",
+    ({ params, update, first: previousText, next: nextText }) => {
+      const first = buildPromptParts(params);
+      const next = buildPromptParts({ ...params, ...update });
+      expect(next.prefix).toBe(first.prefix);
+      expect(first.prefix).not.toContain(previousText);
+      expect(next.prefix).not.toContain(nextText);
+      expect(first.suffix).toContain(previousText);
+      expect(next.suffix).toContain(nextText);
+    },
+  );
+
   it.each([{ toolNames: ["image_generate"], guidance: "Do not call `image_generate` again" }])(
-    "keeps $toolNames guidance stable even without active work",
+    "keeps $toolNames guidance below the stable prefix even without active work",
     ({ toolNames, guidance }) => {
       const available = buildPromptParts({ toolNames });
-      expect(available.prefix).toContain(guidance);
-      expect(buildPromptParts({ toolNames: [] }).prefix).not.toContain(guidance);
-      expect(available.suffix).not.toContain(guidance);
+      const unavailable = buildPromptParts({ toolNames: [] });
+      expect(available.prefix).toBe(unavailable.prefix);
+      expect(available.prefix).not.toContain(guidance);
+      expect(available.suffix).toContain(guidance);
+      expect(unavailable.suffix).not.toContain(guidance);
     },
   );
 
@@ -784,12 +888,18 @@ describe("system prompt memory and runtime cache boundary", () => {
         runtimeInfo: { channel: "discord", capabilities: ["threadbound-acp-spawn"] },
       },
       { runtimeInfo: { channel: "telegram", capabilities: [] } },
+      [["## Execution Bias"], ["Discord ACP default:"]],
+      [
+        [
+          "never route ACP through local subagent controls or a local PTY",
+          "Discord ACP default:",
+          'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`',
+        ],
+      ],
       [
         ["never route ACP through local subagent controls or a local PTY"],
-        ["Discord ACP default:"],
+        ["Discord ACP default:", "ACP thread:"],
       ],
-      [["Discord ACP default:", 'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`']],
-      [[], ["Discord ACP default:", "ACP thread:"]],
     ],
     [
       "ultra toggles",
@@ -799,15 +909,17 @@ describe("system prompt memory and runtime cache boundary", () => {
         proactiveSubagentOrchestration: false,
       },
       { proactiveSubagentOrchestration: true },
+      [["## Execution Bias"], ["## Proactive Sub-Agent Orchestration"]],
+      [["## Care", "## Delegation", "Execute work directly by default."], ["Ultra active"]],
       [
         [
           "## Care",
-          "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
+          "## Proactive Sub-Agent Orchestration",
+          "Ultra active",
+          "Execute work directly by default.",
         ],
-        ["## Proactive Sub-Agent Orchestration"],
+        ["## Delegation"],
       ],
-      [["## Delegation"], ["Ultra active"]],
-      [["## Proactive Sub-Agent Orchestration", "Ultra active"], ["## Delegation"]],
     ],
     [
       "elevated-level changes",
@@ -824,15 +936,21 @@ describe("system prompt memory and runtime cache boundary", () => {
           elevated: { allowed: true, fullAccessAvailable: true, defaultLevel: "full" },
         },
       },
+      [["## Execution Bias"], ["Current elevated level:"]],
       [
         [
           "Subagents stay sandboxed without elevated/host access;",
           "User can toggle with /elevated on|off|ask|full.",
+          "Current elevated level: ask",
         ],
-        ["Current elevated level:"],
       ],
-      [["Current elevated level: ask"]],
-      [["Current elevated level: full"]],
+      [
+        [
+          "Subagents stay sandboxed without elevated/host access;",
+          "User can toggle with /elevated on|off|ask|full.",
+          "Current elevated level: full",
+        ],
+      ],
     ],
   ])(
     "keeps %s after stable authority guidance",

@@ -461,39 +461,39 @@ describe("gateway lock", () => {
     expect(JSON.parse(await fs.readFile(stateLockPath, "utf8"))).toMatchObject(replacement);
   });
 
-  it("keeps a verified maintenance owner when process start identity is unavailable", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    const { lockPath, configPath } = resolveLockPath(env);
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify(
-        createLockPayload({
-          configPath,
-          createdAt: "2000-01-01T00:00:00.000Z",
-          role: "sqlite-maintenance",
-          startTime: 111,
-        }),
-      ),
-      "utf8",
-    );
+  it.each([
+    ["doctor", "--state-sqlite", "compact"],
+    ["sessions", "cleanup", "--enforce"],
+  ])(
+    "keeps a verified %s maintenance owner when process start identity is unavailable",
+    async (...args) => {
+      vi.useRealTimers();
+      const env = await makeEnv();
+      const { lockPath, configPath } = resolveLockPath(env);
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify(
+          createLockPayload({
+            configPath,
+            createdAt: "2000-01-01T00:00:00.000Z",
+            role: "sqlite-maintenance",
+            startTime: 111,
+          }),
+        ),
+        "utf8",
+      );
 
-    await expect(
-      acquireForTest(env, {
-        timeoutMs: 15,
-        staleMs: 0,
-        platform: "linux",
-        readProcessStartTime: () => null,
-        readProcessCmdline: () => [
-          "node",
-          "/srv/openclaw/openclaw.mjs",
-          "doctor",
-          "--state-sqlite",
-          "compact",
-        ],
-      }),
-    ).rejects.toBeInstanceOf(GatewayLockError);
-  });
+      await expect(
+        acquireForTest(env, {
+          timeoutMs: 15,
+          staleMs: 0,
+          platform: "linux",
+          readProcessStartTime: () => null,
+          readProcessCmdline: () => ["node", "/srv/openclaw/openclaw.mjs", ...args],
+        }),
+      ).rejects.toBeInstanceOf(GatewayLockError);
+    },
+  );
 
   it("keeps an old maintenance owner when its live identity is unreadable", async () => {
     vi.useRealTimers();

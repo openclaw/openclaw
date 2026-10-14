@@ -1,11 +1,8 @@
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
-// OpenClaw rescue policy gates remote writes by owner, DM, sandbox, and YOLO posture.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals.js";
 
 /**
- * Policy checks for remote OpenClaw rescue commands.
- *
  * Rescue intentionally opens only for owner-controlled, non-sandboxed YOLO host
  * posture because remote commands can write local state.
  */
@@ -24,7 +21,6 @@ type SystemAgentRescuePolicyInput = {
   isDirectMessage: boolean;
 };
 
-/** Decide whether a message-channel rescue command is allowed for this sender/context. */
 export function resolveSystemAgentRescuePolicy(
   input: SystemAgentRescuePolicyInput,
 ): SystemAgentRescueDecision {

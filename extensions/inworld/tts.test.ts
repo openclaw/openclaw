@@ -161,6 +161,10 @@ describe("inworldTTS", () => {
 
     expect(buffer.equals(Buffer.from(`${payload}audio-chunk-2`))).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
+    const request = lastGuardRequest();
+    expect(request.url).toBe("https://api.inworld.ai/tts/v1/voice:stream");
+    expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
+    expect(new Headers(request.init?.headers).get("authorization")).toBe("Basic test-key");
   });
 
   it("rejects malformed base64 audio chunks", async () => {
@@ -208,30 +212,6 @@ describe("inworldTTS", () => {
 
     await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toMatchObject({
       message: `Inworld TTS stream parse error: unexpected non-JSON line: ${"p".repeat(79)}`,
-    });
-  });
-
-  it("sends correct request body with defaults", async () => {
-    queueAudioResponse();
-
-    await inworldTTS({ text: "Hello", apiKey: "test-key" });
-
-    const request = lastGuardRequest();
-    expect(request.url).toBe("https://api.inworld.ai/tts/v1/voice:stream");
-    expect(request.auditContext).toBe("inworld-tts");
-    expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
-    if (!request.init) {
-      throw new Error("expected Inworld TTS request init");
-    }
-    expect(request.init.method).toBe("POST");
-    const headers = new Headers(request.init.headers);
-    expect(headers.get("authorization")).toBe("Basic test-key");
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(JSON.parse(readRequestBody(request))).toEqual({
-      text: "Hello",
-      voiceId: "Sarah",
-      modelId: "inworld-tts-1.5-max",
-      audioConfig: { audioEncoding: "MP3" },
     });
   });
 

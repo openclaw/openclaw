@@ -5,14 +5,23 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createAgentDatabaseAdmissionErrorShape,
   listAgentDatabaseAdmissionRefusals,
@@ -23,10 +32,9 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
@@ -34,11 +42,13 @@ const repairMessage = "Rebuilt canonical agent SQLite indexes";
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await flushLogger();
+  clearRuntimeConfigSnapshot();
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -48,6 +58,8 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
   const logPath = path.join(stateDir, "startup.log");
   const configPath = path.join(stateDir, "openclaw.json");
   const config = {
+    // Keep unrelated age-based reclamation from reopening writers during fixture shutdown.
+    session: { maintenance: { mode: "warn" as const } },
     agents: {
       ownership: "explicit" as const,
       entries: Object.fromEntries(ids.map((id) => [id, {}] as const)),
@@ -60,17 +72,21 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     configPath,
     JSON.stringify({ ...config, logging: { level: "warn", file: logPath } }),
   );
+  setRuntimeConfigSnapshot(config);
   setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
   const agents = [];
   for (const agentId of ids) {
-    const agentPath = openOpenClawAgentDatabase({ agentId, env }).path;
     const session = { agentId, env, sessionKey: `agent:${agentId}:retained` };
-    await replaceSessionEntry(session, { sessionId: `${agentId}-history`, updatedAt: 1 });
-    agents.push({ agentId, path: agentPath, session, entry: loadSessionEntry(session) });
+    const entry = await replaceSessionEntry(session, {
+      sessionId: `${agentId}-history`,
+      updatedAt: 1,
+    });
+    expect(entry).not.toBeNull();
+    agents.push({ agentId, path: resolveOpenClawAgentSqlitePath(session), session, entry });
   }
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   const { DatabaseSync } = requireNodeSqlite();
   for (const agent of agents) {
     const writer = new DatabaseSync(agent.path);
@@ -82,6 +98,7 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
       writer.exec("DROP TABLE session_key_contract;");
     }
     writer.close();
+    retireSqliteDatabaseAdmissionForPath(agent.path);
   }
   return {
     env,
@@ -106,7 +123,7 @@ it.for(["missing", "drifted"] as const)(
         log: { info: vi.fn(), warn: vi.fn() },
       });
     for (const agent of agents) {
-      expect(readOpenClawAgentIntegrityVerification(agent.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
     }
     const allAdmitted = createDeferredCore();
     const admitted = new Set<string>();
@@ -160,6 +177,7 @@ it.for(["missing", "drifted"] as const)(
           activateGatewayAgentDatabaseStartup({
             admission,
             preparationReady: Promise.resolve(),
+            waitForPostReadyWork: async () => {},
             getConfig: () => config,
             getPluginRegistry: vi.fn(),
             getPluginMetadataSnapshot: () => undefined,
@@ -273,7 +291,9 @@ it.each([
           : config,
     });
   const failure = await (
-    scope === "scoped" ? withAgentDatabaseStartupAdmission(inspect) : inspect()
+    scope === "scoped"
+      ? withAgentDatabaseStartupAdmission(inspect, { deferInspections: false })
+      : inspect()
   ).catch((error: unknown) => error);
   const message = String(failure);
   if (scope === "unscoped") {

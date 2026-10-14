@@ -23,7 +23,7 @@ export function definePreparedCallSessionTests({
   ) => Promise<void>;
   mocks: {
     readSessionPreviewItemsFromTranscriptAsync: Mock;
-    resolveConfiguredRealtimeVoiceProvider: Mock;
+    resolveConfiguredRealtimeVoiceProviderAsync: Mock;
     createTalkRealtimeRelaySession: Mock;
     consultRealtimeVoiceAgent: Mock;
     chatSend: Mock;
@@ -44,7 +44,7 @@ export function definePreparedCallSessionTests({
       clock.mockReturnValue(4_500);
       return [];
     });
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider: {
         id: "openai",
         label: "OpenAI Realtime",
@@ -132,7 +132,7 @@ export function definePreparedCallSessionTests({
         briefing,
         { role: "tool", text: "Private raw tool output is not voice history" },
       ]);
-      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider: {
           id: "openai",
           label: "OpenAI Realtime",

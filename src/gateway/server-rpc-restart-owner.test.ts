@@ -1,9 +1,7 @@
 import { createServer } from "node:http";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import * as followupDelivery from "../auto-reply/reply/followup-delivery.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,15 +10,23 @@ import {
   getSessionWorkAdmissionRelease,
 } from "../sessions/session-lifecycle-admission.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as queuedChatTurns from "./chat-queued-turns.js";
+import * as sourceFinalization from "./server-methods/chat-send-source-finalization.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 import "./server.subagent-prompt-recent.gateway.test-support.js";
 
+let cleanupRestartProof: (() => Promise<void>) | undefined;
+afterEach(async () => {
+  await cleanupRestartProof?.();
+  cleanupRestartProof = undefined;
+});
+
 it(
-  "records an actual RPC queued reply awaiting final delivery during restart",
+  "records an actual RPC queued reply awaiting finalization during restart",
   { timeout: 120_000 },
-  async () => {
+  async ({ signal }) => {
     const token = "synthetic-rpc-owner-token";
     const state = await createOpenClawTestState({
       label: "rpc-restart-owner",
@@ -39,7 +45,7 @@ it(
     const firstGate = createDeferred();
     const finalGate = createDeferred();
     const finalReached = createDeferred();
-    const queuedRunTerminal = createDeferred<unknown>();
+    const queuedRunRegistered = createDeferred();
     let firstReceived = false;
     let followupReceived = false;
     const tasks = new Set<Promise<void>>();
@@ -83,6 +89,16 @@ it(
     let replyReleased: Promise<void> | undefined;
     let hostResolver: GatewayContextResolver | undefined;
     let context: GatewayRequestContext | undefined;
+    const registerQueuedTurn = queuedChatTurns.registerQueuedChatTurn;
+    const registrationSpy = vi
+      .spyOn(queuedChatTurns, "registerQueuedChatTurn")
+      .mockImplementation((params) => {
+        const registered = registerQueuedTurn(params);
+        if (registered && params.runId === "rpc-queued") {
+          queuedRunRegistered.resolve();
+        }
+        return registered;
+      });
     const kernel = await import("./server-kernel-request-runtime.js");
     const prepare = kernel.prepareGatewayKernelRequestRuntime;
     const startupSpy = vi
@@ -93,20 +109,44 @@ it(
         context = result.gatewayRequestContext;
         return result;
       });
-    const deliver = followupDelivery.deliverFollowupDecision;
-    const deliverySpy = vi
-      .spyOn(followupDelivery, "deliverFollowupDecision")
-      .mockImplementation(async (params) => {
-        if (
-          params.decision.kind === "deliver" &&
-          params.kind !== "tool" &&
-          params.kind !== "block"
-        ) {
-          finalReached.resolve();
-          await finalGate.promise;
-        }
-        return await deliver(params);
+    const createFinalizer = sourceFinalization.createChatSendLateReplyFinalizer;
+    const finalizationSpy = vi
+      .spyOn(sourceFinalization, "createChatSendLateReplyFinalizer")
+      .mockImplementation((params) => {
+        const finalize = createFinalizer(params);
+        return async (batch) => {
+          if (batch.clientRunId === "rpc-queued" && batch.completion.kind !== "progress") {
+            finalReached.resolve();
+            await finalGate.promise;
+          }
+          return await finalize(batch);
+        };
       });
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        startupSpy.mockRestore();
+        registrationSpy.mockRestore();
+        finalizationSpy.mockRestore();
+        firstGate.resolve();
+        finalGate.resolve();
+        if (gateway) {
+          await disconnectGatewayClient(gateway.client).catch(() => undefined);
+          if (!closed) {
+            await gateway.server.close().catch(() => undefined);
+          }
+        }
+        await replyReleased;
+        providerServer.closeAllConnections();
+        if (providerServer.listening) {
+          await new Promise<void>((resolve) => {
+            providerServer.close(() => resolve());
+          });
+        }
+        await Promise.allSettled(tasks);
+        await state.cleanup();
+      })());
+    cleanupRestartProof = cleanup;
     try {
       await new Promise<void>((resolve, reject) => {
         providerServer.once("error", reject);
@@ -140,17 +180,6 @@ it(
         cfg,
         configPath: state.configPath,
         token,
-        onEvent: ({ event, payload }) => {
-          if (
-            event === "chat" &&
-            isRecord(payload) &&
-            payload.sessionKey === sessionKey &&
-            payload.runId === "rpc-queued" &&
-            (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
-          ) {
-            queuedRunTerminal.resolve(payload);
-          }
-        },
       });
       startupSpy.mockRestore();
       await gateway.server.startupSettled;
@@ -167,13 +196,31 @@ it(
         idempotencyKey: "rpc-queued",
         queueMode: "followup",
       });
-      // chat.send acknowledges before dispatch reaches queue admission. Its source
-      // run terminalizes after handoff, while the held first reply keeps it queued.
-      await expect(queuedRunTerminal.promise).resolves.toMatchObject({ state: "final" });
+      // The queued input stays pending until delivery, so wait for its actual
+      // registration before releasing the first reply that currently blocks it.
+      await withinTest(queuedRunRegistered.promise, signal);
+      await expect(
+        withinTest(
+          gateway.client.request("agent.wait", { runId: "rpc-queued", timeoutMs: 30_000 }),
+          signal,
+        ),
+      ).resolves.toMatchObject({ runId: "rpc-queued", status: "pending", timeoutPhase: "queue" });
       expect(context?.chatQueuedTurns.has("rpc-queued")).toBe(true);
       firstGate.resolve();
-      await finalReached.promise;
+      await withinTest(finalReached.promise, signal);
       expect(followupReceived).toBe(true);
+      const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
+        sessionKey,
+        limit: 20,
+      });
+      expect(history.messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: "QUEUED_REPLY_FOR_RECOVERY" }),
+          ]),
+        }),
+      );
       if (!context || !hostResolver || !context.resolveGatewayContext) {
         throw new Error("Missing actual Gateway resolver");
       }
@@ -220,25 +267,7 @@ it(
       expect(after?.restartRecoveryForceSafeTools).toBe(true);
       expect(context.resolveGatewayContext()).toBeUndefined();
     } finally {
-      startupSpy.mockRestore();
-      deliverySpy.mockRestore();
-      firstGate.resolve();
-      finalGate.resolve();
-      if (gateway) {
-        await disconnectGatewayClient(gateway.client).catch(() => undefined);
-        if (!closed) {
-          await gateway.server.close().catch(() => undefined);
-        }
-      }
-      await replyReleased;
-      providerServer.closeAllConnections();
-      if (providerServer.listening) {
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-      }
-      await Promise.allSettled(tasks);
-      await state.cleanup();
+      await cleanup();
     }
   },
 );

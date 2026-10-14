@@ -5,6 +5,8 @@ import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.j
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   canReadDetailedUpdateMetadata,
@@ -26,6 +28,8 @@ export function createDeferredGatewayUpdateCheck(params: {
     | ReturnType<typeof createGatewayUpdateCheck>
     | Promise<ReturnType<typeof createGatewayUpdateCheck>>;
   getConfig: () => OpenClawConfig;
+  /** Catalog republication borrows unchanged plugin instances from this live Gateway registry. */
+  getPluginRegistry: () => PluginRegistry | undefined;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -37,8 +41,6 @@ export function createDeferredGatewayUpdateCheck(params: {
   isClosing?: () => boolean;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => Promise<void> } {
-  // Reserve cancellation before an early RPC can start install discovery.
-  const lifecycle = createGatewayUpdateLifecycle(params.scheduler);
   let stopped = false;
   let started = false;
   let runWatcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
@@ -70,6 +72,27 @@ export function createDeferredGatewayUpdateCheck(params: {
       { dropIfSlow: true },
     );
   };
+
+  // Early RPC discovery shares the same cancellation and publication owner,
+  // even before the post-ready background factory has been admitted.
+  const lifecycle = createGatewayUpdateLifecycle(params.scheduler, {
+    onUpdateAvailableChange: (updateAvailable) => {
+      latestUpdateAvailable = updateAvailable;
+      const payload: GatewayUpdateAvailableEventPayload = {
+        updateAvailable,
+        ...(latestSchedule ? { schedule: latestSchedule } : {}),
+      };
+      broadcastUpdateAvailable(payload);
+    },
+    onUpdateScheduleChange: (schedule) => {
+      latestSchedule = schedule;
+      const payload: GatewayUpdateAvailableEventPayload = {
+        updateAvailable: latestUpdateAvailable,
+        schedule,
+      };
+      broadcastUpdateAvailable(payload);
+    },
+  });
 
   const stop = () => {
     stopped = true;
@@ -108,29 +131,17 @@ export function createDeferredGatewayUpdateCheck(params: {
             lifecycle,
             getConfig: params.getConfig,
             applyRemoteCatalogUpdate: (signal) =>
-              applyRemoteModelCatalogUpdate(params.getConfig, signal),
+              withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+                applyRemoteModelCatalogUpdate(params.getConfig, signal),
+              ),
             onUpdateRunCreated: wakeUpdateRunWatcher,
             log: params.log,
             isNixMode: params.isNixMode,
             ...(params.activeWorkInspectors
               ? { activeWorkInspectors: params.activeWorkInspectors }
               : {}),
-            onUpdateAvailableChange: (updateAvailable) => {
-              latestUpdateAvailable = updateAvailable;
-              const payload: GatewayUpdateAvailableEventPayload = {
-                updateAvailable,
-                ...(latestSchedule ? { schedule: latestSchedule } : {}),
-              };
-              broadcastUpdateAvailable(payload);
-            },
-            onUpdateScheduleChange: (schedule) => {
-              latestSchedule = schedule;
-              const payload: GatewayUpdateAvailableEventPayload = {
-                updateAvailable: latestUpdateAvailable,
-                schedule,
-              };
-              broadcastUpdateAvailable(payload);
-            },
+            onUpdateAvailableChange: lifecycle.onUpdateAvailableChange,
+            onUpdateScheduleChange: lifecycle.onUpdateScheduleChange,
           });
         } catch (err) {
           if (!stopped) {

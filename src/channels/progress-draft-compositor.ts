@@ -1,4 +1,3 @@
-import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,
@@ -15,8 +14,6 @@ import {
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   createProgressDraftSnapshotState,
-  redactProgressDraftLine,
-  redactProgressPlanSteps,
   snapshotProgressDraftState,
 } from "./progress-draft-snapshot.js";
 import {
@@ -26,6 +23,7 @@ import {
   resolveCommentaryLineId,
   sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
+import { projectChannelWorkStatus } from "./progress-draft-work-status.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
   createChannelProgressDraftGate,
@@ -116,8 +114,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   let preambleAt: number | undefined;
   let narrationText = "";
   let finalReplyStarted = false;
-  let finalReplyDelivered = false;
-  const isTurnActive = () => params.active && !finalReplyStarted && !finalReplyDelivered;
+  const isTurnActive = () => params.active && !finalReplyStarted;
   const canUpdateProgress = () =>
     isTurnActive() && params.mode === "progress" && !progressSuppressed;
   const diffStatTracker = createProgressDraftDiffStatTracker({
@@ -278,8 +275,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       !narrationText ||
       preambleAt === undefined ||
       !gate?.hasStarted ||
-      finalReplyStarted ||
-      finalReplyDelivered
+      finalReplyStarted
     ) {
       return;
     }
@@ -364,7 +360,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     });
 
   const noteProgress = async (
-    inputLine?: ChannelProgressDraftCompositorLine,
+    line?: ChannelProgressDraftCompositorLine,
     options?: { toolName?: string; startImmediately?: boolean; flush?: boolean },
   ) => {
     if (!isTurnActive()) {
@@ -373,7 +369,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
       return false;
     }
-    const line = inputLine === undefined ? undefined : redactProgressDraftLine(inputLine);
     if (params.isEmptyLine?.(line)) {
       return false;
     }
@@ -387,7 +382,11 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
     // Approvals require a user decision; intermediate tool failures belong to the tool log.
     const shouldStoreLine =
-      !quietProgress || (typeof progressLine === "object" && progressLine.kind === "approval");
+      !quietProgress ||
+      (typeof progressLine === "object" &&
+        (progressLine.kind === "approval" ||
+          progressLine.kind === "operation-status" ||
+          progressLine.kind === "subagent-status"));
     // Failure visibility does not grant protected capacity in the rolling tool log.
     const needsAttention =
       shouldStoreLine &&
@@ -434,6 +433,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const progressEventHandlers = createChannelProgressDraftEventHandlers({
     entry: params.entry,
     preparedItems: params.preparedItems,
+    toolIcons: params.toolIcons,
     pushLine: noteProgress,
     onTool: diffStatTracker.stageToolEvent,
     onItem: diffStatTracker.commitItemEvent,
@@ -454,7 +454,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return gate?.hasStarted ?? false;
     },
     get isVisible() {
-      return Boolean(lastRenderedText) && !finalReplyStarted && !finalReplyDelivered;
+      return Boolean(lastRenderedText) && !finalReplyStarted;
     },
     get hasStatusHeadline() {
       return Boolean(resolveStatusText().text);
@@ -472,17 +472,16 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       clearPreambleExpiryTimer();
     },
     markFinalReplyDelivered() {
-      finalReplyDelivered = true;
+      finalReplyStarted = true;
       clearPreambleExpiryTimer();
     },
     // Authoritative queued admission may force reset after a silent turn;
     // ordinary assistant boundaries still require a settled final.
     beginNewTurn(options?: { force?: boolean }) {
-      if (options?.force !== true && !finalReplyStarted && !finalReplyDelivered) {
+      if (options?.force !== true && !finalReplyStarted) {
         return false;
       }
       finalReplyStarted = false;
-      finalReplyDelivered = false;
       gate?.reset();
       clearProgressState(false);
       return true;
@@ -526,8 +525,31 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     },
     pushToolProgress: noteProgress,
     ...progressEventHandlers,
-    pushItemEvent: (payload: Parameters<typeof progressEventHandlers.pushItemEvent>[0]) =>
-      routePreparedProgressItem({
+    pushItemEvent: async (payload: Parameters<typeof progressEventHandlers.pushItemEvent>[0]) => {
+      if (params.showWorkStatus && quietProgress && canUpdateProgress()) {
+        const status = projectChannelWorkStatus(payload);
+        const current = lines.find(
+          (line) => typeof line === "object" && line.kind === "operation-status",
+        );
+        // A late result for another operation must not replace the operation
+        // the user is currently watching. Retractions still use the real item id.
+        if (
+          status &&
+          (payload.kind === "subagent" ||
+            payload.phase !== "end" ||
+            !current ||
+            (typeof current === "object" && current.id === status.id))
+        ) {
+          diffStatTracker.commitItemEvent(payload);
+          if (payload.kind !== "subagent") {
+            lines = lines.filter(
+              (line) => typeof line !== "object" || line.kind !== "operation-status",
+            );
+          }
+          return await noteProgress(status);
+        }
+      }
+      return await routePreparedProgressItem({
         payload,
         progressMode: params.mode === "progress",
         commentary: commentaryProgressEnabled,
@@ -535,7 +557,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         clearLine,
         pushCommentary: (text, options) => compositor.pushCommentaryProgress(text, options),
         pushHeadline: (text, options) => compositor.pushPreambleHeadline(text, options),
-      }),
+      });
+    },
     async pushApprovalEvent(
       payload: Parameters<typeof progressEventHandlers.pushApprovalEvent>[0],
     ) {
@@ -555,10 +578,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
-      planSteps = steps && steps.length > 0 ? redactProgressPlanSteps(steps) : undefined;
-      planExplanation = redactToolPayloadText(options?.explanation ?? "")
-        .replace(/\s+/g, " ")
-        .trim();
+      planSteps = steps && steps.length > 0 ? steps.map((step) => ({ ...step })) : undefined;
+      planExplanation = (options?.explanation ?? "").replace(/\s+/g, " ").trim();
       planExplanationFormat = options?.explanationFormat;
       if (!planSteps && !planExplanation) {
         return await renderAfterRetraction();
@@ -611,9 +632,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       if (!canUpdateProgress()) {
         return false;
       }
-      const normalized = redactToolPayloadText(text ?? "")
-        .replace(/\s+/g, " ")
-        .trim();
+      const normalized = (text ?? "").replace(/\s+/g, " ").trim();
       if (normalized === narrationText) {
         return false;
       }

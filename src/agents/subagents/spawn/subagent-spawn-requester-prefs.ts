@@ -9,34 +9,15 @@ import {
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
 import { resolveThinkingDefault } from "../../model-thinking-default.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./subagent-spawn.runtime.js";
 
 type RequesterPreferencesContext = {
   cfg: OpenClawConfig;
-  requesterInternalKey: string;
   requesterAgentId?: string;
-  assertActive?: () => void;
+  requesterEntry: SessionEntry | undefined;
 };
 
-async function readRequesterSession(
-  params: RequesterPreferencesContext,
-): Promise<SessionEntry | undefined> {
-  try {
-    const target = await resolveGatewaySessionStoreTargetInWorker({
-      cfg: params.cfg,
-      key: params.requesterInternalKey,
-      agentId: params.requesterAgentId,
-      assertActive: params.assertActive,
-    });
-    return target.store[target.canonicalKey];
-  } catch {
-    return undefined;
-  } finally {
-    params.assertActive?.();
-  }
-}
-
-function resolveRequesterModel(params: RequesterPreferencesContext, entry?: SessionEntry) {
+function resolveRequesterModel(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.requesterAgentId,
@@ -60,10 +41,9 @@ function resolveRequesterModel(params: RequesterPreferencesContext, entry?: Sess
   return { defaultModel, selectedModel };
 }
 
-export async function readRequesterPreferences(params: RequesterPreferencesContext) {
-  const entry = await readRequesterSession(params);
-  params.assertActive?.();
-  const { defaultModel, selectedModel } = resolveRequesterModel(params, entry);
+export function resolveRequesterPreferences(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
+  const { defaultModel, selectedModel } = resolveRequesterModel(params);
   const model = selectedModel ?? defaultModel;
   return {
     model: selectedModel ?? undefined,
@@ -78,14 +58,13 @@ export async function readRequesterPreferences(params: RequesterPreferencesConte
   };
 }
 
-export async function readRequesterFastMode(
+export function resolveRequesterFastMode(
   params: RequesterPreferencesContext & { requesterModel?: ModelRef; childModel: string },
-): Promise<FastMode | undefined> {
-  const entry = await readRequesterSession(params);
-  params.assertActive?.();
+): FastMode | undefined {
+  const entry = params.requesterEntry;
   let model = params.requesterModel;
   if (!model) {
-    const { defaultModel, selectedModel } = resolveRequesterModel(params, entry);
+    const { defaultModel, selectedModel } = resolveRequesterModel(params);
     model = selectedModel ?? defaultModel;
   }
   if (params.childModel !== `${model.provider}/${model.model}`) {

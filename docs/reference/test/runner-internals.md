@@ -119,6 +119,17 @@ containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
 to use the native CLI; its wrapper does not create or reuse a shared external
 install.
 
+Canvas A2UI asset builds use the shared build-artifact cache, including
+`BUILD_ALL_CACHE_ROOT` when consecutive update candidates use different checkouts.
+The cache verifies and restores both dialect bundles together. Canvas source,
+its package manifest, the lockfile, workspace dependency settings, patches, build
+scripts, Node version, and build environment invalidate reuse; unrelated root
+package scripts do not. `OPENCLAW_BUILD_CACHE=0` forces compilation. Explicit
+`OPENCLAW_A2UI_BUNDLE_OUT` destinations bypass the shared cache. Sparse checkouts
+retain their existing complete-prebuilt-bundle behavior. Cold A2UI builds default
+the native Rayon and Rolldown worker pools to four threads each, preserving explicit
+`RAYON_NUM_THREADS` and `ROLLDOWN_WORKER_THREADS` overrides.
+
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its

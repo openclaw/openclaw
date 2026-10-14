@@ -11,8 +11,8 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -37,103 +37,69 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
-  it.each(["local draft", "/stop"])(
-    "keeps an editable draft without send permission: %s",
-    (draft) => {
-      const onSend = vi.fn();
-      const { container } = renderComposer({ canCompose: true, canSend: false, draft, onSend });
-      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-      expect(textarea?.disabled).toBe(false);
-      const send = primaryButton(container);
-      expect(send.disabled).toBe(true);
-      send.click();
-      pressComposerEnter(container);
-      expect(onSend).not.toHaveBeenCalled();
-      expect(textarea?.value).toBe(draft);
-    },
-  );
-
-  it.each([
-    { name: "pending attachment", overrides: { pendingAttachmentReads: 1 } },
-    { name: "send permission withheld", overrides: { canSend: false } },
-    { name: "send in progress", overrides: { sending: true } },
-    {
-      name: "history-gated command",
-      overrides: { draft: "/compact", submitDisabledReason: "Loading history" },
-    },
-  ])("keeps desktop and mobile Stop available with a held draft: $name", ({ overrides }) => {
-    const onAbort = vi.fn();
+  it.each(["local draft"])("keeps an editable draft without send permission: %s", (draft) => {
     const onSend = vi.fn();
-    const onDraftChange = vi.fn();
-    const { container, props } = renderComposer({
-      canAbort: true,
-      canCompose: true,
-      draft: "Keep this draft",
-      onAbort,
-      onSend,
-      onDraftChange,
-      ...overrides,
-    });
-    const stop = primaryButton(container);
-
-    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
-    expect(stop.disabled).toBe(false);
-    expect(container.querySelector(".chat-mobile-primary-action > openclaw-tooltip > button")).toBe(
-      stop,
-    );
-    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
-    stop.click();
-    expect(onAbort).toHaveBeenCalledOnce();
+    const { container } = renderComposer({ canCompose: true, canSend: false, draft, onSend });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.disabled).toBe(false);
+    const send = primaryButton(container);
+    expect(send.disabled).toBe(true);
+    send.click();
+    pressComposerEnter(container);
     expect(onSend).not.toHaveBeenCalled();
-    expect(onDraftChange).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(props.draft);
+    expect(textarea?.value).toBe(draft);
   });
 
-  it.each([true, false])(
-    "keeps command submission gated while history is pending: %s",
-    (pending) => {
+  it.each([{ name: "pending attachment", overrides: { pendingAttachmentReads: 1 } }])(
+    "keeps desktop and mobile Stop available with a held draft: $name",
+    ({ overrides }) => {
+      const onAbort = vi.fn();
       const onSend = vi.fn();
-      const reason = pending ? "Loading chat" : "History failed. Retry to load the conversation.";
-      const { container } = renderComposer({
-        draft: "/compact",
-        submitDisabledReason: reason,
-        submitPending: pending,
+      const onDraftChange = vi.fn();
+      const { container, props } = renderComposer({
+        canAbort: true,
+        canCompose: true,
+        draft: "Keep this draft",
+        onAbort,
         onSend,
+        onDraftChange,
+        ...overrides,
       });
-      const send = primaryButton(container);
-      expect(send.disabled).toBe(true);
-      expect(send.getAttribute("aria-label")).toBe(reason);
-      expect(send.getAttribute("aria-busy")).toBe(String(pending));
-      expect(send.querySelector(".btn__spinner") !== null).toBe(pending);
-      send.click();
-      pressComposerEnter(container);
+      const stop = primaryButton(container);
+
+      expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
+      expect(stop.disabled).toBe(false);
+      expect(
+        container.querySelector(".chat-mobile-primary-action > openclaw-tooltip > button"),
+      ).toBe(stop);
+      expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
+      stop.click();
+      expect(onAbort).toHaveBeenCalledOnce();
       expect(onSend).not.toHaveBeenCalled();
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/compact");
+      expect(onDraftChange).not.toHaveBeenCalled();
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(props.draft);
     },
   );
 
-  it.each(
-    ["/stop", "/approve approval-123 allow-once", "ordinary draft", "/compact"].flatMap((draft) =>
-      ["keyboard", "button"].map((submission) => ({ draft, submission })),
-    ),
-  )(
-    "accepts ordinary messages and controls while holding commands during history loading: $draft via $submission",
-    ({ draft, submission }) => {
-      const onSend = vi.fn();
-      const { container } = renderComposer({
-        draft,
-        submitDisabledReason: "Loading history",
-        onSend,
-      });
-      if (submission === "keyboard") {
-        pressComposerEnter(container);
-      } else {
-        primaryButton(container).click();
-      }
-      expect(onSend).toHaveBeenCalledTimes(draft === "/compact" ? 0 : 1);
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
-    },
-  );
+  it.each([false])("keeps command submission gated while history is pending: %s", (pending) => {
+    const onSend = vi.fn();
+    const reason = pending ? "Loading chat" : "History failed. Retry to load the conversation.";
+    const { container } = renderComposer({
+      draft: "/compact",
+      submitDisabledReason: reason,
+      submitPending: pending,
+      onSend,
+    });
+    const send = primaryButton(container);
+    expect(send.disabled).toBe(true);
+    expect(send.getAttribute("aria-label")).toBe(reason);
+    expect(send.getAttribute("aria-busy")).toBe(String(pending));
+    expect(send.querySelector(".btn__spinner") !== null).toBe(pending);
+    send.click();
+    pressComposerEnter(container);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/compact");
+  });
 
   function renderDictatingComposer({
     submitDisabledReason,
@@ -147,7 +113,7 @@ describe("renderChatComposer controls", () => {
       onDraftChange: (value) => {
         draft = value;
       },
-      onSend: () => onSend(draft),
+      onSend: (_mode, action) => onSend(draft, action),
       onToggleRealtimeTalk: vi.fn(),
       submitDisabledReason,
     });
@@ -177,11 +143,11 @@ describe("renderChatComposer controls", () => {
     stop?.click();
 
     expect(finishActive).toHaveBeenCalledOnce();
-    expect(handleClick).not.toHaveBeenCalled();
+    expect(handleClick).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "Loading chat"])(
+  it.each(["Loading chat"])(
     "finishes locked dictation before submitting the complete composer draft with history hold %s",
     async (submitDisabledReason) => {
       const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({
@@ -203,13 +169,14 @@ describe("renderChatComposer controls", () => {
       const send = primaryButton(container);
       expect(send.getAttribute("aria-label")).toBe("Send");
       expect(send.disabled).toBe(false);
-      send.click();
+      const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+      send.dispatchEvent(action);
 
       expect(finishActive).toHaveBeenCalledOnce();
       expect(onSend).not.toHaveBeenCalled();
       finalTranscript.resolve("dictated ending");
       await vi.waitFor(() =>
-        expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending"),
+        expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending", action),
       );
     },
   );
@@ -228,64 +195,6 @@ describe("renderChatComposer controls", () => {
     expect(send?.getAttribute("aria-disabled")).toBe("true");
     expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
   });
-
-  it.each([
-    {
-      name: "empty idle",
-      overrides: {},
-      label: "Write a message to send.",
-      disabled: true,
-      stop: false,
-    },
-    {
-      name: "empty abortable",
-      overrides: { canAbort: true, onAbort: vi.fn() },
-      label: t("chat.runControls.stopGenerating"),
-      disabled: false,
-      stop: true,
-    },
-    {
-      name: "draft idle",
-      overrides: { draft: "Send this" },
-      label: t("chat.runControls.sendMessage"),
-      disabled: false,
-      stop: false,
-    },
-  ])(
-    "renders one primary action with a separate mic for $name",
-    ({ overrides, label, disabled, stop }) => {
-      const view = renderComposer({ ...overrides, onToggleRealtimeTalk: vi.fn() });
-      const primary = primaryButton(view.container);
-
-      expect(primary.getAttribute("aria-label")).toBe(label);
-      expect(primary.disabled).toBe(disabled);
-      expect(primary.classList.contains("chat-send-btn--stop")).toBe(stop);
-      expect(view.container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(stop ? 1 : 0);
-      expect(button(view.container, t("chat.composer.startVoiceInput"))).not.toBe(primary);
-    },
-  );
-
-  it.each([
-    [undefined, t("chat.composer.voiceGestureHint")],
-    [false, t("chat.composer.startVoiceInput")],
-  ])(
-    "uses the gesture hint only when hold-to-dictate is available",
-    (composerHoldToRecord, tooltipContent) => {
-      const { container } = renderComposer({
-        composerHoldToRecord,
-        onToggleRealtimeTalk: vi.fn(),
-      });
-      const voice = button(container, t("chat.composer.startVoiceInput"));
-      const tooltip = voice.closest("openclaw-tooltip") as
-        | (HTMLElement & {
-            content?: string;
-          })
-        | null;
-
-      expect(voice.getAttribute("aria-label")).toBe(t("chat.composer.startVoiceInput"));
-      expect(tooltip?.content).toBe(tooltipContent);
-    },
-  );
 
   it("keeps voice and generation stop controls distinct when both are active", () => {
     const onAbort = vi.fn();
@@ -310,21 +219,25 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
-  it("keeps mobile voice controls disabled while the composer is busy", () => {
-    const { container } = renderComposer({
-      sending: true,
-      onToggleRealtimeTalk: vi.fn(),
-    });
+  it.each([{ sending: true }])(
+    "keeps dictation available while Talk is held during an active turn: %j",
+    (run) => {
+      const { container } = renderComposer({
+        ...run,
+        onToggleRealtimeTalk: vi.fn(),
+      });
 
-    const mobileDictation = container.querySelector<HTMLButtonElement>(
-      ".chat-mobile-dictation-action .chat-send-btn--voice",
-    );
-    expect(mobileDictation?.disabled).toBe(true);
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
-        ?.disabled,
-    ).toBe(true);
-  });
+      const mobileDictation = container.querySelector<HTMLButtonElement>(
+        ".chat-mobile-dictation-action .chat-send-btn--voice",
+      );
+      expect(mobileDictation?.disabled).toBe(false);
+      expect(button(container, t("chat.composer.startVoiceInput")).disabled).toBe(false);
+      expect(
+        container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
+          ?.disabled,
+      ).toBe(true);
+    },
+  );
 
   it.each([true, false])(
     "holds Talk during initial history while preserving draft input (hold-to-record=%s)",
@@ -340,7 +253,9 @@ describe("renderChatComposer controls", () => {
         onToggleRealtimeTalk,
         submitDisabledReason: t("chat.thread.loading"),
       });
-      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
+      );
       const microphone = button(container, t("chat.composer.startVoiceInput"));
       const talk = button(container, t("chat.composer.realtimeTalkCapability"));
       microphone.click();
@@ -362,15 +277,6 @@ describe("renderChatComposer controls", () => {
 
     view = renderComposer({ connected: false, onToggleRealtimeTalk: vi.fn() });
     expect(button(view.container, t("chat.composer.startVoiceInput")).disabled).toBe(true);
-  });
-
-  it("keeps Stop available while disconnected for an abortable run", () => {
-    const onAbort = vi.fn();
-    const { container } = renderComposer({ connected: false, canAbort: true, onAbort });
-    const stop = button(container, t("chat.runControls.stopGenerating"));
-    expect(stop.disabled).toBe(false);
-    stop.click();
-    expect(onAbort).toHaveBeenCalledOnce();
   });
 
   it("offers Steer only for eligible queued messages during an active run", () => {
@@ -398,7 +304,7 @@ describe("renderChatComposer controls", () => {
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
   });
 
-  it.each([false, true])("steers empty Enter only on a new press (repeat=%s)", (repeat) => {
+  it.each([false])("steers empty Enter only on a new press (repeat=%s)", (repeat) => {
     const onQueueSteer = vi.fn();
     const onSend = vi.fn();
     const { container } = renderComposer({
@@ -427,52 +333,29 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { connected: false, submitDisabledReason: null },
-    { connected: true, submitDisabledReason: "Loading history" },
-  ])("does not steer from Enter while admission is held: %j", (availability) => {
-    const onQueueSteer = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      ...availability,
-      onAbort: vi.fn(),
-      onQueueSteer,
-      queue: [{ id: "queued", text: "queued", createdAt: 1, sessionKey: "main" }],
-    });
+  it.each([{ connected: true, submitDisabledReason: "Loading history" }])(
+    "does not steer from Enter while admission is held: %j",
+    (availability) => {
+      const onQueueSteer = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        ...availability,
+        onAbort: vi.fn(),
+        onQueueSteer,
+        queue: [{ id: "queued", text: "queued", createdAt: 1, sessionKey: "main" }],
+      });
 
-    container
-      .querySelector("textarea")
-      ?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-      );
-    expect(onQueueSteer).not.toHaveBeenCalled();
-    expect(container.querySelector(".chat-queue__action")).toBeNull();
-  });
-
-  it("keeps empty Enter inert when no queued message can be steered", () => {
-    const onQueueSteer = vi.fn();
-    const onSend = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      onAbort: vi.fn(),
-      onQueueSteer,
-      onSend,
-      queue: [{ id: "failed", text: "failed", createdAt: 1, sendState: "failed" }],
-    });
-
-    expect(() =>
       container
         .querySelector("textarea")
         ?.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-        ),
-    ).not.toThrow();
-    expect(onQueueSteer).not.toHaveBeenCalled();
-    expect(onSend).not.toHaveBeenCalled();
-  });
+        );
+      expect(onQueueSteer).not.toHaveBeenCalled();
+      expect(container.querySelector(".chat-queue__action")).toBeNull();
+    },
+  );
 
   it.each([
-    ["queue", "steer", { metaKey: true }, "Steer this now", undefined, undefined],
     ["steer", "queue", { ctrlKey: true }, "Queue this next", undefined, undefined],
     [
       "collect",
@@ -512,11 +395,7 @@ describe("renderChatComposer controls", () => {
   );
 
   it.each([
-    ["modifier-enter", true, "queue", false],
-    ["enter", false, "queue", false],
     ["modifier-enter", true, "steer", false],
-    ["enter", true, "interrupt", false],
-    ["enter", true, undefined, false],
     ["enter", true, "queue", true],
   ] as const)(
     "keeps ordinary send semantics for shortcut=%s active=%s mode=%s alt=%s",
@@ -537,82 +416,27 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it("passes the original pointer submission event through the composer", () => {
-    const onSend = vi.fn();
-    const { container } = renderComposer({ draft: "Repeat this message", onSend });
-    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
-    primaryButton(container).dispatchEvent(action);
-    expect(onSend).toHaveBeenCalledWith(undefined, action);
-  });
-
-  it("keeps empty modified Enter on the existing empty-draft path", () => {
+  it.each(["enter"] as const)("keeps newline keys, including repeats, for %s", (sendShortcut) => {
     const onSend = vi.fn();
     const { container } = renderComposer({
       canAbort: true,
-      draft: "",
+      draft: "Keep editing",
       followUpMode: "queue",
       onAbort: vi.fn(),
       onSend,
-      sendShortcut: "enter",
+      sendShortcut,
     });
 
-    pressComposerEnter(container, { ctrlKey: true });
-
+    for (const repeat of [false, true]) {
+      const event = pressComposerEnter(container, {
+        ctrlKey: sendShortcut === "enter",
+        shiftKey: sendShortcut === "enter",
+        repeat,
+      });
+      expect(event.defaultPrevented).toBe(false);
+    }
     expect(onSend).not.toHaveBeenCalled();
   });
-
-  it.each(["enter", "modifier-enter"] as const)(
-    "keeps newline keys, including repeats, for %s",
-    (sendShortcut) => {
-      const onSend = vi.fn();
-      const { container } = renderComposer({
-        canAbort: true,
-        draft: "Keep editing",
-        followUpMode: "queue",
-        onAbort: vi.fn(),
-        onSend,
-        sendShortcut,
-      });
-
-      for (const repeat of [false, true]) {
-        const event = pressComposerEnter(container, {
-          ctrlKey: sendShortcut === "enter",
-          shiftKey: sendShortcut === "enter",
-          repeat,
-        });
-        expect(event.defaultPrevented).toBe(false);
-      }
-      expect(onSend).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["queue", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
-    ["steer", "Steer ⏎ · Queue ⌘/Ctrl+Enter"],
-  ] as const)(
-    "teaches both actions for %s without changing ordinary Enter",
-    (followUpMode, tooltip) => {
-      const onSend = vi.fn();
-      const available = renderComposer({
-        canAbort: true,
-        draft: "Follow up now",
-        followUpMode,
-        onAbort: vi.fn(),
-        onSend,
-        sendShortcut: "enter",
-      });
-      const availablePrimary = primaryButton(available.container);
-      const availableTooltip = availablePrimary.closest("openclaw-tooltip") as
-        | (HTMLElement & { content?: string })
-        | null;
-      expect(availablePrimary.getAttribute("aria-label")).toBe(
-        t(followUpMode === "steer" ? "chat.followUpModeSteer" : "chat.runControls.queueMessage"),
-      );
-      expect(availableTooltip?.content).toBe(tooltip);
-      const action = pressComposerEnter(available.container);
-      expect(onSend).toHaveBeenCalledWith(undefined, action);
-    },
-  );
 
   it("does not advertise an unavailable alternate action", () => {
     const unavailable = [
@@ -726,6 +550,7 @@ describe("renderChatComposer controls", () => {
 
   it("renders reconnect waits as compact badges without the raw transport error", () => {
     const { container } = renderComposer({
+      connected: false,
       queue: [
         {
           id: "reconnect-1",

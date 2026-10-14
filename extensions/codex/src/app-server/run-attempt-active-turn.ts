@@ -6,9 +6,13 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  composeSessionTranscriptWriteAssertion,
+  hasPromptImageInput,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
@@ -167,6 +171,7 @@ export function activateCodexAttemptTurn(
     activeTurnId,
     {
       agentHookContext: hookContext,
+      hasDeliveredFinalSourceReply: () => toolBridge.telemetry.finalSourceReplyDelivered === true,
       initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
@@ -177,19 +182,22 @@ export function activateCodexAttemptTurn(
           toolBridge.availableTools.some((tool) => tool.name === "message")),
       onAsyncDelivery: async (delivery) => {
         return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
-          params:
-            prepareReplyMedia && projectionParams.onBlockReply
-              ? {
-                  ...projectionParams,
-                  onBlockReply: async (payload, options) => {
-                    const prepared = await prepareReplyMedia({ kind: "payload", payload });
-                    if (prepared.kind !== "payload") {
-                      throw new Error("Reply media preparation returned the wrong result kind");
-                    }
+          params: projectionParams.onBlockReply
+            ? {
+                ...projectionParams,
+                onBlockReply: async (payload, options) => {
+                  const prepared = prepareReplyMedia
+                    ? await prepareReplyMedia({ kind: "payload", payload })
+                    : { kind: "payload" as const, payload };
+                  if (prepared.kind !== "payload") {
+                    throw new Error("Reply media preparation returned the wrong result kind");
+                  }
+                  if (!toolBridge.telemetry.finalSourceReplyDelivered) {
                     await projectionParams.onBlockReply?.(prepared.payload, options);
-                  },
-                }
-              : projectionParams,
+                  }
+                },
+              }
+            : projectionParams,
           cwd: effectiveCwd,
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
@@ -315,10 +323,12 @@ export function activateCodexAttemptTurn(
       state.activeLocalProjections -= 1;
     }
   };
+  const isSteeringAvailable = () =>
+    !state.completed && !state.terminalTurnNotificationQueued && !runAbortController.signal.aborted;
   const assertSteeringActive = () => {
     connection.assertCurrent();
     runAbortController.signal.throwIfAborted();
-    if (state.completed || state.terminalTurnNotificationQueued) {
+    if (!isSteeringAvailable()) {
       throw new Error("codex app-server turn is no longer accepting steering");
     }
   };
@@ -411,11 +421,10 @@ export function activateCodexAttemptTurn(
       const messages = activeProjector.buildSteeringTranscriptPrefix();
       if (params.sessionTarget && messages.length > 0) {
         await codexTranscriptMirrorRuntime.mirror({
-          // Transcript SDK commit callback must remain synchronous.
-          assertCurrent: () => {
-            connection.assertLegacyCurrent();
-            assertSteeringActive();
-          },
+          assertCurrent: composeSessionTranscriptWriteAssertion([
+            connection.assertLegacyCurrent,
+            createNativeSessionBindingScope(assertSteeringActive).assertLegacyCurrent,
+          ]),
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,
           sessionId: params.sessionId,
@@ -508,10 +517,7 @@ export function activateCodexAttemptTurn(
   };
   const messageInjection = {
     version: 2 as const,
-    isAvailable: () =>
-      !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      !runAbortController.signal.aborted,
+    isAvailable: isSteeringAvailable,
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
@@ -630,9 +636,7 @@ export function activateCodexAttemptTurn(
             resourceState.turnRoute === route &&
             route?.signal.aborted === false &&
             turnRuntime.turnIdRef.current === activeTurnId &&
-            !state.completed &&
-            !state.terminalTurnNotificationQueued &&
-            !runAbortController.signal.aborted,
+            isSteeringAvailable(),
         );
       }
       params.replyOperation?.attachBackend(handle);

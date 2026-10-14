@@ -7,7 +7,7 @@ export async function readPrivateNativeHostFile(filePath: string, executable: bo
   const directory = await root(path.dirname(resolved));
   await using file = await directory.open(path.basename(resolved), { hardlinks: "allow" });
   if (file.realPath !== resolved) {
-    throw new Error("non-canonical native host file path");
+    throw new Error("unresolved native host file path");
   }
   const uid = process.getuid?.();
   if (uid !== undefined && file.stat.uid !== uid) {

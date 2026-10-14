@@ -8,6 +8,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as gatewayLock from "../infra/gateway-lock.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -108,6 +109,59 @@ afterAll(() => {
 });
 
 describe("offline sessions cleanup harness ownership", () => {
+  it("refuses an owned store, permits preview, and cleans only after exclusive admission", async () => {
+    await withOpenClawTestState({ label: "cleanup-maintenance-owner" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        plugins: { enabled: false },
+        session: {
+          maintenance: {
+            mode: "warn",
+            pruneAfter: "1d",
+            preserveRecent: false,
+            maxDiskBytes: false,
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      const scope = { agentId: "main", sessionKey: "agent:main:hook:owned-cleanup", storePath };
+      const entry = { sessionId: "owned-cleanup", updatedAt: Date.now() - 40 * 86_400_000 };
+      await replaceSessionEntry(scope, entry);
+      const runtime = createNonExitingRuntime();
+      const output = vi.spyOn(runtime, "writeJson").mockImplementation(() => {});
+      const acquire = gatewayLock.acquireGatewayLock;
+      vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation((opts) =>
+        acquire({ ...opts, timeoutMs: 0 }),
+      );
+      const owner = await acquire({ allowInTests: true, port: 18789, timeoutMs: 0 });
+      if (!owner) {
+        throw new Error("expected Gateway owner");
+      }
+      try {
+        await expect(
+          sessionsCleanupCommand({ store: storePath, enforce: true }, runtime),
+        ).rejects.toThrow(
+          `OpenClaw process (PID ${process.pid}) owns this state; run Gateway-delegated cleanup without --store, or stop the Gateway`,
+        );
+        expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject(entry);
+        await sessionsCleanupCommand(
+          { store: storePath, enforce: true, dryRun: true, json: true },
+          runtime,
+        );
+        expect(output).toHaveBeenCalledWith(
+          expect.objectContaining({ dryRun: true, wouldMutate: true }),
+          2,
+        );
+        expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject(entry);
+      } finally {
+        await owner.release();
+      }
+      await sessionsCleanupCommand({ store: storePath, enforce: true, json: true }, runtime);
+      expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toBeUndefined();
+    });
+  });
+
   it.each([
     { label: "recorded", metadata: "recorded", activation: "enabled" },
     { label: "legacy", metadata: "legacy", activation: "enabled" },

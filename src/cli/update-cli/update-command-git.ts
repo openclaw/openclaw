@@ -9,17 +9,16 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
-import {
-  DEV_BRANCH,
-  resolveDevUpstreamRefs,
-  type UpdateChannel,
-} from "../../infra/update-channels.js";
+import { DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
 import {
   resolveDevUpdateTargetRevision,
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
 import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
+import {
+  readGitUpdateFetchTarget,
+  resolveGitUpdateTrackingRef,
+} from "../../infra/update-git-metadata.js";
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
 import {
   createGlobalInstallEnv,
@@ -37,7 +36,6 @@ import {
   normalizeFallbackFailureReason,
   reportUpdateStepCompletion,
 } from "../../infra/update-runner-command.js";
-import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import {
   readBranchName,
   readGitTargetSchemaVersions,
@@ -50,6 +48,7 @@ import type {
   UpdateRunResult,
   UpdateStepProgress,
 } from "../../infra/update-runner-types.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -64,6 +63,7 @@ import {
 } from "./shared.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
+import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
 
 export async function retireStandaloneGitWrapper(params: {
@@ -93,7 +93,7 @@ export async function retireStandaloneGitWrapper(params: {
 
     let stat;
     try {
-      stat = await fs.lstat(wrapperPath);
+      stat = await fs.lstat(wrapperPath, { bigint: true });
     } catch (error) {
       if (hasNodeErrorCode(error, "ENOENT")) {
         continue;
@@ -103,8 +103,8 @@ export async function retireStandaloneGitWrapper(params: {
     if (
       !stat.isFile() ||
       stat.isSymbolicLink() ||
-      stat.size > 4096 ||
-      (platform !== "win32" && (stat.mode & 0o111) === 0)
+      stat.size > 4096n ||
+      (platform !== "win32" && (stat.mode & 0o111n) === 0n)
     ) {
       continue;
     }
@@ -135,18 +135,16 @@ export async function retireStandaloneGitWrapper(params: {
       continue;
     }
     try {
-      if (process.platform === "freebsd") {
-        await createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
-          wrapperPath,
-        );
-      }
+      await createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
+        wrapperPath,
+      );
       // Filesystem and pkg reads can outlive this wrapper or the update's authority.
       const currentFile = await readRegularFile({ filePath: wrapperPath, maxBytes: 4096 });
-      const current = await fs.lstat(wrapperPath);
+      const current = await fs.lstat(wrapperPath, { bigint: true });
       if (
         !current.isFile() ||
-        !sameFileIdentity(stat, currentFile.stat) ||
-        !sameFileIdentity(currentFile.stat, current) ||
+        !sameFileIdentity(stat, currentFile.exactIdentity) ||
+        !sameFileIdentity(currentFile.exactIdentity, current) ||
         currentFile.buffer.toString("utf8") !== contents
       ) {
         throw new Error("The installer wrapper changed before retirement.");
@@ -196,53 +194,37 @@ async function listGitRemotes(
 }
 
 async function resolveCurrentRemoteBranchRevision(
-  params: GitInspectionParams & { candidate: string },
+  params: GitInspectionParams & { useDevDefault: boolean },
 ): Promise<RemoteRevisionResolution> {
-  const tracking = await runReadOnlyGitCommand({
-    ...params,
-    args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", params.candidate],
-  });
-  const trackingRef = tracking?.code === 0 ? tracking.stdout.trim() : "";
-  if (!trackingRef) {
+  const readGit = async (...args: string[]) => {
+    const result = await runReadOnlyGitCommand({ ...params, args });
+    return result?.code === 0 ? result.stdout.trim() || null : null;
+  };
+  const source = await readGitUpdateFetchTarget(readGit, DEV_BRANCH, params.useDevDefault);
+  if (!source) {
     return { status: "missing" };
   }
-  const remoteList = await listGitRemotes(params);
-  if (remoteList.metadataUnreadable) {
-    return { status: "unreadable", reason: remoteList.metadataUnreadable };
+  const trackingRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
+  const localRevision = trackingRef ? await readGit("rev-parse", trackingRef) : null;
+  if (source.remote === ".") {
+    return localRevision ? { status: "ok", revision: localRevision } : { status: "missing" };
   }
-  const remote = (remoteList.remotes ?? [])
-    .toSorted((left, right) => right.length - left.length)
-    .find((value) => trackingRef.startsWith(`${value}/`));
-  if (!remote) {
-    return {
-      status: "unreadable",
-      reason: `could not resolve remote ownership for ${params.candidate}`,
-    };
-  }
-  const branch = trackingRef.slice(remote.length + 1);
-  const remoteRef = `refs/heads/${branch}`;
-  const remoteResult = await runReadOnlyGitCommand({
-    ...params,
-    args: ["ls-remote", "--exit-code", remote, remoteRef],
-  });
-  const remoteRevision =
-    remoteResult?.code === 0 ? readExactRemoteRevision(remoteResult.stdout, remoteRef) : null;
+  const remoteLabel = `${source.remote}/${source.mergeRef.replace(/^refs\/heads\//u, "")}`;
+  const remoteResult = await readGit("ls-remote", "--exit-code", source.remote, source.mergeRef);
+  const remoteRevision = remoteResult
+    ? readExactRemoteRevision(remoteResult, source.mergeRef)
+    : null;
   if (!remoteRevision) {
     return {
       status: "unreadable",
-      reason: `could not inspect current remote target ${remote}/${branch}`,
+      reason: `could not inspect current remote target ${remoteLabel}`,
     };
   }
-  const local = await runReadOnlyGitCommand({
-    ...params,
-    args: ["rev-parse", params.candidate],
-  });
-  const localRevision = local?.code === 0 ? local.stdout.trim() : "";
   return localRevision === remoteRevision
     ? { status: "ok", revision: remoteRevision }
     : {
         status: "unreadable",
-        reason: `cached ${trackingRef} differs from current remote ${remote}/${branch}`,
+        reason: `cached ${trackingRef?.replace(/^refs\/remotes\//u, "") ?? "Git target"} differs from current remote ${remoteLabel}`,
         failureCode: "target-git-cache-stale",
       };
 }
@@ -272,11 +254,7 @@ function readRemoteTagRevisions(stdout: string): Map<string, string> | null {
     if (!match) {
       return null;
     }
-    const tag = match[1];
-    if (!tag) {
-      return null;
-    }
-    (match[2] ? peeled : direct).set(tag, sha);
+    (match[2] ? peeled : direct).set(match[1]!, sha);
   }
   return new Map([...direct, ...peeled]);
 }
@@ -356,26 +334,16 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     revision = selected;
   } else {
     const branch = await readBranchName(runTargetCommand, params.root, params.timeoutMs);
-    const needsCheckoutMain = branch !== DEV_BRANCH;
-    let remoteBranchRefs: string[] = [];
-    if (needsCheckoutMain) {
-      const { remotes = [] } = await listGitRemotes({ runCommand, ...params });
-      remoteBranchRefs = remotes.map((remote) => `refs/remotes/${remote}/${DEV_BRANCH}`);
-    }
-    for (const candidate of resolveDevUpstreamRefs(needsCheckoutMain, remoteBranchRefs)) {
-      const resolved = await resolveCurrentRemoteBranchRevision({
-        runCommand,
-        root: params.root,
-        timeoutMs: params.timeoutMs,
-        candidate,
-      });
-      if (resolved.status === "ok") {
-        revision = resolved.revision;
-        break;
-      }
-      if (resolved.status === "unreadable") {
-        return { metadataUnreadable: resolved.reason, failureCode: resolved.failureCode };
-      }
+    const resolved = await resolveCurrentRemoteBranchRevision({
+      runCommand,
+      root: params.root,
+      timeoutMs: params.timeoutMs,
+      useDevDefault: branch !== DEV_BRANCH,
+    });
+    if (resolved.status === "ok") {
+      revision = resolved.revision;
+    } else if (resolved.status === "unreadable") {
+      return { metadataUnreadable: resolved.reason, failureCode: resolved.failureCode };
     }
   }
   if (!revision) {
@@ -391,11 +359,17 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     ? target.schemaVersions
       ? { schemaVersions: target.schemaVersions }
       : {}
-    : { metadataUnreadable: target.reason };
+    : {
+        metadataUnreadable: target.reason,
+        ...(target.reason.startsWith("git show ")
+          ? { failureCode: "target-git-cache-stale" as const }
+          : {}),
+      };
 }
 
 export async function updateGitInstall(params: {
   root: string;
+  restart?: boolean;
   sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
   installKind: "git" | "package" | "unknown";
@@ -423,9 +397,8 @@ export async function updateGitInstall(params: {
   const assertCurrent = params.assertCurrent;
   let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-  const pkgOwnership = createFreeBsdPkgOwnershipInspection(effectiveTimeout);
+  const pkgOwnership = createSystemPackageOwnershipInspection(effectiveTimeout);
   await pkgOwnership.assertUnowned(updateRoot);
-  const installEnv = await createGlobalInstallEnv();
   const installTarget = params.switchToGit
     ? await resolveGlobalInstallTarget({
         manager: await resolveGlobalManager({
@@ -440,25 +413,30 @@ export async function updateGitInstall(params: {
         pkgOwnership,
       })
     : null;
+  const installEnv = await createGlobalInstallEnv(undefined, installTarget ?? {});
   const npmLifecycleGate = installTarget
     ? resolveNpmLifecyclePolicyGate(installTarget)
     : { policy: null, error: null };
+
+  const failed = async (
+    reason: string,
+    steps: UpdateRunResult["steps"],
+    recovery = readOriginalUpdateRecovery(params, effectiveTimeout),
+  ): Promise<UpdateRunResult> => ({
+    status: "error",
+    mode: "git",
+    root: params.root,
+    reason,
+    recovery: await recovery,
+    steps,
+    durationMs: Date.now() - params.startedAt,
+  });
 
   // Package-to-Git updates must settle package-manager policy before cloning or
   // updating the checkout; carry this exact decision into the later install.
   if (npmLifecycleGate.error) {
     defaultRuntime.error(npmLifecycleGate.error);
-    return {
-      status: "error",
-      mode: "git",
-      root: params.root,
-      reason: "npm-lifecycle-policy-preflight",
-      recovery: await (params.installKind === "git"
-        ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
-        : verifyPackageUpdateRecovery(params.root)),
-      steps: [],
-      durationMs: Date.now() - params.startedAt,
-    };
+    return failed("npm-lifecycle-policy-preflight", []);
   }
 
   const checkSnapshot = async () => {
@@ -493,15 +471,11 @@ export async function updateGitInstall(params: {
   };
   const snapshotBeforeClone = params.switchToGit ? await checkSnapshot() : undefined;
   if (snapshotBeforeClone && snapshotBeforeClone.exitCode !== 0) {
-    return {
-      status: "error",
-      mode: "git",
-      root: params.root,
-      reason: "snapshot-capacity-insufficient",
-      steps: [snapshotBeforeClone],
-      recovery: await verifyPackageUpdateRecovery(params.root),
-      durationMs: Date.now() - params.startedAt,
-    };
+    return failed(
+      "snapshot-capacity-insufficient",
+      [snapshotBeforeClone],
+      verifyPackageUpdateRecovery(params.root),
+    );
   }
 
   const previousPackage = installTarget
@@ -533,16 +507,11 @@ export async function updateGitInstall(params: {
         progress: params.progress,
         channel: params.channel,
         devTarget: params.devTarget,
-        beforeGitMutation:
-          process.platform === "freebsd"
-            ? async (target) => {
-                await params.beforeGitMutation(target);
-                await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(
-                  updateRoot,
-                );
-                params.assertCurrent?.();
-              }
-            : params.beforeGitMutation,
+        beforeGitMutation: async (target) => {
+          await params.beforeGitMutation(target);
+          await createSystemPackageOwnershipInspection(effectiveTimeout).assertUnowned(updateRoot);
+          params.assertCurrent?.();
+        },
         inspectGitTarget: (target) => params.inspectGitTarget(target, installTarget ?? undefined),
         beforeGitStaging: params.switchToGit
           ? undefined
@@ -597,7 +566,9 @@ export async function updateGitInstall(params: {
             // Exposure must use the clone owner's pinned destination, not a
             // caller alias that transport may have retargeted meanwhile.
             updateRoot = targetRoot;
-            await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(updateRoot);
+            await createSystemPackageOwnershipInspection(effectiveTimeout).assertUnowned(
+              updateRoot,
+            );
             stagedUpdateResult = await runUpdate(stagingRoot, publish, storageRoot);
             if (stagedUpdateResult.root === stagingRoot) {
               stagedUpdateResult = {
@@ -613,17 +584,10 @@ export async function updateGitInstall(params: {
     updateRoot = checkout?.checkoutDir ?? updateRoot;
 
     if (cloneStep && cloneStep.exitCode !== 0) {
-      return {
-        status: "error",
-        mode: "git",
-        root: params.root,
-        reason: "git-clone-failed",
-        recovery: await (params.installKind === "git"
-          ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
-          : verifyPackageUpdateRecovery(params.root)),
-        steps: [...(snapshotBeforeClone ? [snapshotBeforeClone] : []), cloneStep],
-        durationMs: Date.now() - params.startedAt,
-      };
+      return await failed("git-clone-failed", [
+        ...(snapshotBeforeClone ? [snapshotBeforeClone] : []),
+        cloneStep,
+      ]);
     }
 
     const updateResult = stagedUpdateResult ?? (await runUpdate(updateRoot));

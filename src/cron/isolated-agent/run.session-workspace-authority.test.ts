@@ -10,7 +10,7 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import { hasLiveWorktreeRunLease } from "../../agents/worktrees/run-lease.js";
+import { hasLiveWorktreeRunLease } from "../../agents/worktrees/run-lease.test-support.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
@@ -228,6 +228,11 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
         }
         const result = await read.execute("scheduled-read", { path: "sentinel.txt" });
         reads.push(JSON.stringify(result));
+        if (worktree) {
+          await expect(
+            read.execute("outside", { path: path.join(foreignWorkspace, "sentinel.txt") }),
+          ).rejects.toThrow(/outside|escapes sandbox root/i);
+        }
         return { payloads: [{ text: "Read complete" }], meta: { agentMeta: {} } };
       });
     });
@@ -257,7 +262,8 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
         expect(reads).toEqual([]);
         expect(execution.getJob(job.id)?.state.lastRunStatus).toBe("error");
       } else {
-        expect(execution.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+        const result = execution.getJob(job.id)?.state;
+        expect(result?.lastRunStatus, result?.lastError).toBe("ok");
         expect(reads).toHaveLength(1);
         expect(reads[0]).toContain(scenario === "operator" ? "FOREIGN_WORKSPACE" : "OWN_WORKSPACE");
       }

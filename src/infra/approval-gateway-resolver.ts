@@ -129,18 +129,19 @@ export async function resolveApprovalOverGateway(
     (channelLabel
       ? `${channelLabel} approval (${senderId ?? "unknown"})`
       : `Approval (${senderId ?? "unknown"})`);
+  const canonicalResolveParams = (kind: ChannelApprovalKind): ApprovalResolveParams => ({
+    id: approvalId,
+    kind,
+    decision: params.decision,
+    ...(reviewer ? { reviewer } : {}),
+  });
 
   const canonicalGatewayRuntime = (params as CanonicalResolveApprovalOverGatewayParams)
     .gatewayRuntime;
   if (canonicalGatewayRuntime && canonicalKind) {
     return await canonicalGatewayRuntime.request(
       "approval.resolve",
-      {
-        id: approvalId,
-        kind: canonicalKind,
-        decision: params.decision,
-        ...(reviewer ? { reviewer } : {}),
-      },
+      canonicalResolveParams(canonicalKind),
       { clientDisplayName },
     );
   }
@@ -152,12 +153,7 @@ export async function resolveApprovalOverGateway(
     ) => Promise<T>;
   }) => {
     if (hasCanonicalKind) {
-      const resolveParams: ApprovalResolveParams = {
-        id: approvalId,
-        kind: canonicalKind,
-        decision: params.decision,
-        ...(reviewer ? { reviewer } : {}),
-      };
+      const resolveParams = canonicalResolveParams(canonicalKind);
       return await gatewayClient.request<ApprovalResolveResult>("approval.resolve", resolveParams);
     }
 

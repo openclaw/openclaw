@@ -2,7 +2,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 
 type ChatPositionMarker = {
@@ -46,9 +46,9 @@ export function projectChatPositions(
   };
   const group = (item: MessageGroup, rowKey: string) => {
     if (
-      isInterSessionGroup(item) &&
+      isSessionActivityGroup(item) &&
       !searchActive &&
-      !expandedWork.get("inter-session:" + item.key)
+      !expandedWork.get("session-activity:" + item.key)
     ) {
       return;
     }

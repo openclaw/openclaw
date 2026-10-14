@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../src/infra/provider-usage.shared.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { authReads, type ModelAuthRequest } from "./model-auth-request-state.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
@@ -15,13 +16,11 @@ export function canonicalModelAuthProviderId(provider: string): string {
 
 /** API-key-only providers have no scheduled expiry for the dashboard to monitor. */
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
-  if (p.status === "missing") {
-    return true;
-  }
-  if (!Array.isArray(p.profiles)) {
-    return false;
-  }
-  return p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token");
+  return (
+    p.status === "missing" ||
+    (Array.isArray(p.profiles) &&
+      p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token"))
+  );
 }
 
 const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] as const;
@@ -90,6 +89,9 @@ export async function loadModelAuthStatus(
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
   opts.signal?.throwIfAborted();
+  if (!hasOperatorReadAccess(client.auth)) {
+    return EMPTY_AUTH_STATUS;
+  }
   const params = {
     ...(opts?.refresh ? { refresh: true } : {}),
     agentId: opts.agentId,

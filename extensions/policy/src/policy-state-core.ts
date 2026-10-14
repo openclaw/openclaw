@@ -82,30 +82,19 @@ export function scanPolicyModelRefs(
 export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetworkEvidence[] {
   return (
     [
-      ["browser-private-network", ["browser", "ssrfPolicy", "dangerouslyAllowPrivateNetwork"]],
-      ["browser-private-network-legacy", ["browser", "ssrfPolicy", "allowPrivateNetwork"]],
-      [
-        "web-fetch-private-network",
-        ["tools", "web", "fetch", "ssrfPolicy", "dangerouslyAllowPrivateNetwork"],
-      ],
-      [
-        "web-fetch-private-network-legacy",
-        ["tools", "web", "fetch", "ssrfPolicy", "allowPrivateNetwork"],
-      ],
+      ["browser-private-network", "browser/ssrfPolicy/dangerouslyAllowPrivateNetwork"],
+      ["browser-private-network-legacy", "browser/ssrfPolicy/allowPrivateNetwork"],
+      ["web-fetch-private-network", "tools/web/fetch/ssrfPolicy/dangerouslyAllowPrivateNetwork"],
+      ["web-fetch-private-network-legacy", "tools/web/fetch/ssrfPolicy/allowPrivateNetwork"],
       [
         "web-fetch-rfc2544-benchmark-range",
-        ["tools", "web", "fetch", "ssrfPolicy", "allowRfc2544BenchmarkRange"],
+        "tools/web/fetch/ssrfPolicy/allowRfc2544BenchmarkRange",
       ],
-      [
-        "web-fetch-ipv6-unique-local-range",
-        ["tools", "web", "fetch", "ssrfPolicy", "allowIpv6UniqueLocalRange"],
-      ],
+      ["web-fetch-ipv6-unique-local-range", "tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange"],
     ] as const
   ).flatMap(([id, path]) => {
-    const value = readBooleanPath(cfg, path);
-    return value === undefined
-      ? []
-      : [{ id, source: `oc://openclaw.config/${path.join("/")}`, value }];
+    const value = readBooleanPath(cfg, path.split("/"));
+    return value === undefined ? [] : [{ id, source: `oc://openclaw.config/${path}`, value }];
   });
 }
 

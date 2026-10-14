@@ -190,10 +190,11 @@ function* parseContentDispositionParameters(header: string): Generator<{
     if (separator > 0) {
       yield {
         name: parameter.slice(0, separator).trim().toLowerCase(),
+        // Apostrophes are token characters, not HTTP quoted-string delimiters.
         value: parameter
           .slice(separator + 1)
           .trim()
-          .replace(/^["']|["']$/g, ""),
+          .replace(/^"|"$/g, ""),
       };
     }
   }

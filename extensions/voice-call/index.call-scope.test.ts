@@ -205,6 +205,7 @@ describe("voice-call active-call tool scope", () => {
     { action: "initiate_call", message: "start" },
     { action: "send_dtmf", callId: "bound", digits: "1" },
     { action: "speak_to_user", callId: "bound", message: "speak" },
+    { action: "steer_call", callId: "bound", message: "steer" },
   ])("rejects every bound-call action except end_call ($action)", async (params) => {
     const { tool } = registerBoundTool();
     const scopedParams = {

@@ -18,12 +18,11 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 
 type CatalogDecisions = ReturnType<typeof createModelCatalogDecisions>;
 
 /** Captures alternative runtime metadata while readiness stays with the prepared catalog owner. */
-export async function prepareModelPickerRuntimeChoices(params: {
+export function prepareModelPickerRuntimeChoices(params: {
   cfg: OpenClawConfig;
   agentId: string;
   entry: ModelCatalogEntry;
@@ -37,7 +36,7 @@ export async function prepareModelPickerRuntimeChoices(params: {
     evaluation: ModelAuthAvailabilityEvaluation,
     runtimeId: string,
   ) => ModelChoice;
-}): Promise<() => ModelRuntimeChoice[]> {
+}): () => ModelRuntimeChoice[] {
   const {
     cfg,
     agentId,
@@ -56,84 +55,82 @@ export async function prepareModelPickerRuntimeChoices(params: {
     evaluation: baseEvaluation,
     pluginRegistry: decisions.pluginRegistry,
   });
-  const availableRuntimes = await decisions.runtimeChoices(entry, variants);
-  const alternatives = await settleCurrentReadPreparations(
-    requestedRuntimes
-      .filter((runtimeId) => runtimeId !== (selected?.id ?? "openclaw"))
-      .map(async (runtimeId) => {
-        const selectable =
-          resolveCompatibleAgentRuntimeForProvider({
-            provider: entry.provider,
-            runtime: runtimeId,
-            cfg,
-          }) === runtimeId;
-        const { entry: runtimeEntry, variants: runtimeVariants } = selectModelCatalogRuntimeEntry({
-          entry,
-          routeVariants: variants,
-          runtimeId,
-        });
-        const runtimeView = createModelCatalogView({
+  const alternatives = requestedRuntimes
+    .filter((runtimeId) => runtimeId !== (selected?.id ?? "openclaw"))
+    .map((runtimeId) => {
+      const selectable =
+        resolveCompatibleAgentRuntimeForProvider({
+          provider: entry.provider,
+          runtime: runtimeId,
           cfg,
-          catalog: [runtimeEntry],
-          routeVariants: runtimeVariants,
-        });
-        // Authorization keeps every observed route; metadata donors stay runtime-specific.
-        const runtimeHost = await decisions.evaluateEntry(runtimeEntry, variants, runtimeId);
-        const runtimeRegistered =
-          runtimeId === "openclaw" ||
-          decisions.pluginRegistry?.agentHarnesses.some(
-            ({ harness }) => harness.id === runtimeId,
-          ) ||
-          listCliRuntimeModelBackendBindings().some(
-            (binding) =>
-              binding.runtime === runtimeId &&
-              normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
-          );
-        return () => {
-          const evaluation = evaluateNative(runtimeEntry, runtimeHost, runtimeId);
-          const projected = runtimeView.readProjection(
-            runtimeEntry,
-            resolveLogicalModelCatalogEntryState({
-              evaluation,
-              routePolicy: openAIModelCatalogRoutePolicy,
-            }).routeProjection,
-          ).runtimeEntry;
-          const {
-            id: _id,
-            name: _name,
-            provider: _provider,
-            alias: _alias,
-            tags: _tags,
-            apiKeySupported: _apiKeySupported,
-            runtimeChoices: _runtimeChoices,
-            agentRuntime,
-            ...capabilities
-          } = projectPublic(projected, evaluation, runtimeId);
-          const runtime = { id: runtimeId, source: "model" as const, ...agentRuntime };
-          if (!selectable || availableRuntimes?.includes(runtimeId) !== true) {
-            const compatibleRuntimes = evaluation.selectedRoute?.runtimePolicy?.compatibleIds;
-            const unavailableReason =
-              !selectable ||
-              (decisions.pluginRegistry !== undefined && !runtimeRegistered) ||
-              (compatibleRuntimes !== undefined && !compatibleRuntimes.includes(runtimeId))
-                ? "unsupported-runtime"
-                : evaluation.unavailableReason;
-            return {
-              agentRuntime: runtime,
-              available: false,
-              ...(unavailableReason ? { unavailableReason } : {}),
-              ...(evaluation.unavailableUntil === undefined
-                ? {}
-                : { unavailableUntil: evaluation.unavailableUntil }),
-            } satisfies ModelRuntimeChoice;
-          }
+        }) === runtimeId;
+      const { entry: runtimeEntry, variants: runtimeVariants } = selectModelCatalogRuntimeEntry({
+        entry,
+        routeVariants: variants,
+        runtimeId,
+      });
+      const runtimeView = createModelCatalogView({
+        cfg,
+        catalog: [runtimeEntry],
+        routeVariants: runtimeVariants,
+      });
+      // Authorization keeps every observed route; metadata donors stay runtime-specific.
+      const runtimeHost = decisions.evaluateEntry(runtimeEntry, variants, runtimeId);
+      const runtimeRegistered =
+        runtimeId === "openclaw" ||
+        decisions.pluginRegistry?.agentHarnesses.some(({ harness }) => harness.id === runtimeId) ||
+        listCliRuntimeModelBackendBindings().some(
+          (binding) =>
+            binding.runtime === runtimeId &&
+            normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
+        );
+      return (availableRuntimes: readonly string[] | undefined) => {
+        const evaluation = evaluateNative(runtimeEntry, runtimeHost, runtimeId);
+        const projected = runtimeView.readProjection(
+          runtimeEntry,
+          resolveLogicalModelCatalogEntryState({
+            evaluation,
+            routePolicy: openAIModelCatalogRoutePolicy,
+          }).routeProjection,
+        ).runtimeEntry;
+        const {
+          id: _id,
+          name: _name,
+          provider: _provider,
+          alias: _alias,
+          tags: _tags,
+          apiKeySupported: _apiKeySupported,
+          runtimeChoices: _runtimeChoices,
+          agentRuntime,
+          ...capabilities
+        } = projectPublic(projected, evaluation, runtimeId);
+        const runtime = { id: runtimeId, source: "model" as const, ...agentRuntime };
+        if (!selectable || availableRuntimes?.includes(runtimeId) !== true) {
+          const compatibleRuntimes = evaluation.selectedRoute?.runtimePolicy?.compatibleIds;
+          const unavailableReason =
+            !selectable ||
+            (decisions.pluginRegistry !== undefined && !runtimeRegistered) ||
+            (compatibleRuntimes !== undefined && !compatibleRuntimes.includes(runtimeId))
+              ? "unsupported-runtime"
+              : evaluation.unavailableReason;
           return {
-            ...capabilities,
             agentRuntime: runtime,
-            available: evaluation.availability === true,
+            available: false,
+            ...(unavailableReason ? { unavailableReason } : {}),
+            ...(evaluation.unavailableUntil === undefined
+              ? {}
+              : { unavailableUntil: evaluation.unavailableUntil }),
           } satisfies ModelRuntimeChoice;
-        };
-      }),
-  );
-  return () => alternatives.map((read) => read());
+        }
+        return {
+          ...capabilities,
+          agentRuntime: runtime,
+          available: evaluation.availability === true,
+        } satisfies ModelRuntimeChoice;
+      };
+    });
+  return () => {
+    const availableRuntimes = decisions.runtimeChoices(entry, variants);
+    return alternatives.map((read) => read(availableRuntimes));
+  };
 }

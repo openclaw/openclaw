@@ -128,14 +128,13 @@ export async function prepareUpdateRestart(
         gatewayServiceEnv = serviceStateReadEnv;
         serviceMutationAllowed = false;
         serviceMutationSkipMessage = `SERVICE-DEFINITION: ${refusal.message} The updated installation is kept; after resolving the service hold, run \`${formatCliCommand("openclaw gateway start", serviceStateReadEnv)}\`. Gateway readiness remains unverified.`;
+      } else if (params.preManagedServiceStop?.stopped) {
+        const message =
+          err instanceof GatewayServiceUpdateOwnershipError
+            ? formatErrorMessage(err)
+            : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
+        throw new GatewayServiceUpdateOwnershipError(message, err);
       } else {
-        if (params.preManagedServiceStop?.stopped) {
-          const message =
-            err instanceof GatewayServiceUpdateOwnershipError
-              ? formatErrorMessage(err)
-              : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
-          throw new GatewayServiceUpdateOwnershipError(message, err);
-        }
         serviceMutationAllowed = false;
         serviceMutationSkipMessage =
           "Code update completed; gateway service management skipped because its current ownership could not be inspected. " +

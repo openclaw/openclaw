@@ -203,7 +203,7 @@ describe("OpenAI Chat Completions stream", () => {
       name: "lookup",
       arguments: { query: "cats" },
     });
-    expect(result.content[0]).not.toHaveProperty("partialArgs");
+    expect(result.content[0]).not.toHaveProperty("partialJson");
     expect(result.content[0]).not.toHaveProperty("streamIndex");
     expect(eventTypes).toContain("toolcall_start");
     expect(eventTypes).toContain("toolcall_delta");
@@ -246,7 +246,8 @@ describe("OpenAI Chat Completions stream", () => {
         chunk({}, "function_call"),
       ],
       { ...FIXTURE_OPTIONS, reasoningEffort: "medium" },
-      { ...model, reasoning: true },
+      // Official OpenAI sends reasoning tool turns through Responses.
+      { ...model, reasoning: true, baseUrl: "https://provider.example/v1" },
     );
 
     expect(result.stopReason).toBe("toolUse");

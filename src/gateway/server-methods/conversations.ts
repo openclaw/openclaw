@@ -174,30 +174,21 @@ export const conversationHandlers: GatewayRequestHandlers = {
     validateConversationListParams,
     async ({ params: request, respond, context }) => {
       const readCurrentConfig = () => context.getRuntimeConfig();
-      try {
-        respond(
-          true,
-          await runGatewayConversationList({
-            config: readCurrentConfig(),
-            readCurrentConfig,
-            agentId: request.agentId,
-            ...(request.channel ? { channel: request.channel } : {}),
-            ...(request.query ? { query: request.query } : {}),
-            limit: request.limit ?? 50,
-          }),
-          undefined,
-        );
-      } catch (cause) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            cause instanceof Error ? cause.message : String(cause),
-          ),
-        );
-      }
+      respond(
+        true,
+        await runGatewayConversationList({
+          config: readCurrentConfig(),
+          readCurrentConfig,
+          agentId: request.agentId,
+          ...(request.channel ? { channel: request.channel } : {}),
+          ...(request.query ? { query: request.query } : {}),
+          limit: request.limit ?? 50,
+        }),
+        undefined,
+      );
     },
+    (cause) =>
+      errorShape(ErrorCodes.UNAVAILABLE, cause instanceof Error ? cause.message : String(cause)),
   ),
   "conversations.send": defineValidatedGatewayMethod(
     "conversations.send",

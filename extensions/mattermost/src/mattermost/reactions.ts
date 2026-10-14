@@ -1,8 +1,4 @@
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeMattermostMessagingTarget } from "../normalize.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -28,8 +24,6 @@ type ReactionParams = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   fetchImpl?: MattermostFetch;
 };
-type ReactionMutation = (client: MattermostClient, params: MutationPayload) => Promise<void>;
-type MutationPayload = { userId: string; postId: string; emojiName: string };
 
 const BOT_USER_CACHE_TTL_MS = 10 * 60_000;
 const botUserIdCache = new Map<string, { userId: string; expiresAt: number }>();
@@ -38,11 +32,10 @@ async function resolveBotUserId(
   client: MattermostClient,
   cacheKey: string,
 ): Promise<string | null> {
-  const rawNow = Date.now();
-  const now = asDateTimestampMs(rawNow);
+  const now = Date.now();
   const cached = botUserIdCache.get(cacheKey);
   if (cached) {
-    if (now !== undefined && cached.expiresAt > now) {
+    if (cached.expiresAt > now) {
       return cached.userId;
     }
     botUserIdCache.delete(cacheKey);
@@ -52,25 +45,16 @@ async function resolveBotUserId(
   if (!userId) {
     return null;
   }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(BOT_USER_CACHE_TTL_MS, { nowMs: rawNow });
-  if (expiresAt !== undefined) {
-    botUserIdCache.set(cacheKey, { userId, expiresAt });
-  }
+  botUserIdCache.set(cacheKey, { userId, expiresAt: now + BOT_USER_CACHE_TTL_MS });
   return userId;
 }
 
 export async function addMattermostReaction(params: ReactionParams): Promise<Result> {
-  return runMattermostReaction(params, {
-    action: "add",
-    mutation: createReaction,
-  });
+  return runMattermostReaction(params, "add");
 }
 
 export async function removeMattermostReaction(params: ReactionParams): Promise<Result> {
-  return runMattermostReaction(params, {
-    action: "remove",
-    mutation: deleteReaction,
-  });
+  return runMattermostReaction(params, "remove");
 }
 
 type AuthorizedReactionTarget = { kind: "channel"; id: string } | { kind: "user"; id: string };
@@ -145,10 +129,7 @@ async function authorizeMattermostReactionResource(params: {
 
 async function runMattermostReaction(
   params: ReactionParams,
-  options: {
-    action: "add" | "remove";
-    mutation: ReactionMutation;
-  },
+  action: "add" | "remove",
 ): Promise<Result> {
   const resolved = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   const baseUrl = resolved.baseUrl?.trim();
@@ -179,35 +160,27 @@ async function runMattermostReaction(
     if (!userId) {
       return { ok: false, error: "Mattermost reactions failed: could not resolve bot user id." };
     }
-    await options.mutation(client, {
-      userId,
-      postId: params.postId,
-      emojiName: params.emojiName,
-    });
+    if (action === "add") {
+      await client.request<void>("/reactions", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: userId,
+          post_id: params.postId,
+          emoji_name: params.emojiName,
+        }),
+        discardResponse: true,
+      });
+    } else {
+      const emoji = encodeURIComponent(params.emojiName);
+      // Mattermost answers with 200 {"status":"OK"}, not 204.
+      await client.request<void>(`/users/${userId}/posts/${params.postId}/reactions/${emoji}`, {
+        method: "DELETE",
+        discardResponse: true,
+      });
+    }
   } catch (err) {
-    return { ok: false, error: `Mattermost ${options.action} reaction failed: ${String(err)}` };
+    return { ok: false, error: `Mattermost ${action} reaction failed: ${String(err)}` };
   }
 
   return { ok: true };
-}
-
-async function createReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
-  await client.request<void>("/reactions", {
-    method: "POST",
-    body: JSON.stringify({
-      user_id: params.userId,
-      post_id: params.postId,
-      emoji_name: params.emojiName,
-    }),
-    discardResponse: true,
-  });
-}
-
-async function deleteReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
-  const emoji = encodeURIComponent(params.emojiName);
-  // Mattermost answers with 200 {"status":"OK"}, not 204.
-  await client.request<void>(`/users/${params.userId}/posts/${params.postId}/reactions/${emoji}`, {
-    method: "DELETE",
-    discardResponse: true,
-  });
 }

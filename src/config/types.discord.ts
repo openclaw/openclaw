@@ -114,9 +114,7 @@ export type DiscordVoiceAutoJoinConfig = DiscordVoiceAllowedChannelConfig & {
 };
 
 export type DiscordVoiceAllowedChannelConfig = {
-  /** Guild ID that owns the voice channel. */
   guildId: string;
-  /** Voice channel ID allowed for realtime voice sessions. */
   channelId: string;
 };
 
@@ -135,7 +133,6 @@ export type DiscordVoiceRealtimeConfig = {
   model?: string;
   /** Provider realtime output voice name, for example "cedar". */
   speakerVoice?: string;
-  /** Provider realtime output voice id. */
   speakerVoiceId?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;
@@ -268,22 +265,18 @@ export type DiscordAccountConfig = Omit<
     maxLinesPerMessage?: number;
     /** Per-action tool gating (default: true for all). */
     actions?: DiscordActionConfig;
-    /** Thread session behavior. */
     thread?: DiscordThreadConfig;
     dm?: DiscordDmConfig;
-    /** New per-guild config keyed by guild id or slug. */
+    /** Per-guild config keyed by guild id or slug. */
     guilds?: Record<string, DiscordGuildEntry>;
-    /** Exec approval forwarding configuration. */
     execApprovals?: DiscordExecApprovalConfig;
     /** Agent-controlled interactive components (buttons, select menus). */
     agentComponents?: DiscordAgentComponentsConfig;
-    /** Slash command configuration. */
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */
     threadBindings?: DiscordThreadBindingsConfig;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
-    /** Voice channel conversation settings. */
     voice?: DiscordVoiceConfig;
     /** PluralKit identity resolution for proxied messages. */
     pluralkit?: DiscordPluralKitConfig;
@@ -313,7 +306,6 @@ export type DiscordAccountConfig = Omit<
   };
 
 export type DiscordConfig = {
-  /** Optional per-account Discord configuration (multi-account). */
   accounts?: Record<string, DiscordAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;

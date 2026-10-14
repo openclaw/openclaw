@@ -40,5 +40,5 @@ it("caps an overflowing follow interval at the safe timer maximum", async () => 
   );
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   expect(mocks.delay).toHaveBeenCalledTimes(1);
-  expect(mocks.delay).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+  expect(mocks.delay).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS, undefined, { signal: undefined });
 });

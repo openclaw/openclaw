@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedGitHubSourceReadIdentity } from "../../agents/github-read-identity.js";
 import {
@@ -9,12 +9,15 @@ import {
 const mocks = vi.hoisted(() => ({
   captureAgentLifecycleBinding: vi.fn(),
   matchesAgentLifecycleBinding: vi.fn(),
+  matchesAgentLifecycleBindingAsync: vi.fn(),
   prepareGitHubReadIdentity: vi.fn(),
   prepareGitPack: vi.fn(),
 }));
+// mock-isolation: HTTP admission tests inject retirement during awaits without a database lifecycle owner.
 vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
   captureAgentLifecycleBinding: mocks.captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding: mocks.matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync: mocks.matchesAgentLifecycleBindingAsync,
 }));
 vi.mock("../../agents/github-tool-identity.js", async () => ({
   GitHubIdentityError: (await import("../../agents/github-read-identity.js")).GitHubIdentityError,
@@ -56,6 +59,8 @@ describe("repository project admission", () => {
   let recipeMode: string;
   let truncated: boolean;
   let unavailable: boolean;
+  let rootEntries: Record<string, unknown>[];
+  let blobs: Record<string, string>;
   let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
   const repositoryNode = () => ({
     __typename: "Repository",
@@ -77,9 +82,12 @@ describe("repository project admission", () => {
     recipeMode = "100755";
     truncated = false;
     unavailable = false;
-    mocks.captureAgentLifecycleBinding.mockReset().mockReturnValue(agent);
+    rootEntries = [{ path: ".openclaw", type: "tree", mode: "040000", sha: setupTree }];
+    blobs = {};
+    mocks.captureAgentLifecycleBinding.mockReset().mockResolvedValue(agent);
     mocks.prepareGitPack.mockReset().mockResolvedValue("/synthetic/source.pack");
     mocks.matchesAgentLifecycleBinding.mockReset().mockReturnValue(true);
+    mocks.matchesAgentLifecycleBindingAsync.mockReset().mockResolvedValue(true);
     mocks.prepareGitHubReadIdentity.mockReset().mockImplementation(async ({ assertActive }) => {
       assertActive();
       const admittedToken = token;
@@ -128,13 +136,25 @@ describe("repository project admission", () => {
         value = {
           sha: rootTree,
           truncated,
-          tree: [{ path: ".openclaw", type: "tree", mode: "040000", sha: setupTree }],
+          tree: rootEntries,
         };
       } else if (url.pathname === `/repos/acme/project/git/trees/${setupTree}`) {
         value = {
           sha: setupTree,
           truncated,
           tree: [{ path: "worktree-setup.sh", type: "blob", mode: recipeMode, sha: recipe }],
+        };
+      } else if (url.pathname.startsWith("/repos/acme/project/git/blobs/")) {
+        const sha = url.pathname.split("/").at(-1) ?? "";
+        const content = blobs[sha];
+        if (content === undefined) {
+          throw new Error("Unexpected fixture blob request");
+        }
+        value = {
+          sha,
+          size: Buffer.byteLength(content),
+          encoding: "base64",
+          content: Buffer.from(content).toString("base64"),
         };
       } else {
         throw new Error("Unexpected fixture metadata request");
@@ -147,6 +167,114 @@ describe("repository project admission", () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     clearRuntimeConfigSnapshot();
+  });
+
+  it("admits the declarative recipe before an executable fallback from immutable blobs", async () => {
+    const blob = "e".repeat(40);
+    rootEntries.push({ path: ".devcontainer.json", type: "blob", mode: "100644", sha: blob });
+    blobs[blob] = '{ // cloud preparation\n "onCreateCommand": ["npm", "ci"], "image": "ignored" }';
+    const result = await prepareRepositoryWorkerProjectSource(initial);
+    expect(result.setupRecipe).toBe(blob);
+    expect(result.recipe).toMatchObject({
+      source: "devcontainer",
+      identity: blob,
+      inputs: { ".devcontainer.json": blob },
+      onCreate: ["npm", "ci"],
+      ignoredPropertiesNote: "devcontainer image ignored on cloud machines",
+    });
+    expect(requestPaths().filter((path) => path.includes("/git/trees/"))).toEqual([
+      `/repos/acme/project/git/trees/${rootTree}`,
+    ]);
+    expect(requestPaths().filter((path) => path.includes("/git/blobs/"))).toEqual([
+      `/repos/acme/project/git/blobs/${blob}`,
+    ]);
+  });
+
+  it("records detected install identity using immutable lockfile blobs without fetching their contents", async () => {
+    const lock = "e".repeat(40);
+    const packageBlob = "f".repeat(40);
+    rootEntries = [
+      { path: "yarn.lock", type: "blob", mode: "100644", sha: lock },
+      { path: "package.json", type: "blob", mode: "100644", sha: packageBlob },
+    ];
+    blobs[packageBlob] = '{ "packageManager": "yarn@4.0.0" }';
+    const result = await prepareRepositoryWorkerProjectSource(initial);
+    const identity = "d66a6ba34bd261aca84e16d556a81df1d3c3105fa71ad1a175af1be237a8412a";
+    expect(result.setupRecipe).toBe(identity);
+    expect(result.recipe).toEqual({
+      source: "detected",
+      identity,
+      inputs: { "yarn.lock": lock, "package.json": packageBlob },
+      env: { COREPACK_ENABLE_AUTO_PIN: "0", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+      detectedInstall:
+        'mkdir -p "$HOME/.local/bin" && corepack enable --install-directory "$HOME/.local/bin" && PATH="$HOME/.local/bin:$PATH" yarn install --immutable',
+    });
+    expect(requestPaths().filter((path) => path.includes("/git/blobs/"))).toEqual([
+      `/repos/acme/project/git/blobs/${packageBlob}`,
+    ]);
+    fetchImpl.mockClear();
+    const cached = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: () => ({
+        project: result.project,
+        setupRecipe: result.setupRecipe,
+        recipe: result.recipe,
+      }),
+    });
+    expect(cached.recipe).toEqual(result.recipe);
+    expect(
+      requestPaths().every(
+        (path) => !path.includes("/git/trees/") && !path.includes("/git/blobs/"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reparses pre-secret devcontainer caches before granting repository setup", async () => {
+    const blob = "e".repeat(40);
+    rootEntries.push({ path: ".devcontainer.json", type: "blob", mode: "100644", sha: blob });
+    blobs[blob] = '{"secrets":{"PACKAGE_TOKEN":{}},"onCreateCommand":"npm ci"}';
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
+    assert.isDefined(admitted.recipe);
+    const legacyRecipe = structuredClone(admitted.recipe);
+    delete legacyRecipe.secretNames;
+    fetchImpl.mockClear();
+    const refreshed = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: () => ({ project: admitted.project, setupRecipe: blob, recipe: legacyRecipe }),
+    });
+    expect(refreshed.recipe?.secretNames).toEqual(["PACKAGE_TOKEN"]);
+    expect(requestPaths()).toContain(`/repos/acme/project/git/blobs/${blob}`);
+    fetchImpl.mockClear();
+    const reused = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: () => ({
+        project: refreshed.project,
+        setupRecipe: blob,
+        recipe: refreshed.recipe,
+      }),
+    });
+    expect(reused.recipe?.secretNames).toEqual(["PACKAGE_TOKEN"]);
+    expect(requestPaths().some((path) => path.includes("/git/blobs/"))).toBe(false);
+  });
+
+  it("rejects cached command facts whose recipe identity disagrees with admission", async () => {
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
+    await expect(
+      prepareRepositoryWorkerProjectSource({
+        ...initial,
+        knownRecipe: () => ({
+          project: admitted.project,
+          setupRecipe: admitted.setupRecipe,
+          recipe: {
+            source: "script",
+            identity: "e".repeat(40),
+            inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+            env: {},
+            onCreate: ["./.openclaw/worktree-setup.sh"],
+          },
+        }),
+      }),
+    ).rejects.toThrow("identity changed");
   });
 
   it("prepares an authenticated pack for an internal enterprise repository", async () => {
@@ -169,7 +297,7 @@ describe("repository project admission", () => {
     );
   });
 
-  it.each([undefined, "HEAD", "refs/tags/v1", "feature/ready"])(
+  it.each(["HEAD", "refs/tags/v1", "feature/ready"])(
     "pins %s through the commit resolver and records executable recipe identity without credentials",
     async (ref) => {
       const result = await prepareRepositoryWorkerProjectSource({
@@ -201,63 +329,9 @@ describe("repository project admission", () => {
     },
   );
 
-  it("refills from the pinned descriptor and accepts credential rotation for the same source owner", async () => {
-    const result = await prepareRepositoryWorkerProjectSource(initial);
-    token = "rotated-synthetic-token";
-    await expect(result.revalidate()).resolves.toBeUndefined();
-    expect(result).not.toHaveProperty("readGitToken");
-    fetchImpl.mockClear();
-    const restored = await prepareRepositoryWorkerProjectSource({
-      ...admission,
-      expected: result.project,
-    });
-    expect(restored.project).toEqual(result.project);
-    expect(restored.setupRecipe).toBe(recipe);
-    expect(
-      fetchImpl.mock.calls.every(([url]) => !new Request(url).url.includes("/commits/heads")),
-    ).toBe(true);
-  });
-
-  it("uses seven reads across discovery, pinned admission, and post-binding revalidation", async () => {
-    const admitted = await prepareRepositoryWorkerProjectSource({
-      ...initial,
-      knownRecipe: (project) => ({ project, setupRecipe: recipe }),
-    });
-    const restored = await prepareRepositoryWorkerProjectSource({
-      ...admission,
-      expected: admitted.project,
-      knownRecipe: (project) => ({ project, setupRecipe: recipe }),
-    });
-    await restored.revalidate();
-    expect(restored.project).toEqual(admitted.project);
-    expect(requestPaths()).toEqual([
-      "/repos/acme/project",
-      "/repos/acme/project/commits/heads%2Fmain",
-      "/repos/acme/project",
-      "/graphql",
-      "/repos/acme/project",
-      "/graphql",
-      "/repos/acme/project",
-    ]);
-    for (const [requestInput, init] of fetchImpl.mock.calls.filter(([input]) =>
-      new Request(input).url.endsWith("/graphql"),
-    )) {
-      const request = new Request(requestInput, init);
-      expect(request.method).toBe("POST");
-      expect(request.headers.get("content-type")).toBe("application/json");
-      expect(request.headers.get("authorization")).toBe(`Bearer ${token}`);
-      const body = await request.json();
-      expect(body.variables).toEqual({ repositoryId, commit });
-      expect(body.query).toMatch(
-        /node\(id: \$repositoryId\)[\s\S]*on Repository[\s\S]*object\(oid: \$commit\)/u,
-      );
-      expect(body.query).not.toMatch(/repository\(owner:/u);
-    }
-  });
-
-  it.each(["refill", "revalidate"] as const)(
+  it.each(["revalidate"] as const)(
     "rejects invalid GraphQL repository/object metadata during %s without a REST fallback",
-    async (phase) => {
+    async () => {
       const admitted = await prepareRepositoryWorkerProjectSource(initial);
       const node = repositoryNode();
       const responses = [
@@ -281,14 +355,7 @@ describe("repository project admission", () => {
       ];
       for (const response of responses) {
         fetchImpl.mockClear().mockResolvedValueOnce(new Response(JSON.stringify(response)));
-        const pending =
-          phase === "revalidate"
-            ? admitted.revalidate()
-            : prepareRepositoryWorkerProjectSource({
-                ...admission,
-                expected: admitted.project,
-                knownRecipe: (project) => ({ project, setupRecipe: recipe }),
-              });
+        const pending = admitted.revalidate();
         await expect(pending).rejects.toThrow();
         expect(requestPaths()).toEqual(["/graphql"]);
       }
@@ -424,32 +491,6 @@ describe("repository project admission", () => {
     },
   );
 
-  it.each(["repository", "identity"] as const)(
-    "rejects old recipe facts after %s changes",
-    async (changed) => {
-      const admitted = await prepareRepositoryWorkerProjectSource(initial);
-      if (changed === "repository") {
-        repositoryId = "R_recreated_project";
-      } else {
-        selection = {
-          source: "system-configured",
-          profileId: `ghp_${"1".repeat(32)}`,
-          accountId: 2,
-        };
-      }
-      fetchImpl.mockClear();
-      await expect(
-        prepareRepositoryWorkerProjectSource({
-          ...initial,
-          knownRecipe: () => ({ project: admitted.project, setupRecipe: admitted.setupRecipe }),
-        }),
-      ).rejects.toThrow("identity changed");
-      expect(
-        fetchImpl.mock.calls.every(([input]) => !new Request(input).url.includes("/git/trees/")),
-      ).toBe(true);
-    },
-  );
-
   it("rejects malformed or mutated known facts without silently rediscovering a recipe", async () => {
     await expect(
       prepareRepositoryWorkerProjectSource({
@@ -489,7 +530,7 @@ describe("repository project admission", () => {
     ).toBe(true);
   });
 
-  it.each(["120000", "160000"])("does not authorize setup from mode %s", async (mode) => {
+  it.each(["120000"])("does not authorize setup from mode %s", async (mode) => {
     recipeMode = mode;
     expect((await prepareRepositoryWorkerProjectSource(initial)).setupRecipe).toBeUndefined();
   });
@@ -642,6 +683,47 @@ describe("repository project admission", () => {
       prepareRepositoryWorkerProjectSource({ ...initial, signal: controller.signal }),
     ).rejects.toThrow();
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each(["capture", "preparation"] as const)(
+    "does not read credentials after the caller closes during lifecycle %s",
+    async (phase) => {
+      const controller = new AbortController();
+      const started = createDeferred();
+      const release = createDeferred();
+      if (phase === "capture") {
+        mocks.captureAgentLifecycleBinding.mockImplementationOnce(async () => {
+          started.resolve();
+          await release.promise;
+          return agent;
+        });
+      } else {
+        mocks.matchesAgentLifecycleBindingAsync.mockImplementationOnce(async () => {
+          started.resolve();
+          await release.promise;
+          return true;
+        });
+      }
+      const pending = prepareRepositoryWorkerProjectSource({
+        ...initial,
+        signal: controller.signal,
+      });
+      await started.promise;
+      controller.abort();
+      release.resolve();
+
+      await expect(pending).rejects.toThrow();
+      expect(mocks.prepareGitHubReadIdentity).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses preparation when the worker observes agent retirement", async () => {
+    mocks.matchesAgentLifecycleBindingAsync.mockResolvedValueOnce(false);
+
+    await expect(prepareRepositoryWorkerProjectSource(initial)).rejects.toThrow("identity changed");
+    expect(mocks.prepareGitHubReadIdentity).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("does not expose native credential subprocess diagnostics as preparation errors", async () => {

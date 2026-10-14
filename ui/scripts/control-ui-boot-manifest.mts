@@ -108,7 +108,11 @@ async function collectBootChunkPaths(
             chunkPaths.add(pathname);
           }
         });
-        await installMockGateway(page, { serverBuildId: readDistBuildId(distDir) });
+        await installMockGateway(page, {
+          serverBuildId: readDistBuildId(distDir),
+          // The roster hook would import diagnostics into the measured boot graph.
+          awaitInitialRoster: false,
+        });
         const waitForRoute = async () => {
           await page
             .locator(

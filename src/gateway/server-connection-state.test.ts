@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -110,7 +111,7 @@ describe("gateway connection state", () => {
   });
 
   it("uses committed policy for projected and plain session events through tentative activation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const reader = ensureProfileForEmail("event-policy-reader@example.test");
       const other = ensureProfileForEmail("event-policy-other@example.test");
       const config = (others: "none" | "view"): OpenClawConfig => ({
@@ -197,12 +198,9 @@ describe("gateway connection state", () => {
                 scope,
               );
             }
-            const frames = peer.send.mock.calls.map(([frame]): unknown => {
-              if (typeof frame !== "string") {
-                throw new Error("expected a serialized Gateway event");
-              }
-              return JSON.parse(frame);
-            });
+            const frames = peer.send.mock.calls.map(([frame]): unknown =>
+              JSON.parse(String(frame)),
+            );
             expect.soft(frames, stage).toEqual(
               visibleKeys.flatMap((sessionKey) => [
                 expect.objectContaining({
@@ -328,13 +326,7 @@ describe("gateway connection state", () => {
   });
 
   it("advertises online people only through live operator connections", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const state = createGatewayConnectionState({
-        scheduler: createTestGatewayScheduler(),
-        bootId: "online-recipients",
-        cfg: { agents: { entries: { main: {} } } },
-      });
-      onTestFinished(() => state.mentionInbox.dispose());
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const reads = { count: 0 };
       const requester = makeClient("requester", reads);
       const recipient = makeClient("recipient", reads);
@@ -355,6 +347,16 @@ describe("gateway connection state", () => {
           hasAvatar: false,
           updatedAt: 1,
         };
+      }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "online-recipients",
+        cfg: { agents: { entries: { main: {} } } },
+      });
+      onTestFinished(() => state.mentionInbox.dispose());
+      for (const peer of [requester, recipient]) {
+        prepareGatewayRecipientProfile(peer.client);
         state.clients.add(peer.client);
       }
       const recipientOnline = async () => {
@@ -387,7 +389,9 @@ describe("gateway connection state", () => {
   });
 
   it("broadcasts to 50 members from committed facts while rows are dirty and revokes immediately without SQL", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:broadcast-members" };
       await upsertSessionEntryCore(scope, {
         sessionId: "broadcast-members",
@@ -402,11 +406,11 @@ describe("gateway connection state", () => {
           broadcastDuringPublication?.();
         }
       });
-      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const state = createGatewayConnectionState({
         scheduler: createTestGatewayScheduler(),
         bootId: "members",
-        cfg: {},
+        cfg,
       });
       const detach = state.attachSessionRowProjection(projection);
       const peers = Array.from({ length: 50 }, (_, index) => {
@@ -526,7 +530,7 @@ describe("gateway connection state", () => {
   });
 
   it("serves current presence through broadcasts, RPCs, and hello without SQL while display rows are dirty", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const reader = ensureProfileForEmail("presence-reader@example.test");
@@ -603,7 +607,6 @@ describe("gateway connection state", () => {
               ]);
               expect(peer.send).toHaveBeenCalledOnce();
               const frame = peer.send.mock.calls[0]?.[0];
-              expect(typeof frame).toBe("string");
               expect(JSON.parse(String(frame))).toMatchObject({
                 event: "presence",
                 payload: { presence: expected },

@@ -1,8 +1,9 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -23,14 +24,13 @@ import {
   selectResolvedUserProfile,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
+  selectProfileDisplayEntries,
+  selectUserProfileEmails,
   userProfilesDb,
   userProfileDisplaySelection,
   toUserProfile,
 } from "./user-profiles-internal.js";
-import {
-  ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
-} from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -43,7 +43,7 @@ export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
 
 /** Worker hydration retains unknown legacy bindings without inventing their lifetime. */
 export function readUserProfileEmailBindings(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds?: string | readonly string[],
 ): UserProfileEmailBinding[] {
   if (
@@ -77,7 +77,7 @@ export function readUserProfileEmailBindings(
 
 /** Alias lookup is observational and never initializes profile storage. */
 export function readUserProfileSnapshotCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<
     OpenClawStateReadCommand,
     { type: "userProfiles.reconcile" | "userProfiles.catalog" }
@@ -98,7 +98,7 @@ export function readUserProfileSnapshotCommand(
   );
 }
 
-export function readUserProfileIdForEmail(db: DatabaseSync, email: string): string | undefined {
+export function readUserProfileIdForEmail(db: EngineConnection, email: string): string | undefined {
   if (!tableExists(db, "user_profile_emails") || !tableExists(db, "user_profiles")) {
     return undefined;
   }
@@ -123,11 +123,7 @@ export function readUserProfileSnapshotSync(
           .select([
             ...userProfileDisplaySelection,
             "created_at",
-            // The native role writer can add this column after a worker has opened.
-            ...(hasEnsuredUserProfileRoleSchema(database.db) ||
-            tableHasColumn(database.db, "user_profiles", "role")
-              ? (["role"] as const)
-              : []),
+            ...(tableHasColumn(database.db, "user_profiles", "role") ? (["role"] as const) : []),
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),
@@ -168,59 +164,70 @@ export function readUserProfileSnapshotSync(
 }
 
 /** Resolve current authority and display together on the caller's admitted connection. */
-export function readUserProfileAuthorityInDatabase(
-  db: DatabaseSync,
-  profileId: string,
-): UserProfileAuthority | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
-    const current = tableExists(db, "user_profiles")
-      ? selectResolvedUserProfileMetadataById(db, profileId)
-      : undefined;
-    if (!current) {
-      return undefined;
-    }
-    const display = selectProfileAccessEntries(db, [current.id])[0]?.[1];
-    if (!display) {
-      return undefined;
-    }
-    const aliases = executeSqliteQuerySync(
-      db,
-      userProfilesDb(db)
-        .selectFrom("user_profiles")
-        .select("id")
-        .where("merged_into", "=", current.id)
-        .orderBy("id", "asc"),
-    ).rows;
-    return {
-      profileId: current.id,
-      role: current.role ?? null,
-      githubLogin: display.githubLogin ?? null,
-      aliases: [current.id, ...aliases.map((alias) => alias.id)],
-      display: projectUserProfileDisplay(display),
-    };
-  });
+export function readUserProfileAuthorityCommand(
+  db: EngineConnection,
+  command: Extract<OpenClawStateReadCommand, { type: "userProfiles.authority.resolve" }>,
+) {
+  const { profileId, includeProfile = false } = command;
+  const profile: (UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined =
+    runSqliteDeferredTransactionSync(db, () => {
+      const current = tableExists(db, "user_profiles")
+        ? selectResolvedUserProfileMetadataById(db, profileId)
+        : undefined;
+      if (!current) {
+        return undefined;
+      }
+      const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
+      if (!display) {
+        return undefined;
+      }
+      const githubIdentity = selectUserProfileGitHubIdentities(db, [current.id]).get(current.id);
+      const aliases = executeSqliteQuerySync(
+        db,
+        userProfilesDb(db)
+          .selectFrom("user_profiles")
+          .select("id")
+          .where("merged_into", "=", current.id)
+          .orderBy("id", "asc"),
+      ).rows;
+      return {
+        profileId: current.id,
+        role: current.role ?? null,
+        githubLogin: githubIdentity?.login ?? null,
+        aliases: [current.id, ...aliases.map((alias) => alias.id)],
+        display: projectUserProfileDisplay(display),
+        ...(includeProfile
+          ? {
+              listItem: {
+                ...toUserProfile(current),
+                emails: selectUserProfileEmails(db, current.id),
+                githubIdentity: githubIdentity ?? null,
+                hasAvatar: display.has_avatar === 1,
+              },
+            }
+          : {}),
+      };
+    });
+  return { type: command.type, profile };
 }
 
 /** Disclosure scopes need current aliases, never the resident display catalog. */
-export function readCurrentUserProfileAliases(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): ReadonlySet<string> {
-  ensureUserProfilesSchema(options);
-  const database = openOpenClawStateDatabase(options);
+export function readCurrentUserProfileAliasesInDatabase(db: EngineConnection, profileId: string) {
   return runSqliteDeferredTransactionSync(
-    database.db,
+    db,
     () => {
-      const canonicalId =
-        selectResolvedUserProfileMetadataById(database.db, profileId)?.id ?? profileId;
+      if (!tableExists(db, "user_profiles")) {
+        return { profileId, aliases: [profileId] };
+      }
+      const canonicalId = selectResolvedUserProfileMetadataById(db, profileId)?.id ?? profileId;
       const aliases = executeSqliteQuerySync(
-        database.db,
-        userProfilesDb(database.db)
+        db,
+        userProfilesDb(db)
           .selectFrom("user_profiles")
           .select("id")
           .where("merged_into", "=", canonicalId),
       ).rows;
-      return new Set([canonicalId, ...aliases.map((row) => row.id)]);
+      return { profileId: canonicalId, aliases: [canonicalId, ...aliases.map((row) => row.id)] };
     },
     { operationLabel: "user-profiles.aliases" },
   );
@@ -240,7 +247,7 @@ export function projectHasMultipleSessionSharingIdentities(
 }
 
 /** True when session-sharing policy can distinguish at least two durable people. */
-export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boolean {
+export function selectHasMultipleSessionSharingIdentities(db: EngineConnection): boolean {
   const profiles = executeSqliteQuerySync(
     db,
     userProfilesDb(db)
@@ -255,7 +262,7 @@ export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boo
 
 /** Exact canonical identity and aliases selected on the caller's admitted connection. */
 export function selectUserProfileIdentityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
 ): UserProfileIdentity | undefined {
   const profile = selectResolvedUserProfileMetadataById(db, profileId);
@@ -278,7 +285,7 @@ export function selectUserProfileIdentityInDatabase(
 
 /** Read display rows and their one-hop aliases without creating profile storage. */
 export function selectUserProfileDisplaysInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   ids: readonly string[],
 ): Map<string, Omit<ProfileDisplayRow, "role"> | undefined> {
   const profiles = userProfilesDb(db).selectFrom("user_profiles");
@@ -306,12 +313,14 @@ export function selectUserProfileDisplaysInDatabase(
     )
   ) {
     // Native BLOB keys compare by value in SQLite, not by Map object identity.
-    return new Map(
-      ids.map((id) => [
+    const displays: Map<string, Omit<ProfileDisplayRow, "role"> | undefined> = new Map();
+    for (const id of ids) {
+      displays.set(
         id,
         selectResolvedUserProfile(db, id, profiles.select(userProfileDisplaySelection)),
-      ]),
-    );
+      );
+    }
+    return displays;
   }
   const byId = new Map(rows.map((row) => [row.id, row]));
   return new Map(
@@ -352,32 +361,5 @@ export function resolveUserProfileReferenceInCatalog(
       [...rows.values()]
         .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
         .map((row) => row.merged_into ?? row.id),
-  );
-}
-
-/** Resolve display navigation against the caller's admitted database and visible profile IDs. */
-export function selectUserProfileReferenceInDatabase(
-  db: DatabaseSync,
-  reference: string,
-  allowedProfileIds?: ReadonlySet<string>,
-) {
-  let profiles = userProfilesDb(db).selectFrom("user_profiles");
-  if (allowedProfileIds) {
-    profiles = profiles.where((eb) =>
-      eb(eb.fn.coalesce("merged_into", "id"), "in", [...allowedProfileIds]),
-    );
-  }
-  return matchUserProfileReference(
-    reference,
-    selectResolvedUserProfile(db, reference, profiles.select(["id", "merged_into"]))?.id,
-    (prefix) =>
-      executeSqliteQuerySync(
-        db,
-        profiles
-          .select((eb) => eb.fn.coalesce("merged_into", "id").as("id"))
-          .where("id", "like", `${prefix}%`)
-          .distinct()
-          .limit(2),
-      ).rows.map((row) => row.id),
   );
 }

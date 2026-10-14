@@ -1,6 +1,6 @@
 import { PassThrough, Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
@@ -299,67 +299,58 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   }, 1_000);
 
-  it("applies the relay deadline to gateway fallback", async () => {
-    const invokeBridge = vi.fn(async () => {
-      throw new Error("bridge unavailable");
-    });
-    const gatewayEntered = createDeferred<CallGatewayOptions>();
-    const gatewayResponse = createDeferred<NativeHookRelayProcessResponse>();
-    const callGateway = vi.fn((options: CallGatewayOptions) => {
-      gatewayEntered.resolve(options);
-      return gatewayResponse.promise;
-    });
-    const stdout = createWritableTextBuffer();
-    const stderr = createWritableTextBuffer();
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const pending = runNativeHookRelayCliForTest(
-      {
-        ...relayOptions,
-        event: "post_tool_use",
-        timeout: "25",
-      },
-      {
-        stdin: createReadableTextStream("{}"),
-        stdout,
-        stderr,
-        invokeBridge: invokeBridge as never,
-        callGateway: callGateway as never,
-      },
-    );
-
-    try {
-      const request = await Promise.race([
-        gatewayEntered.promise,
-        pending.then(() => {
-          throw new Error("Relay finished before gateway fallback");
-        }),
-      ]);
-      expect(callGateway).toHaveBeenCalledOnce();
-      expect(request).toMatchObject({
-        method: "nativeHook.invoke",
-        timeoutMs: 25,
-        signal: expect.any(AbortSignal),
-      });
-      await vi.advanceTimersByTimeAsync(24);
-      expect(request.signal?.aborted).toBe(false);
-      expect(stderr.text()).toBe("");
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(await pending).toBe(0);
-      expect(request.signal?.aborted).toBe(true);
-      expect(stdout.text()).toBe("");
-      expect(stderr.text()).toContain("native hook relay timed out");
-    } finally {
-      gatewayResponse.resolve({ stdout: "", stderr: "", exitCode: 0 });
+  it.each(["bridge", "gateway"] as const)(
+    "cancels %s and joins settlement before returning timeout output",
+    async (route) => {
+      const entered = createDeferred<AbortSignal>();
+      const response = createDeferred<NativeHookRelayProcessResponse>();
+      const transport = (signal?: AbortSignal) => {
+        if (!signal) {
+          throw new Error("Relay transport requires its cancellation signal");
+        }
+        entered.resolve(signal);
+        return response.promise;
+      };
+      const callGateway = vi.fn((options: CallGatewayOptions) => transport(options.signal));
+      const stdout = createWritableTextBuffer();
+      const stderr = createWritableTextBuffer();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const pending = runNativeHookRelayCliForTest(
+        { ...relayOptions, event: "post_tool_use", timeout: "25" },
+        {
+          stdin: createReadableTextStream("{}"),
+          stdout,
+          stderr,
+          invokeBridge:
+            route === "bridge" ? (options) => transport(options.signal) : rejectMissingBridge,
+          callGateway: callGateway as never,
+        },
+      );
       try {
-        await vi.runAllTimersAsync();
-        await pending;
+        const signal = await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Relay finished before transport admission",
+        );
+        await vi.advanceTimersByTimeAsync(24);
+        expect(signal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(signal.aborted).toBe(true);
+        // Cancellation is not settlement: no terminal output until cleanup joins.
+        expect(stderr.text()).toBe("");
+        response.resolve({ stdout: "late-response", stderr: "", exitCode: 0 });
+        expect(await pending).toBe(0);
+        expect(stdout.text()).toBe("");
+        expect(stderr.text()).toContain("native hook relay timed out");
+        expect(callGateway).toHaveBeenCalledTimes(route === "gateway" ? 1 : 0);
+        expect(vi.getTimerCount()).toBe(0);
       } finally {
+        response.resolve({ stdout: "", stderr: "", exitCode: 0 });
+        await pending;
         vi.useRealTimers();
       }
-    }
-  }, 1_000);
+    },
+  );
 
   it.each([60_000])("keeps a timely response after wall-clock shift %s", async (shift) => {
     let wallNow = 0;
@@ -534,3 +525,32 @@ function createHeldOpenTextStream(text: string): PassThrough {
   stream.write(text);
   return stream;
 }
+
+it("fails closed in dedicated mode without reading local state or using operator RPC", async () => {
+  const invokeBridge = vi.fn();
+  const callGateway = vi.fn();
+  const stdout = createWritableTextBuffer();
+  const stderr = createWritableTextBuffer();
+  await runNativeHookRelayCliFromArgvForTest(
+    [
+      "node",
+      "openclaw",
+      "hooks",
+      "relay",
+      "--provider",
+      "codex",
+      "--relay-id",
+      "remote-relay",
+      "--generation",
+      "generation",
+      "--event",
+      "pre_tool_use",
+      "--remote-credential",
+      "/missing-native-hook-credential.json",
+    ],
+    { stdin: createReadableTextStream("{}"), stdout, stderr, invokeBridge, callGateway },
+  );
+  expect(invokeBridge).not.toHaveBeenCalled();
+  expect(callGateway).not.toHaveBeenCalled();
+  expect(stdout.text()).toContain("deny");
+});

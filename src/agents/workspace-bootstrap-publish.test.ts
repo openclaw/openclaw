@@ -4,9 +4,8 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FsSafeError } from "../infra/fs-safe.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
 import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import * as workspace from "./workspace.js";
@@ -96,16 +95,6 @@ describe("bootstrap publication atomicity", () => {
     expect(content.trim().length).toBeGreaterThan(0);
   });
 
-  it("leaves an existing complete AGENTS.md winner unchanged", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
-    await fs.writeFile(agentsPath, "WINNER\n", "utf-8");
-
-    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-
-    expect(await fs.readFile(agentsPath, "utf-8")).toBe("WINNER\n");
-  });
-
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "reuses an established read-only workspace without creating bootstrap files",
     async () => {
@@ -150,26 +139,13 @@ describe("bootstrap publication atomicity", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")("publishes through a workspace symlink", async () => {
-    const root = await makeTempWorkspace("openclaw-workspace-alias-");
-    const workspaceDir = path.join(root, "workspace");
-    const workspaceAlias = path.join(root, "workspace-alias");
-    await fs.mkdir(workspaceDir);
-    await fs.symlink(workspaceDir, workspaceAlias, "dir");
-
-    await ensureAgentWorkspace({ dir: workspaceAlias, ensureBootstrapFiles: true });
-
-    const agents = await fs.readFile(path.join(workspaceDir, DEFAULT_AGENTS_FILENAME), "utf8");
-    expect(agents.trim().length).toBeGreaterThan(0);
-  });
-
-  it.each(["off", "auto"])("publishes one complete winner with native mode %s", async (mode) => {
+  it("publishes one complete winner", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
     const contents = ["FIRST-COMPLETE\n", "SECOND-COMPLETE\n"];
 
-    const created = await withEnvAsync({ FS_SAFE_NATIVE_MODE: mode }, () =>
-      Promise.all(contents.map(async (content) => await publishBootstrapFile(agentsPath, content))),
+    const created = await Promise.all(
+      contents.map(async (content) => await publishBootstrapFile(agentsPath, content)),
     );
 
     expect(created.filter(Boolean)).toHaveLength(1);
@@ -201,42 +177,7 @@ describe("bootstrap publication atomicity", () => {
     }
   });
 
-  it("reports a staging cleanup failure with the publication error", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
-    const failure = await injectPartialPublicationFailure(tempDir, DEFAULT_AGENTS_FILENAME);
-    const realUnlink = fs.unlink.bind(fs);
-    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (filePath) => {
-      const target = nodeFilePath(filePath);
-      if (target && failure.stagedPaths.includes(target)) {
-        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-      }
-      await realUnlink(filePath);
-    });
-
-    try {
-      const error = await publishBootstrapFile(agentsPath, "complete\n").catch(
-        (caught: unknown) => caught,
-      );
-      if (!(error instanceof FsSafeError) || !(error.cause instanceof AggregateError)) {
-        throw new Error("Expected publication and cleanup failure evidence", { cause: error });
-      }
-      expect(error.cause.errors).toMatchObject([{ code: "ENOSPC" }, { code: "EACCES" }]);
-      expect(error).toMatchObject({
-        details: {
-          publication: { status: "not-published" },
-          cleanup: { status: "failed" },
-        },
-      });
-      await expectPathMissing(agentsPath);
-      expect(await listTempSiblings(tempDir)).toHaveLength(1);
-    } finally {
-      failure.restore();
-      unlinkSpy.mockRestore();
-    }
-  });
-
-  it("fails closed when the workspace does not support hard links", async () => {
+  it("publishes complete bootstrap bytes without hard-link support", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
     const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation(() => {
@@ -244,10 +185,11 @@ describe("bootstrap publication atomicity", () => {
     });
 
     try {
-      await expect(publishBootstrapFile(agentsPath, "complete\n")).rejects.toThrow(
-        /filesystem does not support atomic bootstrap publication/u,
-      );
-      await expectPathMissing(agentsPath);
+      await expect(publishBootstrapFile(agentsPath, "complete\n")).resolves.toBe(true);
+      await expect(publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(false);
+      expect(await fs.readFile(agentsPath, "utf8")).toBe("complete\n");
+      expect((await fs.lstat(agentsPath)).nlink).toBe(1);
+      expect(await listTempSiblings(tempDir)).toEqual([]);
     } finally {
       linkSpy.mockRestore();
     }

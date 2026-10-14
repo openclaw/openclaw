@@ -10,10 +10,88 @@ import {
   captureGatewayDeviceRevocation,
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
+import * as restartRecovery from "./chat-restart-recovery.js";
 import { createChatSendWorkAdmission } from "./chat-send-work-admission.js";
 
 describe("retained chat work admission", () => {
   afterEach(resetGatewayWorkAdmission);
+  it.each(["retained", "replaced", "released"] as const)(
+    "keeps terminal settlement custody after cancellation cleanup with a %s admission",
+    async (change) => {
+      const release = vi.fn();
+      const resume = createDeferred();
+      const sessionBinding = { sessionId: "terminal-session" };
+      let registered = sessionBinding;
+      let active = true;
+      let guard: (() => void) | undefined;
+      const terminal = vi
+        .spyOn(restartRecovery, "terminalizeRestartSafeChatAdmission")
+        .mockImplementation(async (params) => {
+          guard = params.assertCurrent;
+          await resume.promise;
+          params.assertCurrent();
+          return true;
+        });
+      const key = "agent:main:terminal";
+      const storePath = "/isolated/terminal.sqlite";
+      const work = createChatSendWorkAdmission({
+        admission: { release },
+        logGateway: { warn: vi.fn() },
+        terminal: {
+          target: {
+            keyFormat: "agent-qualified",
+            agentId: "main",
+            canonicalKey: key,
+            requestedKey: key,
+            storeKey: key,
+            storeKeys: [key],
+            storePath,
+            readSource: { agentId: "main", path: storePath, databaseIdentity: "original-source" },
+          },
+          storePath,
+          sessionBinding,
+          admittedSessionId: sessionBinding.sessionId,
+          runId: "terminal-run",
+          lifecycleRevision: "original-lifecycle",
+          isActive: () => active,
+          currentRegistration: () => registered,
+        },
+      });
+      const settling = work.settleTerminal({ startedAt: 1, status: "killed", retryable: false });
+      const observed = settling.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(guard).toBeTypeOf("function");
+        work.release();
+        guard?.();
+        expect(release).not.toHaveBeenCalled();
+        if (change === "replaced") {
+          registered = { sessionId: sessionBinding.sessionId };
+        } else if (change === "released") {
+          active = false;
+        }
+        resume.resolve();
+        expect(await observed).toEqual(
+          change === "retained"
+            ? { value: true }
+            : {
+                error: expect.objectContaining({
+                  message: "Chat terminal settlement no longer owns its admission",
+                }),
+              },
+        );
+        expect(release).toHaveBeenCalledOnce();
+        expect(guard).toThrow("Chat settlement admission was released");
+      } finally {
+        resume.resolve();
+        await observed;
+        work.release();
+        terminal.mockRestore();
+      }
+    },
+  );
   it.each([
     { deferred: false, failCleanup: false },
     { deferred: false, failCleanup: true },

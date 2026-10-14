@@ -148,19 +148,18 @@ beforeAll(async () => {
     resolveModelAuthMode,
     resolveUsableCustomProviderApiKey,
   } = await import("./model-auth.js"));
+  const owner = await import("./auth-profiles/path-resolve.native.js");
+  owner.prepareSharedAuthStoreOwnershipForNative();
 });
 
-beforeEach(() => {
+function resetRuntimeAuthState() {
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
-});
+}
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-  clearRuntimeAuthProfileStoreSnapshots();
-  setActiveDegradedSecretOwners([]);
-});
+beforeEach(resetRuntimeAuthState);
+afterEach(resetRuntimeAuthState);
 
 function secretRef(source: SecretRef["source"], id: string, provider: string): SecretRef {
   return { source, id, provider };
@@ -242,12 +241,7 @@ function expectSecretSentinelAuth(
   auth: Awaited<ReturnType<typeof resolveAuth>>,
   expected: { value: string; source: string; mode: "api-key" | "oauth" },
 ) {
-  const apiKey = auth.apiKey;
-  expect(apiKey).toBeDefined();
-  if (!apiKey) {
-    throw new Error("expected model auth API key");
-  }
-  expectSecret(apiKey, expected.value);
+  expectSecret(auth.apiKey, expected.value);
   expect(auth.source).toBe(expected.source);
   expect(auth.mode).toBe(expected.mode);
 }
@@ -485,6 +479,7 @@ describe("resolveApiKeyForProviderCore", () => {
     const resolved = await resolveAuth({
       provider: "openai",
       profileId,
+      cfg: {},
       secretSentinels: true,
       store,
       agentDir,
@@ -670,6 +665,7 @@ describe("resolveApiKeyForProviderCore", () => {
     const auth = await resolveAuth({
       provider: "custom-auth",
       profileId: "custom-auth:synthetic",
+      cfg: {},
       store: authStore({
         "custom-auth:synthetic": keyCredential("custom-auth", "synthetic-defer"),
         "custom-auth:real": keyCredential("custom-auth", "sk-real"),
@@ -858,43 +854,51 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     });
   });
 
-  it("accepts non-secret local markers for private LAN custom OpenAI-compatible providers", async () => {
-    const auth = await resolveAuth({
-      provider: "custom-192-168-0-222-11434",
-      cfg: configForProviders({
-        "custom-192-168-0-222-11434": {
-          baseUrl: "http://192.168.0.222:11434/v1",
-          api: "openai-completions",
-          apiKey: "ollama-local",
-          models: [createModelConfig({ id: "qwen3.5:9b", name: "Qwen 3.5 9B" })],
-        },
-      }),
-      store: authStore({}),
-    });
-
-    expectAuthFields(auth, {
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      source: "models.json (local marker)",
-      mode: "api-key",
-    });
-  });
-
-  it("does not accept non-secret local markers for remote custom providers", async () => {
-    await expect(
-      resolveAuth({
-        provider: "custom-remote",
+  it.each([0, 1])(
+    "accepts explicit local markers with %i saved model rows in direct auth",
+    async (modelCount) => {
+      const auth = await resolveAuth({
+        provider: "custom-192-168-0-222-11434",
         cfg: configForProviders({
-          "custom-remote": {
-            baseUrl: "https://api.example.com/v1",
+          "custom-192-168-0-222-11434": {
+            baseUrl: "http://192.168.0.222:11434/v1",
             api: "openai-completions",
             apiKey: "ollama-local",
-            models: [createModelConfig({ id: "qwen3.5:9b", name: "Qwen 3.5 9B" })],
+            models: Array.from({ length: modelCount }, () => createModelConfig()),
           },
         }),
         store: authStore({}),
-      }),
-    ).rejects.toThrow('No API key found for provider "custom-remote"');
-  });
+        allowAuthProfileFallback: false,
+      });
+
+      expectAuthFields(auth, {
+        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        source: "models.json (local marker)",
+        mode: "api-key",
+      });
+    },
+  );
+
+  it.each([0, 1])(
+    "rejects remote local-marker auth with %i saved model rows",
+    async (modelCount) => {
+      await expect(
+        resolveAuth({
+          provider: "custom-remote",
+          cfg: configForProviders({
+            "custom-remote": {
+              baseUrl: "https://api.example.com/v1",
+              api: "openai-completions",
+              apiKey: "ollama-local",
+              models: Array.from({ length: modelCount }, () => createModelConfig()),
+            },
+          }),
+          store: authStore({}),
+          allowAuthProfileFallback: false,
+        }),
+      ).rejects.toThrow('No API key found for provider "custom-remote"');
+    },
+  );
 
   it("uses implicit aws-sdk auth for built-in Bedrock Converse models", async () => {
     const auth = await resolveModelAuth({

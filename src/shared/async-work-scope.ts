@@ -67,16 +67,6 @@ export class AsyncWorkScope {
     }
     // Register before invoking without delaying received node results behind
     // a subsequent socket-close event. Async descendants inherit this exact owner.
-    const operation = this.registerWork<T>();
-    try {
-      operation.resolve(this.enter(run));
-    } catch (error) {
-      operation.reject(error);
-    }
-    return operation.promise;
-  }
-
-  private registerWork<T>() {
     const operation = createDeferredCore<T>();
     this.pending.add(operation.promise);
     void operation.promise.then(
@@ -86,7 +76,12 @@ export class AsyncWorkScope {
         this.failures?.add(error);
       },
     );
-    return operation;
+    try {
+      operation.resolve(this.enter(run));
+    } catch (error) {
+      operation.reject(error);
+    }
+    return operation.promise;
   }
 
   beginClose(reason?: unknown): void {

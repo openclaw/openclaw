@@ -80,15 +80,8 @@ function canFallbackAfterLineReplyFailure(error: unknown): boolean {
 
 function markLineVisibleDeliveryError(error: unknown): Error {
   const deliveryError = toLineDeliveryError(error);
-  if (Object.isExtensible(deliveryError)) {
-    Object.assign(deliveryError, { sentBeforeError: true, visibleReplySent: true });
-    return deliveryError;
-  }
-  const visibleError = new Error("LINE message send failed", {
-    cause: deliveryError,
-  });
-  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
-  return visibleError;
+  Object.assign(deliveryError, { sentBeforeError: true, visibleReplySent: true });
+  return deliveryError;
 }
 
 export async function deliverLineAutoReply(params: {
@@ -136,9 +129,6 @@ export async function deliverLineAutoReply(params: {
     allowFailedBatchTextRecovery: boolean,
     externalTail: messagingApi.Message[] = [],
   ): Promise<void> => {
-    if (messages.length === 0) {
-      return;
-    }
     for (let i = 0; i < messages.length; i += 5) {
       const batch = messages.slice(i, i + 5);
       try {

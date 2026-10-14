@@ -189,7 +189,9 @@ export class ModelSetupWizardRunner {
       ModelSetupWizardStartMethod,
       "openclaw.setup.activate.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
-    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> = {},
+    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> & {
+      selectModel?: true;
+    } = {},
     modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
     return this.startSession(authChoice, startMethod, {
@@ -219,7 +221,7 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     startMethod: ModelSetupWizardStartMethod,
     params:
-      | { authChoice: string; modelTarget?: "utility" }
+      | { authChoice: string; modelTarget?: "utility"; selectModel?: true }
       | SystemAgentSetupActivateParams
       | { serverName: string },
     activationTargetId?: string,
@@ -281,16 +283,14 @@ export class ModelSetupWizardRunner {
           };
         });
       const started = await this.awaitWizardStart(session, request);
-      if (!started.done) {
-        session.admitted = true;
+      if (started.done) {
+        return this.applyResult(session, started);
       }
-      if (session !== this.session && !started.done) {
+      session.admitted = true;
+      if (session !== this.session) {
         // Admission can finish after cancellation; release only its original session.
         await this.cancelSession(session);
         return null;
-      }
-      if (started.done) {
-        return this.applyResult(session, started);
       }
       return await this.requestNext(session);
     } catch (error) {
@@ -338,11 +338,13 @@ export class ModelSetupWizardRunner {
       return "cancelled";
     }
     session.cancellationRequested = true;
+    const isCurrent = () =>
+      session === this.session && !this.isRetired(session) && !session.suspended;
     let result: WizardStatusResult | undefined;
     try {
       result = await this.sendCancellation(session);
     } catch (error) {
-      if (session !== this.session || this.isRetired(session) || session.suspended) {
+      if (!isCurrent()) {
         return undefined;
       }
       if (isWizardNotFoundError(error)) {
@@ -351,7 +353,7 @@ export class ModelSetupWizardRunner {
       }
       throw error;
     }
-    if (session !== this.session || this.isRetired(session) || session.suspended) {
+    if (!isCurrent()) {
       return undefined;
     }
     if (result?.status === "cancelled" || result?.status === "error") {
@@ -368,14 +370,14 @@ export class ModelSetupWizardRunner {
             },
           );
         } catch (error) {
-          if (session !== this.session || this.isRetired(session) || session.suspended) {
+          if (!isCurrent()) {
             return undefined;
           }
           if (!isWizardNotFoundError(error)) {
             throw error;
           }
         }
-        if (session !== this.session || this.isRetired(session) || session.suspended) {
+        if (!isCurrent()) {
           return undefined;
         }
       }
@@ -516,11 +518,10 @@ export class ModelSetupWizardRunner {
     if (session !== this.session || session.suspended) {
       return null;
     }
-    if (isCurrent?.() === false) {
-      this.close();
-      return null;
-    }
-    if (result.done && result.status === "cancelled" && session.cancellationRequested) {
+    if (
+      isCurrent?.() === false ||
+      (result.done && result.status === "cancelled" && session.cancellationRequested)
+    ) {
       this.close();
       return null;
     }
@@ -556,8 +557,8 @@ export class ModelSetupWizardRunner {
         };
       }
     }
-    clearTimeout(session.externalInputTimer);
     if (result.done) {
+      clearTimeout(session.externalInputTimer);
       session.reservedWindow?.close();
       this.session = null;
     }
@@ -656,15 +657,14 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "error", message: [message, ...session.notes].join("\n\n") });
   }
 
-  private async cancelSession(session: WizardSession): Promise<WizardStatusResult | undefined> {
+  private async cancelSession(session: WizardSession): Promise<void> {
     try {
-      return await this.sendCancellation(
+      await this.sendCancellation(
         session,
         session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin",
       );
     } catch {
       // Detached cleanup is best effort; explicit cancellation surfaces failures.
-      return undefined;
     }
   }
 

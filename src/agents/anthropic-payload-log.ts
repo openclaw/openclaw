@@ -73,7 +73,6 @@ type AnthropicPayloadLogger = {
   recordUsage: (messages: AgentMessage[], error?: unknown) => void;
 };
 
-/** Create an Anthropic payload/usage logger when the env flag is enabled. */
 export function createAnthropicPayloadLogger(
   params: AgentTraceBase & {
     env?: NodeJS.ProcessEnv;

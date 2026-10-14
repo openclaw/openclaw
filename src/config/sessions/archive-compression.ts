@@ -19,7 +19,6 @@ export function stripSessionArchiveCompressionSuffix(fileName: string): string {
     : fileName;
 }
 
-/** Compresses archive content when the runtime supports zstd. */
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;
   suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
@@ -33,7 +32,6 @@ export function encodeSessionArchiveContent(content: string): {
   return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
-/** Reads an archived transcript, transparently decompressing zstd artifacts. */
 export function readSessionArchiveContentSync(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
@@ -46,7 +44,6 @@ export function readSessionArchiveContentSync(filePath: string): string {
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
 }
 
-/** Decodes staged archive bytes using the source archive's codec. */
 export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
   if (!compressed) {
     return Buffer.from(bytes).toString("utf8");

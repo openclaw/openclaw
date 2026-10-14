@@ -1,4 +1,3 @@
-// Parses Chrome MCP tool results and formats redacted tool failures.
 import path from "node:path";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";

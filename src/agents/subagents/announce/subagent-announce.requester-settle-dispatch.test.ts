@@ -1,17 +1,17 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
-import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
-import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -21,7 +21,6 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runWithAgentCommandRecoveryOwner } from "../../agent-command-recovery-owner.js";
@@ -47,6 +46,7 @@ import {
   settledChild,
   publishWakeTransition,
   useRequesterSettleDispatchFixture,
+  createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
@@ -56,39 +56,19 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await closeOpenClawAgentDatabasesAsync(dir);
     }
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
 
 const SESSION_LANE = `session:${REQUESTER_KEY}`;
 const GLOBAL_LANE = "subagent-settle-dispatch-proof";
 
-function createContext(): GatewayRequestContext {
-  const chatRunState = createChatRunState();
-  const methodRegistry = createGatewayMethodRegistry([]);
-  const context = Object.assign({} as GatewayRequestContext, {
-    trackExecution: trackAsyncWork,
-    agentRunSeq: new Map(),
-    broadcast: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatRunState,
-    dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
-    getGatewayMethodRegistry: () => methodRegistry,
-    logGateway: { error: vi.fn(), warn: vi.fn() },
-    nodeSendToSession: vi.fn(),
-    removeChatRun: vi.fn(() => undefined),
-  });
-  context.createAgentTurnFacade = (principal) =>
-    createInternalAgentTurnFacade({
-      ...principal,
-      getContext: () => context,
-      getMethodRegistry: () => methodRegistry,
-    });
-  return context;
-}
-
 describe("requester settle dispatch deadline", () => {
   useRequesterSettleDispatchFixture();
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
 
   it.each([false, true])(
     "wakes a nested yielded requester once (child completed before yield=%s)",
@@ -505,7 +485,7 @@ describe("requester settle dispatch deadline", () => {
     await replaceSessionEntry(target, {
       sessionId: "requester-session",
       updatedAt: 100,
-      status: "running",
+      status: undefined,
       abortedLastRun: false,
       restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
       mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },
@@ -523,6 +503,7 @@ describe("requester settle dispatch deadline", () => {
     const accepted = createDeferredCore();
     const finals: string[] = [];
     const cfg = { agents: { defaults: { subagents: { announceTimeoutMs: 20 } } } };
+    setRuntimeConfigSnapshot(cfg);
     startTurn.mockImplementation(async ({ preflight, io }) => {
       const request = preflight.request;
       io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
@@ -627,6 +608,7 @@ describe("requester settle dispatch deadline", () => {
       const cfg = {
         agents: { defaults: { timeoutSeconds: 1, subagents: { announceTimeoutMs: 20 } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const executionStarted = createDeferredCore();
       const workDone = createDeferredCore();
       const stop = new AbortController();

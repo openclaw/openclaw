@@ -1,4 +1,3 @@
-// Configure wizard helper for removing channel config sections safely.
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listChatChannels } from "../channels/chat-meta.js";
@@ -26,7 +25,10 @@ function listConfiguredChannelRemovalChoices(
     return [];
   }
   const labelsById = new Map(
-    listChatChannels().map((meta) => [meta.id, formatChannelRemovalLabel(meta.label, meta.id)]),
+    listChatChannels().map((meta) => [
+      meta.id,
+      sanitizeTerminalText(meta.label) || formatUnknownChannelRemovalLabel(meta.id),
+    ]),
   );
   return Object.keys(channels)
     .filter((id) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
@@ -36,10 +38,6 @@ function listConfiguredChannelRemovalChoices(
       label: labelsById.get(id) ?? formatUnknownChannelRemovalLabel(id),
     }))
     .toSorted(compareChannelRemovalChoices);
-}
-
-function formatChannelRemovalLabel(label: string, fallback: string): string {
-  return sanitizeTerminalText(label) || formatUnknownChannelRemovalLabel(fallback);
 }
 
 function formatUnknownChannelRemovalLabel(id: string): string {

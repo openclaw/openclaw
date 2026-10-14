@@ -32,7 +32,6 @@ import {
 // for the same CDP target across requests.
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
 const MAX_ROLE_REFS_CACHE = 50;
-let roleRefsCacheGeneration = 0;
 const MAX_OBSERVED_PAGE_TEXT_CHARS = 2_048;
 
 function truncateObservedPageText(value: string): string {
@@ -54,24 +53,11 @@ export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string
   }
   const state = ensurePageState(page);
   const key = targetKey(cdpUrl, normalizedTargetId);
-  const invalidBeforeGeneration = state.roleRefsInvalidBeforeGeneration;
-  const ariaInvalidBeforeGeneration = state.roleRefsAriaInvalidBeforeGeneration;
-  const cached = roleRefsByTarget.get(key);
-  if (
-    cached &&
-    ((invalidBeforeGeneration !== undefined && cached.generation <= invalidBeforeGeneration) ||
-      (ariaInvalidBeforeGeneration !== undefined &&
-        cached.mode === "aria" &&
-        cached.generation <= ariaInvalidBeforeGeneration))
-  ) {
+  if (state.roleRefsInvalidated) {
     roleRefsByTarget.delete(key);
   }
-  state.roleRefsInvalidBeforeGeneration = undefined;
-  state.roleRefsAriaInvalidBeforeGeneration = undefined;
+  state.roleRefsInvalidated = false;
   state.roleRefsTargetKey = key;
-  if (!state.roleRefs) {
-    state.roleRefsTargetGeneration = roleRefsByTarget.get(key)?.generation;
-  }
 }
 
 /** Store role refs on the page and target cache. */
@@ -89,13 +75,11 @@ export function storeRoleRefsForTarget(opts: {
   }
   const state = ensurePageState(opts.page);
   state.roleRefs = opts.refs;
-  state.roleRefsFrameSelector = opts.frameSelector;
   state.roleRefsFrame = opts.frame;
   state.roleRefsMode = opts.mode;
   const targetId = normalizeOptionalString(opts.targetId);
   if (!targetId) {
     state.roleRefsTargetKey = undefined;
-    state.roleRefsTargetGeneration = undefined;
     return;
   }
   bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
@@ -104,30 +88,21 @@ export function storeRoleRefsForTarget(opts: {
   // Frame-scoped refs remain local and require a fresh snapshot after reconnect.
   if (opts.frameSelector) {
     roleRefsByTarget.delete(key);
-    state.roleRefsTargetGeneration = undefined;
     return;
   }
-  const generation = ++roleRefsCacheGeneration;
-  roleRefsByTarget.set(key, { refs: opts.refs, mode: opts.mode, generation });
+  roleRefsByTarget.set(key, { refs: opts.refs, mode: opts.mode });
   pruneMapToMaxSize(roleRefsByTarget, MAX_ROLE_REFS_CACHE);
-  state.roleRefsTargetGeneration = generation;
 }
 
 function clearRoleRefs(state: PageState): void {
   if (state.roleRefsTargetKey) {
-    const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
-    // A delayed event from an obsolete Page must not erase refs that a newer
-    // wrapper stored for the same target after this Page's generation.
-    if (cached?.generation === state.roleRefsTargetGeneration) {
-      roleRefsByTarget.delete(state.roleRefsTargetKey);
-    }
+    // A delayed event from an older wrapper may evict newer refs; a snapshot repairs it.
+    roleRefsByTarget.delete(state.roleRefsTargetKey);
   }
   state.roleRefs = undefined;
   state.roleRefsMode = undefined;
-  state.roleRefsFrameSelector = undefined;
   state.roleRefsFrame = undefined;
   state.roleRefsTargetKey = undefined;
-  state.roleRefsTargetGeneration = undefined;
 }
 
 function currentTargetRoleRefsMode(
@@ -136,8 +111,7 @@ function currentTargetRoleRefsMode(
   if (!state.roleRefsTargetKey) {
     return undefined;
   }
-  const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
-  return cached && cached.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
+  return roleRefsByTarget.get(state.roleRefsTargetKey)?.mode;
 }
 
 /** Restore cached role refs onto a newly resolved page. */
@@ -161,7 +135,6 @@ export function restoreRoleRefsForTarget(opts: {
     return;
   }
   state.roleRefsTargetKey = cacheKey;
-  state.roleRefsTargetGeneration = cached.generation;
   state.roleRefs = cached.refs;
   state.roleRefsMode = cached.mode;
 }
@@ -278,13 +251,7 @@ export function ensurePageState(page: Page): PageState {
   const invalidateFrameRefs = (frame: Frame, navigated: boolean) => {
     const isMainFrame = frame === page.mainFrame();
     if (!state.roleRefsTargetKey) {
-      // Discovery can bind a replacement Page after a navigation. Keep its
-      // generation boundary so an older Page cannot invalidate newer refs.
-      if (isMainFrame) {
-        state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
-      } else {
-        state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
-      }
+      state.roleRefsInvalidated = true;
     }
     const pageWideAriaRefs =
       state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";

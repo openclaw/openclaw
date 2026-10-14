@@ -1,4 +1,3 @@
-// Builds npm environment overrides for safe project-local installs.
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -10,7 +9,6 @@ import { resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
-/** Options that scope npm config and cache paths for project-local installs. */
 export type NpmProjectInstallEnvOptions = NpmConfigScope & {
   cacheDir?: string;
 };
@@ -62,12 +60,8 @@ const NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS = [
   "USERPROFILE",
 ] as const;
 
-function resolveEnvPath(
-  env: NodeJS.ProcessEnv,
-  primaryKey: string,
-  fallbackKey: string,
-): string | null {
-  const raw = env[primaryKey]?.trim() || env[fallbackKey]?.trim();
+function resolveEnvPath(env: NodeJS.ProcessEnv, name: string): string | null {
+  const raw = env[`NPM_CONFIG_${name}`]?.trim() || env[`npm_config_${name.toLowerCase()}`]?.trim();
   return raw ? resolveNpmConfigPath(raw, env) : null;
 }
 
@@ -99,7 +93,10 @@ function resolveNpmConfigPath(rawPath: string, env: NodeJS.ProcessEnv): string {
     : path.resolve(expanded);
 }
 
-function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function createNpmConfigPathProbeEnv(
+  env: NodeJS.ProcessEnv,
+  scope: NpmConfigScope,
+): NodeJS.ProcessEnv {
   const probeEnv = { ...env };
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {
     delete probeEnv[key];
@@ -108,6 +105,9 @@ function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
     if (probeEnv[key] == null && process.env[key] != null) {
       probeEnv[key] = process.env[key];
     }
+  }
+  if (scope.npmConfigPrefix) {
+    probeEnv.npm_config_prefix = scope.npmConfigPrefix;
   }
   return probeEnv;
 }
@@ -146,15 +146,11 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
   if (scopedGlobalConfig) {
     return scopedGlobalConfig;
   }
-  const configuredGlobalConfig = resolveEnvPath(
-    env,
-    "NPM_CONFIG_GLOBALCONFIG",
-    "npm_config_globalconfig",
-  );
+  const configuredGlobalConfig = resolveEnvPath(env, "GLOBALCONFIG");
   if (configuredGlobalConfig) {
     return configuredGlobalConfig;
   }
-  const configuredPrefix = resolveEnvPath(env, "NPM_CONFIG_PREFIX", "npm_config_prefix");
+  const configuredPrefix = resolveEnvPath(env, "PREFIX");
   if (configuredPrefix) {
     return path.join(configuredPrefix, "etc", "npmrc");
   }
@@ -165,10 +161,7 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
   try {
     const raw = runNpmConfigProbe({
       args: ["config", "get", "globalconfig"],
-      env: {
-        ...createNpmConfigPathProbeEnv(env),
-        ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
-      },
+      env: createNpmConfigPathProbeEnv(env, scope),
       timeoutMs: 2_000,
     }).trim();
     const resolved = raw && raw !== "null" && raw !== "undefined" ? raw : null;
@@ -181,15 +174,7 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
 }
 
 function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConfigScope): string {
-  const configFiles = uniqueStrings(
-    [
-      resolveScopedProjectNpmrc(scope),
-      resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
-        resolveHomeNpmrc(env),
-      resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
-      resolveScopedGlobalNpmrc(scope),
-    ].filter((file): file is string => Boolean(file)),
-  );
+  const configFiles = resolveNpmConfigFiles(env, scope);
   return JSON.stringify({
     cwd: scope.npmConfigCwd?.trim() || tryProcessCwd() || "",
     prefix: scope.npmConfigPrefix?.trim() ?? "",
@@ -213,21 +198,19 @@ function resolveScopedGlobalNpmrc(scope: NpmConfigScope): string | null {
   return prefix ? path.join(prefix, "etc", "npmrc") : null;
 }
 
-function hasRawNpmConfigKey(
+function resolveNpmConfigFiles(
   env: NodeJS.ProcessEnv,
-  key: string,
-  scope: NpmConfigScope = {},
-): boolean {
+  scope: NpmConfigScope,
+  includeProbedGlobal = false,
+): string[] {
   const files = [
     resolveScopedProjectNpmrc(scope),
-    resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ?? resolveHomeNpmrc(env),
-    resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
+    resolveEnvPath(env, "USERCONFIG") ?? resolveHomeNpmrc(env),
+    resolveEnvPath(env, "GLOBALCONFIG"),
     resolveScopedGlobalNpmrc(scope),
-    readNpmGlobalConfigPath(env, scope),
+    ...(includeProbedGlobal ? [readNpmGlobalConfigPath(env, scope)] : []),
   ];
-  return uniqueStrings(files.filter((file): file is string => Boolean(file))).some((file) =>
-    hasNpmrcConfigKey(file, key),
-  );
+  return uniqueStrings(files.filter((file): file is string => Boolean(file)));
 }
 
 function hasNpmrcConfigKey(filePath: string, key: string): boolean {
@@ -267,10 +250,7 @@ export function findExplicitNpmConfigKeys(
   }
 
   const cwd = scope.npmConfigCwd?.trim() || tryProcessCwd() || undefined;
-  const probeEnv = {
-    ...createNpmConfigPathProbeEnv(env),
-    ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
-  };
+  const probeEnv = createNpmConfigPathProbeEnv(env, scope);
   try {
     const raw = runNpmConfigProbe({
       args: ["config", "list", "--location=project", "--json=false", "--long=false"],
@@ -300,10 +280,12 @@ function resolveNpmFreshnessBypassMode(
   if (process.platform === "win32") {
     return "before";
   }
-  if (hasRawNpmConfigKey(env, "min-release-age", scope)) {
+  const hasRawKey = (key: string) =>
+    resolveNpmConfigFiles(env, scope, true).some((file) => hasNpmrcConfigKey(file, key));
+  if (hasRawKey("min-release-age")) {
     return "min-release-age";
   }
-  return hasRawNpmConfigKey(env, "before", scope) ? "before" : "min-release-age";
+  return hasRawKey("before") ? "before" : "min-release-age";
 }
 
 /**
@@ -321,7 +303,6 @@ export function createNpmFreshnessBypassArgs(
   return [`--before=${now.toISOString()}`];
 }
 
-/** Applies the same npm freshness bypass policy through environment variables. */
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),

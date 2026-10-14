@@ -13,22 +13,24 @@ import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
 import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
+import { readResidentUserProfileId } from "../../../src/state/user-profile-list.ts";
 import {
   linkEmail,
   setDisplayName,
   setUserProfileRole,
 } from "../../../src/state/user-profile-writes.worker.ts";
-import { ensureProfileForEmail, resolveUserProfileId } from "../../../src/state/user-profiles.ts";
+import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:pr-reader-lifetime";
@@ -139,12 +141,10 @@ function summarizeChecks(ok: boolean, payload?: unknown, errorCode?: string) {
 }
 
 async function refreshFromBrowser(page: Page) {
-  return page.evaluate(
-    async ({ method, sessionKey: requestedKey }) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime: { context: { gateway: ApplicationGateway } };
-      };
-      const client = app?.runtime.context.gateway.snapshot.client;
+  return evaluateControlUiContext(
+    page,
+    async (context, { method, sessionKey: requestedKey }) => {
+      const client = context.gateway.snapshot.client;
       if (!client) {
         throw new Error("Control UI Gateway client is unavailable");
       }
@@ -152,7 +152,7 @@ async function refreshFromBrowser(page: Page) {
         sessionKeys: [requestedKey],
         refreshSessionKeys: [requestedKey],
       });
-      return app.runtime.context.gateway.snapshot.hello?.auth?.scopes;
+      return context.gateway.snapshot.hello?.auth?.scopes;
     },
     { method: SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, sessionKey },
   );
@@ -473,11 +473,13 @@ suite.define(() => {
               additions: original.additions,
             });
             const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+            await openDetailsPullRequests(pane);
             const chip = pane.locator(".chat-pr").first();
             await chip.locator(".chat-pr__number").filter({ hasText: "#101" }).waitFor();
             await chip.locator(".chat-pr__checks-pill").click();
             await pane.getByText("original-workspace check", { exact: true }).waitFor();
             await page.keyboard.press("Escape");
+            await pane.locator('.chat-details[role="dialog"]').waitFor();
             const screenshot = async (name: string) => {
               if (artifacts) {
                 await writeFile(
@@ -532,6 +534,8 @@ suite.define(() => {
             expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
             releaseProvider.resolve();
             const settled = await racePromiseWithAbortSignal(changedDelivery.promise, signal);
+            // A new session incarnation resets the pane-local Details presentation.
+            await openDetailsPullRequests(pane);
             await chip
               .locator(".chat-pr__number")
               .filter({ hasText: `#${settled.number}` })
@@ -614,7 +618,7 @@ suite.define(() => {
               await racePromiseWithAbortSignal(snapshotEntered.promise, signal);
               await cue("Reassign the retiring reader while its PR and CI reads are held");
               linkEmail(retiringEmail, viewer.id);
-              identityReassigned = resolveUserProfileId(retiring.id) === viewer.id;
+              identityReassigned = readResidentUserProfileId(retiring.id) === viewer.id;
               expect(identityReassigned).toBe(true);
 
               expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
