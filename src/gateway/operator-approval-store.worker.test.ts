@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -9,6 +11,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
 import * as native from "./operator-approval-store.kernel.worker.js";
@@ -446,4 +449,36 @@ it("queues a brief approval burst through shared input admission", async () => {
       value: { outcome: "found", record: { status: "pending", decision: null } },
     });
   }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  // Materialize the state file so the competing connection can open it.
+  openOpenClawStateDatabase(databaseOptions);
+  const competitor = new DatabaseSync(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  competitor.exec("PRAGMA busy_timeout = 0");
+  const observed: string[] = [];
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (admit, attachment) =>
+      createAdmission((request, grant) => {
+        try {
+          competitor.exec("BEGIN IMMEDIATE");
+          competitor.exec("ROLLBACK");
+          observed.push(`${request.stage}:free`);
+        } catch (error) {
+          if (!isSqliteLockError(error)) {
+            throw error;
+          }
+          observed.push(`${request.stage}:held`);
+        }
+        admit(request, grant);
+      }, attachment),
+  );
+  try {
+    await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  } finally {
+    competitor.close();
+  }
+  expect(observed).toEqual(["transaction:free", "commit:held"]);
 });
