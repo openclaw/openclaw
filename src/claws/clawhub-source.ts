@@ -19,7 +19,11 @@ import {
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { parseClawManifestSummary } from "./clawhub-manifest-summary.js";
-import { readClawHubCatalogPreview } from "./clawhub-preview-content.js";
+import {
+  readClawHubCatalogPreview,
+  type ClawHubClawCatalogPreview,
+} from "./clawhub-preview-content.js";
+export type { ClawHubClawCatalogPreview } from "./clawhub-preview-content.js";
 import {
   CLAWHUB_TIMEOUT_MS,
   ClawHubSourceError,
@@ -66,11 +70,6 @@ export type ClawHubClawCatalogDetail = ClawHubClawCatalogEntry & {
     automations: Array<{ name: string; schedule: string; timezone: string }>;
   };
   scanStatus?: string;
-};
-export type ClawHubClawCatalogPreview = {
-  kind: "instruction" | "skill";
-  name: string;
-  content: string;
 };
 type AcceptedTrust = Extract<Awaited<ReturnType<typeof checkClawHubPackageTrust>>, { ok: true }>;
 export type ClawHubClawTrust = {

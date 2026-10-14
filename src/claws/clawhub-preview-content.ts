@@ -3,9 +3,14 @@ import { fetchClawHubSkillCard } from "../infra/clawhub-skills.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { parseRequestedClawHubSkillRef } from "../skills/lifecycle/clawhub-store.js";
 import { ClawHubSourceError, type ResolvedClawHubSource } from "./clawhub-source-artifact.js";
-import type { ClawHubClawCatalogPreview } from "./clawhub-source.js";
 import { digestClawBytes } from "./digest.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
+
+export type ClawHubClawCatalogPreview = {
+  kind: "instruction" | "skill";
+  name: string;
+  content: string;
+};
 
 export async function readClawHubCatalogPreview(input: {
   params: ClawHubFetchOptions & { packageName: string; version: string };

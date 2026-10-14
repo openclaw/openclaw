@@ -652,7 +652,7 @@ function validateClawHubPluginPackage(params: {
     !satisfiesPluginApiRange(runtimeVersion, compatibility.pluginApiRange)
   ) {
     return buildClawHubInstallFailure(
-      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${runtimeVersion}.`,
+      `Plugin "${pkg.name}" requires plugin API ${compatibility.pluginApiRange}, but this OpenClaw runtime exposes ${runtimeVersion}. Upgrade OpenClaw or choose an explicit compatible plugin version.`,
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
     );
   }
