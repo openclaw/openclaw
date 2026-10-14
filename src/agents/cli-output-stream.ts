@@ -48,7 +48,7 @@ import {
   createClaudeTerminalResultWatcher,
   createCliStreamJsonTurnBudget,
   createOrdinaryClaudeLineAccountant,
-  forEachTerminalResultEvent,
+  createTerminalResultEventDispatcher,
   resolveCliTerminalReplyText,
 } from "./cli-output-stream-budget.js";
 import {
@@ -211,13 +211,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
   };
 
-  const dispatchTerminalResultEvents = (
-    parsed: CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[],
-  ) =>
-    forEachTerminalResultEvent(parsed, (event) => {
-      sawTerminalResult = true;
-      handleCustomJsonlEvent(event);
-    });
+  const dispatchTerminalResultEvents = createTerminalResultEventDispatcher(() => {
+    sawTerminalResult = true;
+  }, handleCustomJsonlEvent);
 
   const accountOrdinaryClaudeLine = createOrdinaryClaudeLineAccountant(turnBudget, (line) =>
     watchForClaudeTerminalResult(line),
@@ -604,6 +600,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
 
   const watchForClaudeTerminalResult = createClaudeTerminalResultWatcher({
     ...params,
+    toolTracker,
     hasTerminalResult: () => sawTerminalResult,
     onResultEvents: dispatchTerminalResultEvents,
     onResultRecord: handleParsedRecord,

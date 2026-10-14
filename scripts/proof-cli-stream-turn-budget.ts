@@ -28,7 +28,13 @@
  *  6. discounted-output-seen — a recognized partial delta and no terminal
  *                       envelope. Pins that discounted frames still count as
  *                       observed output for interrupted-run recovery.
- *  7. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
+ *  7. semantic-progress-after-budget — an Agent tool is outstanding when the
+ *                       budget is spent. Pins that attributed child progress
+ *                       still reaches the recovery clock, that the outstanding
+ *                       call still settles (and an unstarted one does not), that
+ *                       ordinary output advances progress again afterwards, and
+ *                       that none of it changes the recovered reply.
+ *  8. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
  *                       assistant text and grows the heap by a tiny fraction of
  *                       the bytes streamed. Pins that memory is still bounded.
  *
@@ -247,6 +253,159 @@ function scenarioDiscountedOutputSeen(): void {
   console.log(`[discounted-output-seen] interrupted run still reports "${output.text}"`);
 }
 
+const AGENT_TOOL_CALL_ID = "toolu_proof_agent";
+
+function agentToolUseFrame(): string {
+  return JSON.stringify({
+    type: "assistant",
+    session_id: SESSION_ID,
+    message: {
+      id: "msg_proof_agent",
+      role: "assistant",
+      content: [{ type: "tool_use", id: AGENT_TOOL_CALL_ID, name: "Agent", input: {} }],
+    },
+  });
+}
+
+/** Child progress for the Agent call. Carries no "result" substring at all. */
+function attributedProgressFrame(step: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: AGENT_TOOL_CALL_ID,
+    session_id: SESSION_ID,
+    message: {
+      id: `msg_child_${step}`,
+      role: "assistant",
+      content: [{ type: "text", text: `child step ${step}` }],
+    },
+  });
+}
+
+function foregroundToolResultFrame(toolUseId: string): string {
+  return JSON.stringify({
+    type: "user",
+    session_id: SESSION_ID,
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: toolUseId, content: "agent finished" }],
+    },
+  });
+}
+
+/**
+ * The abort this PR's recovery can otherwise walk into: an Agent tool is still
+ * outstanding when the budget is spent, so for the rest of the turn the runner
+ * has only two ways to advance semantic progress — attributed child progress
+ * for that call, or the tool result that settles it.
+ *
+ * Real: the parser, its record decoding, its budget accounting, and the exact
+ * callbacks `execute-process.ts` wires (`onToolUseStart`, `onToolResult`,
+ * `onAttributedSubagentProgress`).
+ *
+ * Restated, not real: two predicates owned elsewhere, so the consequence is
+ * checked rather than assumed. `activeParsedTools` mirrors
+ * `execute-events.ts:240-277`; `semanticProgress` mirrors the only two paths
+ * that touch session activity in `diagnostic-owned-activity.ts:97-127` —
+ * `observeOutput(true)` with no tool active, and
+ * `observeAttributedAgentProgress` for a foreground Agent call. The real
+ * diagnostic owner needs a live registration; the arithmetic is restated here
+ * with its source line so a reviewer can check the restatement.
+ */
+function scenarioSemanticProgressAfterBudget(): void {
+  const activeParsedTools = new Set<string>();
+  const foregroundAgentTools = new Set<string>();
+  let semanticProgress = 0;
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onToolUseStart: (delta) => {
+      activeParsedTools.add(delta.toolCallId);
+      if (delta.name === "Agent" || delta.name === "Task") {
+        foregroundAgentTools.add(delta.toolCallId);
+      }
+    },
+    onToolResult: (delta) => {
+      activeParsedTools.delete(delta.toolCallId);
+    },
+    onAttributedSubagentProgress: (parentToolUseId) => {
+      if (foregroundAgentTools.has(parentToolUseId) && activeParsedTools.has(parentToolUseId)) {
+        semanticProgress += 1;
+      }
+    },
+  });
+  // execute-process.ts:145-156 — a stdout chunk only advances semantic progress
+  // while no parsed tool is active; otherwise it renews the transport allowance.
+  const pushStdout = (chunk: string): void => {
+    if (activeParsedTools.size === 0) {
+      semanticProgress += 1;
+    }
+    parser.push(chunk);
+  };
+
+  pushStdout(`${messageStartFrame()}\n`);
+  pushStdout(`${textDeltaFrame("Starting the sweep.")}\n`);
+  pushStdout(`${agentToolUseFrame()}\n`);
+  assert(
+    activeParsedTools.has(AGENT_TOOL_CALL_ID),
+    "semantic-progress-after-budget: the Agent call never became active",
+  );
+
+  overflowLineBudget(parser);
+  const progressAtOverflow = semanticProgress;
+
+  // A long child run: every frame here is the only thing that can keep the
+  // blocked-tool clock off the 15-minute staleness floor.
+  for (let step = 0; step < 3; step += 1) {
+    pushStdout(`${attributedProgressFrame(step)}\n`);
+  }
+  const attributedTouches = semanticProgress - progressAtOverflow;
+  assert(
+    attributedTouches === 3,
+    `semantic-progress-after-budget: ${attributedTouches} of 3 attributed child frames advanced semantic progress; recovery would abort this still-working turn`,
+  );
+
+  // A result for a call this stream never started must not be invented.
+  pushStdout(`${foregroundToolResultFrame("toolu_proof_never_started")}\n`);
+  assert(
+    activeParsedTools.has(AGENT_TOOL_CALL_ID),
+    "semantic-progress-after-budget: an unstarted call's result settled the outstanding Agent tool",
+  );
+
+  pushStdout(`${foregroundToolResultFrame(AGENT_TOOL_CALL_ID)}\n`);
+  assert(
+    activeParsedTools.size === 0,
+    "semantic-progress-after-budget: the Agent tool never settled, so no later output can advance progress",
+  );
+
+  const progressAtSettlement = semanticProgress;
+  pushStdout(`${textDeltaFrame("wrapping up")}\n`);
+  assert(
+    semanticProgress === progressAtSettlement + 1,
+    "semantic-progress-after-budget: ordinary output still cannot advance progress after settlement",
+  );
+
+  pushStdout(`${terminalResultFrame()}\n`);
+  parser.finish();
+
+  const output = parser.getOutput();
+  assert(
+    parser.getErrorText() === null,
+    `semantic-progress-after-budget: parser reported "${parser.getErrorText()}"`,
+  );
+  assert(
+    output?.text === `Starting the sweep.\n\n${FINAL_ANSWER}`,
+    `semantic-progress-after-budget: settlement changed the recovered reply, got ${JSON.stringify(output?.text)}`,
+  );
+  assert(
+    parser.getOutputTruncationText()?.includes("stopped assembling output"),
+    "semantic-progress-after-budget: truncation was not reported to the operator",
+  );
+  console.log(
+    `[semantic-progress-after-budget] ${attributedTouches} attributed child frames advanced the blocked-tool clock, the Agent tool settled, ordinary output resumed advancing it, and the reply is unchanged`,
+  );
+}
+
 function scenarioRecovered(name: string, overflow: (parser: Parser) => number): void {
   const assistantDeltas: string[] = [];
   const parser = createParser(assistantDeltas);
@@ -343,5 +502,6 @@ scenarioToolSplitRecovered("commentary");
 scenarioSupersededDraft();
 scenarioDiscountedOutputSeen();
 scenarioUnknowable();
+scenarioSemanticProgressAfterBudget();
 scenarioRetentionFlat();
 console.log("All runtime assertions passed.");

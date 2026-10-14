@@ -36,6 +36,48 @@ function claudeInputJsonDelta(partialJson: string, index?: number) {
   });
 }
 
+const AGENT_TOOL_CALL_ID = "toolu_agent";
+
+function claudeAgentToolUseFrame() {
+  return {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [{ type: "tool_use", id: AGENT_TOOL_CALL_ID, name: "Agent", input: {} }],
+    },
+  };
+}
+
+function claudeToolResultFrame(toolUseId: string) {
+  return {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: toolUseId, content: "done" }],
+    },
+  };
+}
+
+/**
+ * A Claude turn whose line budget is already spent with a foreground Agent tool
+ * still outstanding — the state the post-budget recovery contracts describe.
+ */
+function createPostBudgetAgentToolParser(handlers: {
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+  onAttributedSubagentProgress?: (parentToolUseId: string) => void;
+}) {
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    ...handlers,
+  });
+  parser.push(`${JSON.stringify(claudeAgentToolUseFrame())}\n`);
+  parser.push("\n".repeat(20_001));
+  return parser;
+}
+
 describe("createCliJsonlStreamingParser framing", () => {
   it("frames coalesced Claude image and PDF lines before omitting retained binary bytes", () => {
     const results: CliToolResultDelta[] = [];
@@ -396,6 +438,106 @@ describe("createCliJsonlStreamingParser framing", () => {
     // Frames the odometers discount are still observed output; an interrupted
     // run must be able to consume their text.
     expect(parser.getOutput()?.text).toBe(expected);
+  });
+
+  it("dispatches attributed Agent progress after the budget stops assembly", () => {
+    const progress: string[] = [];
+    const parser = createPostBudgetAgentToolParser({
+      onAttributedSubagentProgress: (parentToolUseId) => progress.push(parentToolUseId),
+    });
+
+    // No "result" substring anywhere in this frame: it is the exact record the
+    // blocked-tool clock needs, and the only one that can renew it while the
+    // Agent call is outstanding.
+    parser.push(
+      `${JSON.stringify({
+        type: "assistant",
+        parent_tool_use_id: AGENT_TOOL_CALL_ID,
+        message: { role: "assistant", content: [{ type: "text", text: "still working" }] },
+      })}\n`,
+    );
+
+    expect(progress).toEqual([AGENT_TOOL_CALL_ID]);
+  });
+
+  it("settles the outstanding tool after the budget stops assembly", () => {
+    const toolResults: string[] = [];
+    const parser = createPostBudgetAgentToolParser({
+      onToolResult: (delta) => toolResults.push(delta.toolCallId),
+    });
+
+    parser.push(`${JSON.stringify(claudeToolResultFrame(AGENT_TOOL_CALL_ID))}\n`);
+
+    // Until this clears, the runner charges every later stdout chunk to the
+    // transport allowance alone, so nothing can advance semantic progress.
+    expect(toolResults).toEqual([AGENT_TOOL_CALL_ID]);
+  });
+
+  it("starts no new tool call and settles no unstarted call after the budget", () => {
+    const toolStarts: string[] = [];
+    const toolResults: string[] = [];
+    const parser = createPostBudgetAgentToolParser({
+      onToolUseStart: (delta) => toolStarts.push(delta.name),
+      onToolResult: (delta) => toolResults.push(delta.toolCallId),
+    });
+
+    parser.push(
+      `${joinJsonlFrames(
+        // `result` inside the tool input carries this frame past the watcher's
+        // substring prefilter, so the bounded-settlement guard is what stops it.
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "toolu_late", name: "Grep", input: { pattern: "result" } },
+            ],
+          },
+        },
+        claudeToolResultFrame("toolu_never_started"),
+      )}\n`,
+    );
+
+    // Settlement is bounded on purpose: `startedIds` is what terminal reply
+    // selection reads, so a truncated turn may close its outstanding work and
+    // must not open any.
+    expect(toolStarts).toEqual(["Agent"]);
+    expect(toolResults).toEqual([]);
+  });
+
+  it("keeps post-budget tool-split reply text while the outstanding tool settles", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onToolResult: () => {},
+    });
+
+    parser.push(
+      `${joinJsonlFrames(
+        claudeStreamEvent({ type: "message_start" }),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Before." },
+        }),
+        claudeAgentToolUseFrame(),
+      )}\n`,
+    );
+    parser.push("\n".repeat(20_001));
+    parser.push(
+      `${joinJsonlFrames(claudeToolResultFrame(AGENT_TOOL_CALL_ID), {
+        type: "result",
+        subtype: "success",
+        result: "DONE",
+        session_id: "settled-split",
+      })}\n`,
+    );
+    parser.finish();
+
+    // Settling the tool must not move the tool-split state the reply reads.
+    expect(parser.getOutput()).toMatchObject({ text: "Before.\n\nDONE" });
+    expect(parser.getOutputTruncationText()).toContain("exceeded 20000 lines");
   });
 
   it("normalizes empty Claude image data without treating zero omitted bytes as unchanged", () => {

@@ -13,11 +13,16 @@ import type {
   CliBackendParseJsonlEvent,
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
-import type { CliStreamJsonOutputLimits } from "./cli-output-contracts.js";
+import type { CliStreamJsonOutputLimits, CliToolResultDelta } from "./cli-output-contracts.js";
+import {
+  type ClaudeToolUseTracker,
+  dispatchClaudeCliOutstandingToolSettlement,
+} from "./cli-output-events.js";
 import {
   decodeCliRecords,
   missingMessageBoundarySeparator,
   preferStreamedClaudeTextOverResult,
+  readClaudeAttributedSubagentProgressId,
 } from "./cli-output-records.js";
 import { streamJsonOutputLimitErrorText } from "./cli-output-stream-limits.js";
 
@@ -154,35 +159,72 @@ export function createOrdinaryClaudeLineAccountant(
   };
 }
 
-export function forEachTerminalResultEvent(
-  parsed: CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[],
-  handle: (event: CliBackendParsedJsonlEvent) => void,
-): void {
-  for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
-    if (event.kind === "result") {
-      handle(event);
+/**
+ * Marks the turn recovered and projects only the terminal `result` events a
+ * line can still carry. A plugin parser may bundle several events in one
+ * record, and on a truncated turn the rest stay unassembled.
+ */
+export function createTerminalResultEventDispatcher(
+  onTerminalResult: () => void,
+  handleEvent: (event: CliBackendParsedJsonlEvent) => void,
+): (parsed: CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[]) => void {
+  return (parsed) => {
+    for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
+      if (event.kind === "result") {
+        onTerminalResult();
+        handleEvent(event);
+      }
     }
-  }
+  };
 }
 
 /**
+ * Only a STRING `parent_tool_use_id` names a child record. Most Claude frames
+ * carry the key with a `null` value (51 of 65 in
+ * `test/fixtures/cli/claude-2.1-subagent-forwarding.jsonl`), so a bare
+ * substring test would hand nearly every post-budget line to the JSON decoder
+ * the prefilter exists to avoid.
+ */
+const ATTRIBUTED_PARENT_TOOL_USE_ID = /"parent_tool_use_id"\s*:\s*"/;
+
+/**
  * Decodes each post-budget line only far enough to recognize the terminal
- * result, so a finished run still reports its answer while retention stays flat.
+ * result and the semantic events recovery itself depends on, so a finished run
+ * still reports its answer while retention stays flat.
+ *
+ * Stopping at the terminal result alone is not enough. While a parsed tool is
+ * active, the runner routes raw stdout to the transport allowance only, so the
+ * blocked-tool clock advances on two things: attributed progress for the Agent
+ * call, and the tool result that settles it. Dropping both for the rest of a
+ * truncated turn lets stuck-run recovery abort the very run this watcher is
+ * waiting on, past the blocked-tool staleness floor.
+ *
+ * Settlement stays bounded — see `dispatchClaudeCliOutstandingToolSettlement`:
+ * no new tool call is started or tracked here, so the tool-split state terminal
+ * reply selection reads cannot move after assembly stops.
  */
 export function createClaudeTerminalResultWatcher(params: {
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  toolTracker: ClaudeToolUseTracker;
   hasTerminalResult: () => boolean;
   onResultEvents: (
     parsed: CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[],
   ) => void;
   onResultRecord: (record: Record<string, unknown>) => void;
+  onAttributedSubagentProgress?: (parentToolUseId: string) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
 }): (line: string) => void {
   return (line: string) => {
-    // A terminal record always names `result`; skipping the rest avoids paying
-    // JSON parsing for a stream that is no longer being assembled.
-    if (!line || params.hasTerminalResult() || !line.includes("result")) {
+    // A terminal record always names `result`, and an attributed child record
+    // always carries a non-null `parent_tool_use_id`; skipping the rest avoids
+    // paying JSON parsing for a stream that is no longer being assembled.
+    if (
+      !line ||
+      params.hasTerminalResult() ||
+      (!line.includes("result") && !ATTRIBUTED_PARENT_TOOL_USE_ID.test(line))
+    ) {
       return;
     }
     if (params.parseJsonlEvent) {
@@ -203,7 +245,20 @@ export function createClaudeTerminalResultWatcher(params: {
     for (const record of decodeCliRecords(line)) {
       if (record.type === "result" && record.openclaw_interim_result !== true) {
         params.onResultRecord(record);
+        continue;
       }
+      const attributedParentToolUseId = readClaudeAttributedSubagentProgressId(record);
+      if (attributedParentToolUseId) {
+        params.onAttributedSubagentProgress?.(attributedParentToolUseId);
+        continue;
+      }
+      dispatchClaudeCliOutstandingToolSettlement({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed: record,
+        tracker: params.toolTracker,
+        ...(params.onToolResult ? { onToolResult: params.onToolResult } : {}),
+      });
     }
   };
 }

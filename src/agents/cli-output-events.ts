@@ -348,6 +348,63 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
   }
 }
 
+export type ClaudeToolUseTracker = ToolUseTracker;
+
+/**
+ * Settles tool calls a truncated turn already started, and starts nothing new.
+ *
+ * Once a cumulative turn budget stops text assembly, an outstanding tool must
+ * still be allowed to close: until it does, the runner charges every stdout
+ * chunk to the transport allowance alone and nothing can advance semantic
+ * progress. Only calls already in `startedIds` settle here, so that set stays
+ * frozen after assembly stops and the tool-split state terminal reply selection
+ * reads cannot move. Deliberately separate from
+ * `dispatchClaudeCliStreamingToolEvent`, which also starts calls and tracks
+ * streamed tool input.
+ */
+export function dispatchClaudeCliOutstandingToolSettlement(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ClaudeToolUseTracker;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+}): void {
+  if (!supportsCliJsonlToolEvents(params) || isClaudeSubagentRecord(params.parsed)) {
+    return;
+  }
+  const settle = (block: Record<string, unknown>): void => {
+    const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+    if (toolCallId && params.tracker.startedIds.has(toolCallId)) {
+      emitClaudeToolResultBlock(params.tracker, block, params.onToolResult);
+    }
+  };
+  const parsed = params.parsed;
+  if (parsed.type === "stream_event" && isRecord(parsed.event)) {
+    const event = parsed.event;
+    if (
+      event.type === "content_block_start" &&
+      isRecord(event.content_block) &&
+      isClaudeAssistantToolResultBlockType(event.content_block.type)
+    ) {
+      settle(event.content_block);
+    }
+    return;
+  }
+  const assistant = parsed.type === "assistant";
+  if (!(assistant || parsed.type === "user") || !isRecord(parsed.message)) {
+    return;
+  }
+  const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+  for (const block of content) {
+    if (
+      isRecord(block) &&
+      (assistant ? isClaudeAssistantToolResultBlockType(block.type) : block.type === "tool_result")
+    ) {
+      settle(block);
+    }
+  }
+}
+
 type ThinkingTracker = {
   currentMessageId?: string;
   // Thinking text already streamed via thinking_delta, keyed by the Anthropic
