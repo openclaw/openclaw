@@ -11,6 +11,7 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
+- Default model: `google/gemini-4-argon`
 - Managed-cloud provider: `google-vertex` with Google Cloud Application Default Credentials
 - Optional runtime: `agentRuntime.id: "google-gemini-cli"` runs an explicitly configured model through the local Gemini CLI
 
@@ -46,7 +47,7 @@ the Gateway already runs inside a managed Google Cloud environment.
         {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
+              model: { primary: "google/gemini-4-argon" },
             },
           },
         }
@@ -214,12 +215,12 @@ the Gateway already runs inside a managed Google Cloud environment.
 </Tabs>
 
 <Note>
-`google/gemini-3-pro-preview` was retired on 2026-03-09; use `google/gemini-3.1-pro-preview` instead. Re-running Gemini API key setup (`openclaw onboard --auth-choice gemini-api-key` or `openclaw models auth login --provider google`) rewrites a stale configured default to the current model.
+`google/gemini-3-pro-preview` was retired on 2026-03-09; use `google/gemini-4-argon` instead. Re-running Gemini API key setup (`openclaw onboard --auth-choice gemini-api-key` or `openclaw models auth login --provider google`) updates the configured primary model to `google/gemini-4-argon`.
 </Note>
 
 ## Gemini 4 Argon
 
-`google/gemini-4-argon` is available in the bundled catalog, with a 1,048,576-token
+`google/gemini-4-argon` is the default Google model, with a 1,048,576-token
 context window and up to 65,536 output tokens. `google/gemini-4` is its shorthand;
 the same model ID and shorthand are available for `google-vertex`.
 
@@ -227,6 +228,11 @@ Gemini 4 Argon supports text, image, audio, video, and PDF inputs, function
 calling, structured outputs, and search grounding. It uses implicit context
 caching only: explicit `cachedContents` handles and the Live API are not
 supported. See [Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon).
+
+The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
+1,048,576-token context window and up to 65,536 output tokens. The built-in
+`gemini-flash` alias selects this model; `gemini-flash-lite` selects
+`google/gemini-3.5-flash-lite`.
 
 ## Capabilities
 

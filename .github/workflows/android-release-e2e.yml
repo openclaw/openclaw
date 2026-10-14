@@ -1,0 +1,158 @@
+name: Android Release E2E
+
+on:
+  workflow_call:
+    inputs:
+      target_sha:
+        type: string
+        required: true
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ inputs.target_sha || github.sha }}
+    steps:
+      - name: Initialize failure proof and validate target
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PROOF_PATH="$RUNNER_TEMP/android-release-e2e-proof.json"
+          echo "PROOF_PATH=$PROOF_PATH" >> "$GITHUB_ENV"
+          echo "GATEWAY_SELECTION_DIR=$RUNNER_TEMP/android-release-gateway-selection" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import json, os, re
+          sha = os.environ["TARGET_SHA"]
+          with open(os.environ["PROOF_PATH"], "w") as out:
+              json.dump({"schema": 1, "status": "failed",
+                         "targetSha": sha if re.fullmatch(r"[a-f0-9]{40}", sha) else None,
+                         "errors": ["workflow-setup-incomplete"]}, out)
+          PY
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$TARGET_SHA" == "$GITHUB_SHA" ]]
+
+      - name: Checkout exact qualification target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify target and require target-owned harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          test -f scripts/android-release-e2e.ts
+          test -f scripts/ios-release-gateway.ts
+
+      - name: Find this run's stable Gateway selection
+        id: gateway-selection
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const name = `android-release-gateway-selection-${context.runId}`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo,
+              run_id: context.runId,
+              name,
+              per_page: 100,
+            });
+            const matches = artifacts.filter((artifact) => artifact.name === name);
+            if (matches.length > 1) {
+              throw new Error('Multiple stable Gateway selections exist for this run.');
+            }
+            if (matches.length === 0) {
+              if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) {
+                throw new Error('This rerun has no saved stable Gateway selection. Start a new workflow run.');
+              }
+              core.setOutput('create', 'true');
+              core.setOutput('artifact-id', '');
+              return;
+            }
+            const artifact = matches[0];
+            if (artifact.expired || artifact.workflow_run?.id !== context.runId ||
+                artifact.workflow_run?.head_sha !== process.env.TARGET_SHA) {
+              throw new Error('The saved stable Gateway selection is expired or belongs to another source/run. Start a new workflow run.');
+            }
+            core.setOutput('create', 'false');
+            core.setOutput('artifact-id', String(artifact.id));
+
+      - name: Restore this run's stable Gateway selection
+        if: steps.gateway-selection.outputs.artifact-id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.gateway-selection.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          path: ${{ env.GATEWAY_SELECTION_DIR }}
+          digest-mismatch: error
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          cache-mode: "off"
+
+      - name: Prepare stable Gateway selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTORED_SELECTION: ${{ steps.gateway-selection.outputs.artifact-id != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RESTORED_SELECTION" == true ]]; then
+            test -f "$GATEWAY_SELECTION_DIR/selection.json"
+            test -f "$GATEWAY_SELECTION_DIR/package.json"
+            test -f "$GATEWAY_SELECTION_DIR/package-lock.json"
+          fi
+          node --import ./scripts/tsx.mjs scripts/ios-release-gateway.ts \
+            --target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"
+
+      - name: Save this run's stable Gateway selection
+        if: steps.gateway-selection.outputs.create == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-gateway-selection-${{ github.run_id }}
+          path: |
+            ${{ env.GATEWAY_SELECTION_DIR }}/selection.json
+            ${{ env.GATEWAY_SELECTION_DIR }}/package.json
+            ${{ env.GATEWAY_SELECTION_DIR }}/package-lock.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Setup Android toolchain and standard emulator images
+        id: android-toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: "off"
+          install-screenshot-emulators: "true"
+
+      - name: Qualify phone and controlled Wear boundary
+        env:
+          OPENCLAW_GRADLE_JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
+        run: |
+          pnpm android:release:validate -- \
+            --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
+            --selection-dir "$GATEWAY_SELECTION_DIR" \
+            --artifacts-dir "$RUNNER_TEMP/android-release-e2e"
+
+      - name: Retain sanitized qualification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/android-release-e2e-proof.json
+            ${{ runner.temp }}/android-release-e2e/screenshots/*.png
+          if-no-files-found: error
+          retention-days: 14

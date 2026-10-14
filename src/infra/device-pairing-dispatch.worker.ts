@@ -6,9 +6,8 @@ import type { WorkerOperationContext } from "../state/worker-operation-registry.
 import { prepareDevicePairingBinding } from "./device-pairing-binding.js";
 import { withDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
-import { resolveDevicePairingStoreRevision } from "./device-pairing-store-cache.js";
 import {
-  readPairedDevicePairingRecordsFromDatabase,
+  readPairedDevicePairingSnapshotFromDatabase,
   withDevicePairingStoreDatabase,
 } from "./device-pairing-store.js";
 import { deferSqliteWorkerCommitReceipt } from "./sqlite-worker-operation-admission.js";
@@ -34,10 +33,12 @@ export function devicePairingMutation<Input, Result>(
     return runOpenClawStateWriteTransaction(
       () =>
         withDevicePairingMutationAdmission(() => {
-          const before = publishPairing
-            ? readPairedDevicePairingRecordsFromDatabase(database.db)
+          const snapshot = publishPairing
+            ? readPairedDevicePairingSnapshotFromDatabase(database.db)
             : undefined;
+          const before = snapshot?.pairedByDeviceId;
           const after = before ? structuredClone(before) : undefined;
+          const revision = { value: snapshot?.revision ?? "0" };
           return withDevicePairingStoreDatabase(
             database,
             () => {
@@ -67,8 +68,8 @@ export function devicePairingMutation<Input, Result>(
               }
               deferSqliteWorkerCommitReceipt(database.db, {
                 kind: "devicePairing",
-                beforeRevision: resolveDevicePairingStoreRevision(before),
-                revision: resolveDevicePairingStoreRevision(after),
+                beforeRevision: snapshot!.revision,
+                revision: revision.value,
                 changed,
                 ...(tokensReplaced ? { tokensReplaced } : {}),
                 ...(workerEnvironment ? { workerEnvironment } : {}),
@@ -77,6 +78,7 @@ export function devicePairingMutation<Input, Result>(
               return result;
             },
             after,
+            revision,
           );
         }),
       { database, env: getSqliteWorkerStateContext().environment },

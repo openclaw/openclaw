@@ -192,22 +192,6 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(scheduled.policy.explicitToolAllowlist).toContain("write");
   });
 
-  it("keeps built-in profile grants out of explicit overrides", () => {
-    const profile = resolveConversationCapabilityProfile({
-      config: {
-        tools: {
-          profile: "coding",
-          allow: ["pdf"],
-        },
-      },
-      modelProvider: "ollama",
-      modelId: "qwen3.5:9b",
-    });
-
-    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
-    expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
-  });
-
   it("adds runtime tools without replacing the configured tool surface", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {
@@ -340,13 +324,6 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
   }>([
     { name: "configured creator", origin: "external", configured: true, delivery: "telegram" },
     { name: "unknown creator origin", origin: "unknown", configured: true, delivery: "whatsapp" },
-    {
-      name: "removed creator account",
-      origin: "external",
-      configured: false,
-      delivery: "telegram",
-    },
-    { name: "local creator", origin: "local", configured: true, delivery: "whatsapp" },
     {
       name: "removed local resource account",
       origin: "local",

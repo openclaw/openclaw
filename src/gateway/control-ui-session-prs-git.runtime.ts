@@ -72,16 +72,19 @@ export async function readCheckoutGitRevision({
     }
     const selectedBranch = branch ?? checkout.branch;
     const selectedDefault = defaultBranch ? `origin/${defaultBranch}` : defaultRef;
-    const tips = await readRemoteRevisions(
-      root,
-      [
-        ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
-        ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
-      ],
-      checkout,
-    );
+    const tips = includeIndex
+      ? await readRemoteRevisions(
+          root,
+          [
+            ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
+            ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
+          ],
+          checkout,
+        )
+      : [];
     return JSON.stringify([
-      checkout,
+      // Context exposes branch names and remote configuration, not commit IDs.
+      includeIndex ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
       defaultRef,
       [...tips],
       packedReplacements,

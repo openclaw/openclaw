@@ -109,12 +109,10 @@ it("paints the restored roster and workspace in the first sidebar update", async
   await host.updateComplete;
 
   expect(host.querySelector('aside[data-snapshot-state="cached"]')).not.toBeNull();
-  const roster = host.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-    "openclaw-sidebar-agent-roster",
+  expect(host.querySelector("openclaw-sidebar-agent-roster")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor"),
   );
-  expect(roster).not.toBeNull();
-  await roster!.updateComplete;
-  expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor");
   expect(host.querySelector('[data-avatar="⚓"]')).not.toBeNull();
 });
 

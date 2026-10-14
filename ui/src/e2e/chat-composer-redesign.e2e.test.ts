@@ -678,6 +678,8 @@ suite.define(() => {
         .toBe(true);
 
       await page.setViewportSize({ width: 1280, height: 900 });
+      // Details releases its reserved column after the resize reaches its layout owner.
+      await page.locator(".chat-details--docked").waitFor({ state: "detached" });
       const [compactChatMainBox, compactComposerShellBox] = await Promise.all([
         chatMain.boundingBox(),
         composerShell.boundingBox(),
