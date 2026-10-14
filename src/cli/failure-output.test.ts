@@ -217,6 +217,47 @@ describe("formatCliFailureLines", () => {
     "OpenClaw state ownership at ~/.openclaw/state/openclaw.sqlite could not be verified from ~/.openclaw/state/openclaw.sqlite.owner; restart the Gateway.";
 
   it.each([
+    ["gateway"],
+    ["gateway", "run"],
+    ["gateway", "--port", "18789"],
+    ["gateway", "run", "--bind", "loopback", "--port", "18789"],
+    ["--profile", "work", "gateway", "run"],
+  ])("prints the redacted Gateway startup reason without debug: %j", (...args) => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const lines = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error: new Error(`Gateway startup failed. Authorization: Bearer ${token}`, {
+        cause: new Error("private nested diagnostic"),
+      }),
+      argv: ["node", "openclaw", ...args],
+      env: {},
+    });
+    const output = lines.join("\n");
+
+    expect(output).toContain("[openclaw] Reason: Gateway startup failed.");
+    expect(output).not.toContain(token);
+    expect(output).not.toContain("private nested diagnostic");
+    expect(lines).not.toContain("[openclaw] Stack:");
+  });
+
+  it.each([
+    ["gateway", "status"],
+    ["sessions", "list"],
+  ])("keeps ordinary command failures terse: %j", (...args) => {
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: new Error("internal detail"),
+        argv: ["node", "openclaw", ...args],
+        env: {},
+      }),
+    ).toEqual([
+      "[openclaw] The CLI command failed.",
+      "[openclaw] For help, run `openclaw doctor`.",
+    ]);
+  });
+
+  it.each([
     ["--profile", "work", "update", "--json"],
     ["plugins", "update", "--all"],
     ["--profile", "work", "plugins", "update", "codex"],

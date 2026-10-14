@@ -2,10 +2,6 @@ import "../../worker-heap-flag.mjs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, MessagePort, Worker } from "node:worker_threads";
-import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -18,6 +14,11 @@ import {
   observeWorkerMessage,
   workerMessagePayloadBytes,
 } from "./worker-message-metrics.js";
+
+type WorkerMemorySample = Pick<
+  NodeJS.MemoryUsage,
+  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
+> & { heapSizeLimitBytes?: number; gc?: GcSample[] };
 
 type WorkerCpuHandle = {
   readonly threadId: number;
@@ -327,7 +328,7 @@ export function setTrackedWorkerGcObserver(
     for (const source of trackedWorkers.workers.values()) {
       if (source.memoryPort) {
         source.memoryPort.postMessage({ gc: enabled }, []);
-        recordWorkerMessage("memory", "to_worker");
+        recordWorkerMessage("memory", "to_worker", 1);
       }
     }
   }
@@ -352,43 +353,36 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     source.memoryUnavailable = true;
     port.close();
   };
-  port.on(
-    "message",
-    (record: Partial<NodeJS.MemoryUsage> & { heapSizeLimitBytes?: number; gc?: GcSample[] }) => {
-      recordWorkerMessage("memory", "from_worker");
-      // This private port is handed off by our isolate telemetry owner, not task input.
-      if (record.gc) {
-        trackedWorkers.gcObserver?.(record.gc, source.script);
-        return;
-      }
-      const heapUsed = asNonNegativeFiniteNumber(record.heapUsed);
-      const heapTotal = asNonNegativeFiniteNumber(record.heapTotal);
-      const external = asNonNegativeFiniteNumber(record.external);
-      const arrayBuffers = asNonNegativeFiniteNumber(record.arrayBuffers);
-      const heapSizeLimitBytes = asPositiveFiniteNumber(record.heapSizeLimitBytes);
-      if (
-        heapUsed === undefined ||
-        heapTotal === undefined ||
-        external === undefined ||
-        arrayBuffers === undefined
-      ) {
-        close();
-        return;
-      }
-      source.heap = {
-        value: { heapUsed, heapTotal, external, arrayBuffers, heapSizeLimitBytes },
-        sampledAt: performance.now(),
-      };
-      source.memoryPending = false;
-      source.memoryUnavailable = false;
-    },
-  );
+  port.on("message", (record: WorkerMemorySample | { gc: GcSample[] }) => {
+    // Known numeric payload bytes; object envelopes and GC kind labels are excluded.
+    recordWorkerMessage(
+      "memory",
+      "from_worker",
+      ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+        (record.gc?.length ?? 0) * 8,
+    );
+    // This private port is handed off by our isolate telemetry owner, not task input.
+    if (record.gc) {
+      trackedWorkers.gcObserver?.(record.gc, source.script);
+    }
+    if (!("heapUsed" in record)) {
+      return;
+    }
+    // The private producer supplies native counters; retain the cloned sample as-is.
+    delete record.gc;
+    source.heap = {
+      value: record,
+      sampledAt: performance.now(),
+    };
+    source.memoryPending = false;
+    source.memoryUnavailable = false;
+  });
   port.once("close", close);
   port.once("messageerror", close);
   port.unref();
   if (trackedWorkers.gcObserver) {
     port.postMessage({ gc: true });
-    recordWorkerMessage("memory", "to_worker");
+    recordWorkerMessage("memory", "to_worker", 1);
   }
   return true;
 }
