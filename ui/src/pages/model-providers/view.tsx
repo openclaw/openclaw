@@ -159,10 +159,21 @@ function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
   } else if (apiProfileCount > 0) {
     parts.push(t("modelProviders.credentials.profileKey", { count: String(apiProfileCount) }));
   }
+  const summary = card.nativeAuth
+    ? t(
+        card.nativeAuth.readiness === "configured"
+          ? "modelProviders.status.configured"
+          : card.nativeAuth.readiness === "unknown"
+            ? "modelProviders.installedAgents.status.unverified"
+            : "modelProviders.installedAgents.status.signIn",
+      )
+    : parts.length > 0
+      ? parts.join(" · ")
+      : t("modelProviders.credentials.none");
   return (
     <div class="model-providers__credentials">
       <span>{t("modelProviders.credentials.label", { agent: agentLabel })}</span>
-      <strong>{parts.length > 0 ? parts.join(" · ") : t("modelProviders.credentials.none")}</strong>
+      <strong>{summary}</strong>
     </div>
   );
 }
@@ -234,7 +245,7 @@ function KeyEditor(props: ModelProvidersViewProps & { card: ModelProviderCard })
     Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
   const mutationDisabled = () => configMutationDisabled(props);
   return (
-    <Show when={props.keyEditorProvider === props.card.id}>
+    <Show when={!props.card.nativeAuth && props.keyEditorProvider === props.card.id}>
       <div class="model-providers__inline-form">
         <ApiKeyInput
           value={props.keyDraft}
@@ -272,7 +283,11 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
       : (props.mutationBlockedReason ?? "");
   return (
     <div class="model-providers__card-actions">
-      <Show when={props.canConnect(props.card) && props.card.profiles.length === 0}>
+      <Show
+        when={
+          !props.card.nativeAuth && props.canConnect(props.card) && props.card.profiles.length === 0
+        }
+      >
         <button
           class="btn btn--sm"
           data-models-connect-provider={props.card.id}
@@ -282,7 +297,7 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           {t("modelProviders.login.action")}
         </button>
       </Show>
-      <Show when={hasProviderCredentials(props.card)}>
+      <Show when={!props.card.nativeAuth && hasProviderCredentials(props.card)}>
         <button
           class="btn btn--sm"
           disabled={
@@ -311,7 +326,7 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           )}
         </button>
       </Show>
-      <Show when={props.card.apiKeySupported !== false}>
+      <Show when={!props.card.nativeAuth && props.card.apiKeySupported !== false}>
         <button
           class="btn btn--sm"
           disabled={keyDisabled()}
@@ -323,10 +338,11 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
       </Show>
       <Show
         when={
-          props.card.hasConfigApiKey ||
-          props.card.profiles.some(
-            (profile) => profile.type === "api_key" && profile.logoutSupported,
-          )
+          !props.card.nativeAuth &&
+          (props.card.hasConfigApiKey ||
+            props.card.profiles.some(
+              (profile) => profile.type === "api_key" && profile.logoutSupported,
+            ))
         }
       >
         <button

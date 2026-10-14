@@ -29,10 +29,13 @@ const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] 
 /** Collapse auth aliases before display; Gateway rows retain their auth facts. */
 export function listEffectiveModelAuthProviders(
   providers: readonly ModelAuthStatusProvider[],
+  groupBy?: (provider: string) => string,
 ): ModelAuthStatusProvider[] {
   const groups = new Map<string, ModelAuthStatusProvider[]>();
   for (const provider of providers) {
-    const id = provider.nativeAuth?.runtimeId ?? canonicalModelAuthProviderId(provider.provider);
+    const id = groupBy
+      ? groupBy(provider.provider)
+      : (provider.nativeAuth?.runtimeId ?? canonicalModelAuthProviderId(provider.provider));
     const group = groups.get(id) ?? [];
     group.push(provider);
     groups.set(id, group);

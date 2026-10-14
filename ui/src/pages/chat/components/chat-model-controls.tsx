@@ -247,9 +247,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     // Alias records (e.g. google and google-gemini-cli) share one heading, so merge
     // them under that key first; iterating raw records let the later one overwrite it.
     for (const provider of listEffectiveModelAuthProviders(
-      (props.modelAuthStatusResult?.providers ?? []).map((record) =>
-        Object.assign({}, record, { provider: headingKey(record.provider) }),
-      ),
+      props.modelAuthStatusResult?.providers ?? [],
+      headingKey,
     )) {
       const selectedId =
         props.accountSelection?.kind === "automatic"
