@@ -59,7 +59,11 @@ import {
   DIST_EXTENSION_MANIFEST,
   DIST_EXTENSION_PACKAGE,
   NEW_TIME,
+  QA_LAB_PLUGIN_SDK_ENTRY,
+  QA_RUNTIME_PLUGIN_SDK_ENTRY,
   syncBundledPluginMetadata,
+  expectedBuildSpawn,
+  runQaCommand,
   statusCommandSpawn,
   gatewayStatusCommandSpawn,
   resolvePath,
@@ -655,4 +659,53 @@ describe("run-node script", () => {
       }
     },
   );
+
+  it("keeps a private QA build when a non-QA command refreshes runtime metadata", async ({
+    tmp,
+  }) => {
+    const distQaLabIndex = bundledDistPluginFile("qa-lab", "index.js");
+    await setupStampedProject(tmp, {
+      files: {
+        [EXTENSION_INDEX]: "export default {};\n",
+        [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+        [DIST_EXTENSION_INDEX]: "export default {};\n",
+        [bundledPluginFile("qa-lab", "index.ts")]: "export default {};\n",
+        [bundledPluginFile("qa-lab", "openclaw.plugin.json")]:
+          '{"id":"qa-lab","configSchema":{"type":"object"}}\n',
+        [distQaLabIndex]: "export default {};\n",
+        [QA_LAB_PLUGIN_SDK_ENTRY]: "export {};\n",
+        [QA_RUNTIME_PLUGIN_SDK_ENTRY]: "export {};\n",
+      },
+      trackConfig: true,
+    });
+    // CI shape: the build rewrote a generated manifest, and QA bootstrap commands
+    // run the source launcher without private QA before the QA Gateway starts.
+    const gitStatus = ` M ${EXTENSION_MANIFEST}\0`;
+    const bootstrap = createCurrentGitSpawnRecorder({ gitStatus });
+    expect(
+      await runStatusCommand({
+        tmp,
+        spawn: bootstrap.spawn,
+        spawnSync: bootstrap.spawnSync,
+        env: { OPENCLAW_BUILD_PRIVATE_QA: "0" },
+        runRuntimePostBuild: syncBundledPluginMetadata,
+      }),
+    ).toBe(0);
+    expect(bootstrap.spawnCalls).toEqual([statusCommandSpawn()]);
+    await expect(fs.readFile(resolvePath(tmp, distQaLabIndex), "utf8")).resolves.toBe(
+      "export default {};\n",
+    );
+    await expectManifestId(tmp, bundledDistPluginFile("qa-lab", "openclaw.plugin.json"), "qa-lab");
+
+    const gateway = createCurrentGitSpawnRecorder({ gitStatus });
+    expect(
+      await runQaCommand({
+        tmp,
+        spawn: gateway.spawn,
+        spawnSync: gateway.spawnSync,
+        runRuntimePostBuild: syncBundledPluginMetadata,
+      }),
+    ).toBe(0);
+    expect(gateway.spawnCalls).not.toContainEqual(expectedBuildSpawn());
+  });
 });

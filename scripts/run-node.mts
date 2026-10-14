@@ -1435,8 +1435,14 @@ const withRunNodeRuntimePublication = async <T,>(deps: RunNodeDeps, publish: () 
 };
 
 const syncRuntimeArtifacts = async (deps: RunNodeDeps) => {
+  // Metadata sync prunes plugins outside its selection, and this refresh cannot
+  // recompile them. Keep the private QA plugins a private QA build compiled.
+  const privateQaBuild = deps.privateQaRequiredDistEntries.every(
+    (entry) => statMtime(entry, deps.fs) != null,
+  );
+  const env = privateQaBuild ? { ...deps.env, OPENCLAW_BUILD_PRIVATE_QA: "1" } : deps.env;
   try {
-    await deps.runRuntimePostBuild({ cwd: deps.cwd, env: deps.env });
+    await deps.runRuntimePostBuild({ cwd: deps.cwd, env });
   } catch (error) {
     logRunner(`Failed to write runtime build artifacts: ${getErrorMessage(error)}`, deps);
     return false;
