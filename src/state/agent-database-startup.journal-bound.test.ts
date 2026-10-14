@@ -144,8 +144,8 @@ it.each([
 });
 
 it("does not start queued journal reads after Gateway ownership changes", async () => {
-  const entered = createDeferredCore<void>();
-  const release = createDeferredCore<void>();
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
   let current = true;
   readJournal.mockImplementation(async () => {
     if (readJournal.mock.calls.length === 8) {
