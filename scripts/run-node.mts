@@ -28,6 +28,7 @@ import {
 } from "./lib/local-build-metadata.mts";
 import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
 import { acquireManagedCleanup } from "./lib/managed-cleanup-handoff.mts";
+import { pinnedBunEnv, requirePinnedBun } from "./lib/pinned-bun.mts";
 import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
   collectRunNodeBundledPluginBuildEntries,
@@ -1167,12 +1168,14 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.e
   return res.exitCode ?? 1;
 };
 
-const runOpenClaw = (deps: RunNodeDeps) =>
-  runNodeChild(
-    deps,
+const runOpenClaw = (deps: RunNodeDeps) => {
+  const bun = resolveTestRuntime(deps.env) === "bun" ? requirePinnedBun(deps.env) : undefined;
+  return runNodeChild(
+    bun ? { ...deps, env: { ...deps.env, ...pinnedBunEnv(bun, deps.env) } } : deps,
     [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args],
-    resolveTestRuntime(deps.env) === "bun" ? "bun" : deps.execPath,
+    bun ?? deps.execPath,
   );
+};
 
 const pipeSpawnedOutput = (
   childProcess: ChildProcess,
