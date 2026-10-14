@@ -104,8 +104,17 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         }
       };
       const lifecycle = (event: Event) => {
-        if (event.target instanceof Element && event.target.matches(surfaceSelector)) {
-          record(event.type, undefined, event.target);
+        if (!(event.target instanceof Element)) {
+          return;
+        }
+        // Tooltip events retarget or forward across the shadow boundary to their host.
+        const surface = event.target.matches("openclaw-tooltip")
+          ? event.target.shadowRoot?.querySelector(".oc-overlay")
+          : event.target.matches(surfaceSelector)
+            ? event.target
+            : null;
+        if (surface) {
+          record(event.type, undefined, surface);
         }
       };
       const events = ["overlay-show", "overlay-hide", "overlay-after-show", "overlay-after-hide"];
