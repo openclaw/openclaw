@@ -1,4 +1,5 @@
 import { serialize } from "node:v8";
+import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 
 const MAX_RESIDENT_SESSIONS = 128;
@@ -44,7 +45,7 @@ export function createSessionActorResidency() {
       const oversized = oversizedKey === key;
       drop(key);
       // Receipts own appended bodies; residency keeps navigation and byte accounting.
-      state.transcript.contextMetadata = state.hot.transcript.projection?.contextMetadata;
+      state.transcript.contextMetadata = projectSessionActorContextMetadata(state);
       state.transcript.payloads = new Map();
       // A sole resident is exempt from the byte cap; measure it when another key competes.
       if (residents.size === 1) {

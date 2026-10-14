@@ -6,7 +6,7 @@
     "databaseEngines": ["sqlite", "postgres"],
     "schemaVersions": {
       "state": 22,
-      "agent": 26
+      "agent": 27
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",

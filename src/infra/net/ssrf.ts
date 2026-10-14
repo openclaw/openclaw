@@ -652,16 +652,22 @@ export function createPinnedDispatcher(
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
   timeoutMs?: number,
+  streamTimeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
+  const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
   if (!policy || policy.mode === "direct") {
-    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
+    return createHttp1Agent(
+      { ...streamTimeouts, connect: withPinnedLookup(lookup, policy?.connect) },
+      timeoutMs,
+    );
   }
 
   if (policy.mode === "env-proxy") {
     return createHttp1EnvHttpProxyAgent(
       {
+        ...streamTimeouts,
         connect: withPinnedLookup(lookup, policy.connect),
         ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
       },
@@ -673,6 +679,7 @@ export function createPinnedDispatcher(
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   return createHttp1ProxyAgent(
     {
+      ...streamTimeouts,
       uri: proxyUrl,
       // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
       // transport hints for explicit proxies. Translate that to undici's

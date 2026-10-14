@@ -206,11 +206,20 @@ function readSettledToolCalls(
 }
 
 /** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
-export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) {
+export function resolveSettledToolBatchEvidence(
+  attempt: IncompleteTurnAttempt,
+  // Set only when the attempt stopped before its next model call: a user message after
+  // the current attempt's batch was steered into this run and does not start a new turn.
+  options?: { midTurn?: boolean },
+) {
   const snapshot = attempt.messagesSnapshot ?? [];
-  const latestUserIndex = snapshot.findLastIndex((message) => message.role === "user");
   let assistant = attempt.currentAttemptAssistant;
   let assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
+  const latestUserIndex = snapshot.findLastIndex(
+    (message, index) =>
+      message.role === "user" &&
+      !(options?.midTurn && assistantIndex >= 0 && index > assistantIndex),
+  );
   if (assistantIndex <= latestUserIndex || readSettledToolCalls(assistant).length === 0) {
     assistantIndex = snapshot.findLastIndex(
       (message, index) =>
