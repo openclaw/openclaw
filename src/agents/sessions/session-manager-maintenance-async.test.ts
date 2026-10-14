@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -53,28 +52,29 @@ async function appendUser(manager: SessionManager, text: string): Promise<string
   return (await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage(text, 1))).entryId;
 }
 
-it("prepares and publishes a 50 MiB transcript without copying immutable payloads", async () => {
+it("isolates prepared and published transcript rewrite payloads", async () => {
   const manager = SessionManager.inMemory("/synthetic");
-  const id = await manager.appendCustomEntryAsync("large-tool-output", {
-    chunks: Array.from({ length: 50 * 1024 }, () => ({ text: "x".repeat(1024) })),
+  const id = await manager.appendCustomEntryAsync("tool-output", {
+    chunks: [{ text: "original" }],
   });
   const original = manager.getEntry(id);
   if (original?.type !== "custom" || !isRecord(original.data)) {
-    throw new Error("Missing large transcript payload");
+    throw new Error("Missing transcript payload");
   }
-  const started = performance.now();
   const rewrite = await manager.prepareTranscriptRewriteAsync();
-  expect(performance.now() - started).toBeLessThan(50);
-  expect(rewrite.sessionManager.getEntry(id)).toBe(original);
-  expect(Object.isFrozen(original)).toBe(true);
-  expect(Object.isFrozen(original.data)).toBe(true);
-  expect(Reflect.set(original.data, "chunks", [])).toBe(false);
+  const prepared = rewrite.sessionManager.getEntry(id);
+  if (prepared?.type !== "custom" || !isRecord(prepared.data)) {
+    throw new Error("Missing prepared transcript payload");
+  }
+  expect(prepared).not.toBe(original);
+  prepared.data.chunks = [{ text: "prepared" }];
+  expect(original.data.chunks).toEqual([{ text: "original" }]);
   const replacementId = await appendUser(rewrite.sessionManager, "replacement");
   expect(manager.getEntry(replacementId)).toBeUndefined();
-  const publishing = performance.now();
   await rewrite.commit(new Map());
-  expect(performance.now() - publishing).toBeLessThan(50);
-  expect(manager.getEntry(id)).toBe(original);
+  expect(manager.getEntry(id)).toMatchObject({ data: { chunks: [{ text: "prepared" }] } });
+  prepared.data.chunks = [{ text: "later" }];
+  expect(manager.getEntry(id)).toMatchObject({ data: { chunks: [{ text: "prepared" }] } });
   expect(manager.getEntry(replacementId)).toMatchObject({
     appendMode: "side",
     message: { content: "replacement" },
@@ -248,8 +248,7 @@ it.each(["same", "independent"] as const)(
     if (source?.type !== "message" || source.message.role !== "user") {
       throw new Error("Missing hydrated source message");
     }
-    expect(Object.isFrozen(source)).toBe(false);
-    expect(Object.isFrozen(source.message.content)).toBe(true);
+    expect(Object.isFrozen(source.message.content)).toBe(false);
     vi.spyOn(manager, "prepareTranscriptRewrite").mockImplementation(() => {
       throw new Error("sync compatibility adapter used");
     });
@@ -260,7 +259,7 @@ it.each(["same", "independent"] as const)(
     }
     expect(snapshot).not.toBe(source);
     expect(snapshot.message).not.toBe(source.message);
-    expect(snapshot.message.content).toBe(source.message.content);
+    expect(snapshot.message.content).not.toBe(source.message.content);
     source.message.content = "local replacement";
     expect(snapshot.message.content).toEqual([{ type: "text", text: "original" }]);
     await rewrite.sessionManager.resetLeafAsync();

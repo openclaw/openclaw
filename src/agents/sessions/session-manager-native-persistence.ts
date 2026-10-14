@@ -27,7 +27,6 @@ import {
   type PersistRecordOptions,
   type PersistRecordResult,
 } from "./session-manager-persistence-entry.js";
-import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 /** Released synchronous SDK methods keep their native transaction and publication contract. */
@@ -127,7 +126,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
       if (!isCurrentView()) {
         return;
       }
-      const previous = cloneTranscriptView(this.captureTranscriptView());
+      const previous = structuredClone(this.captureTranscriptView());
       stageSqliteTransactionState(database, {
         stage: () => {},
         commit: () => {},
