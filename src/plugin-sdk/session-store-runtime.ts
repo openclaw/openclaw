@@ -26,6 +26,7 @@ import {
   patchSessionEntryCore as patchAccessorSessionEntry,
   readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
+  resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -310,8 +311,22 @@ export const readTranscriptStatsAsync: (
 
 export { readSessionStoreTranscriptStatsSync as readTranscriptStatsSync };
 
-/** Resolves the persisted session key for one SQLite transcript identity. */
-export { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
+/** @deprecated Await resolveTranscriptSessionKeyBySessionIdAsync. Removal follows a stable deprecation period. */
+export function resolveTranscriptSessionKeyBySessionId(
+  params: Parameters<typeof resolveAccessorTranscriptSessionKeyBySessionId>[0],
+): string | undefined {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-transcript-key",
+      method: "resolveTranscriptSessionKeyBySessionId",
+      replacement: "resolveTranscriptSessionKeyBySessionIdAsync",
+    });
+  }
+  return resolveAccessorTranscriptSessionKeyBySessionId(params);
+}
+
+/** Resolves the exact persisted transcript window, including historical session identities. */
+export { resolveTranscriptSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.js";
 
 /** @deprecated Use prepareSessionEntryPatch or applySessionEntryPatch. Removal follows a stable deprecation period. */
 export async function patchSessionEntry(

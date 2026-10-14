@@ -61,6 +61,10 @@ additional size exceeds 300 MiB, packaging stages only Codex for automatic setup
 The installer prefers these staged copies and records their bundled paths, so
 development builds do not mix a newer SDK with older registry plugins. Plugin
 updates and Doctor retain the same-build copies until the app itself is updated.
+Release automation passes `RELEASE_TAG` and its verified `RELEASE_SHA` so shallow,
+tagless checkouts retain the release layout. Staging rejects tag/version/commit
+mismatches. With only `RELEASE_TAG`, it fetches that tag when needed; without an
+explicit release identity, local builds use tags pointing at the current commit.
 The root tarball uses the repository-pinned pnpm packer; Corepack-only
 setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
 build-time Node and npm, then stages Bun and SQLite. No Node executable or

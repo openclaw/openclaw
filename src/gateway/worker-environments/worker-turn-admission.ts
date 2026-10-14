@@ -106,10 +106,9 @@ export function createRequiredWorkerTurnAdmission(options: WorkerTurnAdmissionOp
     assertLocalAllowed() {
       assertRequiredWorkerLocalExecution(getRuntimeConfig());
     },
-    assertCurrent(claim: LocalTurnPlacementClaim) {
+    assertCurrent(live: WorkerSessionPlacementRecord | undefined) {
       const required = getRuntimeConfig().cloudWorkers?.requiredProfile;
       if (required) {
-        const live = options.placements.get(claim.sessionId);
         const environment = live?.environmentId
           ? options.environments.get(live.environmentId)
           : undefined;

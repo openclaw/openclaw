@@ -3465,7 +3465,6 @@
 ["src/auto-reply/reply/agent-runner-execution.test-support.ts","../../agents/model-fallback-runner.js","9565e273e1679dc14e20000753081ee8a74ac238073a65254bafafd7f8a6a563",1]
 ["src/auto-reply/reply/agent-runner-execution.test-support.ts","../../config/sessions.js","3519a3204dff8157a4202c3deb38b16ca9005f68d4db28d8cc6d523ccdd63bb0",1]
 ["src/auto-reply/reply/agent-runner-execution.test-support.ts","../../infra/message-tool-run-outcome-store.js","3eff11c166fefd8f1031d747c8847a2efe4011125abf1cba6112a6d14036b308",1]
-["src/auto-reply/reply/agent-runner-execution.test-support.ts","../../runtime.js","81b078fa9eaac517a022b308f49176ca05a02af51c49a536fd8a415247a61548",1]
 ["src/auto-reply/reply/agent-runner-execution.test-support.ts","./current-turn-images.js","f71a6c78170b958ebbca450d6bd9f98d9e56ef15d52806134ec503ac2e0f0277",1]
 ["src/auto-reply/reply/agent-runner-memory.accounting.test.ts","../../agents/embedded-agent-runner/run-entry.js","706c5c98d2a7d97fc8680551fd29fea15ae8399ec36942f7cac598fc27c92319",1]
 ["src/auto-reply/reply/agent-runner-memory.accounting.test.ts","../../agents/embedded-agent.js","774405bb7675519887863006b31c0ef780b7a883b8204e7264a04bfddcec1dca",1]

@@ -518,15 +518,32 @@ function createAccountBindingManager<TKind extends string>(
     accountId,
     capabilities: { placements: ["current"] },
     /** @deprecated Use listBySessionAsync; removal follows a stable deprecation period. */
-    listBySession: (targetSessionKey) =>
-      listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope),
+    listBySession: (targetSessionKey) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.listBySession",
+        replacement: "SessionBindingAdapterV2.listBySessionAsync",
+      });
+      return listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope);
+    },
     /** @deprecated Use resolveByConversationAsync; removal follows a stable deprecation period. */
-    resolveByConversation: (ref) =>
-      ref.channel === params.channel
+    resolveByConversation: (ref) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.resolveByConversation",
+        replacement: "SessionBindingAdapterV2.resolveByConversationAsync",
+      });
+      return ref.channel === params.channel
         ? resolveCurrentConversationBindingRecord(conversationRef(ref.conversationId))
-        : null,
+        : null;
+    },
     /** @deprecated Use touchAsync; removal follows a stable deprecation period. */
     touch: (bindingId, at) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.touch",
+        replacement: "SessionBindingAdapterV2.touchAsync",
+      });
       const conversationId = conversationIdFromBinding(bindingId);
       if (conversationId) {
         touchAccountBindingConversation(preparation, conversationId, at ?? Date.now());
@@ -603,10 +620,16 @@ function createAccountBindingManager<TKind extends string>(
         context,
       ),
     /** @deprecated Use inspectByConversationAsync; removal follows a stable deprecation period. */
-    inspectByConversation: (ref) =>
-      ref.channel === params.channel
+    inspectByConversation: (ref) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.inspectByConversation",
+        replacement: "SessionBindingAdapterV2.inspectByConversationAsync",
+      });
+      return ref.channel === params.channel
         ? inspectCurrentConversationBindingRecord(conversationRef(ref.conversationId))
-        : null,
+        : null;
+    },
     inspectByConversationAsync: (ref) => readAccountBindingAsync(ref, true),
     resolveByConversationAsync: (ref) => readAccountBindingAsync(ref, false),
     touchAsync: async (bindingId, at) => {

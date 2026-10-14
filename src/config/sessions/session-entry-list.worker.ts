@@ -36,6 +36,7 @@ export function readSessionEntryList(
   let source: SessionEntryListWorkerResult["source"];
   let revision: string | undefined;
   let unchanged: true | undefined;
+  let nextCronRunUpdatedAt: number | null = null;
 
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -47,6 +48,7 @@ export function readSessionEntryList(
               database,
               resolveSqliteScope({ ...scope, sessionKey: "" }),
               scope,
+              { captureCronRunUpdatedAt: (value) => (nextCronRunUpdatedAt = value) },
             );
           if (
             scope.projection !== "list" ||
@@ -113,5 +115,11 @@ export function readSessionEntryList(
   if (!result.found && request.expectedIdentity?.key.startsWith("file:")) {
     throw new Error("Session listing lost its captured physical owner");
   }
-  return { entries: result.found ? result.value : [], source, revision, unchanged };
+  return {
+    entries: result.found ? result.value : [],
+    source,
+    revision,
+    unchanged,
+    ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
+  };
 }

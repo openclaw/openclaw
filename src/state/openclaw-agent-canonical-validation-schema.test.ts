@@ -492,6 +492,7 @@ describe("agent schema 25 migration", () => {
                 "DELETE FROM transcript_events WHERE session_id = 'previous-target'",
                 "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'target'",
                 "DELETE FROM session_entry_snapshots",
+                "UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = 'target'",
                 "UPDATE transcript_rewrite_watermarks SET generation = 'replacement-generation'",
                 "DROP VIEW retained_session_view",
               ]) {
