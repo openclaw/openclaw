@@ -1,7 +1,4 @@
-// Scoped tool schemas prune parameters the selected actions do not use, and merge the
-// surviving groups into one flat object. Without a group of its own `dice` advertised no
-// face at all; sharing the reaction group's `emoji` key would have retitled that parameter
-// for `react` whenever both actions are enabled.
+// Scoped groups merge into one flat object, so `dice` needs its own key to advertise a face.
 import { describe, expect, it } from "vitest";
 import { buildMessageToolSchemaFromActions } from "./message-tool-schema.js";
 
@@ -17,17 +14,10 @@ function schemaPropertiesFor(actions: readonly string[]) {
   return (schema as { properties?: Record<string, { description?: string }> }).properties ?? {};
 }
 
-function propertiesFor(actions: readonly string[]) {
-  return Object.keys(schemaPropertiesFor(actions));
-}
-
 describe("dice schema scoping", () => {
-  it("advertises the dice face when dice is in scope", () => {
-    expect(propertiesFor(["dice"])).toContain("diceEmoji");
-  });
-
-  it("does not drag reaction-only parameters into a dice-only schema", () => {
-    const properties = propertiesFor(["dice"]);
+  it("scopes a dice-only schema to the dice face", () => {
+    const properties = Object.keys(schemaPropertiesFor(["dice"]));
+    expect(properties).toContain("diceEmoji");
     expect(properties).not.toContain("remove");
     expect(properties).not.toContain("trackToolCalls");
   });

@@ -256,11 +256,7 @@ function matchesDeliveredSourceTargets(
   );
 }
 
-/**
- * Actions that address their conversation by target, so an exact target match is what proves
- * the delivery reached the current source. Reply-type actions resolve their conversation from
- * a message id instead and are decided separately in isDeliveredCurrentSourceReply.
- */
+/** Actions addressed by target, where an exact target match proves the delivery's conversation. */
 const TARGET_ADDRESSED_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
   "dice",
   "poll",
@@ -268,10 +264,8 @@ const TARGET_ADDRESSED_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessag
 ]);
 
 /**
- * Actions whose `actionParams` text and media are the payload the channel actually delivers.
- * The message tool's argument object is flat, so a roll or a poll can carry `message` or media
- * fields the channel ignores; mirroring those would write text into the transcript that no
- * recipient ever saw. Delivery classification above stays separate and keeps covering them.
+ * Actions whose `actionParams` text and media are what the channel delivers. The tool's argument
+ * object is flat, so others can carry text it ignores, and mirroring that invents a transcript.
  */
 const MIRRORABLE_SOURCE_ACTION_NAMES: ReadonlySet<string> = new Set<ChannelMessageActionName>([
   "send",
@@ -281,8 +275,7 @@ function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
   requireExactThread = false,
 ): params is MirrorableSourceReplyTranscriptParams {
-  // Transcript mirroring shares this predicate; actions carrying no text or media drop out
-  // on the empty-payload check there rather than needing a second action list here.
+  // Transcript mirroring shares this predicate and screens its own payload separately.
   if (
     !TARGET_ADDRESSED_ACTION_NAMES.has(params.action.trim().toLowerCase()) ||
     !hasCurrentSourceContext(params)
@@ -389,8 +382,7 @@ function resolveDeliveredCurrentSourceReply(
       return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
       // Send variants share destination proof; transcript mirroring stays send-only.
-      // Dice joins poll here: both address their conversation by target and deliver a visible
-      // message, while neither carries transcript text of its own.
+      // Dice joins poll: addressed by target, visibly delivered, carrying no transcript text.
       return (
         (isMessageToolSendActionName(params.action) ||
           params.action === "poll" ||
