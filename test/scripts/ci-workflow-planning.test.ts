@@ -2540,6 +2540,7 @@ describe("ci workflow guards", () => {
         includeReleaseOnlyPluginShards: false,
         compact: !release,
         compactNodeJobCap: release ? 70 : 77,
+        mainValidation: !release,
       });
       expect(plan.compactMode).toBe(release ? undefined : "pull-request");
       expect(

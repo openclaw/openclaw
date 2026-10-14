@@ -525,8 +525,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   it does not promote serial jobs or change worker limits. Preserve the separate
   300s ordered two-slot queue bound and runtime preparation charge.
   Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
-  budget. Native tooling rows containing the partitioned changed-Node planner proof
-  retain a 150s test budget through initial and measured packing. The partition keeps
+  budget; hourly hybrid main validation packs its tooling rows within 420s plus
+  60s setup to keep headroom under its 77-row cap. Native tooling rows containing
+  the partitioned changed-Node planner proof retain a 150s test budget through
+  initial and measured packing. The partition keeps
   two workers and serial outer admission. Ordinary self-hosted bins share promoted capacity across logical
   classes; the existing group exchange fills stranded slots without raising caps.
   Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
