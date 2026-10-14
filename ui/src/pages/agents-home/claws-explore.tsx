@@ -14,11 +14,16 @@ registerEnglishCatalog(registerAgentsHomeEnglish);
 
 function ClawsExploreContent(props: { onSelect?: (entry: ClawCatalogEntry) => void }) {
   const context = useApplication();
-  const [view, setView] = createStore({
-    entries: [] as ClawCatalogEntry[],
+  const [view, setView] = createStore<{
+    entries: ClawCatalogEntry[];
+    query: string;
+    loading: boolean;
+    error: string | null;
+  }>({
+    entries: [],
     query: "",
     loading: false,
-    error: null as string | null,
+    error: null,
   });
   const updateView = (patch: Partial<typeof view>) => {
     setView((state) => {

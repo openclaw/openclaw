@@ -627,6 +627,7 @@ function ClawsCatalogContent(props: ClawsDialogProps) {
       model.syncInitialSelection(value.initialEntry, value.initialPackageName, value.pageMode),
   );
   onCleanup(() => model.dispose());
+  // SAFETY: every view property is supplied by the get trap from model.view().
   const view = new Proxy({} as ClawsCatalogViewProps, {
     get(_target, key) {
       revision();
