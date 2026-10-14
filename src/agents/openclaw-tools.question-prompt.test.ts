@@ -43,7 +43,9 @@ vi.mock("./harness/gateway-question-dispatch.js", async (importOriginal) => {
           // its prompt gets a no-answer result after one event-loop turn instead of hanging.
           const sent = await Promise.race([
             hoisted.promptIsOut.then(() => true),
-            new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+            new Promise<false>((resolve) => {
+              setImmediate(() => resolve(false));
+            }),
           ]);
           if (!sent) {
             return { status: "expired" };

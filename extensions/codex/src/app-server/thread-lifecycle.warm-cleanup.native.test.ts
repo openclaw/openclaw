@@ -375,7 +375,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       context.onTestFinished(() => sibling?.release(siblingBinding.threadId));
       const before = requests.length;
       const leaseFailure = new Error("injected warm publication lease settlement failure");
-      const withLease = bindingStore.withLease;
+      const withLease = bindingStore.withLease.bind(bindingStore);
       const fault = vi
         .spyOn(bindingStore, "withLease")
         .mockImplementation(async (identity, run) => {

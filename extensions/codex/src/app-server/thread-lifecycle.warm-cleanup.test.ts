@@ -133,7 +133,9 @@ describe("Codex warm subscription cleanup", () => {
       const sibling = await claimCodexAppServerLiveThread(fixture.client, "active-sibling");
       expect(sibling).toBeDefined();
       const leaseFailure = new Error("warm publication lease settlement failed");
-      const withLease = testCodexAppServerBindingStore.withLease;
+      const withLease = testCodexAppServerBindingStore.withLease.bind(
+        testCodexAppServerBindingStore,
+      );
       const failedPublication = vi
         .spyOn(testCodexAppServerBindingStore, "withLease")
         .mockImplementation(async (identity, run) => {
