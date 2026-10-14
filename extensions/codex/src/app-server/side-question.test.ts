@@ -38,6 +38,7 @@ import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const {
+  codexHookCommand,
   readCodexAppServerBindingMock,
   isCodexAppServerNativeAuthProfileMock,
   getSharedCodexAppServerClientMock,
@@ -117,18 +118,6 @@ function flushDiagnosticEvents() {
   });
 }
 
-function codexHookCommand(config: unknown, key: string) {
-  const entries = (config as Record<string, unknown> | undefined)?.[key];
-  if (!Array.isArray(entries)) {
-    return undefined;
-  }
-  return (
-    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
-  )
-    .at(0)
-    ?.hooks?.at(0);
-}
-
 beforeAll(() => setRuntimeConfigSnapshot({}));
 afterAll(() => clearRuntimeConfigSnapshot());
 beforeEach(() => setRuntimeConfigSnapshot({}));
@@ -189,7 +178,8 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("rejects a waiting side question when its app-server client closes", async () => {
-    const client = createFakeClient({ completeTurn: false });
+    const turnStarted = createDeferred<void>();
+    const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const controller = new AbortController();
     let outcome: unknown;
@@ -199,18 +189,16 @@ describe("runCodexAppServerSideQuestion", () => {
       outcome = error;
     });
     try {
-      await vi.waitFor(() =>
-        expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
-      );
+      await Promise.race([
+        turnStarted.promise,
+        run.then(() => {
+          throw new Error("Side-question fixture ended before turn/start", { cause: outcome });
+        }),
+      ]);
       client.close(new Error("app-server transport disconnected"));
-      await vi.waitFor(
-        () =>
-          expect(outcome).toEqual(
-            expect.objectContaining({
-              message: expect.stringContaining("closed"),
-            }),
-          ),
-        { timeout: 200 },
+      await run;
+      expect(outcome).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("closed") }),
       );
       expect(outcome).toBeInstanceOf(AggregateError);
       expect(outcome).toMatchObject({
@@ -858,7 +846,11 @@ describe("runCodexAppServerSideQuestion", () => {
         },
       };
       const savedAppConfig = structuredClone(nativeAppConfig);
-      const client = createFakeClient({ completeTurn: rejectsReplay });
+      const turnStarted = createDeferred<void>();
+      const client = createFakeClient({
+        completeTurn: rejectsReplay,
+        onTurnStart: () => turnStarted.resolve(),
+      });
       const baseRequest = client.request.getMockImplementation()!;
       client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
         if (method === "app/installed") {
@@ -955,9 +947,12 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(methods).not.toContain("thread/fork");
         return;
       }
-      await vi.waitFor(() =>
-        expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      );
+      await Promise.race([
+        turnStarted.promise,
+        run.then(() => {
+          throw new Error("Side question finished before starting its turn");
+        }),
+      ]);
       try {
         await handleClientRequestWhenReady(client, {
           id: "side-approval-policy",

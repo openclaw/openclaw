@@ -5,7 +5,7 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatStateController } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,

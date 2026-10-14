@@ -4,6 +4,7 @@ import {
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import type { SessionEntryWritePostimage } from "./session-entry-write-postimage.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 
 type PublishTranscript = (authority: SessionTranscriptAuthority) => SessionTranscriptAuthority;
@@ -77,8 +78,59 @@ export function readSessionActorTransactionState(
   return scope.state;
 }
 
-export function cloneSessionActorStoredState(
+const sharedCollections = new WeakSet<object>();
+
+/** Rows and payloads are replaced, never edited; detach their collection on its first write. */
+export function writableSessionActorMap<K, V>(rows: Map<K, V>): Map<K, V> {
+  return sharedCollections.has(rows) ? new Map(rows) : rows;
+}
+
+export function writableSessionActorNavigation(
+  navigation: SessionActorStoredState["transcript"]["navigation"],
+): SessionActorStoredState["transcript"]["navigation"] {
+  return sharedCollections.has(navigation) ? [...navigation] : navigation;
+}
+
+export function replaceSessionActorStoredEntry(
+  state: SessionActorStoredState,
+  sessionKey: string,
+  postimage: Pick<SessionEntryWritePostimage, "entry" | "row" | "window">,
+): void {
+  state.entryRows = writableSessionActorMap(state.entryRows);
+  state.entryRows.set(sessionKey, {
+    entry: structuredClone(postimage.entry),
+    row: postimage.row,
+  });
+  state.hot.entry = structuredClone(postimage.entry);
+  state.window = postimage.window;
+}
+
+/** Fork only mutable containers; discarded working state cannot change the resident preimage. */
+export function forkSessionActorStoredState(
   state: SessionActorStoredState,
 ): SessionActorStoredState {
-  return structuredClone(state);
+  for (const collection of [
+    state.entryRows,
+    state.pendingInputs,
+    state.completions,
+    state.transcript.identities,
+    state.transcript.active,
+    state.transcript.payloads,
+    state.transcript.navigation,
+  ]) {
+    sharedCollections.add(collection);
+  }
+  return {
+    ...state,
+    hot: {
+      ...state.hot,
+      transcript: {
+        ...state.hot.transcript,
+        version: { ...state.hot.transcript.version },
+        watermark: { ...state.hot.transcript.watermark },
+      },
+    },
+    window: state.window && { ...state.window },
+    transcript: { ...state.transcript },
+  };
 }

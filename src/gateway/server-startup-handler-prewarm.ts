@@ -27,7 +27,6 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
         }
       },
     },
-    { name: "connection", load: () => import("./server/ws-connection/message-handler.js") },
     ...["chat.history", "chat.send", "sessions.list"].map((method): GatewayHandlerPrewarmItem => ({
       name: method,
       load: async (isCancelled) => {
@@ -103,7 +102,10 @@ export function scheduleGatewayHandlerPrewarm(params: {
   let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
-    if (stopped || nextIndex >= items.length) {
+    if (stopped) {
+      return;
+    }
+    if (nextIndex >= items.length) {
       return;
     }
     void (async () => {

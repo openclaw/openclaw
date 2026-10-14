@@ -480,12 +480,13 @@ describe("config cli integration", () => {
     });
   });
 
-  it("redacts SecretRef ids and plugin-only sensitive fields in JSON/text order", async () => {
+  it("redacts SecretRef ids and core and plugin schema-sensitive fields in JSON/text order", async () => {
     const secretRefId = "CONFIG_GET_TEST_TOKEN";
-    const schemaOnlySecrets = ["first-private-route", "second-private-route"];
+    const schemaOnlySecrets = ["first-private-route", "second-private-route", "core-private-route"];
     await withConfig(
       `${JSON.stringify(
         {
+          tools: { web: { fetch: { headers: { "X-Route": schemaOnlySecrets[2] } } } },
           channels: {
             discord: {
               enabled: false,
@@ -524,6 +525,11 @@ describe("config cli integration", () => {
           path: "plugins.entries.codex.config.appServer.headers",
           runtime: output.runtime,
         });
+        await runConfigGet({
+          path: "tools.web.fetch.headers",
+          json: true,
+          runtime: output.runtime,
+        });
 
         expect(output.errors).toStrictEqual([]);
         expect(output.logs).toStrictEqual([
@@ -531,6 +537,7 @@ describe("config cli integration", () => {
           `${REDACTED_SENTINEL}\n`,
           JSON.stringify(REDACTED_SENTINEL),
           `${REDACTED_SENTINEL}\n`,
+          JSON.stringify({ "X-Route": REDACTED_SENTINEL }, null, 2),
         ]);
         expect(output.logs.join("\n")).not.toContain(secretRefId);
         for (const secret of schemaOnlySecrets) {
@@ -561,17 +568,25 @@ describe("config cli integration", () => {
       expectedError: "schema construction unavailable",
     },
   ])("fails closed before config get emits values when $name", async (testCase) => {
-    await withConfig("{ gateway: { port: 19001 } }\n", async () => {
+    const raw = JSON.stringify({
+      plugins: {
+        entries: { codex: { config: { appServer: { headers: { "X-Route": "private-route" } } } } },
+      },
+    });
+    await withConfig(raw, async () => {
       await testCase.installFailure();
       const output = createTestRuntime();
 
-      await expect(runConfigGet({ path: "gateway.port", runtime: output.runtime })).rejects.toThrow(
-        "__exit__:1",
-      );
+      await expect(
+        runConfigGet({
+          path: "plugins.entries.codex.config.appServer.headers",
+          runtime: output.runtime,
+        }),
+      ).rejects.toThrow("__exit__:1");
 
       expect(output.logs).toStrictEqual([]);
       expect(output.errors.join("\n")).toContain(testCase.expectedError);
-      expect(output.errors.join("\n")).not.toContain("19001");
+      expect(output.errors.join("\n")).not.toContain("private-route");
     });
   });
 

@@ -6,6 +6,7 @@ import type {
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import "../../lib/toast-host.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
   setStoredSessionCatalogHidden,
@@ -27,7 +28,7 @@ import {
   selectedRowKeys,
   sessionMenu,
 } from "./multi-select-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar multi-select", () => {
   it("restores the thread link when Tab exits its keyboard context menu", async () => {
@@ -247,10 +248,10 @@ describe("AppSidebar catalog session rows", () => {
 
       expect(contextMenu.defaultPrevented).toBe(true);
       const menu = sidebar.querySelector<HTMLElement>(".sidebar-catalog-view-menu");
-      const hide = menu?.querySelector<HTMLElement>('wa-dropdown-item[value="hide-catalog"]');
+      const hide = menu?.querySelector<HTMLElement>('[data-value="hide-catalog"]');
       expect(menu).not.toBeNull();
       expect(hide).not.toBeNull();
-      menu?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: hide } }));
+      hide?.click();
       await sidebar.updateComplete;
 
       expect(loadStoredHiddenSessionCatalogIds().has("codex")).toBe(true);
@@ -408,8 +409,8 @@ describe("AppSidebar catalog session rows", () => {
         updateComplete: Promise<boolean>;
       };
       await menu.updateComplete;
-      const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
-      expect([...items].map((item) => item.getAttribute("value"))).toEqual([
+      const items = menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+      expect([...items].map((item) => item.dataset.value)).toEqual([
         "viewer",
         "import",
         "terminal",

@@ -8,6 +8,7 @@ import {
 
 const directory = resolveOpenClawCompileCacheDirectory({
   installRoot: fileURLToPath(new URL(".", import.meta.url)),
+  prewarm: true,
 });
 const respawnEnv = resolveOpenClawCompileCacheRespawnEnv({ directory });
 if (respawnEnv) {

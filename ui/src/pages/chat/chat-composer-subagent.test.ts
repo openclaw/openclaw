@@ -6,13 +6,13 @@ import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { ChatPane } from "./chat-pane-render.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { createGatewayBrowserClientFixture, createPaneTestHost } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
-import { renderChat, type ChatProps } from "./chat-view.ts";
+import { renderChat, type ChatProps } from "./chat-view.tsx";
 import { renderChatComposer } from "./components/chat-composer.tsx";
 import {
   installTranscriptDomMocks,
@@ -58,7 +58,7 @@ function createRecoveringComposer(draft: string) {
   };
 }
 
-class SuggestionRecoveryPane extends ChatPane {
+class SuggestionRecoveryPane extends ChatPaneRuntime {
   chatProps: ChatProps | undefined;
 
   initialize({ state, context }: ReturnType<typeof createRefreshChatPane>) {
@@ -80,7 +80,6 @@ class SuggestionRecoveryPane extends ChatPane {
     return html``;
   }
 }
-customElements.define("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
 
 it.each([
   { draft: "Keep this draft", control: false, cached: false },
@@ -152,6 +151,22 @@ it("keeps ordinary input usable while the initial placement turn is pending", ()
   }
 });
 
+it("explains an unresolved initial turn while offline without blocking the outbox", () => {
+  const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  state.hasPendingInitialTurn = () => true;
+  state.connected = false;
+  try {
+    const { input, send } = draw();
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
+      "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+    );
+    expect(input.disabled).toBe(false);
+    expect(send.disabled).toBe(false);
+  } finally {
+    render(nothing, container);
+  }
+});
+
 it("updates held Send when an edited draft changes between control and ordinary input", () => {
   const { state, container, draw } = createRecoveringComposer("/stop");
   let renderRequested = false;
@@ -192,7 +207,7 @@ it.each(["Keep this suggestion", "/stop"])(
     const fixture = createRecoveringComposer(draft);
     const { state, context, container } = fixture;
     state.sessionKey = "agent:main:suggestion-recovery";
-    const pane = new SuggestionRecoveryPane();
+    const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
     pane.initialize(fixture);
     const methods = context.gateway.snapshot.hello?.features?.methods;
     assert(methods);
@@ -432,6 +447,9 @@ it.each([
     };
     try {
       const initial = draw();
+      await waitForSolid(() =>
+        expect(container.querySelector("[data-chat-model-select]")).not.toBeNull(),
+      );
       expect(state.chatModelCatalogInitialized).toBe(false);
       expect(initial.modelSetupRequired).toBe(false);
       expect(initial.modelRequiredReason).toBeUndefined();

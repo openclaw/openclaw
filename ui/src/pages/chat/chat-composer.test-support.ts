@@ -1,7 +1,8 @@
 import { render } from "lit";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -45,8 +46,12 @@ export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
 }
 
 export function createComposerContainer() {
-  const context: Pick<ApplicationContext, "gateway" | "agentSelection"> = {
-    gateway: createApplicationGateway().gateway,
+  const gateway = createApplicationGateway().gateway;
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  onTestFinished(() => runtimeConfig.dispose());
+  const context: Pick<ApplicationContext, "gateway" | "agentSelection" | "runtimeConfig"> = {
+    gateway,
+    runtimeConfig,
     agentSelection: {
       state: { selectedId: "main", scopeId: "main" },
       intentRevision: 0,
@@ -55,7 +60,7 @@ export function createComposerContainer() {
       subscribe: () => () => {},
     },
   };
-  // SAFETY: Disconnected composer fixtures only read Gateway and agent selection; MCP discovery is unavailable.
+  // SAFETY: Disconnected composer and transcript fixtures only consume these capabilities.
   return createApplicationContextProvider(context as ApplicationContext);
 }
 

@@ -33,7 +33,6 @@ import {
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
-  downgradeOpenAIFunctionCallReasoningPairs,
   dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
   sanitizeGoogleTurnOrdering,
@@ -237,6 +236,21 @@ function normalizeAssistantReplayBlockContent(
       sanitizedContent.push({ ...record, text: strippedText });
     }
     removedSilentText ||= isSilentText;
+  }
+  const spoken = message.openclawDelivery?.tts?.text;
+  if (
+    spoken?.trim() &&
+    !sanitizedContent.some((block) => {
+      const record = asOptionalRecord(block);
+      return (
+        record?.type === "toolCall" ||
+        (record?.type === "text" && typeof record.text === "string" && record.text.trim())
+      );
+    })
+  ) {
+    // Restore speech only in model history; the stored and displayed turn stays unchanged.
+    sanitizedContent.push({ type: "text", text: spoken });
+    touched = true;
   }
   if (!touched) {
     return message;
@@ -628,20 +642,15 @@ export async function sanitizeSessionHistory(
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
   });
-  // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
-  // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
-  // so both call and result ids are rewritten together. Covered by unit replay
-  // tests plus live OpenAI/Codex and generic replay-repair model tests.
+  // Repair missing tool results before normalizing paired call/result ids.
   if (policy.repairToolUseResultPairing) {
     messages = sanitizeToolUseResultPairingForModel(messages, isOpenAIResponsesApi);
   }
   if (isOpenAIResponsesApi) {
-    messages = downgradeOpenAIFunctionCallReasoningPairs(
-      normalizeOpenAIResponsesToolCallIds(
-        // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
-        // invalidated by a switch, every later replay must keep dropping them.
-        dropStaleOpenAIReasoning(messages, latestModelSwitchTimestamp ?? undefined),
-      ),
+    messages = normalizeOpenAIResponsesToolCallIds(
+      // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
+      // invalidated by a switch, every later replay must keep dropping them.
+      dropStaleOpenAIReasoning(messages, latestModelSwitchTimestamp ?? undefined),
     );
   } else if (policy.sanitizeToolCallIds && policy.toolCallIdMode) {
     messages = sanitizeToolCallIdsForCloudCodeAssist(messages, policy.toolCallIdMode, {

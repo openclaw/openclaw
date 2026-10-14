@@ -9,7 +9,7 @@ import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../test-helpers/native-gateways.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 setupSidebarTest();
 afterEach(clearNativeGatewayTestState);
@@ -31,10 +31,12 @@ describe("AppSidebar native Gateway menu", () => {
       ],
       currentId: "profile:team",
     };
-    const publish = () =>
+    const publish = () => {
+      Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: snapshot });
       window.dispatchEvent(
         new CustomEvent("openclaw:native-gateways-changed", { detail: snapshot }),
       );
+    };
     publish();
     const { sidebar } = await mountSidebar(
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
@@ -47,15 +49,14 @@ describe("AppSidebar native Gateway menu", () => {
     };
     const choose = async (value: string, modifiers?: MouseEventInit, eventType = "click") => {
       const menu = await open();
-      const item = menu.querySelector<HTMLElement>(`wa-dropdown-item[value="${value}"]`)!;
+      const item = menu.querySelector<HTMLElement>(`[data-value="${value}"]`)!;
       expect(item).not.toBeNull();
       if (modifiers) {
         item.dispatchEvent(
           new MouseEvent(eventType, { bubbles: true, cancelable: true, ...modifiers }),
         );
       } else {
-        // Web Awesome emits wa-select for keyboard activation as well as ordinary clicks.
-        menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+        item.click();
       }
       await sidebar.updateComplete;
       expect(sidebar.querySelector(".sidebar-identity-menu")).toBeNull();
@@ -63,9 +64,7 @@ describe("AppSidebar native Gateway menu", () => {
     const menu = await open();
     expect(menu.querySelector(".sidebar-customize-menu__title")?.textContent).toBe("Gateway");
     const rows = snapshot.gateways.map((gateway) =>
-      menu.querySelector<HTMLElement>(
-        `wa-dropdown-item[value="gateway:${encodeURIComponent(gateway.id)}"]`,
-      )!,
+      menu.querySelector<HTMLElement>(`[data-value="gateway:${encodeURIComponent(gateway.id)}"]`)!,
     );
     expect(
       rows.map((row) => row.querySelector(".sidebar-customize-menu__text")?.textContent?.trim()),
@@ -75,7 +74,7 @@ describe("AppSidebar native Gateway menu", () => {
     ).toEqual(["Connected", "Unreachable", "Unknown status"]);
     expect(
       rows.map((row) =>
-        row.querySelector('[slot="details"] kbd')?.textContent?.replace(/\s+/gu, "").trim(),
+        row.querySelector(".oc-menu-item__details kbd")?.textContent?.replace(/\s+/gu, "").trim(),
       ),
     ).toEqual(["⌘1", undefined, "⌘3"]);
     for (const shortcut of menu.querySelectorAll("kbd")) {
@@ -85,7 +84,7 @@ describe("AppSidebar native Gateway menu", () => {
     expect(rows[1]!.querySelector(".sidebar-gateway-primary")).toBeNull();
     expect(rows[1]!.querySelector(".sidebar-gateway-check")).not.toBeNull();
     expect(rows[0]!.querySelector(".sidebar-gateway-check")).toBeNull();
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: rows[1] }, bubbles: true }));
+    rows[1]!.click();
     await sidebar.updateComplete;
     expect(postMessage).not.toHaveBeenCalled();
     expect(sidebar.querySelector(".sidebar-identity-menu")).toBeNull();
@@ -109,13 +108,9 @@ describe("AppSidebar native Gateway menu", () => {
     snapshot.currentId = "local";
     publish();
     const singleMenu = await open();
-    expect(singleMenu.querySelector('wa-dropdown-item[value="gateway:local"]')).not.toBeNull();
-    expect(
-      singleMenu.querySelector('wa-dropdown-item[value="command:gateway-set-primary"]'),
-    ).toBeNull();
-    expect(
-      singleMenu.querySelector('wa-dropdown-item[value="command:gateway-settings"]'),
-    ).not.toBeNull();
+    expect(singleMenu.querySelector('[data-value="gateway:local"]')).not.toBeNull();
+    expect(singleMenu.querySelector('[data-value="command:gateway-set-primary"]')).toBeNull();
+    expect(singleMenu.querySelector('[data-value="command:gateway-settings"]')).not.toBeNull();
 
     snapshot.gateways = Array.from({ length: 10 }, (_, index) => ({
       ...snapshot.gateways[0]!,
@@ -125,10 +120,13 @@ describe("AppSidebar native Gateway menu", () => {
     snapshot.currentId = "gateway-1";
     publish();
     await sidebar.updateComplete;
-    const manyRows = sidebar.querySelectorAll('wa-dropdown-item[value^="gateway:"]');
+    const manyRows = sidebar.querySelectorAll('[data-value^="gateway:"]');
     expect(manyRows).toHaveLength(10);
     expect(
-      manyRows[8]!.querySelector('[slot="details"] kbd')?.textContent?.replace(/\s+/gu, "").trim(),
+      manyRows[8]!
+        .querySelector(".oc-menu-item__details kbd")
+        ?.textContent?.replace(/\s+/gu, "")
+        .trim(),
     ).toBe("⌘9");
     expect(manyRows[9]!.querySelector("kbd")).toBeNull();
   });

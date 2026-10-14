@@ -270,6 +270,8 @@ export function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSes
           agent: (eb) => eb.ref("excluded.agent"),
           runtime_session_name: (eb) => eb.ref("excluded.runtime_session_name"),
           identity_json: (eb) => eb.ref("excluded.identity_json"),
+          resume_agent_session_id: (eb) => eb.ref("excluded.resume_agent_session_id"),
+          resume_acpx_session_id: (eb) => eb.ref("excluded.resume_acpx_session_id"),
           mode: (eb) => eb.ref("excluded.mode"),
           runtime_options_json: (eb) => eb.ref("excluded.runtime_options_json"),
           cwd: (eb) => eb.ref("excluded.cwd"),

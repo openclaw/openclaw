@@ -286,7 +286,7 @@ suite.define(() => {
         if (entrance === "sidebar") {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
-            .locator("wa-dropdown.sidebar-agent-menu")
+            .locator(".sidebar-agent-menu")
             .getByRole("menuitem", { name: "Other", exact: true })
             .click();
           await waitForControlUiRoute(page, {

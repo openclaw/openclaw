@@ -1,4 +1,5 @@
 import { spawnSync as realSpawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -80,6 +81,71 @@ describe("Git runtime promotion", () => {
     await promotion.activate();
     await promotion.cleanup();
   }
+
+  it("stages a packaged plugin's checkout self-link without Windows symbolic-link privileges", async () => {
+    const candidateRoot = await createCandidate();
+    const relative = path.join("dist", "extensions", "x", "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(path.join(candidateRoot, relative)), { recursive: true });
+    await fs.symlink(candidateRoot, path.join(candidateRoot, relative), "junction");
+    const copy = fs.cp.bind(fs);
+    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      // Windows' native directory copy can expand junctions despite verbatimSymlinks.
+      expect(options?.filter).toBeTypeOf("function");
+      return copy(source, destination, {
+        ...options,
+        filter: async (sourceEntry, destinationEntry) => {
+          if (!(await options?.filter?.(sourceEntry, destinationEntry))) {
+            return false;
+          }
+          if (
+            (await fs.lstat(sourceEntry)).isSymbolicLink() &&
+            (await fs.stat(sourceEntry)).isDirectory()
+          ) {
+            throw Object.assign(new Error("Directory symbolic-link privilege is unavailable"), {
+              code: "EPERM",
+            });
+          }
+          return true;
+        },
+      });
+    });
+    const symlink = fsSync.symlinkSync.bind(fsSync);
+    const junctionSpy = vi.spyOn(fsSync, "symlinkSync").mockImplementation((target, dest, type) => {
+      if (type !== "junction") {
+        throw Object.assign(new Error("Symbolic-link privilege is unavailable"), { code: "EPERM" });
+      }
+      symlink(target, dest, type);
+    });
+    const hostPlatform = process.platform;
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    let promotion: Awaited<ReturnType<typeof preparePromotion>>;
+    try {
+      promotion = await prepareGitRuntimePromotion(
+        root,
+        candidateRoot,
+        async (argv, options) => {
+          platform.mockReturnValue(hostPlatform);
+          try {
+            return await runCommandWithTimeout(argv, options);
+          } finally {
+            platform.mockReturnValue("win32");
+          }
+        },
+        5000,
+        path.dirname(candidateRoot),
+      );
+    } finally {
+      platform.mockRestore();
+      copySpy.mockRestore();
+      junctionSpy.mockRestore();
+    }
+    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
+    await promotion.activate();
+    expect((await fs.lstat(path.join(root, relative))).isSymbolicLink()).toBe(true);
+    expect(await fs.realpath(path.join(root, relative))).toBe(root);
+    await expectRuntime(root, "candidate");
+    await promotion.cleanup();
+  });
 
   it.each([false, true])(
     "does not repeat completed restoration after authority is lost (previous runtime: %s)",

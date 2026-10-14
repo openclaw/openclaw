@@ -78,8 +78,6 @@ export async function configureMockSubagentRegistryPersistence(methods: {
   const worker = await import("../state/openclaw-state-worker-store.js");
   const { rowToSubagentRunRecord } =
     await import("./subagents/registry/subagent-registry.store.codec.js");
-  const { subagentRunRowVersion } =
-    await import("./subagents/registry/subagent-registry.store.row.js");
   const original = worker.runOpenClawStateWorkerOperation;
   const spy = vi
     .spyOn(worker, "runOpenClawStateWorkerOperation")
@@ -124,10 +122,6 @@ export async function configureMockSubagentRegistryPersistence(methods: {
               options?.assertCurrent?.();
               return {
                 writeId: write.writeId,
-                versions: new Map([
-                  ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-                  ...write.deleteRunIds.map((id) => [id, null] as const),
-                ]),
                 notices: [],
               };
             },
@@ -350,15 +344,6 @@ export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSuba
     params: SubagentRunParamsOverrides,
   ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
 };
-
-export function createSubagentRegistryHarness(
-  registry: SubagentRegistryModule,
-): SubagentRegistryHarness {
-  return {
-    ...registry,
-    registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
-  };
-}
 
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
   const now = Date.now();

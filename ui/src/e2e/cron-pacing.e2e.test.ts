@@ -53,7 +53,7 @@ suite.define(() => {
         await page.locator(".cron-table__row").waitFor();
         if (action === "duplicate") {
           await page.locator(".cron-job-menu__trigger").click();
-          await page.locator('wa-dropdown-item[value="clone"]').click();
+          await page.locator('[data-value="clone"]').click();
         } else {
           await page.locator(".cron-table__row").click();
           await page.locator('[data-test-id="cron-schedule-kind-at"]').click();

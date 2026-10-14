@@ -96,6 +96,6 @@ export type ConfirmAndStartUpdateParams = {
 };
 
 export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {
-  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.ts");
+  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.tsx");
   await confirmAndStartUpdateRuntime(params);
 }

@@ -46,8 +46,13 @@ jobs:
       ) }}
     # Admission runs before job concurrency, so an empty metadata edit cannot
     # cancel a useful dispatch. Other changes retain the receiver's policy.
+    # Each event kind owns its lane, as in the receiver's reference dispatcher:
+    # pull_request_target and review runs leave check runs on the PR head, and
+    # GitHub keeps counting a cancelled one there (UNSTABLE), so a comment or
+    # review must never cancel a PR event. Review activity runs are independent
+    # observations and never share a group; comments serialize per comment.
     concurrency:
-      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}-{2}', github.repository, github.event_name, (github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') && github.run_id || github.event.comment.id || github.event.issue.number || github.event.pull_request.number || github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
       MAINTAINER_REVIEW_REQUIRED: ${{ (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association || github.event.issue.author_association) || (contains(github.event.pull_request.labels.*.name, 'maintainer') || contains(github.event.issue.labels.*.name, 'maintainer'))) && !(contains(github.event.pull_request.labels.*.name, 'clawsweeper:autofix') || contains(github.event.issue.labels.*.name, 'clawsweeper:autofix')) && !(contains(github.event.pull_request.labels.*.name, 'clawsweeper:automerge') || contains(github.event.issue.labels.*.name, 'clawsweeper:automerge')) }}

@@ -29,19 +29,30 @@ describe("portaled hovercard presentation ownership", () => {
     vi.useFakeTimers();
     const view = fixture();
     const card = createPortaledHovercard("solid-preview", "preview");
-    const link = document.createElement("a");
-    link.href = "#inside";
-    link.textContent = "Preview";
+    const content = document.createElement("div");
+    const first = document.createElement("a");
+    first.href = "#first";
+    const second = document.createElement("a");
+    second.href = "#second";
+    content.append(first, second);
     // The application delegates these events before the portal installs native listeners.
     delegateEvents(["focusin", "focusout"]);
-    mountSolid(() => link, { container: card });
+    mountSolid(() => content, { container: card });
     view.controller.mount(view.trigger, card, "vertical");
     onTestFinished(() => view.controller.reset());
-    link.focus();
+
+    first.focus();
     view.controller.handleCardPointerLeave();
     await vi.advanceTimersByTimeAsync(200);
     expect(card.isConnected).toBe(true);
-    expect(document.activeElement).toBe(link);
+    expect(document.activeElement).toBe(first);
+    expect(view.dismiss).not.toHaveBeenCalled();
+
+    second.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(second);
+    expect(view.dismiss).not.toHaveBeenCalled();
 
     view.trigger.href = "#outside";
     view.trigger.focus();

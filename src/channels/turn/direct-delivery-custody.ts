@@ -17,6 +17,15 @@ type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDeli
   release: () => void;
 };
 
+export class PendingFinalDeliveryNotOwnedError extends PlatformMessageNotDispatchedError {
+  constructor(state: string) {
+    super("Pending final delivery ownership changed before platform dispatch", {
+      cause: new Error(`pending final delivery is ${state}`),
+      retryable: false,
+    });
+  }
+}
+
 export const NO_PENDING_FINAL_CUSTODY: DirectPendingFinalCustody = {
   assertPlatformSendAuthorized: () => undefined,
   onPlatformSendDispatch: () => Promise.resolve(),
@@ -42,8 +51,7 @@ export async function createDirectPendingFinalCustody(
     fallbackStorePath,
   );
   const identity = completion ? (({ kind: _kind, ...value }) => value)(completion) : undefined;
-  let firstDispatch = true;
-  let admissionTail = Promise.resolve();
+  let admission: Promise<void> | undefined;
   return {
     bindPendingFinalDelivery: (nextPayload) =>
       setReplyPayloadMetadata(nextPayload, {
@@ -52,27 +60,21 @@ export async function createDirectPendingFinalCustody(
       }),
     assertPlatformSendAuthorized: () => assertSessionWriterDeliveryAuthorized(authority),
     release,
-    onPlatformSendDispatch: () => {
-      const expectedStates = firstDispatch
-        ? (["prepared", "queued"] as const)
-        : (["unknown"] as const);
-      firstDispatch = false;
-      const admission = admissionTail.then(async () => {
-        assertSessionWriterDeliveryAuthorized(authority);
+    onPlatformSendDispatch: async () => {
+      // One logical delivery retains custody across all of its physical posts.
+      await (admission ??= (async () => {
         if (!completion) {
           return;
         }
-        const result = await settlePendingFinalDelivery(completion, "unknown", expectedStates);
+        const result = await settlePendingFinalDelivery(completion, "unknown", [
+          "prepared",
+          "queued",
+        ]);
         if (result.state !== "unknown") {
-          throw new PlatformMessageNotDispatchedError(
-            "Pending final delivery ownership changed before platform dispatch",
-            { cause: new Error(`pending final delivery is ${result.state}`) },
-          );
+          throw new PendingFinalDeliveryNotOwnedError(result.state);
         }
-      });
-      // Every physical post must observe the state left by the prior post's check.
-      admissionTail = admission.catch(() => undefined);
-      return admission;
+      })());
+      assertSessionWriterDeliveryAuthorized(authority);
     },
   };
 }

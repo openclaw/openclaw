@@ -50,6 +50,7 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import * as sessionLifecycleState from "./session-accessor.sqlite-lifecycle-state.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import {
@@ -255,6 +256,44 @@ describe("SQLite historical session disk budget", () => {
     },
   );
 
+  it("evicts bulk historical generations without analyzing unchanged session entries", async () => {
+    for (let index = 0; index < 65; index++) {
+      await createHistoricalTranscript({
+        content: "Historical generation " + index,
+        nextSessionId: `bulk-live-${index}`,
+        sessionId: `bulk-history-${index}`,
+        sessionKey: `agent:main:bulk-history-${index}`,
+        updatedAt: index + 1,
+      });
+    }
+    settlePhysicalUsage();
+    database().db.exec("ANALYZE;");
+    const readWindowStatistics = () =>
+      database()
+        .db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+        .get("idx_agent_session_windows_updated_at");
+    expect(readWindowStatistics()).toEqual({ stat: expect.stringMatching(/^130\b/u) });
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+    });
+
+    expect(result?.removedEntries).toBe(65);
+    expect(database().db.prepare("SELECT COUNT(*) AS count FROM session_windows").get()).toEqual({
+      count: 65,
+    });
+    for (let index = 0; index < 65; index++) {
+      expect(
+        loadSessionEntryReadOnly({ sessionKey: `agent:main:bulk-history-${index}`, storePath }),
+      ).toMatchObject({ sessionId: `bulk-live-${index}` });
+    }
+    // Planner estimates can remain stale after history-only deletion; its entry
+    // count did not change and transcript readers use session-scoped indexes.
+    expect(readWindowStatistics()).toEqual({ stat: expect.stringMatching(/^130\b/u) });
+  });
+
   it("pages past protected archives to evict cap-created sessions under pressure", async () => {
     const capKey = "agent:main:explicit:cap-archived";
     const manualKey = "agent:main:explicit:manual-archived";
@@ -440,7 +479,7 @@ describe("SQLite historical session disk budget", () => {
     const removeArchive = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
       if (args[0] === archivePath) {
         expect(cachedDatabase.db.isOpen).toBe(true);
-        closeCachedOpenClawAgentDatabase(cachedDatabase, { eviction: true });
+        closeCachedOpenClawAgentDatabase(cachedDatabase);
         expect(cachedDatabase.db.isOpen).toBe(false);
       }
       return await rm(...args);

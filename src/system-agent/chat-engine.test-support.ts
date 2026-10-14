@@ -248,7 +248,7 @@ export async function createOAuthVerifiedBinding(
     auth: { authProfileId: profileId, authFingerprint, ...harnessBinding.auth },
     deps: {
       ...harnessBinding.deps,
-      loadAuthProfileStoreForRuntime: vi.fn(() => ({
+      loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => ({
         version: 1,
         profiles: { [profileId]: credential },
       })) as never,

@@ -31,6 +31,7 @@ import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
   isPinnableUiSessionRow,
+  isNativeCatalogAdoptionSessionKey,
   parseAgentSessionKey,
   isSubagentSessionKey,
   resolveUiConfiguredMainKey,
@@ -188,6 +189,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
+    if (action.kind === "delete" && isNativeCatalogAdoptionSessionKey(row.key)) {
+      return;
+    }
     if (action.kind === "stop-cloud-worker") {
       return this.changeHeaderPlacement(row, "reclaim");
     }
@@ -387,7 +391,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           break;
         }
         case "snooze":
-          await operations.snoozeSessionWithUndo(host, session, action.snoozedUntil, scope);
+          await operations.snoozeSessionWithUndo(host, session, action, scope);
           break;
         case "wake":
           await operations.patchSession(host, session, { snoozedUntil: null }, scope, {
@@ -595,6 +599,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const loads = [this.loadHeaderPlatform(client, this.connectionGeneration)];
     // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
     const immediateRoot =
+      row.deviceFolder?.path ||
       (row.execNode ? row.execCwd?.trim() : undefined) ||
       row.spawnedWorkspaceDir?.trim() ||
       row.spawnedCwd?.trim() ||

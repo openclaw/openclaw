@@ -6,6 +6,7 @@ import process from "node:process";
 import {
   enableOpenClawCompileCache as enableInstallCompileCache,
   resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
@@ -82,6 +83,25 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   env?: NodeJS.ProcessEnv;
   prepareWriteError?: () => Promise<(message: string) => void | Promise<void>>;
 }): Promise<boolean> {
+  if (!isSourceEntry(params.currentFile) && isForegroundGatewayRunArgv(process.argv)) {
+    const env = resolveOpenClawCompileCacheRespawnEnv({
+      directory: resolveOpenClawCompileCacheDirectory({
+        installRoot: resolveEntryInstallRoot(params.currentFile),
+        env: params.env,
+        foregroundGateway: true,
+      }),
+      env: params.env,
+      foregroundGateway: true,
+    });
+    if (env) {
+      const args = [...process.execArgv, params.currentFile, ...process.argv.slice(2)];
+      if (process.platform !== "win32" && process.execve) {
+        process.execve(process.execPath, [process.execPath, ...args], env);
+      }
+      const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
+      return runRespawnedChild(process.execPath, args, env);
+    }
+  }
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     compileCacheDir: getCompileCacheDir?.(),
@@ -118,8 +138,12 @@ export function enableOpenClawCompileCache(params: {
 }): void {
   if (!isSourceEntry(params.currentFile)) {
     enableInstallCompileCache({
-      directory: resolveOpenClawCompileCacheDirectory(params),
+      directory: resolveOpenClawCompileCacheDirectory({
+        ...params,
+        foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+      }),
       env: params.env,
+      foregroundGateway: isForegroundGatewayRunArgv(process.argv),
     });
   }
 }

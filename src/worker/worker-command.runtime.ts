@@ -1,3 +1,4 @@
+import { realpathSync, statSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
@@ -156,10 +157,28 @@ async function runManagedWorkerCommand(
         const current = { turnId: request.turnId, controller: new AbortController() };
         active = current;
         running = (async (descriptor: WorkerLaunchDescriptor, idleRetention?: true) => {
+          // Device-folder admission binds a canonical path. Do not independently
+          // resolve a replacement symlink into a different execution target.
+          const assignedWorkspace = descriptor.assignment.workspaceDir;
+          const identity = request.canonicalWorkspace ? statSync(assignedWorkspace) : undefined;
+          const assertWorkspaceCurrent = identity
+            ? () => {
+                const currentStat = statSync(assignedWorkspace);
+                if (
+                  realpathSync.native(assignedWorkspace) !== assignedWorkspace ||
+                  currentStat.dev !== identity.dev ||
+                  currentStat.ino !== identity.ino
+                ) {
+                  throw new Error("managed worker canonical workspace changed before execution");
+                }
+              }
+            : undefined;
+          assertWorkspaceCurrent?.();
           const workspaceDir = await realpath(descriptor.assignment.workspaceDir);
           const workerContainmentRoot = await realpath(
             descriptor.assignment.workerContainmentRoot ?? workspaceDir,
           );
+          assertWorkspaceCurrent?.();
           const nextBinding = JSON.stringify({
             environmentId: descriptor.admission.environmentId,
             sessionId: descriptor.admission.sessionId,
@@ -188,6 +207,7 @@ async function runManagedWorkerCommand(
           if (closed) {
             return;
           }
+          assertWorkspaceCurrent?.();
           const result = await runWorkerDescriptor(
             {
               ...descriptor,
@@ -198,6 +218,7 @@ async function runManagedWorkerCommand(
             },
             {
               environmentStateDir: environment.stateDir,
+              ...(assertWorkspaceCurrent ? { assertWorkspaceCurrent } : {}),
               nativeInference: options.nativeInference,
               signal: current.controller.signal,
               ...(options.lifetime

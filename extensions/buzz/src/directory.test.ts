@@ -140,7 +140,7 @@ describe("Buzz live directory", () => {
             }),
           );
         }
-        handlers.oneose();
+        queueMicrotask(() => handlers.oneose());
         return { close: vi.fn() };
       },
     );

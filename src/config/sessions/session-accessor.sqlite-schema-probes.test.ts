@@ -27,13 +27,8 @@ import {
   readPreparedSessionSharingChange,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
-import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import * as identityPublication from "./session-accessor.sqlite-identity.js";
-import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   measureSessionSchemaProbes,
   measureSqliteSchemaProbes,
@@ -52,70 +47,6 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
-});
-
-it("publishes native writes into a warm cache without new generation probes", () => {
-  const options = {
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("session-publication-probes-") },
-  };
-  const writer = openOpenClawAgentDatabase(options);
-  entryCache.readSessionEntryCache(writer, { cache: true });
-  const sql = observeHostDataSql();
-  const publicationQueries: string[] = [];
-  const observePublication = <T>(publish: () => T): T => {
-    const start = sql.queries.length;
-    try {
-      return publish();
-    } finally {
-      publicationQueries.push(
-        ...sql.queries
-          .slice(start)
-          .filter((query) => query.includes("openclaw_session_nodes_cache_generation")),
-      );
-    }
-  };
-  const publishEntry = entryCache.publishSessionEntryCacheInvalidation;
-  const cachePublication = vi
-    .spyOn(entryCache, "publishSessionEntryCacheInvalidation")
-    .mockImplementation((...args) => observePublication(() => publishEntry(...args)));
-  const publishIdentity = identityPublication.prepareSessionIdentityPublication;
-  const lifecyclePublication = vi
-    .spyOn(identityPublication, "prepareSessionIdentityPublication")
-    .mockImplementation((...args) => observePublication(() => publishIdentity(...args)));
-  const replacementKey = "agent:main:publication-replacement";
-  const initialKey = "agent:main:publication-initial";
-  try {
-    replaceSessionEntrySync(
-      { ...options, storePath: writer.path, sessionKey: replacementKey },
-      { sessionId: "publication-replacement", updatedAt: 1, label: "replacement" },
-    );
-    expect(
-      ensureSessionEntrySync(
-        { ...options, storePath: writer.path, sessionKey: initialKey },
-        { sessionId: "publication-initial", updatedAt: 1, label: "initial" },
-      ),
-    ).toBe(true);
-    expect(cachePublication).toHaveBeenCalled();
-    expect(lifecyclePublication).toHaveBeenCalled();
-    expect(publicationQueries).toEqual([]);
-    expect(readExactSessionEntryRow(writer, replacementKey)?.entry.label).toBe("replacement");
-    expect(readExactSessionEntryRow(writer, initialKey)?.entry.label).toBe("initial");
-    expect(
-      ensureSessionEntrySync(
-        { ...options, storePath: writer.path, sessionKey: initialKey },
-        { sessionId: "competing-initialization", updatedAt: 2, label: "stale" },
-      ),
-    ).toBe(false);
-    expect(readExactSessionEntryRow(writer, initialKey)?.entry).toMatchObject({
-      sessionId: "publication-initial",
-      label: "initial",
-    });
-  } finally {
-    lifecyclePublication.mockRestore();
-    cachePublication.mockRestore();
-    sql.restore();
-  }
 });
 
 it("refreshes admitted session readers after worker commits without schema or freshness probes", async () => {

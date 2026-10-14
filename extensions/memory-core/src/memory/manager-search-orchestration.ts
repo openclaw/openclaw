@@ -136,7 +136,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const database = this.publishedDatabase;
     const assertReadOwner = () => {
       opts?.signal?.throwIfAborted();
-      if (database.closed || !database.db.isOpen || this.publishedDatabase !== database) {
+      if (!database.isOpen || this.publishedDatabase !== database) {
         throw new Error("Memory retrieval changed its captured database owner");
       }
     };
@@ -350,7 +350,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         searchSyncEnabled &&
         !capacitySyncInFlight &&
         !formatUpgradePendingKeywordOnly(repairedIndexIdentity) &&
-        (this.dirty || this.sessionsDirty)
+        this.dirty
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {

@@ -11,10 +11,17 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+For runtime contributors, start with
+[database access in workers](/reference/database-schemas/worker-access): execution
+owners, admission once per load, scoped write receipts, memory-only final
+authority guards, and session actors. The
+[migration inventory](/reference/database-schemas/worker-access-inventory)
+records remaining main-thread call sites and the ratchet that prevents growth.
+
 PostgreSQL shared-state generation requires PostgreSQL 16+, preserves lazy feature
 fragments, and keeps engine schema versions in lockstep. See
 [shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
-for catalog equivalence and the explicit v22 pending-promotion exceptions.
+for catalog equivalence and the portable v22 identity columns.
 
 The Gateway process is the single owner of every OpenClaw database and its state.
 Its workers and native handles share that ownership. Committed write receipts
@@ -27,6 +34,20 @@ keep a transaction when their results require one consistent snapshot.
 CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
+
+Admitted updater mutation guards read current recovery rows directly rather than
+starting a synchronous snapshot subprocess for every effect. Explicit
+artifact-preserving inspection still uses private snapshots. Initial recovery
+admission, finalization checks, executor authority, and refusal of newly committed
+recovery remain unchanged; no recovery decision is cached across an await.
+
+Before Doctor's pre-repair capture admits live SQLite reads, maintenance reuses
+the source content revision while the database, WAL, and journal file identities,
+sizes, and nanosecond modification/change timestamps remain unchanged. Capture
+checks still evaluate current custody, quarantine, and update admission each time;
+the final metadata observation invalidates cached rows even when a write happens
+during revision selection. Changed source files require a fresh revision and ledger read. Backup ordering,
+stored bytes, schemas, and rollback behavior are unchanged.
 
 Agent deletion status is loaded on first admission and retained per agent in the
 physical shared database's process-owned facts. Journal writers publish pending,
@@ -55,6 +76,13 @@ internal maintenance against subsequent revocation; it is never retained across
 asynchronous work or a lock wait. Schemas, stored formats, retention, permissions,
 and update behavior are unchanged.
 
+Update-history workers bound commit-admission waits to one second. On timeout,
+the transaction rolls back before the same worker command retries, preserving
+FIFO ordering and rereading the current rows. Fresh admission waits outside
+`BEGIN IMMEDIATE`, leaving the serving Gateway's writer free while the updater
+host is busy. Authority refusals and uncertain rollback outcomes are not retried;
+required update and recovery records retain their existing durability.
+
 Database-fact readers do not contact the host inside a transaction. Missing writer
 registrations or unpublished facts remain unknown until the transaction closes;
 schema readers retain their conservative snapshot validation. The next read
@@ -80,6 +108,15 @@ does not redirect that operation to the replacement file; the next admission or
 open detects it through the database lifecycle owner. Commit authority checks and
 Doctor's explicit verification remain in place.
 
+Fresh agent databases install the current canonical schema directly, without
+running legacy migration discovery or repairing indexes that were just created.
+After the creation transaction commits, the schema owner publishes the admitted
+catalog and canonical-validation facts for later opens and workers. Tracked DDL
+and rollback still invalidate those facts; existing databases retain their first
+admission and migration checks. Connection lock timeouts are assigned through
+the shared per-handle owner so repeated setup does not repeat the PRAGMA.
+Schemas, stored bytes, and upgrade or downgrade behavior are unchanged.
+
 Chat input actors reuse their native owner’s admitted physical identity and
 canonical location, without queuing another writer reservation just to acquire
 the actor. Cold owners still prepare their database identity first. Captured
@@ -92,19 +129,32 @@ commits independently of reply delivery. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
 for ordering, rollback, and the writer families that still retain native guards.
 
-SQLite format, schema-version, integrity, canonical-index, and
-table-existence validation runs on a physical database's first admission.
-The admitted facts are shared with all workers and handles while any connection
-remains open. Final close retires those facts; a later reopen validates again. File identity uses
-volume, inode, and stable birthtime captured once with `fstat` on the retained
-admission descriptor, not SQL. Admission lookups and established borrowers reuse
-those shared facts without checking the pathname again. Native open and reopen
-still identify replacement files, and creation witnesses retain their physical
-file check. A replaced or
-restored file needs its own first validation. Migration and repair owners validate
-their changes and publish the new facts after successful DDL settlement; later
-runtime consumers do not recheck them. Doctor and explicit verification retain
-their checks, and observed corruption still revokes admission.
+SQLite format, schema-version, integrity, canonical-index, and table-existence
+validation runs once per physical database per process load. A regular
+`<database>.seal` file can carry admitted facts across clean restarts: the owner
+writes it after a successful `TRUNCATE` checkpoint and native close, and unlinks
+it before the next write. Startup reuses it only when its checksum, schema
+identity, device, inode, stable birthtime, size, and nanosecond modification time
+match, journals are absent or empty, and full verification is at most seven days
+old. A hit skips startup snapshot, readiness, schema, and integrity inspection,
+including post-ready scans. The plain checksum-protected write needs no rename
+or fsync protocol; an incomplete seal falls back to full validation.
+
+Admitted facts are shared with all workers and handles while the database is open.
+Final close releases their in-memory payloads; a clean-close seal restores validated
+facts on reopen without SQL. A close that cannot seal requires fresh admission.
+File identity uses volume, inode, and stable
+birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
+Admission lookups and established borrowers reuse those shared facts without
+checking the pathname again. Native open and reopen still identify replacement
+files, and creation witnesses retain their physical file check. A replaced or
+restored file needs fresh admission. Migration and repair owners validate their
+changes and publish new facts after successful DDL settlement. Doctor and explicit
+verification retain full checks, and observed corruption still revokes admission.
+Silent corruption with unchanged metadata is outside the seal's guarantee and
+is caught by normal SQLite access or the next full verification. See
+[clean-close seal and integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+for the crash argument, verification interval, and maintenance behavior.
 
 Shared-state and agent read-only connections reuse bounded prepared statements
 under their native connection lifecycle. Prepared-statement reuse alone does not
@@ -115,17 +165,35 @@ Current-row authority checks remain at their effect boundaries. Cached rows insi
 an active SQLite snapshot use that snapshot's identity and the connection's local
 mutation revision. They never carry a current committed-write revision or become
 reusable after the snapshot ends. Autocommit caches use the owning writer's receipts.
-Closing a connection clears its prepared statements and row caches. Final close
-also retires physical-database admission, keeping only the host's identity descriptor
-until explicit retirement can safely close it without releasing sibling POSIX locks.
+Closing a connection clears its prepared statements and row caches. Confirmed close
+retains the physical database's completed validation facts for later opens in the
+same process. Explicit retirement closes the host identity descriptor only after
+all sibling native handles have drained, preserving their POSIX locks.
+
+The shared-state reader pool keeps its first worker warm for the normal handle
+idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
+Retirement uses the pool's existing task and native-resource settlement so an
+active read or retained lease is not interrupted.
+
+Transcript history and search lanes likewise retire surplus workers after 30
+seconds idle. Each lane keeps one worker until its existing five-minute idle
+retirement, which waits for logical reader leases to be released. Surplus
+retirement preserves those leases and waits for active tasks; a later concurrent
+read starts another worker on demand.
 
 Canonical auth reads pass a compact projection of the live owner's schema facts
 (user version and the two auth table classifications) to the isolated child. The
-child reads current credential rows and closes its native reader before transferring
-them, without repeating schema admission on each request. It retains neither schema
-catalogs nor open handles between requests. Cold, snapshot, and artifact-preserving
-reads still admit their own database; owner DDL invalidates the next projection,
-and a replacement physical file cannot borrow the previous file's facts.
+child reads current credential rows through its bounded native reader pool without
+repeating connection setup or schema admission on each request. Retained readers
+are bound to the request's admitted physical identity; the parent joins child
+cleanup before database deletion. Cold, snapshot, and artifact-preserving reads
+still admit their own database; owner DDL invalidates the next projection, and a
+replacement physical file cannot borrow the previous file's reader or facts.
+
+Synchronous plugin discovery inside workers likewise borrows the existing
+shared-state reader pool. Each pass reads current rows, while the native reader
+and its admission survive until worker cleanup or idle expiry. Main-thread
+one-shot reads and artifact-preserving snapshots keep their scoped lifetimes.
 
 Worker dispatch carries snapshots prepared by the admission owner when it publishes
 facts or writer custody. Unchanged requests reuse the registry revision without
@@ -171,9 +239,22 @@ transactional repair, and integrity checks remain with their existing owners.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the published facts. Missing objects use the existing installation
 transaction, which publishes the new schema facts on commit; rollback cannot
-publish a schema that did not commit. Ordinary connection replacement and data
+publish a schema that did not commit. Admission publications use the active
+connection’s transaction state and the store’s shared publication anchor, so
+PostgreSQL transactions also defer facts until commit and discard them on rollback.
+Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
+
+Audit lifecycle bindings, node-worker launch companions, worker placement moves,
+skill-library and worker-environment preparation, goal receipts, Board preparation,
+and memory origin/provenance preparation reuse these admitted objects even on
+their first use of a warm connection. Redundant DDL would revoke retained profile
+authority, so an existing table is not recreated just to prepare a store. Retired
+memory triggers are removed only when present; imported memory rows still receive
+their existing provenance backfill. Private update and Windows workspace lease
+owners likewise create their table only when missing. No schema version, stored
+shape, upgrade, or downgrade behavior changes.
 
 Shared-state bootstrap checks native table options once after installing the
 canonical schema. When every ordinary table is already STRICT, it skips legacy
@@ -236,6 +317,17 @@ Placement projections read placement, move, pending-result, journal, and environ
 facts in one statement per bounded batch. Batches share the existing read
 transaction; journal and result-claim checks consume those same snapshot facts.
 Optional columns come from admitted schema facts and refresh with that owner.
+
+Placement retirement checks the inventory once at startup, then checks only IDs
+changed by placement receipts or session identity mutations. Clean idle passes
+perform no retirement reads. Unknown evidence and failed cleanup remain pending
+for the existing minute sweep. Config, store topology, and uncertain session
+storage publications request a fresh inventory scan. Retirement predicates and
+remote environment teardown keep their existing authority checks.
+
+Skills discovery shares installed-plugin inventory facts across the workspaces in
+one worker scan. Each new scan starts with a fresh plugin cache, so installed
+plugin changes remain visible without rereading the same index for every agent.
 
 Shared-state read operations retain their admission revision through their
 synchronous domain read. ACP metadata reuses at most 128 rows per connection
@@ -313,12 +405,17 @@ uncertain outcomes, and service restart reloads it. Active notifications retain
 their current subscription checks and delivery receipts; persisted subscriptions
 and receipt retention are unchanged.
 
-The Gateway does not schedule daily full-database scans. Admission-requested
-background checks stay limited to the requested agent database: `quick_check`
-for clean restart proof, or a full check after proven same-boot process death or
-native WAL admission without a verification receipt while the verifier is running.
-See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
-for the provenance requirements and operator-requested verification.
+The Gateway does not schedule daily full-database scans. Startup reuses recent
+clean-close seals or performs the required full validation; a seal hit does not
+queue a post-ready verification scan. Doctor and explicit verification retain
+full checks. See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+for the seven-day verification interval and operator-requested verification.
+
+Gateway startup and restart checks admit only configured agent database targets.
+Retained stores for unconfigured agents remain untouched for Doctor to inspect.
+An incompatible secondary agent database refuses that agent's sessions with
+`openclaw doctor --fix` guidance, without blocking healthy agents or restarting
+the Gateway. Shared-state and required system-agent checks remain strict.
 
 Two mechanisms back that contract. CI runs
 `scripts/check-native-state-schema-version.mjs`, which fails the build when the

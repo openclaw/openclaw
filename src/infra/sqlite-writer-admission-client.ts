@@ -1,5 +1,6 @@
 import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readAgentDatabaseExecutionAuthority } from "../state/openclaw-agent-execution-authority.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
@@ -21,6 +22,11 @@ const TIMED_OUT = 3;
 function assertRequestCustody(owner: SqliteWorkerOperationContext): void {
   if (owner.requestCustody && !readSqliteWorkerRequestCustody(owner.requestCustody)) {
     const refusal = new SqliteWorkerError("SQLite worker request custody is revoked", "closed");
+    owner.refusal = refusal;
+    throw refusal;
+  }
+  if (owner.executionAuthority && !readAgentDatabaseExecutionAuthority(owner.executionAuthority)) {
+    const refusal = new SqliteWorkerError("SQLite execution authority is revoked", "closed");
     owner.refusal = refusal;
     throw refusal;
   }

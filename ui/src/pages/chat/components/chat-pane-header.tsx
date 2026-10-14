@@ -181,7 +181,7 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
               type="button"
               title={t("chat.sessionHeader.renameTooltip")}
               aria-label={t("chat.sessionHeader.renameAria", { title: props.title })}
-              onClick={props.onBeginRename}
+              onClick={() => props.onBeginRename()}
             >
               <SessionTitle {...props} />
             </button>
@@ -325,6 +325,7 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
         class={[
           "chat-pane__header",
           {
+            "chat-pane__header--mobile": props.mergedChrome,
             "chat-pane__header--closable": props.onClosePane !== undefined,
             "chat-pane__header--stacked-status":
               props.narrow && (props.runningSubagentCount ?? 0) > 0,
@@ -372,7 +373,7 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </openclaw-tooltip>
           </Show>
           <IdentityCrumbs {...props} /> <LitContent value={props.publicAccessIndicator} />
-          {hasSharingControl() ? undefined : (
+          {props.mergedChrome || hasSharingControl() ? undefined : (
             <LitContent
               value={renderStandalonePersonLink(
                 renderSessionOwnerChip(
@@ -393,17 +394,19 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
               )}
             />
           )}
-          {props.showOwnerChip && props.session?.participants?.length ? (
+          {!props.mergedChrome && props.showOwnerChip && props.session?.participants?.length ? (
             <openclaw-viewer-facepile
               class="chat-pane__participants"
               prop:staticParticipants={props.session.participants}
               prop:totalCount={props.session.participantCount}
               prop:maxVisible={4}
               prop:personActivity={props.personActivity}
-              variant="session"
             />
           ) : undefined}
-          <LitContent value={props.placementControl} /> <LitContent value={props.presence} />
+          <LitContent value={props.placementControl} />
+          <Show when={!props.mergedChrome}>
+            <LitContent value={props.presence} />
+          </Show>
         </div>
         <div class="chat-pane__header-trailing">
           <LitContent value={props.detailsControl} />
@@ -426,8 +429,13 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
             <LitContent value={props.runAction} />
             <LitContent value={props.sharingControl} />
-            <ChatPaneLayoutMenu {...props} />
-            <LitContent value={props.sessionMenuAction} />
+            <Show when={props.mergedChrome}>
+              <LitContent value={props.sessionMenuAction} />
+            </Show>
+            <ChatPaneLayoutMenu {...props} mobile={props.mergedChrome} />
+            <Show when={!props.mergedChrome}>
+              <LitContent value={props.sessionMenuAction} />
+            </Show>
           </div>
         </div>
         <Show when={props.narrow}>

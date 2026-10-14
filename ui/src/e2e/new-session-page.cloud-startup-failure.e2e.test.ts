@@ -53,7 +53,7 @@ suite.define(() => {
         await gateway.waitForRequest("environments.list");
         await page.locator("#new-session-where-trigger").click();
         await page
-          .locator("wa-popover.new-session-page__where-popover")
+          .locator(".oc-popover.new-session-page__where-popover")
           .getByRole("button", { name: "aws", exact: true })
           .click();
         await page.getByRole("switch", { name: "Incognito" }).click();
@@ -198,7 +198,7 @@ suite.define(() => {
           await gateway.waitForRequest("environments.list");
           await page.locator("#new-session-where-trigger").click();
           await page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator(".oc-popover.new-session-page__where-popover")
             .getByRole("button", { name: "aws", exact: true })
             .click();
           const composer = page.locator(".new-session-page__message");
@@ -282,7 +282,9 @@ suite.define(() => {
             await outbox.getByText("later ordinary turn", { exact: true }).waitFor();
             await outbox.getByText("Waiting for reconnect", { exact: true }).waitFor();
             expect(await outbox.count()).toBe(1);
-            expect(await pane.locator(".agent-chat__composer-status-band").count()).toBe(0);
+            await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
+              "The initial message is unresolved.",
+            );
             await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain(
               "Waiting for reconnect",
             );

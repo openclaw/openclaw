@@ -8,6 +8,7 @@ import {
   type WatchSubscription,
 } from "@openclaw/fs-safe/watch";
 import {
+  FS_RECONCILE_MS,
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
 } from "../infra/fs-observation-mode.js";
@@ -171,6 +172,7 @@ export function createConfigFileAdapter(opts: {
         subscription: watch(plan.root, {
           scopes: plan.scopes,
           mode: next.mode,
+          intervalMs: FS_RECONCILE_MS,
           pollIntervalMs: resolveFsObservationIntervalMs(),
           signal: next.lifetime.signal,
           onInvalidate: (hint) =>

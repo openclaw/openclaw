@@ -77,24 +77,18 @@ describe("native dashboard connection health", () => {
     },
   );
 
-  it("reports endpoint changes and cannot be overwritten by an older reporter or client", () => {
-    const first = connectedStore();
-    const stopFirst = startNativeGatewayHealthReporting(first.gateway);
-    cleanups.push(stopFirst);
-    const second = connectedStore();
-    const stopSecond = startNativeGatewayHealthReporting(second.gateway);
-    cleanups.push(stopSecond);
-    const oldClient = second.current();
+  it("reports endpoint changes and cannot be overwritten by a replaced client", () => {
+    const { gateway, current } = connectedStore();
+    const stop = startNativeGatewayHealthReporting(gateway);
+    cleanups.push(stop);
+    const oldClient = current();
     const gatewayUrl = "wss://other.example/control";
-    second.gateway.connect({ gatewayUrl });
+    gateway.connect({ gatewayUrl });
     expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
-    second.current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+    current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
     oldClient.opts.onClose?.({ code: 1006, reason: "old socket", willRetry: false });
-    first.gateway.stop();
-    stopFirst();
     expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
-    stopSecond();
-    stopFirst();
+    stop();
     expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
   });
 });

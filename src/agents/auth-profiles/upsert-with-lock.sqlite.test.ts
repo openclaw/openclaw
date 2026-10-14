@@ -4,13 +4,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
@@ -25,6 +31,7 @@ import {
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import * as storeRuntime from "./store-runtime.js";
+import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import type { ApiKeyCredential, OAuthCredential } from "./types.js";
 import {
   persistAuthProfileBatch,
@@ -58,6 +65,19 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   clearAuthProfileMigrationDiagnostics();
 });
+
+function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
+  const shared = openOpenClawStateDatabase();
+  const { databasePath } = captureAuthProfileStorePersistenceSnapshot(agentDir).owner;
+  const source = readDatabasePathIdentitySync(databasePath);
+  const authority = captureAuthProfileCredentialAuthority(
+    captureOpenClawStateWorkerContext({ path: shared.path }),
+    { databasePath, identity: `${source.key}:${source.birthtime ?? ""}` },
+    selectedProfileId,
+  );
+  authority.observe(loadPersistedAuthProfileStore(agentDir)?.profiles[selectedProfileId]);
+  return authority;
+}
 
 function apiKey(key: string): ApiKeyCredential {
   return { type: "api_key", provider: "openai", key };
@@ -657,6 +677,7 @@ describe("auth profile batch persistence", () => {
         agentDir,
       );
 
+      const authority = retainPersistedCredential(agentDir, targetId);
       await persistAuthProfileBatch({
         agentDir,
         profiles: [{ profileId: targetId, credential: apiKey("sk-fresh") }],
@@ -664,6 +685,7 @@ describe("auth profile batch persistence", () => {
         allowOAuthGenerationReplacement: true,
       });
 
+      expect(authority.readCurrentCredential()).toEqual(apiKey("sk-fresh"));
       expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
         version: 1,
         profiles: {

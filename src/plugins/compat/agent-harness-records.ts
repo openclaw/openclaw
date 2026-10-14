@@ -7,13 +7,16 @@ const AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD = {
   introduced: "2026-09-08",
   deprecated: "2026-10-04",
   warningStarts: "2026-10-04",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "stable-deprecation-period",
   replacement:
-    "Await hostCapabilities.createToolSurfaceAsync or createOpenClawCodingToolsAsync with the existing arguments. Released synchronous factories retain their array results and completion timing until the next Plugin SDK major and explicit breaking-release approval.",
+    "Await hostCapabilities.createToolSurfaceAsync or createOpenClawCodingToolsAsync with the existing arguments. Released synchronous factories retain their array results and completion timing until an announced later stable release and explicit breaking-release approval.",
   docsPath: "/plugins/sdk-migration/compatibility-policy#harness-tool-construction",
-  surfaces: ["AgentHarnessHostCapabilities.createToolSurface", "createOpenClawCodingTools"],
+  surfaces: [
+    "AgentHarnessHostCapabilities.createToolSurface",
+    "openclaw/plugin-sdk/agent-harness.createOpenClawCodingTools",
+  ],
   diagnostics: [
-    "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    "TypeScript @deprecated annotations and migration documentation; bounded capability-family warnings on legacy preparation",
   ],
   tests: [
     "src/plugin-sdk/agent-harness-async-compat.test.ts",

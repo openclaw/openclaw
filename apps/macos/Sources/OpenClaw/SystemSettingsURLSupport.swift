@@ -20,15 +20,17 @@ enum SystemSettingsURLSupport {
                 "x-apple.systempreferences:com.apple.preference.notifications",
             ]
         }
-        let pane = switch capability {
+        let pane: String? = switch capability {
         case .notifications: "Notifications"
-        case .accessibility: "Accessibility"
+        case .accessibility, .eventPosting, .computerControl, .canvas: "Accessibility"
         case .screenRecording: "ScreenCapture"
         case .microphone: "Microphone"
         case .speechRecognition: "SpeechRecognition"
         case .camera: "Camera"
+        case .cameraEnabled: nil
         case .location: "LocationServices"
         }
+        guard let pane else { return [] }
         return [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_\(pane)",
             "x-apple.systempreferences:com.apple.preference.security",

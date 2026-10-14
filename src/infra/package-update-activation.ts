@@ -341,7 +341,7 @@ export async function settlePendingPackageActivation(
       initial.intent === null &&
       initial.publications.length === 0) ||
       initial.phase === "aborted");
-  const publicationNotStarted = !identities && !leaseIdentityChanged && unusedPreparation;
+  const publicationNotStarted = !leaseIdentityChanged && unusedPreparation;
   if (
     !complete &&
     !publicationNotStarted &&
@@ -349,19 +349,23 @@ export async function settlePendingPackageActivation(
     !(
       leaseIdentityChanged &&
       (unusedPreparation ||
-        (initial.phase === "publication-complete" &&
-          replacementIdentity === initial.descriptor.previous.identity) ||
+        (!identities &&
+          initial.phase === "publication-complete" &&
+          replacementIdentity === previousIdentity) ||
         initial.phase === "superseded")
     ) &&
-    [initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
-      replacementIdentity,
-    )
+    [previousIdentity, candidateIdentity].includes(replacementIdentity)
   ) {
+    if (identities) {
+      throw new Error(
+        "Remounted previous package has unfinished publication; use the original recovery owner.",
+      );
+    }
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
   if (options?.dryRun) {
-    if (externalPublication) {
+    if (externalPublication || (identities && unusedPreparation)) {
       await verifyPackagePublicationSettlement(
         initial,
         () => journal.assertCurrent(initial),
@@ -370,7 +374,7 @@ export async function settlePendingPackageActivation(
     }
     return {
       operationId: initial.descriptor.operationId,
-      reason,
+      reason: identities && unusedPreparation ? "publication-not-started" : reason,
       retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
       detail: undefined,
       warning: undefined,
@@ -415,7 +419,7 @@ export async function settlePendingPackageActivation(
       if (complete && receipt) {
         return finish(receipt);
       }
-      if (publicationNotStarted) {
+      if (publicationNotStarted && !identities) {
         const owner = createPublicationOwner(anchor, journal, assertReplacement, initial);
         if (initial.phase === "prepared") {
           try {
@@ -448,7 +452,7 @@ export async function settlePendingPackageActivation(
           replacementIdentity,
           settled: true,
         };
-      if (externalPublication) {
+      if (externalPublication || (identities && unusedPreparation)) {
         const verified = await verifyPackagePublicationSettlement(
           initial,
           assertCurrent,
@@ -462,7 +466,9 @@ export async function settlePendingPackageActivation(
         assertReplacement = verified.assertUnchanged;
         assertArchiveCurrent = verified.assertInstalledUnchanged;
         settlement = {
-          kind: "publication-settled-external-change",
+          kind: unusedPreparation
+            ? "publication-not-started"
+            : "publication-settled-external-change",
           replacementIdentity,
           settled: true,
           detail: receipt?.detail ?? verified.detail,

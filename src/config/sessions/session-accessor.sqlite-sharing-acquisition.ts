@@ -106,9 +106,11 @@ export function projectSessionEntryPredicateChange(
         ? { ...entry, owner: change.owner }
         : undefined;
     case "participants":
-      return change.projection
-        ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
-        : undefined;
+      return change.projectionChanged === false
+        ? entry
+        : change.projection
+          ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
+          : undefined;
     case "category":
       return entry.sessionId === change.sessionId
         ? { ...entry, category: change.category ?? undefined }

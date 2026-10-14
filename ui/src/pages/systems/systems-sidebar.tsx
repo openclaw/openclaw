@@ -1,6 +1,6 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo, createUniqueId } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
+import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -26,32 +26,6 @@ const statusOptions = [
   { value: "online", labelKey: "systems.online" },
   { value: "offline", labelKey: "systems.offline" },
 ] as const satisfies ReadonlyArray<{ value: SystemsStatusFilter; labelKey: string }>;
-
-function MenuOption(props: { value: string; label: string; checked: boolean }) {
-  let item!: HTMLElement;
-  createEffect(
-    () => props.checked,
-    (checked) => {
-      syncDropdownItemRadio(item, checked);
-    },
-  );
-  return (
-    <wa-dropdown-item
-      class="sidebar-session-sort-menu__item"
-      value={props.value}
-      role="menuitemradio"
-      aria-checked={props.checked ? "true" : "false"}
-      ref={(element) => {
-        item = element;
-      }}
-    >
-      <span class="session-menu__text">{t(props.label)}</span>
-      <span slot="details" class="session-menu__check" aria-hidden="true">
-        {props.checked ? <Icon name="check" /> : null}
-      </span>
-    </wa-dropdown-item>
-  );
-}
 
 export function systemName(row: SystemsInventoryRow): string {
   const named =
@@ -125,6 +99,7 @@ function SystemsSidebarContent(props: SystemsSidebarProps) {
   );
 }
 function SystemsInventory(props: { controller: SystemsController }) {
+  const menuId = createUniqueId();
   const controller = () => props.controller;
   const query = () => controller().query.trim().toLocaleLowerCase();
   const rows = createMemo(() => {
@@ -211,12 +186,60 @@ function SystemsInventory(props: { controller: SystemsController }) {
             }
           }}
         />
-        <wa-dropdown
-          class="systems-filter-menu sidebar-session-sort-menu"
+        <Menu
+          id={menuId}
+          class="systems-filter-menu"
+          panelClass="sidebar-session-sort-menu"
           placement="bottom-end"
-          aria-label={t("systems.filterSort")}
-          onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
-            const value = event.detail.item.value;
+          label={t("systems.filterSort")}
+          triggerClass={`systems-filter__sort sidebar-session-sort${controller().statusFilter !== "all" ? " sidebar-session-sort--filtered" : ""}`}
+          triggerAttributes={{ title: t("systems.filterSort") }}
+          trigger={<Icon name="listFilter" />}
+          items={[
+            {
+              kind: "content",
+              id: "sort-heading",
+              content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
+            },
+            ...sortOptions.map((option): MenuItem => ({
+              id: `sort:${option.value}`,
+              label: t(option.labelKey),
+              type: "radio",
+              checked: controller().sortMode === option.value,
+              class: "sidebar-session-sort-menu__item",
+              content: <span class="session-menu__text">{t(option.labelKey)}</span>,
+              details: (
+                <span class="session-menu__check" aria-hidden="true">
+                  {controller().sortMode === option.value ? <Icon name="check" /> : null}
+                </span>
+              ),
+            })),
+            {
+              kind: "content",
+              id: "status-heading",
+              content: (
+                <>
+                  <div class="session-menu__separator" role="separator" />
+                  <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
+                </>
+              ),
+            },
+            ...statusOptions.map((option): MenuItem => ({
+              id: `status:${option.value}`,
+              label: t(option.labelKey),
+              type: "radio",
+              checked: controller().statusFilter === option.value,
+              class: "sidebar-session-sort-menu__item",
+              content: <span class="session-menu__text">{t(option.labelKey)}</span>,
+              details: (
+                <span class="session-menu__check" aria-hidden="true">
+                  {controller().statusFilter === option.value ? <Icon name="check" /> : null}
+                </span>
+              ),
+            })),
+          ]}
+          onSelect={(item) => {
+            const value = item.id;
             const sort = sortOptions.find((option) => value === `sort:${option.value}`);
             const status = statusOptions.find((option) => value === `status:${option.value}`);
             if (sort) {
@@ -225,41 +248,7 @@ function SystemsInventory(props: { controller: SystemsController }) {
               controller().updatePresentation({ statusFilter: status.value });
             }
           }}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            class={[
-              "systems-filter__sort sidebar-session-sort",
-              { "sidebar-session-sort--filtered": controller().statusFilter !== "all" },
-            ]}
-            aria-label={t("systems.filterSort")}
-            title={t("systems.filterSort")}
-          >
-            <Icon name="listFilter" />
-          </button>
-          <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>
-          <For each={sortOptions}>
-            {(option) => (
-              <MenuOption
-                value={`sort:${option.value}`}
-                label={option.labelKey}
-                checked={controller().sortMode === option.value}
-              />
-            )}
-          </For>
-          <div class="session-menu__separator" role="separator" />
-          <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
-          <For each={statusOptions}>
-            {(option) => (
-              <MenuOption
-                value={`status:${option.value}`}
-                label={option.labelKey}
-                checked={controller().statusFilter === option.value}
-              />
-            )}
-          </For>
-        </wa-dropdown>
+        />
         <button
           type="button"
           class="systems-filter__refresh"

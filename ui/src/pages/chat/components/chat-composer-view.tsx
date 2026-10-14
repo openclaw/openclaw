@@ -44,7 +44,7 @@ import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
-import { ChatPermissionPicker } from "./chat-permission-picker.ts";
+import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import {
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,
@@ -230,10 +230,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     <>
       <div class="agent-chat__composer-shell">
         <div class="chat-footer__context">
-          <LitContent value={props.footerContent ?? undefined} />
+          {props.footerContent}
           <div class="agent-chat__composer-notices">
-            <LitContent value={props.notices ?? undefined} /> {composerStatus()} {composerAlerts()}{" "}
-            {fallbackStatus()}
+            {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
           </div>
           <ComposerQuestionDock panel={context.questionPanelProps} />
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}

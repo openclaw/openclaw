@@ -19,6 +19,18 @@ Stop the Gateway through its service owner before running `plugins update`,
 fallbacks. `plugins marketplace entries --offline` reads the saved feed without
 refreshing it. Refused commands report how to retry.
 
+While a plugin or config operation is running, the CLI waits and retries only if
+the Gateway confirms that it did not accept the mutation. Admission stays within
+the command's existing ten-minute budget, including `plugins reload --wait`.
+Interrupting the command cancels pending admission retries. An already accepted
+mutation may still finish; inspect plugin status before retrying it.
+Lost replies and failures after acceptance are reported without automatic replay;
+inspect plugin status before retrying them. Older Gateways that do not provide
+the admission fact keep the explicit busy response.
+
+If a command encounters offline database maintenance, it reports the reason
+without `OPENCLAW_DEBUG`. Wait for maintenance to finish, then retry the command.
+
 `plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
 when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
 policy keys in config use the required lowercase form.

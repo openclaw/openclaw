@@ -24,6 +24,7 @@ import type { ModelFallbackResultClassification } from "../model-fallback-attemp
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import { modelKey } from "../model-ref-shared.js";
+import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
@@ -57,7 +58,6 @@ import type {
   EmbeddedAgentRunEntryParams,
   EmbeddedAgentRunEntryResult,
 } from "./run-entry.types.js";
-import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
@@ -566,6 +566,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     failed = terminalOutcome.status === "error";
     const result = mergeRunEntryExecutionTrace({
       result: candidateResult,
+      config: params.selection.cfg,
       terminalStatus: terminalOutcome.status,
       provider: fallbackResult.provider,
       model: fallbackResult.model,

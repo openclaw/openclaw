@@ -92,6 +92,19 @@ describe("Feishu message content over the real Lark SDK", () => {
           sendJson(401, { code: 99991663, msg: "missing authenticated message request" });
           return;
         }
+        if (url.pathname.startsWith("/open-apis/contact/v3/users/")) {
+          sendJson(200, {
+            code: 0,
+            data: {
+              user: {
+                name: url.pathname.endsWith("/ou_loopback_merge_child_sender")
+                  ? "Alice"
+                  : undefined,
+              },
+            },
+          });
+          return;
+        }
 
         if (request.method === "POST" && body.msg_type === "sticker") {
           if (url.pathname === "/open-apis/im/v1/messages/om_withdrawn_sticker/reply") {
@@ -144,6 +157,15 @@ describe("Feishu message content over the real Lark SDK", () => {
                   msg_type: "text",
                   body: { content: JSON.stringify({ text: "forwarded context" }) },
                   create_time: "1710000000000",
+                  sender: { id: "ou_loopback_merge_child_sender", id_type: "open_id" },
+                },
+                {
+                  message_id: "om_loopback_second_child",
+                  upper_message_id: messageId,
+                  msg_type: "text",
+                  body: { content: JSON.stringify({ text: "second context" }) },
+                  create_time: "1710000001000",
+                  sender: { id: "ou_loopback_unknown", id_type: "open_id" },
                 },
               ],
             },
@@ -268,7 +290,24 @@ describe("Feishu message content over the real Lark SDK", () => {
       ).resolves.toMatchObject({
         messageId: "om_loopback_merge_forward",
         contentType: "merge_forward",
-        content: "[Merged and Forwarded Messages]\n- forwarded context",
+        content:
+          "[Merged and Forwarded Messages]\n" +
+          "- [2024-03-09T16:00:00.000Z] Alice: forwarded context\n" +
+          "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context",
+      });
+      await expect(
+        getMessageFeishu({
+          cfg: {
+            ...cfg,
+            channels: { feishu: { ...cfg.channels?.feishu, resolveSenderNames: false } },
+          },
+          messageId: "om_loopback_merge_forward",
+        }),
+      ).resolves.toMatchObject({
+        content:
+          "[Merged and Forwarded Messages]\n" +
+          "- [2024-03-09T16:00:00.000Z] ou_loopback_merge_child_sender: forwarded context\n" +
+          "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context",
       });
 
       await expect(
@@ -289,8 +328,11 @@ describe("Feishu message content over the real Lark SDK", () => {
           appId: "cli_feishu_content_107947",
         },
       ]);
-      expect(requests.filter((request) => request.method === "GET")).toHaveLength(7);
-      for (const request of requests.filter((entry) => entry.method === "GET")) {
+      const messageReads = requests.filter(
+        (request) => request.method === "GET" && request.path.startsWith("/open-apis/im/"),
+      );
+      expect(messageReads).toHaveLength(8);
+      for (const request of messageReads) {
         expect(request).toMatchObject({
           authorization: "Bearer tat-feishu-content-107947",
           cardMessageContentType: "user_card_content",

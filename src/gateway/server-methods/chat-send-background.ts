@@ -1,8 +1,6 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   buildDashboardSessionTitleSource,
   isDashboardSessionTitleCandidate,
@@ -22,50 +20,6 @@ type DashboardSessionTitleRequest = {
   sessionKey: string;
   storePath: string;
 };
-
-/** Reply gate for chat-turn naming; `released` reports whether its turn was still running. */
-type DashboardSessionTitleTurn = {
-  released: Promise<boolean>;
-  settled: Promise<void>;
-};
-
-export function createChatSendTitleTurn() {
-  const ready = createDeferredCore<boolean>();
-  const settled = createDeferredCore();
-  let waiting = true;
-  let stop: (() => void) | undefined;
-  // The first release wins, including empty, rejected, and interrupted turns.
-  const release = (duringTurn: boolean) => {
-    stop?.();
-    stop = undefined;
-    waiting = false;
-    ready.resolve(duringTurn);
-  };
-  return {
-    released: ready.promise,
-    settled: settled.promise,
-    onAgentRunStart(runId: string) {
-      if (waiting) {
-        stop?.();
-        stop = onAgentEventForRun(runId, (event) => {
-          if (
-            event.stream === "assistant" ||
-            event.stream === "item" ||
-            event.stream === "tool" ||
-            event.stream === "thinking" ||
-            event.stream === "approval"
-          ) {
-            release(true);
-          }
-        });
-      }
-    },
-    finish() {
-      release(false);
-      settled.resolve();
-    },
-  };
-}
 
 export function scheduleCreatedDashboardSessionTitle(
   created: {
@@ -95,7 +49,7 @@ export function scheduleCreatedDashboardSessionTitle(
 
 export function scheduleChatDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
-  turn?: DashboardSessionTitleTurn,
+  retryAfter?: Promise<void>,
 ): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
@@ -109,7 +63,6 @@ export function scheduleChatDashboardSessionTitle(
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     // Naming only patches metadata under the title writer's session identity check.
     // It must not hold a turn admission while waiting on a model.
-    const retryAfter = turn && (await turn.released) ? turn.settled : undefined;
     const updated = await maybeGenerateDashboardSessionTitle({
       cfg: params.cfg,
       agentId: params.agentId,

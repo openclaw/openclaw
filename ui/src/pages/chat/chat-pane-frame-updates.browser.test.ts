@@ -2,8 +2,7 @@ import { html } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createTestChatPane, connectPaneTestView } from "./chat-pane.test-support.ts";
 
 // MessageChannel supplies distinct browser tasks without a timer or a real-frame race.
 async function task(action: () => void) {
@@ -38,14 +37,17 @@ async function mountPane(presented = true) {
   });
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
-    render: () => html`<span>${pane.presentationTitle}</span><span>${pane.paneId}</span>`,
+    render: () => ({
+      layout: html`<span>${pane.presentationTitle}</span><span>${pane.paneId}</span>`,
+    }),
     presentedChanged: () => {},
   });
   pane.presented = presented;
-  const updates = vi.spyOn(pane, "performUpdate");
-  ChatPaneBase.prototype.connectedCallback.call(pane);
+  const updates = vi.spyOn(pane, "render");
+  connectPaneTestView(pane);
   await pane.updateComplete;
   expect(updates).toHaveBeenCalledTimes(1);
+  expect(pane.textContent).toContain(pane.paneId);
   updates.mockClear();
   return { pane, updates };
 }
@@ -135,13 +137,18 @@ it("releases a disconnected pane's parked update and renders after reconnect", a
   pane.requestUpdate();
   await task(() => {});
   Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
-  ChatPaneBase.prototype.disconnectedCallback.call(pane);
+  pane.disconnectedCallback();
   await pane.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(1);
+  expect(updates).not.toHaveBeenCalled();
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.presented = true;
-  ChatPaneBase.prototype.connectedCallback.call(pane);
+  connectPaneTestView(pane);
   pane.requestUpdate();
   await pane.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(2);
+  expect(pane.textContent).toContain(pane.paneId);
+  updates.mockClear();
+  pane.presentationTitle = "reconnected revision";
+  await pane.updateComplete;
+  expect(updates).toHaveBeenCalledTimes(1);
+  expect(pane.textContent).toContain("reconnected revision");
 });

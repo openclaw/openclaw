@@ -67,6 +67,16 @@ supplied context is public. Unknown audience metadata must deny publication.
 owner; never derive this field from message text, stored permalinks, or model
 arguments. The ordinary decision-only resolver does not grant authority.
 
+For mutable source policy, the intent may also supply
+`prepare: async () => assertCurrent`. The host invokes it once at run admission
+and retains the returned synchronous guard for child publication. The channel
+must reacquire current authorization and routing with bounded retries and return
+`null` if the prepared prompt's route, access tier, or public-context proof is no
+longer valid. This drops the turn without trying another model or publishing a
+generic model-failure reply. Throw operational failures instead; these stop model
+fallback but produce a retryable access-verification error. Preparation cannot
+renew an already admitted run; use-time checks and revocation remain mandatory.
+
 An exact host resolver-to-context handoff binds the intent to one admitted
 run. Only its fresh immediate isolated visible children can receive public
 grants, in their creation commits before launch. Private/draft, incognito, existing,
@@ -74,7 +84,7 @@ forked, retargeted, and descendant sessions do not qualify. The intent cannot
 be serialized for future turns or transport fallback. This does not grant
 creator/admin authority or change Team collaboration permissions. Consumers
 of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
-a canonical URL alone is not proof of anonymous access.
+a normalized URL alone is not proof of anonymous access.
 
 The host awaits `onVisibleWorkSessions(sessions, creation)` for fresh visible
 children before their first turn starts, so a channel can persist session-scoped
@@ -316,7 +326,7 @@ when initialization must finish before the child runs.
     });
     ```
 
-    For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
+    For channels that accept both current top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
     For channel-specific secret activation, `createChannelSecretContract` from
     `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
@@ -409,6 +419,13 @@ when initialization must finish before the child runs.
       replies whose confirmed delivery the shared dispatcher will record. Channel
       adapters must skip their own transcript mirror for those replies, including
       fallback sends, while still reporting the delivery outcome normally.
+
+      The shared channel turn lifecycle owns pending-final delivery admission.
+      It records direct-send custody immediately before platform I/O, or transfers
+      custody to the durable delivery queue. Its reply dispatcher skips the
+      intermediate queued claim; terminal settlement and replay suppression remain
+      owned by the delivery lifecycle.
+
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.
@@ -742,7 +759,7 @@ remains supported for older plugins and hosts, with no removal version scheduled
 Keep its return type strictly `boolean`: older hosts treat a returned promise as
 truthy rather than awaiting it. Hosts predating the async companion ignore the new
 field and use only the synchronous callback. An async-only alias therefore cannot
-prove equivalence on those hosts; exact canonical target matching still works.
+prove equivalence on those hosts; exact normalized target matching still works.
 
 Verified official installed plugins can delegate supported conversation, metadata, and attachment
 reads to provider-owned access checks. Channel-origin requests need server-owned
@@ -972,7 +989,7 @@ the plugin does not grant additional authority to an existing job.
 </CardGroup>
 
 <Note>
-Some bundled helper seams still exist for bundled-plugin maintenance and
+Some bundled helper interfaces still exist for bundled-plugin maintenance and
 compatibility. They are not the recommended pattern for new channel plugins;
 prefer the generic channel/setup/reply/runtime subpaths from the common SDK
 surface unless you are maintaining that bundled plugin family directly.

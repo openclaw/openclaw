@@ -338,6 +338,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
           let userEnvelopes = new Map<string, string>();
           let turn = 0;
           let requestsThisTurn = 0;
+          let assistantHistory: string[] = [];
           let providerFailure: Error | undefined;
           const createObserver = promptCacheRequestObserver.createPromptCacheRequestObserver;
           const observerSpy = vi
@@ -347,6 +348,20 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               return {
                 ...observer,
                 onModelRequest: (runtimeModel, context) => {
+                  if (api === "openai-responses" && turn <= 4) {
+                    const assistants = context.messages
+                      .filter((message) => message.role === "assistant")
+                      .map((message) => stableStringify(message));
+                    for (let index = 0; index < assistantHistory.length; index++) {
+                      if (assistants[index] !== assistantHistory[index]) {
+                        providerFailure = new Error(
+                          `assistant replay changed at assistant ${index}`,
+                        );
+                        throw providerFailure;
+                      }
+                    }
+                    assistantHistory = assistants;
+                  }
                   const occurrences = new Map<string, number>();
                   let userAnchor = "";
                   userEnvelopes = new Map(
@@ -570,7 +585,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     })
                   : undefined;
               try {
-                const result = await runEmbeddedAgent({
+                const run = runEmbeddedAgent({
                   userTurnTranscriptRecorder: recorder,
                   messageActionTurnCapability: capability,
                   messageProvider: api === "openai-responses" ? "webchat" : "telegram",
@@ -621,6 +636,15 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     ? { images: [{ type: "image" as const, mimeType: "image/png", data: PNG }] }
                     : {}),
                 });
+                if (api === "openai-responses" && turn === 5) {
+                  await expect(run).rejects.toMatchObject({ reason: "format" });
+                  if (providerFailure) {
+                    throw providerFailure;
+                  }
+                  expect(requestsThisTurn, "permanent failure is not retried").toBe(1);
+                  continue;
+                }
+                const result = await run;
                 if (providerFailure) {
                   throw providerFailure;
                 }
@@ -639,12 +663,10 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     ),
                   })}`,
                 ).toBeGreaterThan(0);
-                if (!(api === "openai-responses" && turn === 5)) {
-                  expect(
-                    result.payloads?.some((payload) => payload.text?.includes("answer")),
-                    `turn ${turn} completed`,
-                  ).toBe(true);
-                }
+                expect(
+                  result.payloads?.some((payload) => payload.text?.includes("answer")),
+                  `turn ${turn} completed`,
+                ).toBe(true);
               } finally {
                 if (capability) {
                   revokeMessageActionTurnCapability(capability);

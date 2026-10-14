@@ -175,7 +175,7 @@ function cpuDegradedOption(requiredArgs) {
   reject("invalid performance waiver argument");
 }
 
-function snapshotCpuWaived(snapshot, allowCpuDegraded, label) {
+function snapshotCpuWaived(snapshot, allowCpuDegraded, label, deploymentAcceptance = false) {
   if (
     !snapshot ||
     typeof snapshot !== "object" ||
@@ -223,9 +223,44 @@ function snapshotCpuWaived(snapshot, allowCpuDegraded, label) {
       reject(`Gateway ${label} event-loop metric ${field} is malformed`);
   }
   if (!degraded) return false;
+  // Native CPU/utilization warnings describe load, not lost admission. Deployment
+  // can progress with bounded delay; profiling still requires an undegraded sample.
+  if (deploymentAcceptance && !reasons.includes("event_loop_delay") &&
+      Number.isFinite(eventLoop.delayP99Ms) && eventLoop.delayP99Ms < 1000 &&
+      Number.isFinite(eventLoop.delayMaxMs) && eventLoop.delayMaxMs < 1000) {
+    return false;
+  }
   // Native reasons own threshold policy. Never rewrite evidence or infer reasons from metrics.
   if (!allowCpuDegraded) reject(`Gateway ${label} snapshot is degraded`);
   return true;
+}
+
+function gatewayStartupPending(startup, startupCode, readiness, readinessCode) {
+  if (!Number.isFinite(startup.uptimeMs) || startup.uptimeMs < 0) {
+    reject("Gateway startupz proof is malformed");
+  }
+  if (readiness.agentDatabases !== undefined && !Array.isArray(readiness.agentDatabases)) {
+    reject("Gateway agent admission is malformed");
+  }
+  if (readiness.stateDatabase !== undefined || readiness.agentDatabases?.some(
+    value => value?.code !== "agent-database-inspection-pending")) {
+    reject("Gateway database admission failed");
+  }
+  const agentId = operatorProfile().modelAgent;
+  const refusal = readiness.agentDatabases?.find(value => value?.agentId === agentId);
+  if (startupCode === "503" && startup.ok === false && startup.status === "starting") {
+    if (typeof startup.pendingReason !== "string" || !startup.pendingReason) {
+      reject("Gateway startupz recovery reason is malformed");
+    }
+    // Other agents may still inspect in the background after the marker's agent
+    // and critical initial startup are admitted by native readyz.
+    return startup.pendingReason !== "agent-database-inspection" ||
+      readinessCode !== "200" || readiness.ready !== true || Boolean(refusal);
+  }
+  if (startupCode !== "200" || startup.ok !== true || startup.status !== "started") {
+    reject("Gateway startupz is not started");
+  }
+  return Boolean(refusal);
 }
 
 const appServerPolicyFields = ["mode", "approvalPolicy", "approvalsReviewer", "sandbox", "defaultWorkspaceDir"];
@@ -3989,14 +4024,14 @@ async function startupProfileCommand(command, input) {
     assert.equal(record.operation, input.operation);
     if (command === "strict-observation") {
       assert.equal(record.arm?.state, "pending");
-      const readinessWaived = snapshotCpuWaived(input.readiness, true, "readiness");
-      const channelsWaived = snapshotCpuWaived(input.channels, true, "channels");
+      const readinessWaived = snapshotCpuWaived(input.readiness, true, "readiness", true);
+      const channelsWaived = snapshotCpuWaived(input.channels, true, "channels", true);
       assert(input.readiness.ready === true && Array.isArray(input.readiness.failing) &&
         input.readiness.failing.length === 0 && Number.isFinite(input.readiness.uptimeMs) && input.readiness.uptimeMs >= 0);
       verifyChannelAccounts(input.channels);
       assert.equal(input.convergenceState, readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY");
       assert.equal(input.channelState, channelsWaived ? "CHANNELS_CPU_DEGRADED_OPERATOR_WAIVED" : "CHANNELS_OK");
-      if (readinessWaived || channelsWaived) return { operation: record.operation, outcome: "ineligible-load" };
+      if (input.readiness.eventLoop.degraded || input.channels.eventLoop.degraded) return { operation: record.operation, outcome: "ineligible-load" };
       registeredArm(directory, record);
       record.arm = { state: "strict-observed", readinessSha256: digest(JSON.stringify(input.readiness)),
         channelsSha256: digest(JSON.stringify(input.channels)) };
@@ -4492,9 +4527,36 @@ try {
     case "channels": {
       const allowCpuDegraded = cpuDegradedOption(1);
       const payload = jsonArgument(args[0]);
-      const waived = snapshotCpuWaived(payload, allowCpuDegraded, "channels");
+      const waived = snapshotCpuWaived(payload, allowCpuDegraded, "channels", true);
       verifyChannelAccounts(payload);
       result = waived ? "CHANNELS_CPU_DEGRADED_OPERATOR_WAIVED" : "CHANNELS_OK";
+      break;
+    }
+    case "marker-readiness": {
+      const [rawStartup, startupCode, rawReadiness, readinessCode] = args;
+      if (args.length !== 4) {
+        reject("invalid marker readiness arguments");
+      }
+      const startup = JSON.parse(rawStartup), readiness = JSON.parse(rawReadiness);
+      if (gatewayStartupPending(startup, startupCode, readiness, readinessCode)) {
+        result = "RECOVERING";
+        break;
+      }
+      if (readinessCode !== "200" || readiness.ready !== true ||
+          !Array.isArray(readiness.failing) || readiness.failing.length ||
+          !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
+        reject("Gateway marker readyz is not ready");
+      }
+      // CPU/utilization alone can reflect useful startup work. Native delay evidence
+      // and a bounded system.info response determine whether dispatch may proceed.
+      if (readiness.eventLoop === undefined) {
+        result = "RECOVERING";
+        break;
+      }
+      const delayPending = snapshotCpuWaived(readiness, true, "marker readiness", true);
+      const loop = readiness.eventLoop;
+      result = delayPending || loop.delayP99Ms === undefined || loop.delayMaxMs === undefined
+        ? "RECOVERING" : "READY";
       break;
     }
     case "probes": {
@@ -4515,21 +4577,12 @@ try {
       if (healthCode !== "200" || health.ok !== true || health.status !== "live") {
         reject("Gateway healthz proof is malformed or unhealthy");
       }
-      if (!Number.isFinite(startup.uptimeMs) || startup.uptimeMs < 0) {
-        reject("Gateway startupz proof is malformed");
-      }
-      if (startupCode === "503" && startup.ok === false && startup.status === "starting") {
-        if (typeof startup.pendingReason !== "string" || !startup.pendingReason) {
-          reject("Gateway startupz recovery reason is malformed");
-        }
+      if (gatewayStartupPending(startup, startupCode, readiness, readinessCode)) {
         result = "RECOVERING";
         break;
       }
-      if (startupCode !== "200" || startup.ok !== true || startup.status !== "started") {
-        reject("Gateway startupz is not started");
-      }
-      const readinessWaived = snapshotCpuWaived(readiness, allowCpuDegraded, "readiness");
-      const channelsWaived = snapshotCpuWaived(channels, allowCpuDegraded, "channels");
+      const readinessWaived = snapshotCpuWaived(readiness, allowCpuDegraded, "readiness", true);
+      const channelsWaived = snapshotCpuWaived(channels, allowCpuDegraded, "channels", true);
       if (!Array.isArray(readiness.failing) || !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
         reject("Gateway readiness identity is malformed");
       }
@@ -4560,6 +4613,7 @@ try {
       result = readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY";
       break;
     }
+    case "suspension-poll-failure":
     case "suspension-prepare-failure": {
       if (args.length !== 2 || args[0] !== "@stdin") reject("invalid suspension failure diagnostic arguments");
       const exit = integer(args[1], "suspension failure exit");
@@ -4576,6 +4630,21 @@ try {
       let payload;
       if (length < bytes.length) {
         try { payload = JSON.parse(bytes.toString("utf8", 0, length)); } catch {}
+      }
+      if (command === "suspension-poll-failure") {
+        // Protocol/authentication refusals remain fatal even when the subprocess
+        // deadline fired. Only transport uncertainty permits another read.
+        const error = payload?.ok === false ? payload.error : undefined;
+        const transport = error?.type === "gateway_transport_error" &&
+          typeof error.message === "string" &&
+          typeof payload.gateway?.url === "string" && typeof payload.gateway?.urlSource === "string" &&
+          (error.code === undefined || Number.isSafeInteger(error.code)) &&
+          (error.reason === undefined || typeof error.reason === "string") &&
+          (error.timeoutMs === undefined || (Number.isSafeInteger(error.timeoutMs) && error.timeoutMs > 0));
+        const transient = (exit === 1 || exit === 124) && transport && (error.kind === "timeout" ||
+          (error.kind === "closed" && [undefined, 1006, 1012].includes(error.code)));
+        result = transient || (exit === 124 && length === 0) ? "retry" : "fatal";
+        break;
       }
       result = "unclassified";
       if (exit === 124) result = "timeout-exit";

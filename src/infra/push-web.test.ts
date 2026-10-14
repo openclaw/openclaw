@@ -45,6 +45,18 @@ import {
 } from "./push-web.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
+const { webPushWarn } = vi.hoisted(() => ({ webPushWarn: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/web-push" ? { ...logger, warn: webPushWarn } : logger;
+    },
+  };
+});
+
 let tmpDir: string;
 const defaultDevicePreferences = { enabled: true, label: "" };
 
@@ -902,6 +914,63 @@ describe("sending", () => {
     );
   });
 
+  it.each([404, 410, 401, 403, 413, 429, 503, undefined])(
+    "keeps successful sends alongside a failed delivery (status=%s)",
+    async (statusCode) => {
+      const failed = await registerSubscription("https://push.example.com/failed");
+      const delivered = await registerSubscription("https://push.example.com/delivered");
+      vi.mocked(webPush.sendNotification).mockImplementation(async (subscription) => {
+        if (subscription.endpoint === failed.endpoint) {
+          throw Object.assign(new Error("delivery failed"), {
+            statusCode,
+            body: "synthetic push-service reason",
+            code: "SYNTHETIC_FAILURE",
+          });
+        }
+        return { statusCode: 201, body: "", headers: {} };
+      });
+
+      const results = await broadcastWebPush({ title: "Mixed broadcast" }, tmpDir);
+
+      expect(results).toHaveLength(2);
+      expect(results).toEqual(
+        expect.arrayContaining([
+          {
+            ok: false,
+            subscriptionId: failed.subscriptionId,
+            statusCode,
+            error: "delivery failed",
+          },
+          { ok: true, subscriptionId: delivered.subscriptionId, statusCode: 201 },
+        ]),
+      );
+      expect(webPushWarn).toHaveBeenCalledWith("Web Push delivery failed", {
+        subscriptionId: failed.subscriptionId,
+        endpointHost: "push.example.com",
+        statusCode,
+        error: "delivery failed",
+        errorName: "Error",
+        errorCode: "SYNTHETIC_FAILURE",
+        responseBody: "synthetic push-service reason",
+        retry: false,
+        subscriptionAction: statusCode === 404 || statusCode === 410 ? "prune" : "retain",
+      });
+      const expired = statusCode === 404 || statusCode === 410;
+      const remaining = await listWebPushSubscriptions(tmpDir);
+      expect(remaining).toEqual(
+        expired ? [delivered] : expect.arrayContaining([failed, delivered]),
+      );
+      expect(remaining).toHaveLength(expired ? 1 : 2);
+      vi.mocked(webPush.sendNotification).mockClear();
+      await broadcastWebPush({ title: "Next notification" }, tmpDir);
+      expect(
+        vi
+          .mocked(webPush.sendNotification)
+          .mock.calls.map(([subscription]) => subscription.endpoint),
+      ).toEqual(remaining.map((subscription) => subscription.endpoint));
+    },
+  );
+
   it("does not delete a subscription re-registered during an expired send", async ({ signal }) => {
     const endpoint = "https://push.example.com/reregistered";
     await registerSubscription(endpoint);
@@ -946,6 +1015,15 @@ describe("sending", () => {
       expect.objectContaining({ ok: false, statusCode: 410 }),
     ]);
     expect(await listWebPushSubscriptions(tmpDir)).toEqual([subscription]);
+    expect(webPushWarn).toHaveBeenCalledWith(
+      "Web Push expired subscription cleanup failed",
+      expect.objectContaining({
+        subscriptionId: subscription.subscriptionId,
+        endpointHost: "push.example.com",
+        error: expect.stringContaining("doctor --fix"),
+        retry: false,
+      }),
+    );
   });
 
   it("keeps completed delivery results when expired-subscription cleanup fails", async ({

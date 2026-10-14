@@ -4,6 +4,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
+// v22 promotes ACP resume keys and explicit portable cursor identities.
 // v21 derives meeting transcript selectors and bounded delivery retention columns.
 // v20 fences possibly delivered cron completions across restart recovery.
 // v19 preserves original channel-owner authorization across recovery.
@@ -21,7 +22,7 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 21;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 22;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
 export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
@@ -75,6 +76,7 @@ export const FIRST_USE_STATE_INDEXES = [
   "idx_operator_approval_standing_grants_binding",
   "idx_web_push_approval_deliveries_subscription",
   "execution_identity_contexts_run_created_idx",
+  "execution_decision_facts_cursor_id_idx",
   "execution_decision_facts_context_occurred_idx",
   "execution_decision_facts_run_occurred_idx",
   "outbound_message_execution_bindings_execution_event_idx",
@@ -101,10 +103,12 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
+  "cron_run_receipts_cursor_id_idx",
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
+  "skill_workshop_changes_cursor_id_idx",
   "idx_skill_workshop_changes_agent_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
@@ -158,6 +162,7 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
     "prepared workers → one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":
     "GitHub publication receipts → original requesting authority",
+  "portable-identity-columns-v22": "ACP resume keys and receipt cursors → portable columns",
   "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",

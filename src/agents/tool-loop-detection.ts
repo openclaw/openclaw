@@ -564,14 +564,14 @@ export function detectToolCallLoop(
 
   if (noProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
     log.error(
-      `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      `Runaway-loop limit reached: ${toolName} repeated ${noProgressStreak} times with no progress`,
     );
     return {
       stuck: true,
       level: "critical",
       detector: "global_circuit_breaker",
       count: noProgressStreak,
-      message: `CRITICAL: ${toolName} repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+      message: `CRITICAL: ${toolName} repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by the runaway-loop limit to prevent runaway loops.`,
       warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }

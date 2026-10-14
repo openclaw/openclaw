@@ -510,7 +510,7 @@ suite.define(() => {
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
     const newThread = currentPage
-      .locator(".sidebar-session-toolbar")
+      .locator(".sidebar-rail")
       .getByRole("link", { name: "New conversation" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");

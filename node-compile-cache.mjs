@@ -6,6 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { isMainThread, Worker, workerData } from "node:worker_threads";
 
+if (isMainThread && process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "gateway") {
+  // Node has already started uncached. Restore worker caching after the respawn.
+  delete process.env.NODE_DISABLE_COMPILE_CACHE;
+  delete process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED;
+}
+
 const MAX_BYTES = 512 * 1024 * 1024;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
@@ -27,16 +33,28 @@ function isCurrentCompileCache(directory, env) {
   );
 }
 
-export function resolveOpenClawCompileCacheRespawnEnv({ directory, env = process.env }) {
+export function resolveOpenClawCompileCacheRespawnEnv({
+  directory,
+  env = process.env,
+  foregroundGateway = false,
+}) {
   // Keep a caller-owned cache when Node permissions can forbid process replacement.
   if (
     process.permission ||
     env.NODE_DISABLE_COMPILE_CACHE !== undefined ||
-    env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1" ||
+    (env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1" && !foregroundGateway) ||
     !directory ||
     !module.getCompileCacheDir?.()
   ) {
     return undefined;
+  }
+  if (foregroundGateway && isMainThread) {
+    return {
+      ...env,
+      NODE_COMPILE_CACHE: directory,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "gateway",
+    };
   }
   if (isCurrentCompileCache(directory, env)) {
     return undefined;
@@ -48,11 +66,22 @@ export function resolveOpenClawCompileCacheRespawnEnv({ directory, env = process
   };
 }
 
-export function enableOpenClawCompileCache({ directory, env = process.env }) {
+export function enableOpenClawCompileCache({
+  directory,
+  env = process.env,
+  foregroundGateway = false,
+}) {
   if (!directory || env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
     return;
   }
   const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
+  if (foregroundGateway && isMainThread) {
+    // Main-thread synchronous cache flushes stall the event loop; workers keep
+    // this cache base and flush on their own threads at their existing boundaries.
+    owner.baseDirectory ??= path.resolve(directory);
+    void maintainOpenClawCompileCache(directory);
+    return;
+  }
   try {
     const result = module.enableCompileCache(directory);
     if (
@@ -76,8 +105,39 @@ export function enableOpenClawCompileCache({ directory, env = process.env }) {
   }
 }
 
-export function resolveOpenClawCompileCacheDirectory({ installRoot, env = process.env }) {
+// Node owns pending bytecode per isolate. Drain it after module loading instead
+// of leaving the whole graph for native worker/process teardown.
+export function scheduleOpenClawCompileCacheFlush() {
+  if (!module.getCompileCacheDir?.()) {
+    return;
+  }
+  const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
+  if (owner.flush) {
+    return;
+  }
+  owner.flush = setImmediate(() => {
+    owner.flush = undefined;
+    try {
+      module.flushCompileCache();
+    } catch {
+      // Disposable bytecode must never fail startup or a completed worker task.
+    }
+  });
+  owner.flush.unref();
+}
+
+export function resolveOpenClawCompileCacheDirectory({
+  installRoot,
+  env = process.env,
+  foregroundGateway = false,
+  prewarm = false,
+}) {
   if (env.NODE_DISABLE_COMPILE_CACHE !== undefined) {
+    return undefined;
+  }
+  // Cold cache persistence runs after output on Node and Bun. Pay that cost only
+  // for a long-lived Gateway, explicit prewarming, or a caller-requested cache.
+  if (!prewarm && !foregroundGateway && env.NODE_COMPILE_CACHE === undefined) {
     return undefined;
   }
   const packagePath = path.join(installRoot, "package.json");

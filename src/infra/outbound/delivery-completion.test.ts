@@ -187,13 +187,18 @@ describe("pending-final delivery completion", () => {
     ).resolves.toMatchObject({ transition: { kind: "rejected", reason: "stale_revision" } });
   });
 
-  it("settles native incognito custody on its retained memory owner", async () => {
+  it("settles incognito custody on its retained memory owner", async () => {
+    const incognitoKey = "agent:main:dashboard:incognito-delivery";
     const nativePath = resolveIncognitoOpenClawAgentSqlitePath({
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: tmpDir },
     });
-    const scope = { sessionKey, storePath: nativePath, env: { OPENCLAW_STATE_DIR: tmpDir } };
-    const nativeCompletion = { ...completion, storePath: nativePath };
+    const scope = {
+      sessionKey: incognitoKey,
+      storePath: nativePath,
+      env: { OPENCLAW_STATE_DIR: tmpDir },
+    };
+    const nativeCompletion = { ...completion, sessionKey: incognitoKey, storePath: nativePath };
     try {
       await replaceSessionEntry(scope, {
         sessionId: completion.sessionId,
@@ -500,20 +505,21 @@ describe("pending-final delivery completion", () => {
     }
   });
 
-  it("owes a notice when claimed custody is affirmed unknown", async () => {
+  it("owes a notice at direct admission and preserves it when ambiguity is affirmed", async () => {
     await installContextOnPendingFinal();
     await settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]);
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toBeUndefined();
+    const notice = loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice;
+    expect(notice).toMatchObject({
+      intentId: completion.intentId,
+      state: "owed",
+      context: noticeContext,
+    });
 
     await expect(
       settlePendingFinalDelivery(completion, "unknown", ["queued", "unknown"]),
     ).resolves.toEqual({ state: "unknown" });
 
-    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
-      intentId: completion.intentId,
-      state: "owed",
-      context: noticeContext,
-    });
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toEqual(notice);
   });
 
   it("does not owe a notice for the pre-dispatch claim or terminal outcomes", async () => {

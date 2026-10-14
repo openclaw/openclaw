@@ -7,6 +7,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
@@ -17,7 +18,6 @@ import { operatorApprovalPublication } from "./operator-approval-store.publicati
 import {
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
-  OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE,
   OPERATOR_APPROVAL_MAX_LIST_LIMIT,
   OPERATOR_APPROVAL_HISTORY_DEFAULT_LIMIT,
   OPERATOR_APPROVAL_HISTORY_MAX_LIMIT,
@@ -116,7 +116,14 @@ export function insertOperatorApprovalInDatabase(params: {
       database.db,
       stateDb
         .insertInto("operator_approvals")
-        .values({
+        .values((eb) => ({
+          cursor_id: eb
+            .selectFrom("operator_approvals")
+            .select((inner) =>
+              inner(inner.fn.coalesce(inner.fn.max<number>("cursor_id"), inner.val(0)), "+", 1).as(
+                "cursor_id",
+              ),
+            ),
           approval_id: id,
           resolution_ref: resolutionRef,
           kind: input.kind,
@@ -144,7 +151,7 @@ export function insertOperatorApprovalInDatabase(params: {
           resolver_id: null,
           consumed_at_ms: null,
           consumed_by: null,
-        })
+        }))
         .onConflict((conflict) => conflict.column("approval_id").doNothing())
         .returningAll(),
     );
@@ -235,90 +242,97 @@ export function getOperatorApprovalDetailedInDatabase(params: {
   }, params.databaseOptions);
 }
 
+type PendingApprovalInput = {
+  kind?: OperatorApprovalKind;
+  sourceSessionKey?: string;
+  audienceSessionKey?: string;
+  reviewerDeviceId?: string;
+  limit?: number;
+  nowMs?: number;
+};
+
+export function readPendingOperatorApprovalsInDatabase(
+  params: PendingApprovalInput,
+  db: DatabaseSync,
+) {
+  const nowMs = params.nowMs ?? Date.now();
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+  const resultLimit = Math.max(
+    1,
+    Math.min(params.limit ?? 1_000, OPERATOR_APPROVAL_MAX_LIST_LIMIT),
+  );
+  const audienceSessionKey =
+    params.audienceSessionKey === undefined
+      ? undefined
+      : requireString(params.audienceSessionKey, "operator approval audience session key");
+  const requiresPostFilter =
+    audienceSessionKey !== undefined || params.reviewerDeviceId !== undefined;
+  const records: OperatorApprovalRecord[] = [];
+  let query = stateDb
+    .selectFrom("operator_approvals")
+    .selectAll()
+    .where("status", "=", "pending")
+    .where("expires_at_ms", ">", nowMs)
+    .orderBy("created_at_ms", "asc")
+    .orderBy("approval_id", "asc");
+  if (params.kind) {
+    query = query.where("kind", "=", params.kind);
+  }
+  if (params.sourceSessionKey) {
+    query = query.where("source_session_key", "=", params.sourceSessionKey);
+  }
+  if (!requiresPostFilter) {
+    query = query.limit(resultLimit);
+  }
+  const corrupt: { id: string; createdAtMs: number }[] = [];
+  // Filter one ordered scan before limiting; unrelated approvals must not starve replay.
+  for (const row of iterateSqliteQuerySync(db, query)) {
+    const record = decodeOperatorApprovalRow(row);
+    if (!record) {
+      corrupt.push({ id: row.approval_id, createdAtMs: row.created_at_ms });
+      continue;
+    }
+    const matchesAudience =
+      !audienceSessionKey || record.audienceSessionKeys.includes(audienceSessionKey);
+    const matchesReviewer =
+      params.reviewerDeviceId === undefined ||
+      matchesOperatorApprovalReviewerBinding(record, params.reviewerDeviceId);
+    if (matchesAudience && matchesReviewer) {
+      records.push(record);
+      if (records.length === resultLimit) {
+        break;
+      }
+    }
+  }
+  return { records, corrupt };
+}
+
+export function hasDueOperatorApprovalsInDatabase(nowMs: number, db: DatabaseSync): boolean {
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<OperatorApprovalDatabase>(db)
+        .selectFrom("operator_approvals")
+        .select("approval_id")
+        .where("status", "=", "pending")
+        .where("expires_at_ms", "<=", nowMs)
+        .limit(1),
+    ) !== undefined
+  );
+}
+
 export function listPendingOperatorApprovalsInDatabase(
-  params: {
-    kind?: OperatorApprovalKind;
-    sourceSessionKey?: string;
-    audienceSessionKey?: string;
-    reviewerDeviceId?: string;
-    limit?: number;
-    nowMs?: number;
-    databaseOptions?: OpenClawStateDatabaseOptions;
-  } = {},
+  params: PendingApprovalInput & { databaseOptions?: OpenClawStateDatabaseOptions } = {},
 ): OperatorApprovalRecord[] {
   return runOpenClawStateWriteTransaction((database) => {
     const nowMs = params.nowMs ?? Date.now();
-    const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const resultLimit = Math.max(
-      1,
-      Math.min(params.limit ?? 1_000, OPERATOR_APPROVAL_MAX_LIST_LIMIT),
+    const { records, corrupt } = readPendingOperatorApprovalsInDatabase(
+      { ...params, nowMs },
+      database.db,
     );
-    const audienceSessionKey =
-      params.audienceSessionKey === undefined
-        ? undefined
-        : requireString(params.audienceSessionKey, "operator approval audience session key");
-    const requiresPostFilter =
-      audienceSessionKey !== undefined || params.reviewerDeviceId !== undefined;
-    const records: OperatorApprovalRecord[] = [];
-    let cursor: { createdAtMs: number; id: string } | undefined;
-    // Audience and reviewer bindings live in validated bounded JSON. Keyset-scan
-    // first, then apply the limit so unrelated records cannot starve replay.
-    while (records.length < resultLimit) {
-      let query = stateDb
-        .selectFrom("operator_approvals")
-        .selectAll()
-        .where("status", "=", "pending")
-        .where("expires_at_ms", ">", nowMs)
-        .orderBy("created_at_ms", "asc")
-        .orderBy("approval_id", "asc")
-        .limit(requiresPostFilter ? OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE : resultLimit);
-      if (params.kind) {
-        query = query.where("kind", "=", params.kind);
-      }
-      if (params.sourceSessionKey) {
-        query = query.where("source_session_key", "=", params.sourceSessionKey);
-      }
-      if (cursor) {
-        const pageCursor = cursor;
-        query = query.where((eb) =>
-          eb.or([
-            eb("created_at_ms", ">", pageCursor.createdAtMs),
-            eb.and([
-              eb("created_at_ms", "=", pageCursor.createdAtMs),
-              eb("approval_id", ">", pageCursor.id),
-            ]),
-          ]),
-        );
-      }
-      const rows = executeSqliteQuerySync(database.db, query).rows;
-      for (const row of rows) {
-        const record = decodeOperatorApprovalRow(row);
-        if (!record) {
-          denyCorruptPendingRow({
-            database,
-            id: row.approval_id,
-            nowMs,
-            createdAtMs: row.created_at_ms,
-          });
-          continue;
-        }
-        const matchesAudience =
-          !audienceSessionKey || record.audienceSessionKeys.includes(audienceSessionKey);
-        const matchesReviewer =
-          params.reviewerDeviceId === undefined ||
-          matchesOperatorApprovalReviewerBinding(record, params.reviewerDeviceId);
-        if (matchesAudience && matchesReviewer) {
-          records.push(record);
-          if (records.length === resultLimit) {
-            break;
-          }
-        }
-      }
-      const last = rows.at(-1);
-      if (!requiresPostFilter || rows.length < OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE || !last) {
-        break;
-      }
-      cursor = { createdAtMs: last.created_at_ms, id: last.approval_id };
+    // Close the iterator before repairing its source table in the same transaction.
+    for (const row of corrupt) {
+      denyCorruptPendingRow({ database, nowMs, ...row });
     }
     return records;
   }, params.databaseOptions);

@@ -59,10 +59,6 @@ vi.mock("../plugins/management-service.js", () => ({
   listManagedPlugins: mocks.listManagedPlugins,
 }));
 
-vi.mock("./server/ws-connection/message-handler.js", () => {
-  mocks.events.push("connection");
-  return { attachGatewayWsMessageHandler: mocks.executeRequest };
-});
 vi.mock("./server-chat.js", () => {
   mocks.events.push("agent-events");
   return { createAgentEventHandler: mocks.executeRequest };
@@ -141,7 +137,6 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       } while (vi.getTimerCount() > 0);
 
       expect(mocks.events[0]).toBe("session-history-worker");
-      expect(mocks.events).toContain("connection");
       expect(mocks.events).toContain("agent-events");
       expect(mocks.events.filter((event) => event === "handlers")).toHaveLength(3);
       expect(mocks.executeRequest).not.toHaveBeenCalled();

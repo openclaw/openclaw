@@ -719,31 +719,3 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
 export function renderMicrophonePicker(props: MicrophonePickerProps) {
   return solidTemplate(renderMicrophonePickerSolid, props);
 }
-
-export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
-  return solidTemplate(renderComposerVoiceButtonSolid, props);
-}
-
-export function renderComposerDictationSendAction(
-  dictation: ComposerDictationController,
-  onSend: (submissionAction?: Event) => void,
-  onPointerDown?: (event: PointerEvent) => void,
-) {
-  return solidTemplate(ComposerDictationSendAction, {
-    readDictation: () => dictation,
-    onSend,
-    onPointerDown,
-  });
-}
-
-function RenderComposerDictationStatusAdapter(props: {
-  readDictation?: () => ComposerDictationController;
-}) {
-  return <>{renderComposerDictationStatusSolid(props.readDictation?.())}</>;
-}
-
-export function renderComposerDictationStatus(dictation?: ComposerDictationController) {
-  return solidTemplate(RenderComposerDictationStatusAdapter, {
-    readDictation: dictation ? () => dictation : undefined,
-  });
-}

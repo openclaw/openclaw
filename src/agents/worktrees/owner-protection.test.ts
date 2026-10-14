@@ -85,7 +85,11 @@ beforeEach(() => {
       assertCurrent: () => {},
       release: () => {},
     }),
-    prepareSessionPlacement: async () => ({ current: () => undefined, release: () => {} }),
+    prepareSessionPlacement: async () => ({
+      prepareRead: () => undefined,
+      current: () => undefined,
+      release: () => {},
+    }),
   });
   mocks.isSessionWorkAdmissionActive.mockReturnValue(false);
   mocks.isSessionLifecycleMutationActive.mockReturnValue(false);
@@ -198,24 +202,52 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     );
   });
 
-  it("protects a missing session row with a placement under its canonical key", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-missing-") };
-    const store = createWorkerSessionPlacementStore({
-      database: openOpenClawStateDatabase({ env }),
-    });
-    mocks.placementService.mockReturnValue(store);
-    const key = cleanupRecord.ownerId;
-    readOwners.mockResolvedValue(new Map([[key, { ...target(key), entry: undefined }]]));
-    await store.startDispatch({ sessionId: "remote-session", sessionKey: key, agentId: "other" });
-    const policy = createManagedWorktreeOwnerPolicy({});
-    const census = await policy.prepareOwners([cleanupRecord]);
-    expect(census.readOwnerState?.("session", key)).toBe("active");
-    await policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) =>
-      withOwnerMutation(async () => {
-        expect(policy.readOwnerState("session", key)).toBe("active");
-      }),
-    );
-  });
+  it.each(["canonical-key", "shared-key", "session-id"])(
+    "protects a remote placement matched by %s",
+    async (match) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-missing-") };
+      const store = createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env }),
+      });
+      mocks.placementService.mockReturnValue(store);
+      const key = cleanupRecord.ownerId;
+      readOwners.mockResolvedValue(
+        new Map([
+          [
+            key,
+            {
+              ...target(key, { sessionId: "remote-session", updatedAt: 1, archivedAt: 1 }),
+              ...(match !== "session-id" ? { entry: undefined } : {}),
+            },
+          ],
+        ]),
+      );
+      await store.startDispatch({
+        sessionId: "remote-session",
+        sessionKey: match === "session-id" ? `${key}:previous` : key,
+        agentId: "other",
+      });
+      if (match === "shared-key") {
+        const claim = await store.claimTurn({
+          sessionId: "local-session",
+          sessionKey: key,
+          agentId: "main",
+          owner: { kind: "local" },
+          claimId: "finished-local-claim",
+          runId: "finished-local-run",
+        });
+        await store.releaseTurn(claim);
+      }
+      const policy = createManagedWorktreeOwnerPolicy({});
+      const census = await policy.prepareOwners([cleanupRecord]);
+      expect(census.readOwnerState?.("session", key)).toBe("active");
+      await policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) =>
+        withOwnerMutation(async () => {
+          expect(policy.readOwnerState("session", key)).toBe("active");
+        }),
+      );
+    },
+  );
 
   it("cancels queued cleanup before the preceding session mutation finishes", async ({
     signal,
@@ -357,7 +389,11 @@ describe("createManagedWorktreeOwnerPolicy", () => {
       prepareMaintenancePlacements: async () => {
         throw new Error("unreadable placement");
       },
-      prepareSessionPlacement: async () => ({ current: () => undefined, release: () => {} }),
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: () => undefined,
+        release: () => {},
+      }),
     });
     const remove = vi.fn(async () => {});
     const policy = createManagedWorktreeOwnerPolicy({});

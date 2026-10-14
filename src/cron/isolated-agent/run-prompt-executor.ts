@@ -381,7 +381,6 @@ export function createCronPromptExecutor(
             cliExecutionProvider: cliExecution ? executionProvider : undefined,
           });
         }
-        const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         const fastModeState = resolveFastModeState({
@@ -426,12 +425,13 @@ export function createCronPromptExecutor(
             bootstrapContextMode,
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature,
+            bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
             fastMode: fastModeState.mode,
             fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
             fastModeStartedAtMs,
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+            modelRoutingProvenance: runOptions.modelRoutingProvenance,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             userTurnTranscriptRecorder,
@@ -468,7 +468,7 @@ export function createCronPromptExecutor(
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
                 const authProfileId = allowCliAuthProfileForwarding
-                  ? resolveCliExecutionAuthProfileId({
+                  ? await resolveCliExecutionAuthProfileId({
                       cliExecutionProvider: executionProvider,
                       authProfileProvider: providerOverride,
                       config: params.cfgWithAgentDefaults,

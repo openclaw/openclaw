@@ -4,6 +4,7 @@ import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -54,6 +55,15 @@ export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
 
 type TranscriptSessionMatchEntry = StoreTypes.TranscriptsSessionEntry & { inputRevision: string };
+
+// Retain only the latest bounded page across the short-lived RPC store instances.
+let transcriptListCache:
+  | {
+      key: string;
+      writeToken: string;
+      page: TranscriptReadRequests["transcripts.readEntries"]["output"];
+    }
+  | undefined;
 
 /** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
@@ -305,18 +315,44 @@ export class TranscriptsStore {
     options: read.TranscriptReadOptions,
   ): Promise<read.TranscriptReadPage<StoreTypes.TranscriptReadEntry>>;
   async listReadEntries(options: read.TranscriptReadOptions & { projection?: "public" }) {
-    return this.readWorker("transcripts.readEntries", { params: options });
+    const operation = createTranscriptStoreOperation(this.databaseOptions);
+    operation.assertCurrent();
+    const writeToken = readSqliteDatabaseWriteTokenForPath(operation.databaseOptions.path);
+    const key = JSON.stringify([
+      operation.databaseOptions.path,
+      operation.databaseOptions.readOnly,
+      process.env.TZ,
+      options,
+    ]);
+    if (
+      writeToken &&
+      transcriptListCache?.writeToken === writeToken &&
+      transcriptListCache.key === key
+    ) {
+      return structuredClone(transcriptListCache.page);
+    }
+    const page = await operation.read("transcripts.readEntries", { params: options });
+    if (writeToken) {
+      // A write during the read invalidates this pre-read token on the next lookup.
+      transcriptListCache = { key, writeToken, page: structuredClone(page) };
+    }
+    return page;
   }
 
   async writeSession(
     inputSession: TranscriptSessionDescriptor,
-    condition?: { expectedInputRevision?: string; assertCurrent?: () => void },
-  ): Promise<void> {
+    condition?: {
+      expectedInputRevision?: string;
+      expectedSessionRevision?: string;
+      assertCurrent?: () => void;
+    },
+  ): Promise<{ inserted: boolean; inputRevision: string; sessionRevision: string }> {
     const operation = createTranscriptStoreOperation(
       this.databaseOptions,
       condition?.assertCurrent,
     );
     const expectedInputRevision = condition?.expectedInputRevision;
+    const expectedSessionRevision = condition?.expectedSessionRevision;
     const session = { ...inputSession };
     const selector = transcriptSessionSelector(session);
     const sessionValues = {
@@ -371,12 +407,29 @@ export class TranscriptsStore {
       sessionValues,
       now: Date.now(),
       expectedInputRevision,
+      expectedSessionRevision,
     });
     if (!result.ok) {
       throw result.reason === "conflict"
         ? new TranscriptSessionConflictError()
         : new TranscriptsSummaryChangedError();
     }
+    return {
+      inserted: result.inserted,
+      inputRevision: result.inputRevision,
+      sessionRevision: result.sessionRevision,
+    };
+  }
+
+  async deleteEmptySessionCandidate(
+    session: TranscriptSessionDescriptor,
+    condition: { expectedInputRevision: string; assertCurrent: () => void },
+  ): Promise<void> {
+    const operation = createTranscriptStoreOperation(this.databaseOptions, condition.assertCurrent);
+    await operation.write("transcripts.deleteEmptySessionCandidate", {
+      session: { sessionId: session.sessionId, startedAt: session.startedAt },
+      expectedInputRevision: condition.expectedInputRevision,
+    });
   }
 
   async readSession(sessionSelector: string): Promise<TranscriptSessionDescriptor | undefined> {

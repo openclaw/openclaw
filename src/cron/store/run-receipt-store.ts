@@ -162,18 +162,18 @@ export function claimCronRunReceiptInDatabase(params: {
   const { handle } = params;
   const job = validateCurrentReceiptJob(params.job, params);
   assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
-  pruneTerminalReceipts(
-    params.database,
-    handle.storeKey,
-    handle.jobId,
-    job.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
-    params.receiptSchema,
-  );
   executeSqliteQuerySync(
     params.database,
     query(params.database)
       .insertInto("cron_run_receipts")
-      .values({
+      .values((eb) => ({
+        cursor_id: eb
+          .selectFrom("cron_run_receipts")
+          .select((inner) =>
+            inner(inner.fn.coalesce(inner.fn.max<number>("cursor_id"), inner.val(0)), "+", 1).as(
+              "cursor_id",
+            ),
+          ),
         receipt_id: handle.receiptId,
         store_key: handle.storeKey,
         job_id: handle.jobId,
@@ -187,7 +187,7 @@ export function claimCronRunReceiptInDatabase(params: {
         started_at_ms: handle.startedAtMs,
         finished_at_ms: null,
         error_text: null,
-      }),
+      })),
   );
   return { ...handle };
 }
@@ -244,8 +244,8 @@ export function finishCronRunReceiptInDatabase(params: {
   status: Exclude<CronRunReceiptStatus, "running">;
   finishedAtMs: number;
   error?: string;
-}): void {
-  executeSqliteQuerySync(
+}): boolean {
+  const completed = executeSqliteQuerySync(
     params.database,
     query(params.database)
       .updateTable("cron_run_receipts")
@@ -257,6 +257,9 @@ export function finishCronRunReceiptInDatabase(params: {
       .where("receipt_id", "=", params.handle.receiptId)
       .where("status", "=", "running"),
   );
+  if (!completed.numAffectedRows) {
+    return false;
+  }
   pruneTerminalReceipts(
     params.database,
     params.handle.storeKey,
@@ -264,4 +267,5 @@ export function finishCronRunReceiptInDatabase(params: {
     params.pendingReceiptId,
     params.receiptSchema,
   );
+  return true;
 }

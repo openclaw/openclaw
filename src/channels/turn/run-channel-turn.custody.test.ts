@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
@@ -149,29 +148,36 @@ describe("channel turn failed-send custody", () => {
     },
   );
 
-  it("serializes and revalidates custody before every provider post", async () => {
+  it("retains custody across posts but rejects a replaced writer", async () => {
+    currentEntry = currentWriter;
     const custody = await createDirectPendingFinalCustody(
-      setReplyPayloadMetadata({ text: "reply" }, { pendingFinalDeliveryCompletion: completion }),
+      setReplyPayloadMetadata(
+        { text: "reply" },
+        {
+          pendingFinalDeliveryCompletion: completion,
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            expectedLifecycleRevision: currentWriter.lifecycleRevision,
+            expectedSessionId: completion.sessionId,
+            expectedWriterRunId: currentWriter.activeWriterRunId,
+            sessionKey: completion.sessionKey,
+            storePath: completion.storePath,
+            readCurrentSession: () => currentEntry,
+          },
+        },
+      ),
     );
     if (!custody) {
       throw new Error("expected pending-final custody");
     }
-    const firstCheck = createDeferred<{ state: "unknown" }>();
-    settlePendingFinalDelivery
-      .mockImplementationOnce(async () => firstCheck.promise)
-      .mockResolvedValueOnce({ state: "suppressed" });
-    const first = custody.onPlatformSendDispatch();
-    const second = custody.onPlatformSendDispatch();
-    await Promise.resolve();
+    await custody.onPlatformSendDispatch();
+    await custody.onPlatformSendDispatch();
     expect(settlePendingFinalDelivery).toHaveBeenCalledOnce();
-    firstCheck.resolve({ state: "unknown" });
-    await expect(first).resolves.toBeUndefined();
-    await expect(second).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(settlePendingFinalDelivery).toHaveBeenNthCalledWith(1, identity, "unknown", [
-      "prepared",
-      "queued",
-    ]);
-    expect(settlePendingFinalDelivery).toHaveBeenNthCalledWith(2, identity, "unknown", ["unknown"]);
+    currentEntry = replacementWriter;
+    await expect(custody.onPlatformSendDispatch()).rejects.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
+    custody.release();
   });
 
   it.each([

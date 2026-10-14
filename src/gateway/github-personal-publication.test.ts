@@ -565,9 +565,10 @@ describe("personal publication authority and recovery", () => {
             await linkCanonicalUserProfileEmail("alice@example.test", otherOwner);
           }
           if (race === "session") {
+            const original = mocks.loadSession.getMockImplementation()!;
             await upsertSessionEntryCore(
               { agentId: "main", sessionKey: SESSION_KEY },
-              { ...mocks.loadSession(SESSION_KEY).entry, sessionId: "replacement-session" },
+              { ...original(SESSION_KEY).entry, sessionId: "replacement-session" },
             );
           }
         }

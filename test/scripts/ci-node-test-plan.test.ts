@@ -957,7 +957,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("keeps precise RunsOn targets and their canonical child policies", () => {
     const cronTarget = "src/cron/validate-timestamp.test.ts";
     const siblingTarget = "src/cli/update-dry-run-state.process.test.ts";
-    const targets = [cronTarget, siblingTarget];
+    const cliTarget = "src/cli/nodes-cli.coverage.test.ts";
+    const targets = [cronTarget, siblingTarget, cliTarget];
     const hybrid = expectDefined(
       createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
       "precise hybrid plan",
@@ -988,6 +989,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         job.groups.some((group) => group.includePatterns?.includes(siblingTarget)),
       )?.runner,
     );
+    expect(
+      runson.find((job) => job.groups.some((group) => group.includePatterns?.includes(cliTarget)))
+        ?.runner,
+    ).toBe("blacksmith-16vcpu-ubuntu-2404");
   });
 
   it("discovers only tooling files for a cold precise tooling plan", () => {
@@ -3069,8 +3074,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         runnerBackend === "github" ? { OPENCLAW_VITEST_MAX_WORKERS: "2" } : undefined,
       );
       expect(plan.map((job) => job.planConcurrency)).toEqual([1]);
-      if (owner === "agentic-cli" && runnerBackend !== "github") {
-        expect(plan.map((job) => job.runner)).toEqual([EXTRA_LARGE_NODE_TEST_RUNNER]);
+      if (runnerBackend !== "github") {
+        expect(plan.map((job) => job.runner)).toEqual(["blacksmith-16vcpu-ubuntu-2404"]);
       }
       if (owner === "agentic-gateway-core-2") {
         const changed = expectDefined(

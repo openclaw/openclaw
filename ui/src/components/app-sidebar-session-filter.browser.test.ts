@@ -19,7 +19,7 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "../styles/settings-native-controls.css";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 setupSidebarTest();
 
@@ -131,6 +131,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect
         .element(page.getByRole("listbox", { name: "Owners", exact: true }))
         .toBeVisible();
+      await expect.poll(() => occlusion).toEqual([false, true]);
       expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", "My sessions", "Bob"]);
       const search = page.getByRole("combobox", { name: "Search", exact: true });
       await expect.element(search).toHaveFocus();
@@ -145,8 +146,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect.poll(() => ownerOptions(sidebar)).toHaveLength(4);
       await userEvent.keyboard("{Escape}");
       await expect.element(owners).toHaveFocus();
+      await expect.poll(() => occlusion).toEqual([false, true, false]);
       await trigger.click();
-      await expect.poll(() => occlusion).toEqual([false, true]);
+      await expect.poll(() => occlusion).toEqual([false, true, false, true]);
       await expectFits();
       await expect.element(active).toHaveFocus();
       await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
@@ -214,12 +216,12 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
-      await expect.poll(() => occlusion).toEqual([false, true, false]);
+      await expect.poll(() => occlusion).toEqual([false, true, false, true, false]);
       await trigger.click();
       await expect
         .element(page.getByRole("radio", { name: "Archived", exact: true }))
         .toHaveFocus();
-      await expect.poll(() => occlusion).toEqual([false, true, false, true]);
+      await expect.poll(() => occlusion).toEqual([false, true, false, true, false, true]);
       // The phone sheet covers the toolbar; its backdrop dismisses it instead.
       if (width < 560) {
         sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!.click();
@@ -227,7 +229,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         await trigger.click();
       }
       await expect.poll(() => sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
-      await expect.poll(() => occlusion).toEqual([false, true, false, true, false]);
+      await expect.poll(() => occlusion).toEqual([false, true, false, true, false, true, false]);
     },
   );
 
@@ -269,7 +271,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect.element(panel).toBeVisible();
     await Promise.all(panel.getAnimations().map((animation) => animation.finished));
     expect(panel.getAttribute("aria-modal")).toBe("true");
-    expect(sidebar.querySelector(".sidebar-session-sort-menu wa-popup")).toBeNull();
+    expect(panel.matches(":popover-open")).toBe(true);
     const sheet = panel.getBoundingClientRect();
     expect(sheet.left).toBe(0);
     expect(sheet.width).toBe(innerWidth);
@@ -279,7 +281,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await automation.click();
     await expect.element(automation).toHaveAttribute("aria-checked", "true");
     // A choice opens as a page covering the sheet, with Back and a title.
-    await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
+    const groupBy = page.getByRole("button", { name: "Group by: Custom groups", exact: true });
+    await groupBy.click();
     const choices = sidebar.querySelector<HTMLElement>('[role="listbox"][aria-label="Group by"]')!;
     await expect.element(choices).toBeVisible();
     const choicePage = choices.closest<HTMLElement>(".picker-select__menu")!;
@@ -290,8 +293,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     const back = page.getByRole("button", { name: "Back", exact: true });
     await expect.element(back).toHaveFocus();
     await back.click();
-    await expect.element(choices).not.toBeInTheDocument();
-    await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
+    await expect.element(choicePage).not.toBeVisible();
+    await expect.element(groupBy).toHaveAttribute("aria-expanded", "false");
+    await expect.element(groupBy).toHaveFocus();
+    await groupBy.click();
     await page.getByRole("option", { name: "Project", exact: true }).click();
     expect(loadStoredSidebarSessionsGrouping()).toBe("project");
     await expect
@@ -330,6 +335,16 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect
       .element(sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel")!)
       .toBeVisible();
+
+    // A closed Solid picker must not shrink the outer sheet's Tab boundary to itself.
+    const grouping = sidebar.querySelector<HTMLButtonElement>("#sidebar-sessions-group")!;
+    grouping.focus();
+    await userEvent.tab();
+    await expect
+      .element(page.getByRole("button", { name: "Sort by: Created", exact: true }))
+      .toHaveFocus();
+    await userEvent.tab({ shift: true });
+    await expect.element(grouping).toHaveFocus();
   });
 
   it("fades the owner list at the edges it scrolls past", async () => {

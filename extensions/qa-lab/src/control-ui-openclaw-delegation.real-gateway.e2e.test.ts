@@ -61,12 +61,6 @@ suite.define(() => {
       const repoRoot = process.cwd();
       const runtime = await owner.start({
         repoRoot,
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
-          cwd: repoRoot,
-          usePackagedPlugins: true,
-        },
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
@@ -370,13 +364,6 @@ const fullAccessSuite = createControlUiE2eSuite({
       const repoRoot = process.cwd();
       fullAccessRuntime = await fullAccessOwner.start({
         repoRoot,
-        // The isolated HOME must not make the development launcher rebuild the checkout.
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
-          cwd: repoRoot,
-          usePackagedPlugins: true,
-        },
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
         alternateModel: "mock-openai/gpt-5.6-luna-alt",

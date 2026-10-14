@@ -21,7 +21,7 @@ import {
   emitAssistantMessageStart,
   emitPersistentReasoning,
   emitReasoningEnd,
-  hasMessageToolOnlySourceDelivery,
+  shouldSuppressSourceReplyOutput,
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
   openReasoningStream,
@@ -112,11 +112,11 @@ export function handleMessageUpdate(
     return undefined;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
-  const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
+  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx);
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (
-      !suppressMessageToolOnlySourceReplyOutput &&
+      !suppressSourceReplyOutput &&
       (evtType === "thinking_start" || evtType === "thinking_delta")
     ) {
       openReasoningStream(ctx);
@@ -136,8 +136,8 @@ export function handleMessageUpdate(
       nativeThinking ?? (extractAssistantThinking(msg) || thinkingContent || thinkingDelta),
       nativeThinking ? thinkingContent || thinkingDelta : undefined,
     );
-    if (evtType === "thinking_end" && !suppressMessageToolOnlySourceReplyOutput) {
-      // Mirror the open gate above: when message-tool-only delivery has made the
+    if (evtType === "thinking_end" && !suppressSourceReplyOutput) {
+      // Mirror the open gate above: when confirmed source delivery has made the
       // reasoning lane private, do not force-open it just to close it — that
       // would fire the lane's end hook (onReasoningEnd) for a lane that never
       // rendered, leaking the boundary signal.
@@ -448,7 +448,7 @@ export function handleMessageUpdate(
         visibleDelta = projected.delta ?? (previousText.startsWith(next) ? "" : next);
       }
     }
-    if (!suppressMessageToolOnlySourceReplyOutput) {
+    if (!suppressSourceReplyOutput) {
       if (!wasThinking && ctx.state.partialBlockState.thinking) {
         openReasoningStream(ctx);
       } else if (wasThinking && !ctx.state.partialBlockState.thinking) {
@@ -537,7 +537,7 @@ export function handleMessageUpdate(
     if (
       ctx.params.silentExpected ||
       suppressDeterministicApprovalOutput ||
-      suppressMessageToolOnlySourceReplyOutput
+      suppressSourceReplyOutput
     ) {
       shouldEmit = false;
     }
@@ -567,7 +567,7 @@ export function handleMessageUpdate(
   if (
     ctx.params.silentExpected ||
     suppressDeterministicApprovalOutput ||
-    suppressMessageToolOnlySourceReplyOutput ||
+    suppressSourceReplyOutput ||
     ctx.state.blockReplyBreak !== "text_end"
   ) {
     return undefined;

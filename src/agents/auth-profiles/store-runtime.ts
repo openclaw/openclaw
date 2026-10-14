@@ -8,6 +8,7 @@ export const {
   loadAuthProfileStoreForRuntimeAsync,
   prepareAuthProfileProvider,
   findPersistedAuthProfileCredentialAsync,
+  prepareAuthProfileCredentialRead,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
   loadAuthProfileStoreForSecretsRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
@@ -32,18 +33,18 @@ export const loadAuthProfileStoreForSecretsRuntime =
  */
 export const saveAuthProfileStore = nativePluginBindings.authStore.saveAuthProfileStore;
 
-/** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Retained until an announced stable removal window. */
 export const loadAuthProfileStoreForRuntime =
   nativePluginBindings.authStore.loadAuthProfileStoreForRuntime;
 
-/** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Retained until an announced stable removal window. */
 export const loadAuthProfileStoreWithoutExternalProfiles =
   nativePluginBindings.authStore.loadAuthProfileStoreWithoutExternalProfiles;
-/** @deprecated Use ensureAuthProfileStoreAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use ensureAuthProfileStoreAsync. Retained until an announced stable removal window. */
 export const ensureAuthProfileStore = nativePluginBindings.authStore.ensureAuthProfileStore;
-/** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Retained until an announced stable removal window. */
 export const ensureAuthProfileStoreWithoutExternalProfiles =
   nativePluginBindings.authStore.ensureAuthProfileStoreWithoutExternalProfiles;
-/** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Retained until an announced stable removal window. */
 export const ensureAuthProfileStoreForLocalUpdate =
   nativePluginBindings.authStore.ensureAuthProfileStoreForLocalUpdate;

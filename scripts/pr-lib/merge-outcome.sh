@@ -45,8 +45,9 @@ merge_outcome_diagnose() {
   local pr="$1" observed="$2" expected="${3:-null}" status_expected="${4:-}" mergeable_expected="${5:-}"
   local head="${PREP_HEAD_SHA:-}" rest main rest_status=0
   [ -n "$head" ] || head=$(printf '%s\n' "${MERGE_OUTCOME_RECORD:-null}" | jq -r '.head // empty')
-  printf '%s\n' "$observed" | jq -r --arg head "$head" --argjson expected "$expected" \
-    --argjson recovery "${recovery_record:-null}" --arg status "$status_expected" --arg mergeable "$mergeable_expected" '
+  printf '%s\n%s\n' "$observed" "${recovery_record:-null}" | jq -rs --arg head "$head" --argjson expected "$expected" \
+    --arg status "$status_expected" --arg mergeable "$mergeable_expected" '
+    select(length == 2) | .[1] as $recovery | .[0] |
     def mismatch($field; $actual; $wanted):
       if $actual != $wanted then "Merge precondition \($field): observed=\($actual|tojson); expected=\($wanted|tojson)" else empty end;
     . as $actual |
@@ -255,7 +256,8 @@ merge_outcome_load_local() {
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("recovery")' >/dev/null; then
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
       if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
-        ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
+        ! { GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" || exit 1; printf '\n%s\n' "$MERGE_OUTCOME_RECORD"; } | jq -se '
+          select(length == 2) | .[1] as $next | .[0] |
           .phase == "intent" and
           (if $next.recovery.providerRejection != null then
              .accepted == false and .route == "admin" and $next.route == "admin" and
@@ -288,7 +290,7 @@ merge_outcome_load_local() {
       local provider_rejection original
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
       original=$(GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json") || return 1
-      provider_rejection=$(node "${BASH_SOURCE[0]%/*}/merge-prior-ci.mjs" provider-rejection "$original" "git:$MERGE_OUTCOME_OID") || return 1
+      provider_rejection=$(printf '%s\n' "$original" | node "${BASH_SOURCE[0]%/*}/merge-prior-ci.mjs" provider-rejection "git:$MERGE_OUTCOME_OID") || return 1
       [ "$provider_rejection" = "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.recovery.providerRejection')" ] || {
         merge_outcome_stop "invalid retained provider rejection qualification"; return 1;
       }
@@ -298,8 +300,8 @@ merge_outcome_load_local() {
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
       original=$(GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json") || return 1
       replacement_head=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.replacementHead) || return 1
-      stale_head_retirement=$(node "${BASH_SOURCE[0]%/*}/merge-prior-ci.mjs" \
-        stale-head-retirement "$original" "$retained" "$replacement_head" "git:$MERGE_OUTCOME_OID") || return 1
+      stale_head_retirement=$(printf '%s\n' "$original" | node "${BASH_SOURCE[0]%/*}/merge-prior-ci.mjs" \
+        stale-head-retirement "$retained" "$replacement_head" "git:$MERGE_OUTCOME_OID") || return 1
       [ "$stale_head_retirement" = "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.recovery.staleHeadRetirement')" ] || {
         merge_outcome_stop "invalid retained stale-head retirement qualification"; return 1;
       }
@@ -316,7 +318,8 @@ merge_outcome_load_local() {
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("cancellation")' >/dev/null; then
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .cancellation.outcome)
       if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
-        ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
+        ! { GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" || exit 1; printf '\n%s\n' "$MERGE_OUTCOME_RECORD"; } | jq -se '
+          select(length == 2) | .[1] as $next | .[0] |
           .phase == "intent" and .route == "auto" and (has("cancellation") | not) and
           .accepted == $next.accepted and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
@@ -330,7 +333,8 @@ merge_outcome_load_local() {
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("headDrift")' >/dev/null; then
       retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .headDrift.outcome)
       if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
-        ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
+        ! { GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" || exit 1; printf '\n%s\n' "$MERGE_OUTCOME_RECORD"; } | jq -se '
+          select(length == 2) | .[1] as $next | .[0] |
           .phase == "intent" and .route == "auto" and .accepted == true and
           (has("cancellation") | not) and (has("headDrift") | not) and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
@@ -412,8 +416,8 @@ merge_outcome_write() {
     done
     if [ -n "$MERGE_OUTCOME_OID" ]; then
       prior_attempt=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .attempt) || return 1
-      if printf '%s\n' "$record" | jq -e --arg outcome "$MERGE_OUTCOME_OID" \
-        --argjson prior "$MERGE_OUTCOME_RECORD" '
+      if printf '%s\n%s\n' "$record" "$MERGE_OUTCOME_RECORD" | jq -se --arg outcome "$MERGE_OUTCOME_OID" '
+          select(length == 2) | .[1] as $prior | .[0] |
           (.recovery != null and
             ((.phase == "intent" and .recovery.outcome == $outcome and
                 .recovery.attempt == $prior.attempt) or
@@ -1008,10 +1012,12 @@ merge_outcome_reconcile() {
   fi
   merge_outcome_observe "$pr" || return 1
   head=$(merge_outcome_receipt_head)
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" --arg head "$head" '
+  if ! printf '%s\n%s\n' "$MERGE_OBSERVATION" "$MERGE_OUTCOME_RECORD" | jq -se --arg head "$head" '
+    select(length == 2) | .[1] as $record | .[0] |
     .pr.id == $record.prId and .pr.headRefOid == $head and .pr.baseRefName == $record.base
   ' >/dev/null; then
-    if printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
+    if printf '%s\n%s\n' "$MERGE_OBSERVATION" "$MERGE_OUTCOME_RECORD" | jq -se '
+      select(length == 2) | .[1] as $record | .[0] |
       $record.route == "auto" and $record.accepted == true and $record.phase == "intent" and
       .pr.state == "MERGED" and .pr.id == $record.prId and .pr.baseRefName == $record.base and
       .pr.headRefOid != $record.head
@@ -1090,7 +1096,8 @@ merge_outcome_accept_head_drift() {
     merge_outcome_stop "selected merged head equals the retained auto head; use scripts/pr merge-run for ordinary reconciliation"; return 1
   fi
   merge_outcome_observe "$pr" || return 1
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" --arg merged "$merged_head" '
+  if ! printf '%s\n%s\n' "$MERGE_OBSERVATION" "$MERGE_OUTCOME_RECORD" | jq -se --arg merged "$merged_head" '
+    select(length == 2) | .[1] as $record | .[0] |
     .pr.id == $record.prId and .pr.baseRefName == $record.base and
     .pr.state == "MERGED" and .pr.headRefOid == $merged
   ' >/dev/null; then
@@ -1131,7 +1138,8 @@ merge_outcome_cancel_auto() {
   fi
   merge_outcome_observe "$pr" || return 1
   if [ -n "$observed_head" ]; then
-    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$observed_head" --argjson record "$MERGE_OUTCOME_RECORD" '
+    if ! printf '%s\n%s\n' "$MERGE_OBSERVATION" "$MERGE_OUTCOME_RECORD" | jq -se --arg head "$observed_head" '
+      select(length == 2) | .[1] as $record | .[0] |
       .pr.id == $record.prId and .pr.headRefOid == $head and .pr.baseRefName == $record.base and
       .pr.state == "OPEN" and .pr.autoMergeRequest == null and
       .pr.isInMergeQueue == false and .pr.isMergeQueueEnabled == false
@@ -1141,7 +1149,8 @@ merge_outcome_cancel_auto() {
   elif [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
     merge_outcome_resume "$pr"
     return
-  elif ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
+  elif ! printf '%s\n%s\n' "$MERGE_OBSERVATION" "$MERGE_OUTCOME_RECORD" | jq -se '
+    select(length == 2) | .[1] as $record | .[0] |
     .pr.id == $record.prId and .pr.headRefOid == $record.head and .pr.baseRefName == $record.base and
     .pr.state == "OPEN" and .pr.isInMergeQueue == false and .pr.isMergeQueueEnabled == false and
     (.pr.autoMergeRequest == null or
@@ -1186,7 +1195,8 @@ merge_outcome_cancel_auto() {
       fi
     fi
   fi
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
+  if ! printf '%s\n%s\n' "$MERGE_OBSERVATION" "$MERGE_OUTCOME_RECORD" | jq -se '
+    select(length == 2) | .[1] as $record | .[0] |
     .pr.id == $record.prId and .pr.headRefOid == $record.head and .pr.baseRefName == $record.base and
     .pr.state == "OPEN" and .pr.autoMergeRequest == null and
     .pr.isInMergeQueue == false and .pr.isMergeQueueEnabled == false

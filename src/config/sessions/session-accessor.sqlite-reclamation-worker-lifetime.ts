@@ -376,6 +376,7 @@ export class SqliteReclamationWorker {
           },
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,
+          validationPath: this.options.path,
           readOpeningValidation: params.readOpeningValidation,
           dispatch: () =>
             transport.channel.postMessage(params.request(operationId, coordination), [

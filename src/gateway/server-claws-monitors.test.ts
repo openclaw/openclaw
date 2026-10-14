@@ -56,9 +56,7 @@ describe("Claw serving monitor cleanup", () => {
         expect(listAgentEntries(current.getConfig()).some((agent) => agent.id === "worker")).toBe(
           true,
         );
-        await expect(
-          fs.access(path.join(current.workspaceDir, "SOUL.md")),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(current.workspaceDir, "SOUL.md"));
       });
     },
   );
@@ -173,13 +171,13 @@ describe("Claw serving monitor cleanup", () => {
             current.replaceCron();
           }
         };
-        const originalJournal = deletionJournal.readAgentDeletionJournalAsync;
+        const originalJournal = deletionJournal.prepareAgentDeletionJournalObservation;
         const originalOwnership = clawOwnership.readClawPackageOwnership;
         const originalList = current.cron.list.bind(current.cron);
         const preparation =
           boundary === "journal"
             ? vi
-                .spyOn(deletionJournal, "readAgentDeletionJournalAsync")
+                .spyOn(deletionJournal, "prepareAgentDeletionJournalObservation")
                 .mockImplementationOnce(async (...args) => {
                   const journal = await originalJournal(...args);
                   replaceOwner();
@@ -202,12 +200,10 @@ describe("Claw serving monitor cleanup", () => {
         try {
           await expect(
             current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
-          ).rejects.toThrow(changedOwner === "operation" ? "deletion fence" : "changing");
+          ).rejects.toThrow(changedOwner === "operation" ? "no longer owns" : "changing");
           expect(quiesce).not.toHaveBeenCalled();
           expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
-          await expect(
-            fs.access(path.join(current.workspaceDir, "SOUL.md")),
-          ).resolves.toBeUndefined();
+          await fs.access(path.join(current.workspaceDir, "SOUL.md"));
         } finally {
           preparation.mockRestore();
           quiesce.mockRestore();
@@ -244,14 +240,12 @@ describe("Claw serving monitor cleanup", () => {
       try {
         await expect(
           current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
-        ).rejects.toThrow(changed === "operation" ? "deletion fence" : "cleanup state changed");
+        ).rejects.toThrow(changed === "operation" ? "no longer owns" : "cleanup state changed");
         expect(receiptReads).toBe(read);
         if (read === 1) {
           expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
         }
-        await expect(
-          fs.access(path.join(current.workspaceDir, "SOUL.md")),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(current.workspaceDir, "SOUL.md"));
       } finally {
         reader.mockRestore();
         if (active) {
@@ -308,9 +302,7 @@ describe("Claw serving monitor cleanup", () => {
         const plan = await current.plan();
         const result = await withMonitorDrainClock(() => current.apply(plan));
         expect(result).toMatchObject({ status: "partial", agentRemoved: false });
-        await expect(
-          fs.access(path.join(current.workspaceDir, "SOUL.md")),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(current.workspaceDir, "SOUL.md"));
         const exit = once(holder, "exit");
         holder.kill("SIGTERM");
         await exit;
@@ -355,7 +347,7 @@ describe("Claw serving monitor cleanup", () => {
       await expect(
         withMonitorDrainClock(() => current.gateway.drain("worker", deletion.entry.operationId)),
       ).rejects.toThrow("config convergence is incomplete");
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+      await fs.access(path.join(current.workspaceDir, "SOUL.md"));
     });
     expect(await current.apply(await current.plan())).toMatchObject({ status: "complete" });
   });
@@ -422,7 +414,7 @@ describe("Claw serving monitor cleanup", () => {
       }
       const firstJournal = deletionJournal.readAgentDeletionJournal("worker");
       expect(firstJournal).toBeDefined();
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+      await fs.access(path.join(current.workspaceDir, "SOUL.md"));
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       expect(deletionJournal.readAgentDeletionJournal("worker")?.operationId).toBe(
@@ -463,7 +455,7 @@ describe("Claw serving monitor cleanup", () => {
     );
     await expect(current.apply(plan)).rejects.toMatchObject({ code: "remove_changed" });
     expect(deletionJournal.readAgentDeletionJournal("worker")).toBeUndefined();
-    await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+    await fs.access(path.join(current.workspaceDir, "SOUL.md"));
   });
 
   it("does not cancel or wait for a surviving agent's ordinary runner", async () => {

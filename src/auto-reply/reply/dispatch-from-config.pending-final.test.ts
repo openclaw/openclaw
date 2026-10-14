@@ -11,6 +11,7 @@ import {
   readSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -176,37 +177,43 @@ describe("pending final delivery restart proof", () => {
     const scope = { sessionKey, storePath };
     const original = loadSessionEntry(scope) as SessionEntry;
     const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
     const commands: string[] = [];
     let beforeCommit: (() => void) | undefined;
+    const wrapExecution = (
+      owner: OpenClawAgentDatabaseExecution,
+    ): OpenClawAgentDatabaseExecution => {
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, run, options) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              run({
+                execute: (command, commandOptions) => {
+                  commands.push(command.type);
+                  if (command.type === "session.entry.patch.commit") {
+                    const change = beforeCommit;
+                    beforeCommit = undefined;
+                    change?.();
+                  }
+                  return worker.execute(command, commandOptions);
+                },
+              }),
+            options,
+          ),
+      };
+    };
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
     const observer = vi
       .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-      .mockImplementation((...args) => {
-        const owner = capture(...args);
-        return {
-          ...owner,
-          get fileIdentity() {
-            return owner.fileIdentity;
-          },
-          runExisting: (source, run, options) =>
-            owner.runExisting(
-              source,
-              (worker) =>
-                run({
-                  execute: (command, commandOptions) => {
-                    commands.push(command.type);
-                    if (command.type === "session.entry.patch.commit") {
-                      const change = beforeCommit;
-                      beforeCommit = undefined;
-                      change?.();
-                    }
-                    return worker.execute(command, commandOptions);
-                  },
-                }),
-              options,
-            ),
-        };
-      });
+      .mockImplementation((...args) => wrapExecution(capture(...args)));
+    const capturePreparation = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+    const preparationObserver = vi
+      .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
+      .mockImplementation((...args) => wrapExecution(capturePreparation(...args)));
     try {
       for (const change of [
         { label: "foreign metadata" },
@@ -242,6 +249,7 @@ describe("pending final delivery restart proof", () => {
       }
     } finally {
       observer.mockRestore();
+      preparationObserver.mockRestore();
     }
   });
 

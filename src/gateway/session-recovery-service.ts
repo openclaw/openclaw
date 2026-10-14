@@ -205,7 +205,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
   target: GatewaySessionStoreTarget;
   entry: InternalSessionEntry;
   authorizedPluginId?: string;
-  commitGuard?: () => void;
+  commitGuard?: (current?: InternalSessionEntry) => void;
   workerPlacementContext: SessionWorkerPlacementContext;
 }): Promise<InternalSessionEntry | undefined> {
   const { entry: initialSource, target } = params;
@@ -230,9 +230,9 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
         sessionId: initialSource.sessionId,
       });
       const assertCurrent = () => {
-        params.commitGuard?.();
         assertPlacementCurrent();
         const current = source.current();
+        params.commitGuard?.(current);
         const ownershipError = resolvePluginSessionOwnershipError({
           action: "recover",
           entry: current,
@@ -520,6 +520,9 @@ export async function recoverGatewaySession(params: {
               ? { communication: { ...currentSource.communication } }
               : {}),
             ...(currentSource.spawnedCwd ? { spawnedCwd: currentSource.spawnedCwd } : {}),
+            ...(currentSource.deviceFolder
+              ? { deviceFolder: { ...currentSource.deviceFolder } }
+              : {}),
             ...(currentSource.execHost ? { execHost: currentSource.execHost } : {}),
             ...(currentSource.execNode ? { execNode: currentSource.execNode } : {}),
             ...(currentSource.execCwd ? { execCwd: currentSource.execCwd } : {}),

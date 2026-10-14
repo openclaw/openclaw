@@ -3,22 +3,19 @@ import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { LitContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
 
-export type HeaderMenuQuickAction = {
+export type HeaderMenuSessionAction = {
   id: string;
   label: string;
   icon: LegacyTemplateResult;
   description?: string;
   variant?: "danger";
-} & (
-  | { kind: "status" }
-  | {
-      kind?: "action";
-      active?: boolean;
-      badge?: number;
-      disabled?: boolean;
-      onActivate: () => void;
-    }
-);
+  disabled?: boolean;
+  onActivate: () => void;
+};
+
+export type HeaderMenuQuickAction =
+  | (HeaderMenuSessionAction & { kind?: "action"; active?: boolean })
+  | { kind: "status"; id: string; label: string; icon: LegacyTemplateResult; description?: string };
 
 export type ChatQuickAction = HeaderMenuQuickAction & {
   className?: string;
@@ -80,11 +77,6 @@ export function ChatQuickActionItem(props: {
                 class="side-panel-type-option__shortcut"
               />
             )}
-          </Show>
-          <Show when={!props.layout && typeof action().badge === "number" && action().badge! > 0}>
-            <span slot="details" class="session-menu__sub">
-              {action().badge}
-            </span>
           </Show>
         </wa-dropdown-item>
       )}

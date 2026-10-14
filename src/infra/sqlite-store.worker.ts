@@ -2,6 +2,7 @@ import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { routeLogsToStderr } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
 import { drainProcessOutput } from "../process/output-drain.js";
@@ -65,12 +66,15 @@ const port = parentPort;
 routeLogsToStderr();
 const actors = new Map<number, SqliteWorkerPreparedBackend<SqliteWorkerOperations>>();
 const transfers = createSqliteWorkerTransferOwner();
-let pendingResult: { requestId: number; actor: number; transferId: number } | undefined;
+let pendingResult:
+  | { requestId: number; actor: number; transferId: number; timing: SqliteWorkerRequest["timing"] }
+  | undefined;
 type StagedInput = {
   requestId: number;
   actor: number;
   receiver: ReturnType<typeof createSqliteWorkerTransferReceiver>;
   command: unknown;
+  timing: SqliteWorkerRequest["timing"];
 };
 let pendingInput: StagedInput | undefined;
 const stateContexts = new Map<number, SqliteWorkerStateContext>();
@@ -150,10 +154,23 @@ function assertSynchronousResult(value: unknown, phase: string, beforeReject?: (
 }
 
 async function receive(request: SqliteWorkerRequest): Promise<void> {
-  const timing = request.timing;
+  // Continuations belong to one request; retain its first receipt and execution
+  // stamps until the final frame so transfer time cannot replace backend time.
+  const continuation =
+    request.type === "execute-frame"
+      ? pendingInput
+      : request.type === "result-next" && pendingResult?.transferId === request.transferId
+        ? pendingResult
+        : undefined;
+  const timing =
+    request.timing ??
+    (continuation?.requestId === request.id && continuation.actor === request.actor
+      ? continuation.timing
+      : undefined);
   if (timing) {
-    timing.received = performance.now();
+    timing.received ??= performance.now();
   }
+  let loadedModules = false;
   let reply: SqliteWorkerReply;
   let executed = pendingResult !== undefined;
   let retire = false;
@@ -174,7 +191,11 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         operationAdmission = {
           actor: request.actor,
-          context: { port: request.operationAdmission, requestCustody: request.requestCustody },
+          context: {
+            port: request.operationAdmission,
+            requestCustody: request.requestCustody,
+            executionAuthority: request.executionAuthority,
+          },
         };
       }
       if (request.stateContext) {
@@ -182,6 +203,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
     }
     const executeCommand = async (command: unknown) => {
+      if (timing) {
+        timing.inputReady = performance.now();
+      }
       const backend = actors.get(request.actor);
       if (!backend) {
         throw new Error("SQLite worker actor is closed");
@@ -248,6 +272,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           const loading = backend[SQLITE_WORKER_PREPARE_COMMAND]?.(typedCommand.type);
           if (loading) {
             await loading;
+            loadedModules = true;
           }
           try {
             // Preparation carries captured facts without retaining synchronous admission authority.
@@ -341,6 +366,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       const input: StagedInput = {
         requestId: request.id,
         actor: request.actor,
+        timing,
         command: undefined,
         receiver: createSqliteWorkerTransferReceiver(request.transfer, (record) => {
           input.command = record.value;
@@ -380,6 +406,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
       const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
+      loadedModules = true;
       const factoryName = request.existingIdentity
         ? "openExistingSqliteWorkerBackend"
         : "createSqliteWorkerBackend";
@@ -406,7 +433,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
-          ...(request.target ? { target: request.target } : {}),
           ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
@@ -461,7 +487,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       await executeCommand(deserialize(request.input));
     }
     const serialized = serialize(value);
-    if (timing) {
+    if (timing && !inputNext && request.type !== "result-next") {
       timing.serialized = performance.now();
     }
     if (serialized.byteLength > SQLITE_WORKER_MAX_RESULT_BYTES) {
@@ -471,7 +497,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       const handle = transfers.start([{ kind: "result", serialized }].values(), {
         kinds: ["result"],
       });
-      pendingResult = { requestId: request.id, actor: request.actor, transferId: handle.id };
+      pendingResult = {
+        requestId: request.id,
+        actor: request.actor,
+        transferId: handle.id,
+        timing,
+      };
       reply = { id: request.id, ok: true, value: serialize(handle), transfer: "start" };
     } else {
       reply = {
@@ -504,7 +535,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     const errorContext =
       request.stateContext ??
       (request.type === "execute-frame" ? stateContexts.get(request.actor) : undefined);
-    // Canonical error identities also belong to context-free ephemeral actors.
     const sharedState = !executed
       ? encodeOpenClawStateWorkerError(failure, { includeOrdinary: Boolean(errorContext) })
       : undefined;
@@ -558,6 +588,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     port.postMessage({ ...reply, value: bytes }, [bytes.buffer]);
   } else {
     port.postMessage(reply, []);
+  }
+  if (loadedModules) {
+    scheduleOpenClawCompileCacheFlush();
   }
   if (complete) {
     scheduleWorkerIdleGc();

@@ -4,7 +4,10 @@ import { observeAgentRunStart } from "../../auto-reply/agent-run-start.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
+import {
+  settleReplyPendingFinalDelivery,
+  suppressPendingFinalDelivery,
+} from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { isReplyDispatchDeliveryPending } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
@@ -45,6 +48,7 @@ import {
 import {
   createDirectPendingFinalCustody,
   NO_PENDING_FINAL_CUSTODY,
+  PendingFinalDeliveryNotOwnedError,
   resolvePendingFinalCompletion,
   toCoreManagedDeliveryInfo,
 } from "./direct-delivery-custody.js";
@@ -288,6 +292,10 @@ async function settleChannelDeliveryAttempt(
       finalized = { ...finalized, ...(await finalized.finalization), finalization: undefined };
     }
   } catch (error: unknown) {
+    if (error instanceof PendingFinalDeliveryNotOwnedError) {
+      // Deferred provider admission must also leave the earlier attempt untouched.
+      return;
+    }
     try {
       await onFinalizationError?.(error);
     } catch {
@@ -306,13 +314,10 @@ async function settleChannelDeliveryAttempt(
       messageId: resolveChannelDeliveryMessageId(finalized),
     });
   }
-  const completion = resolvePendingFinalCompletion(attempt.payload);
-  if (completion) {
-    await settlePendingFinalDelivery(
-      completion,
-      pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
-    );
-  }
+  await settleReplyPendingFinalDelivery(
+    attempt.payload,
+    pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
+  );
   await runChannelDeliveryObserver({
     onDelivered,
     payload: attempt.payload,
@@ -545,6 +550,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
         }
       }
     } catch (error: unknown) {
+      if (error instanceof PendingFinalDeliveryNotOwnedError) {
+        // Leave the earlier attempt's ambiguous or terminal custody untouched.
+        return { visibleReplySent: false };
+      }
       await settleFailedPendingFinalDelivery(effectivePayload, error);
       if (delivery.observeMessageSent) {
         await settleChannelDeliveryAttempt(
@@ -642,6 +651,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                   : {}),
                 dispatcherOptions: {
                   ...replyPipeline.dispatcherOptions,
+                  pendingFinalDeliveryAdmission: "deliver",
                   onSkip: (payload, info) => {
                     replyPipeline.dispatcherOptions?.onSkip?.(payload, info);
                     if (info.reason !== "channel_transform") {

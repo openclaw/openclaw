@@ -18,8 +18,20 @@ agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites
 
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
+The `Linux App` Windows installer job allows 105 minutes for source staging and
+packaging. Its canonical core build uses the existing
+`OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS` override with a 60-minute allowance:
+cold Windows declarations exceeded the default 45-minute package deadline, while
+a complete installer job previously took 78 minutes. The remaining job budget
+covers dependency installation, Rust compilation, and NSIS packaging. Linux and
+release-workflow budgets are unchanged.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
+Agent auth-store admission and configured model-owner changes explicitly select
+the Gateway agent-config readiness suite. Its lazy startup path is not fully
+visible to the bounded import graph; the owner watch preserves overlap coverage.
 
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
@@ -29,13 +41,15 @@ Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
 
 Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
+Full hybrid PR checks share central formatting and scripts lint with core lint stripe 1 when those are the complete central command inventory. The existing 16-class runner executes them sequentially within its 15-minute deadline, removing one checkout and dependency setup. Additional central checks, targeted core stripes, and plans without another required check row retain their separate lint job. Central lint still runs after a core lint failure and fails the shared job if it fails.
+
 Default fork first attempts run their existing core lint stripes on Blacksmith16, retaining the same core and extension chunk assignments and restore-only caches. Retries and the GitHub override remain hosted; see [runner placement](/ci/runners#runners).
 
 [Automation admission](/ci/scheduled-workflows#comment-automation) filters known
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-PR jobs run to completion after a sibling failure. `pr-failure-report` compares
+PR jobs and independent checks run to completion after a failure, including forks and retries. Setup, planning, build dependencies, cancellation, and watchdog deadlines still stop work that cannot safely proceed. Failing runs therefore take longer and use more runner time; successful runs keep the same selected checks, job names, and concurrency. `pr-failure-report` compares
 every failed or timed-out job with the newest completed scheduled main CI run
 and publishes a **pre-existing**, **new**, or **unknown** classification in its
 summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
@@ -82,7 +96,7 @@ and Wear store capture script in one hosted Ubuntu job. The final CI gate requir
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
 
-Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
+Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
 Preflight passes the complete changed-path manifest between steps as a local JSON
 file, so large PRs do not lose test-planning inputs to Actions output or environment
@@ -102,11 +116,13 @@ Additional checks and narrow-PR guards and dependency scans start directly after
 
 Changed compiler planning reads every selected program from one native compiler snapshot. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, this avoids serial compiler discovery without changing graph membership or full fallback. Cold Linux replays reduced compiler planning from 77–91 seconds to 17–21 seconds on four available CPUs; the complete materializer reached 14.8 GiB peak RSS. Canonical first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
 
-The extension package boundary row has a 30-minute job budget for SDK preparation,
+The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
 command alone; one completed compile and canary but exceeded the former
-20-minute whole-job deadline.
+20-minute whole-job deadline. Release validation on hosted `ubuntu-24.04` later
+spent about 6 minutes preparing and 23 minutes compiling 128 plugins, passed
+both checks, and was cancelled at the former 30-minute deadline.
 Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
 archives include checkout-specific paths and links, and hosted cold runs exceeded
 22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.

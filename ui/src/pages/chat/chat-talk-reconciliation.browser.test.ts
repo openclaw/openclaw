@@ -5,7 +5,7 @@ import "../../styles.css";
 import "../../styles/chat.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.tsx";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 
 class TalkReconciliationFixture extends LitElement {

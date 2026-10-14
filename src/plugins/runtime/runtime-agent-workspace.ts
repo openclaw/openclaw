@@ -31,7 +31,7 @@ export function ensurePluginAgentWorkspace(params?: PluginWorkspaceParams) {
   };
   resolveGlobalSingleton(Symbol.for("openclaw.workspaceGuardDeprecation"), () => {
     process.emitWarning(
-      "ensureAgentWorkspace.beforePersistentApply runs before dispatch; synchronous OpenClaw DB access in this callback is deprecated. Use SQL-free guard.assertHost for live revocation at commit. Removal: next Plugin SDK major.",
+      "ensureAgentWorkspace.beforePersistentApply runs before dispatch; synchronous OpenClaw DB access in this callback is deprecated. Use SQL-free guard.assertHost for live revocation at commit. Retained until an announced stable removal window.",
       { code: "DEP_WORKSPACE_MUTATION_GUARD", type: "DeprecationWarning" },
     );
     return true;

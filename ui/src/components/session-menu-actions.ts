@@ -1,11 +1,11 @@
-import { ContextConsumer } from "@lit/context";
-import type { ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { applicationContext } from "../app/context.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
+import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
 import { SessionMenuSettings } from "./session-menu-settings.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
@@ -67,7 +67,7 @@ export type SessionManagementAction =
   | { kind: "set-color"; color: string | null }
   | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
   | { kind: "move-to-group"; category: string | null }
-  | { kind: "snooze"; snoozedUntil: number }
+  | { kind: "snooze"; snoozedUntil: number; rememberCustom?: boolean }
   | { kind: "wake" };
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
@@ -85,8 +85,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   categoryClearReturnsToGroups: false,
 };
 
-type SessionMenuActionsHost = ReactiveControllerHost &
-  HTMLElement & { updateComplete: Promise<unknown> };
+type SessionMenuActionsHost = SolidControllerHost & HTMLElement;
 
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
@@ -111,9 +110,17 @@ export type SessionMenuActionsState = {
 
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
-  private readonly context;
+  private readonly context = useOptionalApplication();
+  private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
   readonly ownerMenu: SessionOwnerMenu;
   readonly advanced;
+  openCustomSnooze?: () => void;
+  customSnoozeKeydown?: (event: KeyboardEvent) => boolean;
+
+  get customSnoozeKey(): string | null {
+    const client = this.gateway?.read().snapshot.client;
+    return client ? customSnoozeStorageKey(client.gatewayUrl, client.recoveryScope) : null;
+  }
 
   constructor(
     private readonly host: SessionMenuActionsHost,
@@ -121,11 +128,9 @@ export class SessionMenuActions {
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
   ) {
-    this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
-    new SubscriptionsController(host).watchStore(() => this.context.value?.gateway);
     this.ownerMenu = new SessionOwnerMenu(host);
     this.advanced = new SessionMenuSettings(host, {
-      context: () => this.context.value,
+      context: () => this.context,
       readState: () => this.readState(),
       runAction: (action) => this.runAction(action),
     });
@@ -133,8 +138,7 @@ export class SessionMenuActions {
 
   get involvementAvailable(): boolean {
     return (
-      this.context.value?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities ===
-      true
+      this.gateway?.read().snapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true
     );
   }
 
@@ -246,6 +250,19 @@ export class SessionMenuActions {
       this.runAction({ kind });
       return true;
     }
+    if (value === "snooze-reuse") {
+      const snoozedUntil = readCustomSnooze(this.customSnoozeKey);
+      if (snoozedUntil !== null) {
+        this.runAction({ kind: "snooze", snoozedUntil });
+      }
+      return true;
+    }
+    if (value === "snooze-custom") {
+      if (!this.actionDisabled("snooze", this.actionExtraDisabled("snooze"))) {
+        this.openCustomSnooze?.();
+      }
+      return true;
+    }
     if (value === "wake") {
       this.runAction({ kind: "wake" });
       return true;
@@ -291,6 +308,9 @@ export class SessionMenuActions {
   }
 
   handleKeydown(event: KeyboardEvent, appearancePicker: { showIconGrid: () => void }): boolean {
+    if (this.customSnoozeKeydown?.(event)) {
+      return true;
+    }
     const target = event.composedPath().find((node) => node instanceof HTMLElement);
     const key = resolveAsciiShortcutKey(event);
     // Moving these actions into Advanced must not retire their existing menu shortcuts.

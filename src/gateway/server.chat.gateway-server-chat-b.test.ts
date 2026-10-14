@@ -88,6 +88,7 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { CHAT_DOT_PNG_BASE64, INLINE_DOT_PNG_IMAGE } from "./server.chat-image.test-support.js";
 import {
   captureChatResponse,
   captureChatResult,
@@ -1700,9 +1701,9 @@ describe("gateway server chat", () => {
                   },
                 },
               });
-              const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+              const { loadGatewaySessionEntryReadOnlyAsync } = await import("./session-utils.js");
               setRuntimeConfigSnapshot(initialConfig);
-              const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
+              const loaded = await loadGatewaySessionEntryReadOnlyAsync("agent:work:main");
               expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
               expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
               expect(loaded.canonicalKey).toBe("agent:work:main");
@@ -2724,12 +2725,12 @@ describe("gateway server chat", () => {
     let mutation: Promise<void> | undefined;
     try {
       await writeStoredMainSession({});
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntryAsync: loadGatewaySessionEntry }] =
         await Promise.all([
           import("../config/sessions/session-accessor.js"),
-          import("./session-utils.js"),
+          import("./session-entry-load.test-support.js"),
         ]);
-      const seededSession = loadGatewaySessionEntry("main");
+      const seededSession = await loadGatewaySessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
@@ -2742,7 +2743,7 @@ describe("gateway server chat", () => {
           // Read the authoritative row inside the mutation. Admission startup
           // may refresh metadata before it blocks, but this test deletes that
           // same session generation rather than a stale pre-admission snapshot.
-          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionSession = await loadGatewaySessionEntry("main");
           const deletionEntry = expectDefined(
             deletionSession.entry,
             "session deletion test invariant",
@@ -3002,8 +3003,6 @@ describe("gateway server chat", () => {
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
       dispatchInboundMessageMock.mockImplementation(async (...args: unknown[]) => {
         const [params] = args as [
@@ -3031,7 +3030,7 @@ describe("gateway server chat", () => {
               type: "image",
               mimeType: "image/png",
               fileName: "dot.png",
-              content: pngB64,
+              content: CHAT_DOT_PNG_BASE64,
             },
           ],
         }),
@@ -3041,9 +3040,7 @@ describe("gateway server chat", () => {
 
       expect(responses[0]?.ok).toBe(true);
       await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
-      expect(captured?.replyOptions?.images).toEqual([
-        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0, fileName: "dot.png" },
-      ]);
+      expect(captured?.replyOptions?.images).toEqual([INLINE_DOT_PNG_IMAGE]);
       expect(captured?.ctx?.media).toEqual([
         expect.objectContaining({
           path: expect.any(String),
@@ -3110,8 +3107,6 @@ describe("gateway server chat", () => {
             ],
           ),
         });
-        const pngB64 =
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
         let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
           const [params] = args as [
@@ -3137,7 +3132,7 @@ describe("gateway server chat", () => {
                 type: "image",
                 mimeType: "image/png",
                 fileName: "dot.png",
-                content: pngB64,
+                content: CHAT_DOT_PNG_BASE64,
               },
             ],
           }),
@@ -4915,7 +4910,8 @@ describe("gateway server chat", () => {
         createTextTranscriptEvent("user", "reachable older message", { timestamp: Date.now() }),
         makeTranscriptTextEvent("NO_REPLY", {
           message: {
-            padding: "x".repeat(historyMaxBytes * 2 + 1024),
+            // Exceed the response budget while staying below raw-page admission.
+            padding: "x".repeat(historyMaxBytes + 1024),
             timestamp: Date.now() + 1,
           },
         }),

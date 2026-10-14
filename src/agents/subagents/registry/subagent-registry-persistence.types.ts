@@ -38,7 +38,7 @@ export type SubagentRegistryWriteAuthority = {
 
 export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> = {
   runs?: Map<string, SubagentRunRecord>;
-  preparedRows?: ReadonlyMap<string, SubagentRunRecord>;
+  preparedRows?: () => ReadonlyMap<string, SubagentRunRecord>;
   context?: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
   pendingKillClaim?: SubagentRunRecord;
@@ -54,7 +54,6 @@ export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> =
   ) => void;
   commit?: (
     planned: P,
-    versions: ReadonlyMap<string, string | null>,
     authority: SubagentRegistryWriteAuthority,
   ) => Promise<SubagentRunMutation<P["value"]>>;
 };

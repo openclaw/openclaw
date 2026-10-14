@@ -1,33 +1,6 @@
 import Foundation
 import OpenClawKit
 
-struct WatchMessagingStartupBuffer<Event> {
-    private let maxCount: Int
-    private var events: [Event] = []
-    private(set) var isReady = false
-
-    init(maxCount: Int) {
-        precondition(maxCount > 0)
-        self.maxCount = maxCount
-    }
-
-    mutating func receive(_ event: Event) -> [Event] {
-        guard !self.isReady else { return [event] }
-        if self.events.count == self.maxCount {
-            self.events.removeFirst()
-        }
-        self.events.append(event)
-        return []
-    }
-
-    mutating func markReady() -> [Event] {
-        guard !self.isReady else { return [] }
-        self.isReady = true
-        defer { self.events.removeAll(keepingCapacity: false) }
-        return self.events
-    }
-}
-
 enum WatchMessagingError: LocalizedError {
     case unsupported
     case notPaired
@@ -50,11 +23,7 @@ enum WatchMessagingError: LocalizedError {
 
 @MainActor
 final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
-    private static let maxStartupEvents = 64
-
     private let transport: WatchConnectivityTransport
-    private var startupEvents = WatchMessagingStartupBuffer<WatchMessagingInboundEvent>(
-        maxCount: WatchMessagingService.maxStartupEvents)
     private var statusHandler: (@Sendable (WatchMessagingStatus) -> Void)?
     private var lastEmittedStatus: WatchMessagingStatus?
     private var chatDeliveryHandler: (@Sendable (OpenClawWatchChatDeliveryCommand) async throws -> Void)?
@@ -125,24 +94,20 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
 
     func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?) {
         self.execApprovalResolveHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func setExecApprovalSnapshotRequestHandler(
         _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
     {
         self.execApprovalSnapshotRequestHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?) {
         self.appSnapshotRequestHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
         self.appCommandHandler = handler
-        self.finishStartupRegistrationIfReady()
     }
 
     func sendNotification(
@@ -220,6 +185,7 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
     }
 
     private func receiveInboundEvent(_ event: WatchMessagingInboundEvent) async throws {
+        // NodeAppModel installs handlers synchronously on MainActor before queued transport delivery can run.
         switch event {
         case let .chatDeliveryCommand(command):
             // Returning is the application ACK boundary; a startup buffer is not custody.
@@ -235,30 +201,6 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
             throw OpenClawWatchChatDeliveryError(
                 code: "upgrade_required",
                 message: "Update OpenClaw on iPhone and Apple Watch before sending Watch messages.")
-        default:
-            for event in self.startupEvents.receive(event) {
-                self.dispatchStartupEvent(event)
-            }
-        }
-    }
-
-    private func finishStartupRegistrationIfReady() {
-        guard self.execApprovalResolveHandler != nil,
-              self.execApprovalSnapshotRequestHandler != nil,
-              self.appSnapshotRequestHandler != nil,
-              self.appCommandHandler != nil
-        else {
-            return
-        }
-        for event in self.startupEvents.markReady() {
-            self.dispatchStartupEvent(event)
-        }
-    }
-
-    private func dispatchStartupEvent(_ event: WatchMessagingInboundEvent) {
-        switch event {
-        case .chatDeliveryCommand, .chatDeliveryReceiptAck, .legacyChat:
-            preconditionFailure("Durable Watch delivery must not enter the startup buffer")
         case let .execApprovalResolve(event):
             self.execApprovalResolveHandler?(event)
         case let .execApprovalSnapshotRequest(event):

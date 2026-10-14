@@ -26,8 +26,8 @@ vi.mock("../infra/windows-install-roots.js", () => ({
 vi.mock("../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: () => null }));
 vi.mock("./child-process-tree.js", () => ({ isChildProcessTreeAlive: proc.alive }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
-vi.mock("./exec-spawn.js", () => ({
-  COMMAND_PROCESS_TREE_KILL_GRACE_MS: 300,
+vi.mock("./exec-spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./exec-spawn.js")>()),
   runOutsideCommandProcessScope: vi.fn(),
   spawnCommand: vi.fn(),
 }));

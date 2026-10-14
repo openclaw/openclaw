@@ -18,6 +18,14 @@ export type SqliteWorkerRequestCustodyDescriptor = {
   request: Int32Array<SharedArrayBuffer>;
 };
 
+export type SqliteWorkerExecutionAuthority = {
+  logical: Int32Array<SharedArrayBuffer>;
+  native: Int32Array<SharedArrayBuffer>;
+  physicalIdentity: string;
+  incarnation: string;
+  birthtime?: string;
+};
+
 export type SqliteWorkerAdmissionRequest = {
   stage: "open" | "prepare" | "transaction" | "commit";
   facts: unknown;
@@ -26,12 +34,6 @@ export type SqliteWorkerAdmissionRequest = {
 };
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
-/** Process-private locator; live owner admission remains separate from this identity. */
-export type SqliteWorkerEphemeralTarget = {
-  kind: "ephemeral";
-  handle: string;
-  incarnation: string;
-};
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -87,6 +89,7 @@ export type SqliteWorkerRequest = {
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
+  executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];
@@ -96,7 +99,6 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
-      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
       input: Uint8Array;

@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SessionMembershipFact } from "../config/sessions/session-membership-facts.types.js";
+import type {
+  SessionMembershipFact,
+  SessionParticipantRecord,
+} from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   hasSqlitePostCommitScope,
   publishSqliteCommittedState,
@@ -48,6 +52,10 @@ export type SessionRowFacts =
       kind: "participants";
       /** Participant history belongs to the logical key, across transcript replacements. */
       projection?: Pick<SessionEntry, "participants" | "participantCount">;
+      /** Count-only contributions leave display identity and ordering unchanged. */
+      projectionChanged?: false;
+      records?: readonly SessionParticipantRecord[];
+      actorVersion?: { epoch: string; sequence: number };
     }
   | { kind: "category"; sessionId: string; category: string | null }
   | { kind: "removed" };
@@ -146,16 +154,17 @@ export function captureSessionRowChanges<T>(
   database: DatabaseSync,
   run: (changes: readonly SessionRowChange[]) => T,
 ) {
+  const anchor = sqlPublicationAnchor(database);
   const changes: SessionRowChange[] = [];
-  const active = captures.get(database) ?? new Set<SessionRowChange[]>();
+  const active = captures.get(anchor) ?? new Set<SessionRowChange[]>();
   active.add(changes);
-  captures.set(database, active);
+  captures.set(anchor, active);
   try {
     return { result: run(changes), changes };
   } finally {
     active.delete(changes);
     if (active.size === 0) {
-      captures.delete(database);
+      captures.delete(anchor);
     }
   }
 }
@@ -199,11 +208,12 @@ export const sessionChanges = {
     database?: DatabaseSync,
     beforePublicNotifications?: () => void,
   ): void {
-    if (database && hasSqlitePostCommitScope(database)) {
-      for (const captured of captures.get(database) ?? []) {
+    const anchor = database && sqlPublicationAnchor(database);
+    if (anchor && hasSqlitePostCommitScope(anchor)) {
+      for (const captured of captures.get(anchor) ?? []) {
         const start = captured.length;
         if (
-          !stageSqliteTransactionState(database, {
+          !stageSqliteTransactionState(anchor, {
             stage: () => captured.push(...changes),
             commit() {},
             rollback: () => captured.splice(start),
@@ -285,7 +295,7 @@ export const sessionChanges = {
       },
       notify: publish,
     };
-    if (!database || !stageSqliteCommittedPublication(database, publication)) {
+    if (!anchor || !stageSqliteCommittedPublication(anchor, publication)) {
       publishSqliteCommittedState(publication);
     }
   },

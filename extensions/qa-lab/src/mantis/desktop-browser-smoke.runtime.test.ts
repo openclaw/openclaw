@@ -5,6 +5,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { ensureManagedCrabboxBinary } from "@openclaw/crabbox-provider/cli-runtime-api.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  type CommandRunner,
+  createMantisCrabboxSession,
+  defaultCommandRunner,
+} from "./crabbox-runtime.js";
 import { runMantisDesktopBrowserSmoke } from "./desktop-browser-smoke.runtime.js";
 
 vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
@@ -44,6 +49,75 @@ describe("mantis desktop browser smoke runtime", () => {
       }),
     ).rejects.toThrow("release unavailable");
     expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("reports failed warmup candidates without adopting or stopping them", async () => {
+    const controller = new AbortController();
+    const output = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      controller.abort();
+      return true;
+    });
+    const failure = await defaultCommandRunner(
+      process.execPath,
+      [
+        "-e",
+        `
+      process.stderr.write('leased cbx_0123456789ab slug=fixture server=1 type=tiny ip=private\\n');
+      setInterval(() => {}, 1000);
+    `,
+      ],
+      { signal: controller.signal, stdio: "inherit" },
+    )
+      .catch((error: unknown) => error)
+      .finally(() => output.mockRestore());
+    const runner = vi.fn<CommandRunner>(async () => {
+      throw failure;
+    });
+    const session = await createMantisCrabboxSession(
+      { commandRunner: runner, crabboxBin: "/tmp/crabbox" },
+      { env: {}, repoRoot },
+    );
+    await expect(session.acquire()).rejects.toBe(failure);
+    expect(() => session.runShell("true", [])).toThrow("unavailable before acquisition");
+    await session.stopIfOwned();
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(session.describe()).toMatchObject({
+      id: "unallocated",
+      recoveryLeaseCandidates: ["cbx_0123456789ab"],
+      vncCommand: "unallocated",
+    });
+
+    const result = await runMantisDesktopBrowserSmoke({
+      commandRunner: runner,
+      crabboxBin: "/tmp/crabbox",
+      env: {},
+      repoRoot,
+    });
+    expect(result.status).toBe("fail");
+    const summaryText = await fs.readFile(result.summaryPath, "utf8");
+    expect(JSON.parse(summaryText).crabbox).toMatchObject(session.describe());
+    expect(summaryText).not.toContain("ip=private");
+    expect(await fs.readFile(result.reportPath, "utf8")).toContain(
+      "Recovery candidates (inspect before cleanup): cbx_0123456789ab",
+    );
+    expect(runner).toHaveBeenCalledTimes(2);
+    runner.mockResolvedValueOnce({ stdout: "ready lease cbx_abcdef012345", stderr: "" });
+    await expect(session.acquire()).resolves.toBe("cbx_abcdef012345");
+    expect(session.describe()).not.toHaveProperty("recoveryLeaseCandidates");
+  });
+
+  it("does not adopt lease-looking text from arbitrary failures", async () => {
+    const runner = vi.fn(async () => {
+      throw new Error("leased cbx_0123456789ab slug=untrusted");
+    });
+    const session = await createMantisCrabboxSession(
+      { commandRunner: runner, crabboxBin: "/tmp/crabbox" },
+      { env: {}, repoRoot },
+    );
+    await expect(session.acquire()).rejects.toThrow("untrusted");
+    expect(session.describe()).not.toHaveProperty("recoveryLeaseCandidates");
+    await session.stopIfOwned();
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 
   it("uses the managed binary to lease a desktop, run a browser, copy artifacts, and stop", async () => {

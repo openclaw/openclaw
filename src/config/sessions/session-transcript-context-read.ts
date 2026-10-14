@@ -3,20 +3,12 @@ import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
-import {
-  captureIncognitoSessionHistoryBinding,
-  captureIncognitoSessionSource,
-} from "./session-incognito-binding.js";
-import {
-  prepareIncognitoSessionHistoryRead,
-  type IncognitoSessionHistoryBinding,
-} from "./session-incognito-history-read.js";
 import {
   readSessionTranscriptAnchorsAsync,
   readSessionTranscriptAnchorsFromSource,
@@ -25,7 +17,6 @@ import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-r
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   resolveSessionTranscriptReadFence,
-  withSessionContextAdmission,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 import {
@@ -74,30 +65,14 @@ export async function readSessionTranscriptContextProjectionAsync<T>(
   const captured = { ...target };
   const admission = resolveSessionTranscriptReadFence(captured);
   const capturedAdmission = admission && structuredClone(admission);
+  const memory = captureSessionActorTranscriptRead(captured, signal);
+  if (memory) {
+    const result = await project({ target: memory.target, admission: capturedAdmission });
+    memory.assertCurrent();
+    return result.value;
+  }
   return withSessionTranscriptReadSource(
     captured,
-    async (scope) => {
-      const result = await project({
-        target: { ...captured, ...scope },
-        admission: capturedAdmission,
-      });
-      let accepted = false;
-      await readSessionTranscriptAnchorsAsync(
-        { ...scope, sessionKey: captured.sessionKey },
-        {
-          entryIds: [],
-          contextValidation: { version: result.version, admission: capturedAdmission },
-        },
-        signal,
-        (facts) => {
-          accepted = facts.contextValidated === true || (!result.version && !capturedAdmission);
-        },
-      );
-      if (!accepted) {
-        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
-      }
-      return result.value;
-    },
     async (source) => {
       const scope = { ...source.scope, sessionKey: captured.sessionKey };
       const result = await project({
@@ -140,7 +115,6 @@ export function readSessionTranscriptModelContextAsync<T>(
   signal?: AbortSignal,
   through?: TranscriptEntryAnchor,
   limits?: SessionModelContextLimits,
-  suppliedIncognito?: IncognitoSessionHistoryBinding,
   consumeSynchronously = false,
 ): Promise<T> {
   const capturedTarget = { ...target };
@@ -151,7 +125,6 @@ export function readSessionTranscriptModelContextAsync<T>(
     scope: SessionTranscriptRuntimeTarget,
     context: SessionTranscriptModelContext,
     assertCurrent: () => void,
-    binding?: IncognitoSessionHistoryBinding,
     contextAdmission = capturedAdmission,
     source?: SessionTranscriptWorkerReadSource,
   ): Promise<T> => {
@@ -200,7 +173,7 @@ export function readSessionTranscriptModelContextAsync<T>(
           onRead,
         );
       } else {
-        await readSessionTranscriptAnchorsAsync(scope, selection, signal, onRead, binding);
+        await readSessionTranscriptAnchorsAsync(scope, selection, signal, onRead);
       }
     } catch (error) {
       // Reader cleanup still joins any write-capable consumer it already started.
@@ -215,68 +188,34 @@ export function readSessionTranscriptModelContextAsync<T>(
     // The consumer owns its effects. Transcript changes after this snapshot are best effort.
     return await consumed.value;
   };
-  const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(target);
-  if (source && "kind" in source) {
-    signal?.throwIfAborted();
-    if (capturedAdmission || capturedThrough) {
+  const memory = captureSessionActorTranscriptRead(target, signal);
+  if (memory) {
+    if (memory.missing && (capturedAdmission || capturedThrough)) {
       return Promise.reject(
         new SessionTranscriptReadFenceError("Session transcript is unavailable"),
       );
     }
-    return Promise.resolve(consume({ events: [] })).then((result) => {
-      signal?.throwIfAborted();
-      source.assertCurrent();
-      return result;
+    const context = memory.missing
+      ? Promise.resolve({ events: [] } satisfies SessionTranscriptModelContext)
+      : memory.read("session.history.context", {
+          ...(capturedAdmission ? { admission: capturedAdmission } : {}),
+          through: capturedThrough,
+          limits: capturedLimits,
+        });
+    return context.then(async (value) => {
+      memory.assertCurrent();
+      const result = consume(value);
+      if (consumeSynchronously && isPromiseLike(result)) {
+        void Promise.resolve(result).catch(() => {});
+        throw new Error("Prepared model-context consumers must remain synchronous");
+      }
+      const consumed = await result;
+      memory.assertCurrent();
+      return consumed;
     });
-  }
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(target);
-  if (incognito) {
-    const prepared = prepareIncognitoSessionHistoryRead(incognito, target, signal);
-    const contextAdmission = capturedAdmission ?? prepared.target.admission;
-    return prepared.actor.sessions
-      .withSharedState(async () => {
-        const context = await prepared.actor.sessions.history(
-          prepared.authority,
-          {
-            type: "session.history.context",
-            input: {
-              ...prepared.target,
-              admission: contextAdmission,
-              through: capturedThrough,
-              limits: capturedLimits,
-            },
-          },
-          signal,
-        );
-        return accept(
-          capturedTarget,
-          context,
-          prepared.authority.assertCurrent,
-          prepared,
-          contextAdmission,
-        );
-      })
-      .then((result) => {
-        prepared.authority.assertCurrent();
-        if (prepared.actor.sessions.readSharing(prepared.target.sessionKey)?.entry) {
-          prepared.actor.sessions
-            .captureCurrent(prepared.target.sessionKey)
-            .authorize(prepared.authority, "commit");
-        }
-        return result;
-      });
   }
   return withSessionTranscriptReadSource(
     capturedTarget,
-    async (scope) => {
-      // Capture incognito synchronously, then revalidate after the public async boundary.
-      const context = await Promise.resolve(
-        withSessionContextAdmission(capturedTarget, capturedAdmission, () =>
-          readSessionTranscriptModelContext(scope, capturedThrough, capturedLimits),
-        ),
-      );
-      return accept(capturedTarget, context, () => signal?.throwIfAborted());
-    },
     async (readSource) => {
       const { scope, expectedIdentity, assertCurrent } = readSource;
       const captured = { ...scope, sessionKey: capturedTarget.sessionKey };
@@ -320,6 +259,7 @@ export function readSessionTranscriptModelContextAsync<T>(
           true,
           undefined,
           signal,
+          "history.model-context",
         );
       }
       const context = await readSessionTranscriptModelContextInWorker(
@@ -335,11 +275,12 @@ export function readSessionTranscriptModelContextAsync<T>(
         captured,
         context,
         assertCurrent,
-        undefined,
         capturedAdmission,
-        capturedAdmission ? readSource : undefined,
+        capturedAdmission || capturedThrough ? readSource : undefined,
       );
     },
     signal,
+    undefined,
+    capturedThrough?.storePath,
   );
 }

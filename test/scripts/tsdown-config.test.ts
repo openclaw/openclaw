@@ -56,6 +56,11 @@ const workerBuildTargets = [
   ],
   ["file-tool-read", "worker/file-tool-read.worker", "src/worker/worker-deploy-file-tool-read.ts"],
   [
+    "gateway-state-owner-heartbeat",
+    "worker/gateway-state-owner-heartbeat.worker",
+    "src/infra/gateway-state-owner-heartbeat.worker.ts",
+  ],
+  [
     "image-processor",
     "worker/image-processor.worker",
     "src/worker/worker-deploy-image-processor.ts",
@@ -82,7 +87,12 @@ const workerBuildTargets = [
   ],
 ] as const;
 const isWorkerBuildConfig = (config: TsdownConfig) =>
-  workerBuildTargets.some(([, entry, source]) => hasWorkerEntry(config, entry, source));
+  workerBuildTargets.some(([, entry, source]) => hasWorkerEntry(config, entry, source)) ||
+  (typeof config.entry === "object" &&
+    config.entry !== null &&
+    !Array.isArray(config.entry) &&
+    Object.keys(config.entry).length > 0 &&
+    Object.keys(config.entry).every((name) => name.startsWith("worker/")));
 
 function findWorkerBuildConfig(target: string) {
   const selected = workerBuildTargets.find(([name]) => name === target);

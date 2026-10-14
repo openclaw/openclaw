@@ -28,6 +28,7 @@ Scope includes:
 - Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error/aborted-turn removal before both live requests and provider replay
+- Speech-only assistant turn replay as its spoken text
 
 If you need transcript storage details, see
 [Session management deep dive](/reference/session-management-compaction).
@@ -218,6 +219,10 @@ tool calls, or unknown content blocks. Silent-reply turns with tool calls or
 unknown content blocks also remain unchanged. Stored transcripts are not
 rewritten.
 
+An assistant turn with no visible text or tool calls but recorded speech
+(`openclawDelivery.tts.text`) replays that speech as its text, so later turns
+still see the answer. Stored transcripts are not rewritten.
+
 Implementation: `normalizeAssistantReplayContent` in
 `src/agents/embedded-agent-runner/replay-history.ts`
 
@@ -257,16 +262,22 @@ inter-session user turns that only have provenance metadata.
   summaries are empty, cleartext reasoning content is omitted, and completed
   ciphertext remains unchanged across live continuation and transcript reload.
   Native ChatGPT Responses retains its upstream Codex payload semantics.
-- Node turns canonicalize fresh reasoning signatures before returning the
+- SDK Responses streams canonicalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
   the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
   and previously approved history remain unchanged.
+- Successful SDK Responses completions omit absent error fields. The session
+  owner attaches run metadata to fresh assistant history before persistence, so
+  the next tool step and transcript reload retain the same run envelope.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
 - OpenAI Responses-family replay preserves canonical `call_*|fc_*`
-  same-model reasoning pairs, but deterministically normalizes malformed or
+  tool-call pairs, but deterministically normalizes malformed or
   overlong `call_id`/function-call item ids before pi-ai payload conversion.
+  When an assistant turn lacks preceding reasoning with an `rs_*` ID, the transport
+  omits its `fc_*` item IDs from the outbound payload without changing the
+  transcript's tool-call or tool-result IDs.
 - Tool result pairing repair may move real matched outputs and synthesize
   Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering; no thought signature stripping.

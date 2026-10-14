@@ -235,7 +235,7 @@ OpenClaw can also derive simple setup choices from `setup.providers[].authMethod
 
 Set `requiresRuntime: false` only when those descriptors are sufficient for the setup surface. OpenClaw treats explicit `false` as a descriptor-only contract and will not execute `setup-api` or `openclaw.setupEntry` for setup lookup. If a descriptor-only plugin still ships one of those setup runtime entries, OpenClaw reports an additive diagnostic and continues ignoring it. Omitted `requiresRuntime` keeps legacy fallback behavior so existing plugins that added descriptors without the flag do not break.
 
-Because setup lookup can execute plugin-owned `setup-api` code, normalized `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across discovered plugins. Ambiguous ownership fails closed instead of picking a winner from discovery order.
+Because setup lookup can execute plugin-owned `setup-api` code, normalized `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across discovered plugins. Ambiguous ownership blocks setup lookup instead of picking a winner from discovery order.
 
 When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, checks, or selected provider runtimes.
 
