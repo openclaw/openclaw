@@ -474,7 +474,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       const layoutMenu = await openChatLayoutMenu(page);
       await expect
         .poll(() =>
-          layoutMenu.locator("wa-dropdown-item").filter({ hasText: "Discussion" }).count(),
+          layoutMenu.locator('[role^="menuitem"]').filter({ hasText: "Discussion" }).count(),
         )
         .toBe(0);
       if (recordProof) {

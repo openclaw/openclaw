@@ -233,4 +233,10 @@ Isolated cron runs create their own session entries/transcripts with dedicated r
 - `cron.sessionRetention` (default `"24h"`) prunes old isolated cron run sessions from the store; `false` or a zero duration such as `"0h"` disables.
 - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
+Exact cron run rows retain only their own session-id lineage while sharing the
+base job's usage-family key. The Gateway's seven-day session-registry sweep reads
+and prunes run rows in small batches, so older rows containing oversized inherited
+family lists can expire without loading the entire store into memory. Existing
+rows are not rewritten; active-work protections and transcript archival still apply.
+
 When cron force-creates a new isolated run session, it sanitizes the previous `cron:<jobId>` session entry before writing the new row: it carries safe preferences (thinking/fast/verbose/reasoning settings, labels, display name) and explicit user-selected model/auth overrides, but drops ambient conversation context (channel/group routing, send/queue policy, elevation, origin, ACP runtime binding) so a fresh isolated run cannot inherit stale delivery or runtime authority from an older run.

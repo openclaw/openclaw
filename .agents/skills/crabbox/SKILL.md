@@ -47,6 +47,12 @@ Crabbox.”
   worker counts to compensate.
 - Testbox sizing: `--blacksmith-workflow`, never direct `--class`/`--type`;
   profile changes require fresh leases.
+- Blacksmith runner labels request a tier, not guaranteed CPU or RAM.
+  Blacksmith can allocate smaller machines depending on service availability.
+  For resource-sensitive tests or benchmarks, measure available CPUs,
+  affinity/quotas, and usable RAM on the allocated machine. Size workers and
+  workloads from those measurements. Record the requested tier and observed
+  resources separately. Do not qualify hardware or performance from labels alone.
 - Size, duration, hydration failure, capacity never authorize provider overrides;
   explicit user selection or required backend semantics do.
 

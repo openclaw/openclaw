@@ -120,6 +120,11 @@ Register each capability inside `register(api)` alongside your existing
     filenames, including AAC uploads that need an M4A-style filename for
     compatible transcription APIs.
 
+    `requireTranscriptionText(value, message)` validates the response transcript
+    and trims whitespace. An empty string represents audio without detected
+    speech and is returned unchanged; the media runner records a nonfatal skip.
+    Missing or non-string values still throw with the supplied message.
+
     Official plugins can use the private `blob-runtime` helper
     `bufferToBlobPart(buffer)` for other multipart uploads. Pass it directly to
     `new Blob(...)` to preserve the Buffer range without an intermediate copy;

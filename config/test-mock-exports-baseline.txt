@@ -1208,7 +1208,6 @@
 ["extensions/openai/token-sharing-oauth.runtime.test.ts","openclaw/plugin-sdk/ssrf-runtime","fe42af0e03c37aa726ec8ddf80678482f7b709a329a710a0f68205d3bf1770dd",1]
 ["extensions/openai/tts.optional-capture.test.ts","openclaw/plugin-sdk/ssrf-runtime","6834a7c185c3275cd12900349da92e0628e7fd4e1c8c5aa66315f8e0af676b08",1]
 ["extensions/openai/tts.test.ts","openclaw/plugin-sdk/ssrf-runtime","ae8c5ea4f4d9a54017d3369ec2eb8bb2cba898a26cdf7255ccfac94045ce5f68",1]
-["extensions/openrouter/media-understanding-provider.test.ts","openclaw/plugin-sdk/provider-http","5cf67650da183da2fca45f8ad3e2e17a6d2637f336faa6e089963bb27e3372b1",1]
 ["extensions/openrouter/music-generation-provider.transport.test.ts","openclaw/plugin-sdk/provider-auth-runtime","eb5c37bf125f5fa367efe98a452d35bf05f27f507d2580cdc66ca9fab4f8a891",1]
 ["extensions/openrouter/music-generation-provider.transport.test.ts","openclaw/plugin-sdk/provider-auth-runtime","eb5c37bf125f5fa367efe98a452d35bf05f27f507d2580cdc66ca9fab4f8a891",2]
 ["extensions/openrouter/video-generation-provider.test.ts","openclaw/plugin-sdk/provider-auth-runtime","eb5c37bf125f5fa367efe98a452d35bf05f27f507d2580cdc66ca9fab4f8a891",1]
