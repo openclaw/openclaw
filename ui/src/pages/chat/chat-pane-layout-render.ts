@@ -21,6 +21,7 @@ import { livePresentation, presentedContent } from "../../lit/presentation-bindi
 import { solidContent } from "../../lit/solid-content.tsx";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -62,10 +63,10 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
-  private conversationTabDependencies: readonly unknown[] = [];
-  private conversationTab:
-    | { label: string; icon: ReturnType<typeof renderAgentIdentityAvatar> }
-    | undefined;
+  private readonly conversationTabMemo = new ChatPaneHeaderMemo<{
+    label: string;
+    icon: ReturnType<typeof renderAgentIdentityAvatar>;
+  }>();
   private readonly toolIcons = new ChatToolIconController(
     this,
     () => this.context,
@@ -97,6 +98,13 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     // What the pane shows. Its controls keep working on the layout as it is saved.
     const sidebarLayout = this.presentSidebarLayout(savedLayout);
     const conversationVisible = isSidebarSlotVisible(sidebarLayout, "conversation");
+    const workspace = resolveSessionWorkspace({
+      session: selectedSession,
+      agentWorkspace,
+      worktreePath: selectedSession?.worktree
+        ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+        : undefined,
+    });
     if (this.inputRegion === "page") {
       const preview = state.sessionWorkspaceState?.previews.find(
         (entry) => entry.id === state.sessionWorkspaceState?.activePreviewId,
@@ -105,13 +113,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         preview?.kind === "file" && isSidebarSlotVisible(sidebarLayout, "workspace")
           ? preview
           : undefined;
-      const workspace = resolveSessionWorkspace({
-        session: selectedSession,
-        agentWorkspace,
-        worktreePath: selectedSession?.worktree
-          ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
-          : undefined,
-      });
       publishChatWorkContext(
         this.context,
         this,
@@ -163,13 +164,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       error: conversationVisible ? chatProps.error : null,
       detailsEnabled: !catalog && !this.compact,
       detailsWorkspace: {
-        ...resolveSessionWorkspace({
-          session: selectedSession,
-          agentWorkspace,
-          worktreePath: selectedSession?.worktree
-            ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
-            : undefined,
-        }),
+        ...workspace,
         branch:
           selectedSession?.repository?.branch ??
           selectedSession?.worktree?.branch ??
@@ -392,27 +387,22 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
                 })}
               ></openclaw-plugin-contributions>`;
     const avatar = resolveAssistantDisplayAvatar(chatProps);
-    const conversationTabDependencies = [
-      chatProps.assistantName,
-      avatar.id,
-      avatar.avatar,
-      avatar.textAvatar,
-      currentThemeBranding(),
-    ];
-    if (
-      conversationTabDependencies.some(
-        (value, index) => value !== this.conversationTabDependencies[index],
-      )
-    ) {
-      this.conversationTabDependencies = conversationTabDependencies;
-      this.conversationTab = {
+    const conversationTab = this.conversationTabMemo.read(
+      [
+        chatProps.assistantName,
+        avatar.id,
+        avatar.avatar,
+        avatar.textAvatar,
+        currentThemeBranding(),
+      ],
+      () => ({
         label: chatProps.assistantName,
         icon: renderAgentIdentityAvatar(avatar),
-      };
-    }
+      }),
+    );
     const content = renderSidebarRegion({
       presentationId: this.presentationId,
-      conversationTab: this.conversationTab,
+      conversationTab,
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
       callbacks,

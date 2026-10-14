@@ -145,14 +145,10 @@ function createSnapshotRecord(
   sessionKey: string,
   pending: PendingSessionState,
 ): PreparedSnapshotRecord | null {
-  const sourceSnapshot = pending.snapshot;
-  let snapshot: unknown;
+  let snapshot: ChatSessionSnapshot;
   let weight: number;
   try {
-    const json = JSON.stringify(sourceSnapshot);
-    if (!json) {
-      return null;
-    }
+    const json = JSON.stringify(pending.snapshot);
     snapshot = JSON.parse(json);
     weight = json.length;
   } catch {
@@ -164,19 +160,14 @@ function createSnapshotRecord(
     sessionId: pending.snapshot.sessionId,
     sessionKey,
   };
-  const record = parseSnapshotRecord({ ...envelope, snapshot });
-  // Validation does not transform JSON values. Preserve the existing code-unit
-  // budget: snapshot JSON plus envelope JSON, excluding the enclosing snapshot key.
-  return record
-    ? {
-        record,
-        metadata: {
-          savedAt: record.savedAt,
-          sessionKey,
-          weight: weight + JSON.stringify(envelope).length,
-        },
-      }
-    : null;
+  return {
+    record: { ...envelope, snapshot },
+    metadata: {
+      savedAt: pending.savedAt,
+      sessionKey,
+      weight: weight + JSON.stringify(envelope).length,
+    },
+  };
 }
 
 async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null> {
@@ -388,15 +379,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
     const isCurrent = this.captureReadScope(key);
     try {
-      const admitted = validate(model);
-      if (admitted === null) {
-        return false;
-      }
       const record: SidebarRecord = {
         sessionKey: key,
         savedAt: Date.now(),
         projectionVersion: 1,
-        model: structuredClone(admitted),
+        model: structuredClone(model),
       };
       if (sidebarRecordBytes(record) > 512 * 1024) {
         return false;

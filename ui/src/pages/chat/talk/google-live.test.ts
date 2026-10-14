@@ -605,6 +605,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       expect(getGoogleLiveToolOwnerState(transport).pendingCalls.get("call-1")).toStrictEqual({
         name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         cancelled: false,
+        controller: expect.any(AbortController),
       }),
     );
     transport.stop();

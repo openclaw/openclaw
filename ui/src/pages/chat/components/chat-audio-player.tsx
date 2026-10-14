@@ -99,7 +99,6 @@ function ChatAudioPlayerContent(
   let mediaElement: HTMLAudioElement | null = null;
   let waveformElement: HTMLElement | null = null;
   let waveformResizeObserver: ResizeObserver | null = null;
-  let playRequest: Promise<void> | null = null;
   let releaseWaveformBlob: (() => void) | undefined;
   let waveformController: AbortController | null = null;
   let waveformAttempted = false;
@@ -376,22 +375,13 @@ function ChatAudioPlayerContent(
     if (media.paused) {
       adoptPreparedAudioForPlayback();
       claimChatAudioPlayback(media, cancelPendingResume);
+      // Invoke play in the click task so strict browser media policies retain user activation.
       const playback = media.play();
       const failed = () => {
         releaseChatAudioPlayback(media);
         updateState({ playing: false });
       };
-      if (!playRequest) {
-        // Invoke play in the click task so strict browser media policies retain user activation.
-        playRequest = playback
-          .then(() => prepareWaveformAudio().catch(() => undefined))
-          .catch(failed)
-          .finally(() => {
-            playRequest = null;
-          });
-      } else {
-        void playback.catch(failed);
-      }
+      void playback.then(() => prepareWaveformAudio().catch(() => undefined)).catch(failed);
     } else {
       media.pause();
     }

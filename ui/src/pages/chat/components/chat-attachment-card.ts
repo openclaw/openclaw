@@ -93,11 +93,19 @@ export function prepareAttachmentCardHeader(options: AttachmentCardHeaderOptions
   const typeLabel = typeLabelKey
     ? translate(typeLabelKey)
     : resolveAttachmentFileIcon(options.label, options.mimeType).extensionLabel;
+  const downloadLabel = options.kind === "document" ? translate("chat.attachments.download") : "";
   return {
     compactPreview: options.visualMode === "preview-with-favicon",
     formattedSize,
     metadata: [typeLabel, formattedSize].filter(Boolean).join(" · "),
-    downloadLabel: options.kind === "document" ? translate("chat.attachments.download") : "",
+    downloadLabel,
+    downloadClass: `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
+      downloadLabel
+        ? "chat-assistant-attachment-card__action--labeled"
+        : options.onExpand !== undefined
+          ? "chat-assistant-attachment-card__download--secondary"
+          : ""
+    } ${options.loading ? "skeleton" : ""}`,
     downloadTitle: translate("chat.mediaPlayer.download", { filename: options.label }),
     expandLabel:
       options.expandLabel ?? translate("chat.attachments.expand", { filename: options.label }),
@@ -108,13 +116,6 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
   const skeleton = options.loading ? "skeleton" : "";
   const view = prepareAttachmentCardHeader(options);
   const hasOpenAction = options.onExpand !== undefined;
-  const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
-    view.downloadLabel
-      ? "chat-assistant-attachment-card__action--labeled"
-      : hasOpenAction
-        ? "chat-assistant-attachment-card__download--secondary"
-        : ""
-  }`;
   const downloadContent = view.downloadLabel
     ? html`${icons.download}<span>${view.downloadLabel}</span>`
     : icons.download;
@@ -164,7 +165,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
           options.onDownload
             ? html`<button
                 type="button"
-                class=${`${downloadClass} ${skeleton}`}
+                class=${view.downloadClass}
                 ?disabled=${options.downloadPending}
                 aria-label=${view.downloadTitle}
                 title=${view.downloadTitle}
@@ -174,7 +175,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
               </button>`
             : options.downloadHref || options.downloadPending
               ? html`<a
-                  class=${`${downloadClass} ${skeleton}`}
+                  class=${view.downloadClass}
                   href=${options.downloadPending ? nothing : options.downloadHref}
                   aria-disabled=${options.downloadPending ? "true" : nothing}
                   tabindex=${options.downloadPending && options.downloadPendingFocusable ? 0 : nothing}

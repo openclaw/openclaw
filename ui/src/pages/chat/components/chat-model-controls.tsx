@@ -345,6 +345,11 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         isDefault,
         value: option.value,
         label: resolveChatModelPickerLabel(catalogEntry, option.label),
+        contextWindow: catalogEntry?.contextWindow,
+        supportsTools: catalogEntry?.supportsTools,
+        recommended: catalogEntry?.recommended,
+        disabled: option.disabled,
+        unavailableReason: option.disabled ? option.unavailableReason : undefined,
         provider: catalog.provider(
           option.value,
           isDefault
@@ -365,19 +370,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         // Default clears the runtime pin; session-scoped metadata describes the route being left.
         pickerOption.agentRuntimeId = undefined;
       }
-      if (catalogEntry?.contextWindow) {
-        pickerOption.contextWindow = catalogEntry.contextWindow;
-      }
-      if (typeof catalogEntry?.supportsTools === "boolean") {
-        pickerOption.supportsTools = catalogEntry.supportsTools;
-      }
-      if (catalogEntry?.recommended) {
-        pickerOption.recommended = true;
-      }
-      if (option.disabled) {
-        pickerOption.disabled = true;
-        pickerOption.unavailableReason = option.unavailableReason;
-      }
       const options = [pickerOption];
       for (const choice of runtimeSelectionLocked ? [] : (catalogEntry?.runtimeChoices ?? [])) {
         if (choice.manualSelectionAllowed === false) {
@@ -396,7 +388,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
           unavailableReason: choice.unavailableReason,
-          ...(pickerOption.recommended ? { recommended: true } : {}),
+          recommended: pickerOption.recommended,
         });
       }
       return options;
@@ -434,15 +426,13 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     ) {
       modelOptions.push({
         commitValue: currentOverride,
-        ...(currentCatalogEntry?.contextWindow
-          ? { contextWindow: currentCatalogEntry.contextWindow }
-          : {}),
-        ...(typeof currentCatalogEntry?.supportsTools === "boolean"
-          ? { supportsTools: currentCatalogEntry.supportsTools }
-          : {}),
-        ...(currentCatalogEntry?.available === false
-          ? { disabled: true, unavailableReason: currentCatalogEntry.unavailableReason }
-          : {}),
+        contextWindow: currentCatalogEntry?.contextWindow,
+        supportsTools: currentCatalogEntry?.supportsTools,
+        disabled: currentCatalogEntry?.available === false,
+        unavailableReason:
+          currentCatalogEntry?.available === false
+            ? currentCatalogEntry.unavailableReason
+            : undefined,
         isDefault: false,
         value: currentOverride,
         label: resolveChatModelPickerLabel(

@@ -111,7 +111,7 @@ export function resolveManagedImageResource(
   if (!resource.pending) {
     const controller = new AbortController();
     resource.abortController = controller;
-    const pending = (async () => {
+    resource.pending = (async () => {
       const blob = await fetchManagedImageBlob(source, opts, artifactId, variant, controller);
       if (!blob) {
         return markManagedImageUnavailable(resource);
@@ -125,18 +125,13 @@ export function resolveManagedImageResource(
       resource.unavailableAt = undefined;
       return blobUrl;
     })().finally(() => {
-      if (resource.abortController === controller) {
-        resource.abortController = undefined;
-      }
-      if (resource.pending === pending) {
-        resource.pending = undefined;
-      }
-      if (resource.value === null && resource.subscribers.size === 0 && !resource.pending) {
+      resource.abortController = undefined;
+      resource.pending = undefined;
+      if (resource.value === null && resource.subscribers.size === 0) {
         trimManagedImageMissResources();
       }
       notifyChatMediaResourceSubscribers(resource);
     });
-    resource.pending = pending;
   }
   return resource;
 }
