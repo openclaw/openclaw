@@ -7193,7 +7193,6 @@
 ["src/gateway/server-methods/sessions-patch-effects.test.ts","../session-groups.js","df1eb07eb0ead7af496e3fc1af4f6dfcf6531201ac04d3503785fdf93afc6704",1]
 ["src/gateway/server-methods/sessions-patch-effects.test.ts","./session-change-event.js","a142871cd96897a6b284b18e99ea2a927e89824c5ed3ebacaefab4bd9da011cc",1]
 ["src/gateway/server-methods/sessions-patch-effects.test.ts","./sessions-shared.js","2bf103cced5e30860e9ca723907795ad3a107c74ff9670fd5cb619bb6988621b",1]
-["src/gateway/server-methods/sessions-patch-native-recovery.test.ts","../../auto-reply/reply/model-runtime-normalization.js","766cd7c98d4158b5e0d2388f5ccd3db7d4daf0032743e8babf9d2bedd7a71884",1]
 ["src/gateway/server-methods/sessions-provider-review.test.ts","../../config/sessions/provider-review-store.js","eff653b418c3c4df3a6d50de0d9d744856e7deded31e1691fb1466835c1e2f1b",1]
 ["src/gateway/server-methods/sessions-provider-review.test.ts","./chat-send-handler.js","8d41ba18fc9e800cca5a090e51ac439aa420f312478903269bd14e562c0f02f6",1]
 ["src/gateway/server-methods/sessions-reactions.test.ts","../../infra/outbound/message-action-runner.js","fe374d70895120858573458c2b805d4a9177ca777078097694a9032c37821675",1]

@@ -65,6 +65,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
   "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
+  "agents.entries.*.nativeRuntimeConsent":
+    "Harness IDs allowed to use their native permissions for this agent. New chats use Full access with sandbox off. Remove an ID to revoke remembered consent immediately; explicit per-chat consent is unchanged. Required sandbox and workspace boundaries still apply.",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",

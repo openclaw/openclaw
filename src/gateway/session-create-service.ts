@@ -957,6 +957,7 @@ async function createGatewaySessionInScope(
         const runtimeSelection = await prepareSessionPatchRuntimeSelection({
           cfg: params.cfg,
           agentId: target.agentId,
+          callerCanConsent: params.requestingOperatorScopes?.includes(ADMIN_SCOPE) === true,
           patch: {
             key: target.canonicalKey,
             agentRuntime: params.agentRuntime,
