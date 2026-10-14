@@ -299,12 +299,15 @@ export class SqliteDatabaseAdmissionRegistry {
       return;
     }
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
-    for (const current of record ? [record] : this.records.values()) {
+    for (const current of this.records.values()) {
       if (isSqliteDatabaseAdmissionRetired(current)) {
         if (readSqliteDatabaseGeneration(current, "retired") === 1) {
           this.descriptors.delete(current.identity);
         }
         this.forget(current.identity);
+        continue;
+      }
+      if (record && current !== record) {
         continue;
       }
       let changed = current === record;
