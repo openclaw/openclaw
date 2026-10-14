@@ -103,7 +103,7 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
-  /** The runtime has finished the answer but still owns background settlement. */
+  /** The answer is visible or the runtime only owns background settlement. */
   runFinalizing?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;

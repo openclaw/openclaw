@@ -29,6 +29,7 @@ import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
+import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkCameraDevice } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
@@ -91,6 +92,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;

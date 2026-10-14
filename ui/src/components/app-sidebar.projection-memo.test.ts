@@ -419,6 +419,60 @@ describe("sidebar projection memo", () => {
     expect(row(target.key)).not.toBeNull();
   });
 
+  it("retires visible activity on answer and finishing without changing active run ownership", async () => {
+    const target = session("answer", {
+      hasActiveRun: true,
+      activeRunIds: ["answer-run"],
+      status: "running",
+    });
+    const other = session("other", {
+      hasActiveRun: true,
+      activeRunIds: ["other-run"],
+      status: "running",
+    });
+    const { sidebar, gateway, row, sessions } = await mount([target, other]);
+    const spinner = (key: string) => row(key)?.querySelector('[aria-label="Active run"]');
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 1,
+      stream: "assistant",
+      data: { text: "The answer is ready." },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    expect(spinner(other.key)).not.toBeNull();
+    gateway.publishEvent("chat", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      state: "delta",
+      replace: true,
+      message: { role: "assistant", content: [] },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 2,
+      stream: "tool",
+      data: { phase: "start", toolCallId: "inspect", name: "read" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).not.toBeNull();
+    gateway.publishEvent("agent", {
+      sessionKey: target.key,
+      runId: "answer-run",
+      seq: 3,
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+    await settleLitElement(sidebar);
+    expect(spinner(target.key)).toBeNull();
+    expect(sessions.sessions.state.result?.sessions[0]?.hasActiveRun).toBe(true);
+  });
+
   it("replaces held running subtitles at their deadline without another input or full row projection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);

@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
+import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import { t } from "../../i18n/index.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -440,10 +441,19 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   }
 
   if (payload.state === "delta") {
-    if (payload.runId && payload.runId === state.chatRunId) {
-      reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
-    }
     const next = payload.message == null ? null : (extractText(payload.message) ?? "");
+    if (
+      payload.runId &&
+      payload.runId === state.chatRunId &&
+      next?.trim() &&
+      resolveAssistantMessagePhase(payload.message) !== "commentary"
+    ) {
+      reconcileChatRunStartup(state, {
+        state: "status",
+        phase: "answer",
+        runId: payload.runId,
+      });
+    }
     if (typeof next === "string") {
       const hidden =
         isSilentReplyStream(next) || isAssistantHeartbeatAckForDisplay(payload.message);

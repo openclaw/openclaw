@@ -1,5 +1,10 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
+import {
+  extractAssistantPhaseText,
+  resolveAssistantMessagePhase,
+} from "../../../../src/shared/chat-message-content.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { BootRecord } from "../../app/boot-record.ts";
@@ -7,6 +12,7 @@ import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootst
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { isSessionRunActive, isSessionRunVisuallyActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
 import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
@@ -126,6 +132,7 @@ export function createSessionCapability(
     deletionState: (row) => deletions.deletionState(row.key, row.agentId, row.sessionId),
   });
   const swarmActivity = new SwarmActivityTracker();
+  const runVisualPhases = new Map<string, Map<string, "answer" | "finishing">>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, object>();
   const listeners = new Set<(next: SessionState) => void>();
@@ -467,6 +474,7 @@ export function createSessionCapability(
       retireOperationConnection(previousClient);
       groups.invalidate();
       swarmActivity.clear();
+      runVisualPhases.clear();
       mutations.retireConnection();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
@@ -535,6 +543,42 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === "agent" || event.event === "chat") {
+      const payload = asOptionalRecord(event.payload);
+      const data = asOptionalRecord(payload?.data);
+      if (typeof payload?.sessionKey === "string" && typeof payload.runId === "string") {
+        const runs = runVisualPhases.get(payload.sessionKey);
+        const previous = runs?.get(payload.runId);
+        const hasAnswer =
+          event.event === "chat"
+            ? payload.state === "delta" &&
+              resolveAssistantMessagePhase(payload.message) !== "commentary" &&
+              Boolean(extractAssistantPhaseText(payload.message))
+            : payload.stream === "assistant" &&
+              Boolean(data?.text || data?.delta) &&
+              data?.phase !== "commentary";
+        const phase =
+          payload.stream === "lifecycle" && data?.phase === "finishing"
+            ? "finishing"
+            : hasAnswer
+              ? "answer"
+              : undefined;
+        if (previous !== "finishing" && phase && previous !== phase) {
+          const next = runs ?? new Map<string, "answer" | "finishing">();
+          next.set(payload.runId, phase);
+          runVisualPhases.set(payload.sessionKey, next);
+          notifySubscribers();
+        } else if (
+          previous === "answer" &&
+          ((payload.stream === "tool" && data?.phase === "start") ||
+            (payload.stream === "assistant" && data?.phase === "commentary" && data.text))
+        ) {
+          runs?.delete(payload.runId);
+          notifySubscribers();
+        }
+      }
+      return;
+    }
     if (event.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
       githubPublication.observePullRequests(event.payload);
       return;
@@ -577,6 +621,9 @@ export function createSessionCapability(
     const runEnded =
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
+    if (reconciled.applied && hasActiveRun === false && eventInfo) {
+      runVisualPhases.delete(eventInfo.key);
+    }
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
     if (
       claimChanged ||
@@ -666,6 +713,15 @@ export function createSessionCapability(
     observeRow,
     inheritRow: roster.observations.inheritRow,
     projectRows: roster.observations.projectRows,
+    isRunVisuallyActive(row) {
+      const phases = runVisualPhases.get(row.key);
+      const settled =
+        phases &&
+        (row.activeRunIds?.length
+          ? row.activeRunIds.every((runId) => phases.has(runId))
+          : phases.size > 0);
+      return isSessionRunVisuallyActive(isSessionRunActive(row), settled ? "answer" : undefined);
+    },
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,
@@ -715,6 +771,7 @@ export function createSessionCapability(
       permissions.clear();
       deletions.clear();
       swarmActivity.clear();
+      runVisualPhases.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       sessionEventSubscription.dispose();

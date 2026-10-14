@@ -203,7 +203,9 @@ export function buildSidebarSessionNavigationState(input: {
       workContext: resolveSessionWorkContext(row),
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      hasActiveRun: row.archived !== true && isSessionRunActive(row),
+      hasActiveRun:
+        row.archived !== true &&
+        (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunActive(row)),
       gatewayHasActiveRun: row.hasActiveRun,
       hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,

@@ -408,7 +408,16 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
     return true;
   }
   if (payload.stream === "assistant") {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    if ((payload.data.text || payload.data.delta) && payload.data.phase !== "commentary") {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "answer",
+        seq: payload.seq,
+      });
+    } else if (payload.data.text || payload.data.delta) {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
     return true;
   }
   if (payload.stream === "compaction") {

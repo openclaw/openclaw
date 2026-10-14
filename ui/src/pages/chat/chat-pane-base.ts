@@ -76,6 +76,8 @@ import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { isChatRunWorking } from "./components/chat-composer-state.ts";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
@@ -413,7 +415,13 @@ export abstract class ChatPaneBase extends ControllerHost {
       ? {
           client: state.client,
           agentId: resolveChatAgentId(state),
-          working: hasDirectSessionRun(state),
+          working: isChatRunWorking({
+            runActive: hasDirectSessionRun(state),
+            queue: state.chatQueue,
+            runStatus: state.chatRunStatus,
+            sessionKey: state.sessionKey,
+            startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
+          }),
           completion: state.chatRunStatus,
         }
       : null;
