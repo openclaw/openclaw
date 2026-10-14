@@ -63,7 +63,7 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 
 ## Modal Completion Actions
 
-- Place workflow completion actions last in `<openclaw-modal-actions>`, after content, status and validation errors. The native modal stylesheet owns right alignment, wrapping and label containment for Solid and retained Lit callers. Keep submit buttons inside their native form; no renderer or custom-element registration is needed. Caller styles own spacing, not competing alignment or mobile full-width rules. Header X/Expand and field-local controls are not completion actions. Scrollable panels respect `--openclaw-modal-height-limit` so the footer stays reachable.
+- Place workflow completion actions last in `<openclaw-modal-actions>`, after content, status and validation errors. The native modal stylesheet owns right alignment, wrapping and label containment for Solid and retained Lit callers. Keep submit buttons inside their native form; no renderer or custom-element registration is needed. Caller styles own spacing, not competing alignment or mobile full-width rules. Header X/Expand and field-local controls are not completion actions. Scrollable panels respect `--openclaw-modal-height-limit` so the footer stays reachable. Set the intended width with `--openclaw-modal-width` on the native host and let child panels fill the shell instead of imposing a wider independent width.
 
 ## Gateway Coupling
 

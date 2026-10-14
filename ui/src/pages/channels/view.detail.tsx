@@ -213,7 +213,11 @@ export function renderChannelDetail(params: {
     ),
   );
   return (
-    <openclaw-modal-dialog label={params.label} onModal-cancel={() => params.onClose()}>
+    <openclaw-modal-dialog
+      label={params.label}
+      style={{ "--openclaw-modal-width": "680px" }}
+      onModal-cancel={() => params.onClose()}
+    >
       <div class="channels-detail">
         <div class="channels-detail__header">
           <LitContent

@@ -90,7 +90,7 @@
 .channels-detail {
   display: flex;
   flex-direction: column;
-  width: min(680px, calc(100vw - 48px));
+  width: 100%;
   max-height: min(85dvh, 860px, var(--openclaw-modal-height-limit));
 }
 
