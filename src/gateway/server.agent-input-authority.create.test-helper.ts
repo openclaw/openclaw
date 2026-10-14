@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -29,6 +33,8 @@ import { dispatchInboundMessageMock, prepareGatewayReplyRuntimeForTest } from ".
 export async function runIndependentCreationInputCase(
   context: GatewayRequestContext,
   boundary:
+    | "slow acceptance"
+    | "slow kickoff failure"
     | "before acceptance"
     | "after acceptance"
     | "guest after acceptance"
@@ -63,10 +69,17 @@ export async function runIndependentCreationInputCase(
       }
     : baseCfg;
   const cleanup: Array<() => void> = [];
+  const slow = boundary.startsWith("slow");
+  const creationReached = createDeferred();
+  const releaseCreation = createDeferred();
+  const executions: Promise<unknown>[] = [];
   const releaseDispatch = createDeferred();
   let dispatched: ReturnType<typeof dispatchInboundMessage> | undefined;
   let releaseWork: Promise<void> | undefined;
-  const release = () => releaseDispatch.resolve();
+  const release = () => {
+    releaseCreation.resolve();
+    releaseDispatch.resolve();
+  };
   signal.addEventListener("abort", release, { once: true });
   try {
     const runtimeConfig = guest
@@ -148,10 +161,29 @@ export async function runIndependentCreationInputCase(
       }));
       return dispatched;
     });
+    if (slow) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      cleanup.push(() => vi.useRealTimers());
+      const trackExecution = context.trackExecution.bind(context);
+      const executionSpy = vi.spyOn(context, "trackExecution").mockImplementation((work) => {
+        const execution = trackExecution(work);
+        executions.push(execution);
+        return execution;
+      });
+      cleanup.push(() => executionSpy.mockRestore());
+    }
     const stage = sessionAccessor.stageSessionPendingInput;
     const stageSpy = vi
       .spyOn(sessionAccessor, "stageSessionPendingInput")
       .mockImplementationOnce(async (...args) => {
+        if (slow) {
+          // The real creation owner has committed its row before staging the opening input.
+          creationReached.resolve();
+          await withinTest(releaseCreation.promise, signal);
+          if (boundary === "slow kickoff failure") {
+            throw new Error("opening input unavailable");
+          }
+        }
         if (boundary === "before acceptance") {
           participants.close();
           admission.close();
@@ -175,7 +207,7 @@ export async function runIndependentCreationInputCase(
         return pending;
       });
     cleanup.push(() => stageSpy.mockRestore());
-    const result = await withPluginRuntimeGatewayRequestScope(
+    const creation = withPluginRuntimeGatewayRequestScope(
       { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
       () =>
         withGatewayToolCallerIdentity(
@@ -201,7 +233,31 @@ export async function runIndependentCreationInputCase(
             ),
         ),
     );
-    const accepted = boundary !== "before acceptance" && boundary !== "participant after creation";
+    const outcome = creation.then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    if (slow) {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          creationReached.promise,
+          creation,
+          "creation settled before staging",
+        ),
+        signal,
+      );
+      await vi.advanceTimersByTimeAsync(10_001);
+      releaseCreation.resolve();
+    }
+    const settled = await withinTest(outcome, signal);
+    if ("error" in settled) {
+      throw settled.error;
+    }
+    const { result } = settled;
+    const accepted =
+      boundary !== "before acceptance" &&
+      boundary !== "participant after creation" &&
+      boundary !== "slow kickoff failure";
     expect(result.details).toMatchObject({
       sessionKey: expect.any(String),
       sessionId: expect.any(String),
@@ -282,6 +338,7 @@ export async function runIndependentCreationInputCase(
         "accepted custody",
       )(() => recorder.persistApproved());
     if (
+      boundary === "slow acceptance" ||
       boundary === "after acceptance" ||
       boundary === "guest after acceptance" ||
       boundary === "participant after acceptance"
@@ -317,6 +374,7 @@ export async function runIndependentCreationInputCase(
     }
   } finally {
     release();
+    await Promise.allSettled(executions);
     await Promise.allSettled([dispatched, releaseWork]);
     for (const dispose of cleanup.toReversed()) {
       dispose();
