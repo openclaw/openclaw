@@ -42,10 +42,7 @@ import {
   createPluginRegistryConfigValidator,
   collectSecretRefProviderSourceIssues,
 } from "./validation-plugin-registry.js";
-import {
-  validatePreparedPluginSchemaValue,
-  type PreparedPluginSchemaValidations,
-} from "./validation-prepared.js";
+import { validatePreparedPluginSchemaValue } from "./validation-prepared.js";
 import type { ValidateConfigWithPluginsResult } from "./validation.types.js";
 
 export type ValidateConfigWithPluginsParams = {
@@ -80,7 +77,6 @@ export function validatePreparedConfigWithPlugins(
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
-    schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
@@ -374,7 +370,6 @@ export function validatePreparedConfigWithPlugins(
           config,
           registry,
           deferredPluginIds,
-          schemaValidations: opts.schemaValidations,
         }),
       );
     }
@@ -501,7 +496,7 @@ export function validatePreparedConfigWithPlugins(
           applyDefaults: true, // Always apply defaults for plugin schema validation;
           // writeConfigFile persists persistCandidate, not validated.config (#61841)
         },
-        opts.schemaValidations,
+        ensureLoadedRegistryInfo().registry,
       );
       if (!result.ok) {
         for (const error of result.errors) {
@@ -591,7 +586,6 @@ export function validatePreparedConfigWithPlugins(
       config,
       env: opts.env,
       applyDefaults: opts.applyDefaults,
-      schemaValidations: opts.schemaValidations,
       registry,
       deferredPluginIds,
       ensureCompatPluginIds,

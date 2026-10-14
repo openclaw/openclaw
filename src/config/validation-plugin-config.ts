@@ -29,10 +29,7 @@ import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import {
-  validatePreparedPluginSchemaValue,
-  type PreparedPluginSchemaValidations,
-} from "./validation-prepared.js";
+import { validatePreparedPluginSchemaValue } from "./validation-prepared.js";
 
 export function formatChannelConfigIssueMessage(message: string, pluginId?: string): string {
   const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
@@ -91,7 +88,6 @@ export function validateExplicitPluginConfig(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
-  schemaValidations?: PreparedPluginSchemaValidations;
   registry: PluginManifestRegistry;
   deferredPluginIds?: ReadonlySet<string>;
   ensureCompatPluginIds: () => ReadonlySet<string>;
@@ -323,7 +319,7 @@ export function validateExplicitPluginConfig(params: {
             applyDefaults: true, // Always apply defaults for AJV schema validation;
             // writeConfigFile persists persistCandidate, not validated.config (#61841)
           },
-          params.schemaValidations,
+          params.registry,
         );
         if (!result.ok) {
           for (const error of result.errors) {

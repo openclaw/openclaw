@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as installedRecords from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import * as schemaValidator from "../plugins/schema-validator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawConfig } from "./types.js";
 import {
@@ -44,6 +45,53 @@ function preparedMetadata(): PreparedConfigValidationPluginMetadata {
 }
 
 describe("async config plugin validation", () => {
+  it("revalidates edited settings and schemas while isolating reused plugin defaults", async () => {
+    let metadata = preparedMetadata();
+    const raw = {
+      plugins: {
+        allow: ["validation-fixture"],
+        entries: { "validation-fixture": { enabled: true, config: {} } },
+      },
+    };
+    const validate = () =>
+      validateConfigObjectWithPluginsAsync(raw, {
+        env,
+        loadPluginMetadataSnapshotAsync: async () => metadata,
+      });
+    const readWorkspace = (result: Awaited<ReturnType<typeof validate>>) => {
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("Expected valid fixture");
+      }
+      return result.config.plugins!.entries!["validation-fixture"].config!;
+    };
+    const check = vi.spyOn(schemaValidator, "validatePluginSchemaValue");
+    try {
+      readWorkspace(await validate()).workspace = "caller-mutated";
+      expect(readWorkspace(await validate()).workspace).toBe("prepared-workspace");
+      expect(check).toHaveBeenCalledTimes(1);
+
+      raw.plugins.entries["validation-fixture"].config = { workspace: 42 };
+      expect(await validate()).toMatchObject({
+        ok: false,
+        issues: [
+          expect.objectContaining({ path: "plugins.entries.validation-fixture.config.workspace" }),
+        ],
+      });
+      raw.plugins.entries["validation-fixture"].config = {};
+      const schema = metadata.manifestRegistry.plugins[0].configSchema!;
+      schema.properties = { workspace: { type: "string", default: "edited-default" } };
+      expect(readWorkspace(await validate()).workspace).toBe("edited-default");
+      expect(check).toHaveBeenCalledTimes(3);
+
+      metadata = preparedMetadata();
+      expect(readWorkspace(await validate()).workspace).toBe("prepared-workspace");
+      expect(check).toHaveBeenCalledTimes(4);
+    } finally {
+      check.mockRestore();
+    }
+  });
+
   it.each(["runtime", "strict"] as const)(
     "validates core-only settings in %s mode without plugin metadata",
     async (mode) => {
