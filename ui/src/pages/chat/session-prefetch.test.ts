@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -68,7 +67,7 @@ describe("session navigation intent prefetch", () => {
   let fixture: ReturnType<typeof createSessionPrefetchFixture>;
   let cache: ChatMessageCache;
   let store: SessionSnapshotStore;
-  let host: HTMLElement & ReactiveControllerHost;
+  let host: ReturnType<typeof createSessionPrefetchFixture>["host"];
   let updatePrefetch: ReturnType<typeof createSessionPrefetchFixture>["updatePrefetch"];
 
   beforeEach(() => {
