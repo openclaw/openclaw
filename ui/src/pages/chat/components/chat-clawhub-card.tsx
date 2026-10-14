@@ -131,15 +131,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     const client = scope.client;
     controller = new AbortController();
     const signal = controller.signal;
-    const current = () =>
-      active &&
-      generation === requestGeneration &&
-      connection.isCurrent(scope) &&
-      host.recommendation?.id === card.id &&
-      host.recommendation?.kind === card.kind &&
-      host.agentId === agentId &&
-      (card.kind !== "skill" ||
-        (host.recommendation.kind === "skill" && host.recommendation.registry === card.registry));
+    const current = () => active && generation === requestGeneration && connection.isCurrent(scope);
     const previous = state.presentation;
     if (
       !previous ||

@@ -1817,14 +1817,31 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `inactive lifecycle skips persistence ensure`() async throws {
-        try await self.withLaunchAgentEnvironment {
-            let manager = self.manager
-            manager.desiredActive = false
-            _ = await manager.ensureLaunchAgentEnabledIfNeeded()
+    @Test(arguments: ["inactive", "repair-owned", "repair-during-inspection"])
+    func `persistence ensure defers to inactive or repair-owned activation`(_ scenario: String) async throws {
+        let manager = self.manager
+        let port = try self.availableGatewayPort()
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            commandHook: { arguments in
+                if scenario == "repair-during-inspection", arguments.first == "status" {
+                    await MainActor.run { manager.hostingChangeInProgress = true }
+                }
+            }) {
+                manager.desiredActive = scenario != "inactive"
+                manager.hostingChangeInProgress = scenario == "repair-owned"
+                defer { manager.hostingChangeInProgress = false }
 
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
-        }
+                let installed = await manager.ensureLaunchAgentEnabledIfNeeded()
+
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                if scenario == "inactive" {
+                    #expect(calls.isEmpty)
+                } else {
+                    #expect(!calls.contains { $0.first == "install" })
+                }
+                #expect(!installed)
+            }
     }
 
     @Test(arguments: [

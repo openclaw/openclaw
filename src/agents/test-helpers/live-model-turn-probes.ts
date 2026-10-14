@@ -21,7 +21,6 @@ const KNOWN_EMPTY_EXTRA_PROBE_MODELS = new Set(["openrouter/amazon/nova-2-lite-v
 const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
-  "opencode-go/glm-5",
   "opencode-go/glm-5.1",
   "opencode-go/minimax-m2.5",
   "openrouter/deepseek/deepseek-chat-v3.1",

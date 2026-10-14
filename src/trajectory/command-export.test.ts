@@ -30,6 +30,12 @@ const cases: Array<{
     outputPath: "prefix/../~/inventory",
   },
   {
+    name: "double-dot-prefixed output directory",
+    contexts: [complete],
+    contextFiles: ["system-prompt.txt", "tools.json"],
+    outputPath: "..diagnostics",
+  },
+  {
     name: "empty prompt",
     contexts: [{ systemPrompt: "", tools: [] }],
     contextFiles: ["tools.json"],

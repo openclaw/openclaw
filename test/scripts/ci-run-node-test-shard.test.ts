@@ -947,6 +947,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      config: "test/vitest/vitest.commands.config.ts",
+      ownerIncludePatterns: ["src/commands/**/*.test.ts"],
+      targets: [
+        "src/commands/doctor-sqlite-nocow.test.ts",
+        "src/commands/doctor-config-preflight.process.test.ts",
+      ],
+      otherOwner: "src/commands/doctor-security.test.ts",
+    },
+    {
       config: "test/vitest/vitest.gateway-methods.config.ts",
       ownerIncludePatterns: ["src/gateway/server-methods/**/*.test.ts"],
       targets: [

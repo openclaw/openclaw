@@ -117,17 +117,11 @@ class ChatCiAutomationController extends ChatCiDisclosure<Props> {
       this.reset();
       const gateway = this.gateway;
       this.stopGateway = gateway?.subscribe(() => {
-        if (this.gateway === gateway && this.boundGateway === gateway) {
-          this.syncConnection();
-          this.publish();
-        }
+        this.syncConnection();
+        this.publish();
       });
       this.stopEvents = gateway?.subscribeEvents((event) => {
-        if (
-          this.gateway === gateway &&
-          this.boundGateway === gateway &&
-          (event.event === "cron" || event.event === "config.changed")
-        ) {
+        if (event.event === "cron" || event.event === "config.changed") {
           this.invalidate();
         }
       });
@@ -211,29 +205,14 @@ class ChatCiAutomationController extends ChatCiDisclosure<Props> {
       return null;
     }
     const version = this.version;
-    const targetKey = this.currentTargetKey();
-    const revision = gateway.connectionRevision;
-    const generation = scope.client.connectionGeneration;
-    const auth = JSON.stringify(gateway.snapshot.hello?.auth ?? null);
     return {
       client: scope.client,
       target,
       current: () =>
         this.isConnected &&
         version === this.version &&
-        targetKey === this.currentTargetKey() &&
-        targetKey === this.targetKey &&
         gateway === this.gateway &&
-        gateway === this.boundGateway &&
-        revision === this.connectionRevision &&
-        generation === this.connectionGeneration &&
-        auth === this.authKey &&
-        gateway.connectionRevision === revision &&
-        gateway.snapshot.client === scope.client &&
-        gateway.snapshot.phase === "connected" &&
-        this.connection.isCurrent(scope) &&
-        scope.client.connectionGeneration === generation &&
-        JSON.stringify(gateway.snapshot.hello?.auth ?? null) === auth,
+        this.connection.isCurrent(scope),
     };
   }
 
