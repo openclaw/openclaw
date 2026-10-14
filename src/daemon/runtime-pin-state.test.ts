@@ -278,6 +278,30 @@ describe("transactional runtime pin state", () => {
       expect(readDaemonRuntimePin(scope, updated).pin).toBeUndefined();
     });
   });
+  it("propagates cold pin snapshot read failures without adopting absent state", async () => {
+    await withOpenClawTestState({ label: "runtime-pin-read-failure" }, async (state) => {
+      const scope = { kind: "gateway" as const, env: state.env };
+      commitDaemonRuntimePin(
+        scope,
+        { expected: readDaemonRuntimePin(scope, command), pin },
+        command,
+      );
+      await closeStateDatabaseForTest();
+      const failure = Object.assign(new Error("pin snapshot read failed"), { code: "EIO" });
+      const snapshot = vi
+        .spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync")
+        .mockImplementationOnce(() => {
+          throw failure;
+        });
+      try {
+        expect(() => readDaemonRuntimePinForInstall(scope, command, false)).toThrow(failure);
+        expect(snapshot).toHaveBeenCalledOnce();
+      } finally {
+        snapshot.mockRestore();
+        await closeStateDatabaseForTest();
+      }
+    });
+  });
   it.each([
     { capable: false, cleanup: "deferred", succeeds: true },
     { capable: true, cleanup: "deferred", succeeds: false },
