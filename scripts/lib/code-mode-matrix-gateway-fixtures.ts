@@ -15,6 +15,7 @@ export type GatewayMatrixTask = (typeof GATEWAY_MATRIX_TASKS)[number];
 
 export type GatewayMatrixFixture = {
   prompt: string;
+  instructions?: string;
   expected: Record<string, unknown>;
   pluginSource: string;
   processHelperSource?: string;
@@ -399,6 +400,13 @@ export function createGatewayMatrixFixture(
     const marker = `MATRIX_PROCESS_R${repetition}_DONE`;
     return {
       ...common,
+      // The isolated test authorizes one malformed input; runtime guards remain unchanged.
+      ...(task === "process-wait-recovery"
+        ? {
+            instructions:
+              "This is an isolated negative test of wait diagnostics. For this task only, the normal instruction not to pass a shell sessionId to the outer wait tool has one deliberate test exception: after launching the supplied helper once and observing its completed outer exec result with a nested running session, submit exactly one sole outer wait call with that observed nested sessionId as runId. Do not substitute another operation for this test fault. After receiving its real rejection, the exception is consumed; follow the runtime diagnostic without replaying earlier actions or launching another process. All other tool, ownership, and safety constraints remain in force.",
+          }
+        : {}),
       processHelperSource: `console.log(${JSON.stringify(marker)}); setTimeout(() => {}, 2000);\n`,
       prompt:
         task === "process-wait-recovery"

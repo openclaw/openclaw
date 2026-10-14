@@ -224,6 +224,7 @@ export function createGatewayMatrixWorkload(
       .update(fixture.prompt)
       .update("\0")
       .update(fixture.interviewPrompt)
+      .update(fixture.instructions ? `\0${fixture.instructions}` : "")
       .digest("hex"),
     fixtureSha256: createHash("sha256")
       .update(fixture.pluginSource)
@@ -1185,6 +1186,7 @@ async function agentRequest(
   abortSignal?: AbortSignal,
   sessionKey?: string,
   maxOutputTokens?: number,
+  instructions?: string,
 ) {
   const url = `http://127.0.0.1:${port}/v1/responses`;
   const timeout = AbortSignal.timeout(timeoutSeconds * 1_000);
@@ -1201,6 +1203,7 @@ async function agentRequest(
     body: JSON.stringify({
       model: "openclaw/qa",
       input: prompt,
+      ...(instructions ? { instructions } : {}),
       ...(previousId ? { previous_response_id: previousId } : {}),
       ...(maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens }),
       stream: false,
@@ -1575,6 +1578,7 @@ export async function runGatewayMatrixCell(
         params.abortSignal,
         rootSessionKey,
         performance ? undefined : MAX_MODEL_OUTPUT_TOKENS,
+        fixture.instructions,
       );
     } finally {
       taskResponseAt = Date.now();

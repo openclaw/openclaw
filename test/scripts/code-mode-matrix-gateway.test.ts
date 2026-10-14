@@ -1039,6 +1039,11 @@ describe("wrong-wait process recovery evidence", () => {
   it("requires a failed wait followed by a new exec polling the original helper", () => {
     const fixture = gatewayFixtures.createGatewayMatrixFixture("process-wait-recovery", 1);
     expect(fixture.expected).toEqual(PROCESS);
+    expect(fixture.instructions).toContain("exactly one sole outer wait call");
+    expect(fixture.instructions).not.toContain("poll");
+    expect(
+      gatewayFixtures.createGatewayMatrixFixture("process-contracts", 1).instructions,
+    ).toBeUndefined();
     expect(
       createGatewayMatrixWorkload("process-wait-recovery", 1, "off", 120).settings.allowedTools,
     ).toEqual(["exec", "process"]);
