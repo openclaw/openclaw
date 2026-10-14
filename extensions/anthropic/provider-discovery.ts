@@ -42,7 +42,6 @@ async function prepareClaudeCliAuth({
   // A capture coalesces a roster's reads. Even a capture without a signal expires.
   const owner = signal ?? config;
   const sourceKey = JSON.stringify([
-    env.PATH,
     process.cwd(),
     env.HOME,
     env.USERPROFILE,
@@ -50,15 +49,16 @@ async function prepareClaudeCliAuth({
     env.CLAUDE_CONFIG_DIR,
     env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
   ]);
+  const now = Date.now();
   let observation = captures.get(owner);
   if (
     !observation ||
     observation.sourceKey !== sourceKey ||
-    Date.now() - observation.observedAt >= NATIVE_LOGIN_TTL_MS
+    now - observation.observedAt >= NATIVE_LOGIN_TTL_MS
   ) {
     const captured = {
       sourceKey,
-      observedAt: Date.now(),
+      observedAt: now,
       pending: observeClaudeCliNativeLogin({ env, signal }),
     };
     observation = captured;

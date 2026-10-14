@@ -396,7 +396,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const {
         authAliasLookupParams,
         apiKeys,
-        nativeProviders,
         expectsOAuth,
         authHealth,
         usageProviderIds,
@@ -531,13 +530,30 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               : undefined,
         });
       }
-      for (const native of nativeProviders) {
+      for (const [runtimeId, mode] of Object.entries(preparedSnapshot.authModes)) {
+        if (typeof mode !== "object") {
+          continue;
+        }
+        const readiness = mode.readiness ?? "configured";
+        const native: ModelAuthStatusProvider = {
+          provider: runtimeId,
+          displayName: providerDisplayName(runtimeId),
+          status:
+            readiness === "missing" ? "missing" : readiness === "configured" ? "ok" : "static",
+          profiles: [],
+          nativeAuth: {
+            runtimeId,
+            mode: mode.mode,
+            readiness,
+            ...(mode.message ? { message: mode.message } : {}),
+          },
+        };
         const provider = providers.find((entry) => entry.provider === native.provider);
         if (provider) {
           provider.nativeAuth = native.nativeAuth;
           provider.status = native.status;
         } else {
-          providers.push({ ...native, displayName: providerDisplayName(native.provider) });
+          providers.push(native);
         }
       }
       const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };

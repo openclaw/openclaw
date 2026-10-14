@@ -5,10 +5,9 @@ import path from "node:path";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
-export type ClaudeCliNativeLogin = {
-  readiness: "configured" | "unknown" | "missing";
-  message?: string;
-};
+export type ClaudeCliNativeLogin =
+  | { readiness: "configured" | "unknown" }
+  | { readiness: "missing"; message: string };
 
 async function observeFile(file: string): Promise<"present" | "absent" | "unknown"> {
   try {

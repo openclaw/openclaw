@@ -52,12 +52,12 @@ it("prepares native availability once for a 632-workspace roster", async () => {
   }
 });
 
-it.each(["config", "environment", "capture signal", "expired capture"])(
+it.each(["config", "environment", "login selector", "capture signal", "expired capture"])(
   "reobserves native availability after a changed %s",
   async (changed) => {
     const config = {};
-    const env = {};
-    const signal = new AbortController().signal;
+    const env: NodeJS.ProcessEnv = {};
+    const signal = changed === "expired capture" ? undefined : new AbortController().signal;
     const input = { config, env, signal, provider: "claude-cli" };
     nativeLogin
       .mockResolvedValueOnce({ readiness: "missing" })
@@ -68,6 +68,9 @@ it.each(["config", "environment", "capture signal", "expired capture"])(
     });
     if (changed === "expired capture") {
       vi.advanceTimersByTime(60_000);
+    }
+    if (changed === "login selector") {
+      env.CLAUDE_CONFIG_DIR = "/synthetic/changed-account";
     }
     expect(
       await provider.prepareSyntheticAuth!({

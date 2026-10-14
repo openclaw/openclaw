@@ -275,7 +275,6 @@ function createOrderOptions(
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
-const EMPTY_PREPARED_AUTH_MODES: PreparedAgentCredentialModes = {};
 let preparedAuthStore: AuthProfileStore = { version: 1, profiles: {} };
 let preparedMetadataSnapshot: unknown;
 
@@ -300,7 +299,7 @@ function createPreparedOwnerSnapshot(agentId: string) {
     config,
     entries: [],
     routeVariants: [],
-    authModes: EMPTY_PREPARED_AUTH_MODES,
+    authModes: {},
     authStore: preparedAuthStore,
     authMaterializations: [],
     metadataSnapshot: preparedMetadataSnapshot as never,

@@ -44,9 +44,11 @@ it("reports a truly empty selected login and picks up a login without restarting
     CLAUDE_CODE_USE_VERTEX: "1",
   };
   const missing = await observeClaudeCliNativeLogin({ env });
-  expect(missing.readiness).toBe("missing");
-  expect(missing.message).toContain(configDir);
-  expect(missing.message).toContain("claude auth login");
+  expect(missing).toMatchObject({
+    readiness: "missing",
+    message: expect.stringContaining(configDir),
+  });
+  expect(missing).toMatchObject({ message: expect.stringContaining("claude auth login") });
   if (process.platform === "darwin") {
     const [command, options] = runUtf8CommandWithTimeout.mock.calls[0]!;
     expect(command).not.toContain("-w");

@@ -8,13 +8,7 @@ import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 
 const { nativeLogin } = vi.hoisted(() => ({ nativeLogin: vi.fn() }));
 
-vi.mock("./cli-auth-seam.js", async (importActual) => {
-  const actual = await importActual<typeof import("./cli-auth-seam.js")>();
-  return {
-    ...actual,
-    observeClaudeCliNativeLogin: nativeLogin,
-  };
-});
+vi.mock("./cli-auth-seam.js", () => ({ observeClaudeCliNativeLogin: nativeLogin }));
 
 const { buildAnthropicCliMigrationResult } = await import("./cli-migration.js");
 const { resolveKnownAnthropicModelRef } = await import("./claude-model-refs.js");
@@ -24,7 +18,6 @@ const { default: anthropicPlugin } = await import("./index.js");
 
 beforeEach(() => {
   nativeLogin.mockReset();
-  vi.unstubAllEnvs();
 });
 
 afterAll(() => {

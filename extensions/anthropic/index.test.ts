@@ -964,11 +964,11 @@ describe("anthropic provider replay hooks", () => {
       const runtimeAuth = await provider.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
-      } as never);
+      });
       const discoveryAuth = await anthropicProviderDiscovery.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
-      } as never);
+      });
       for (const auth of [runtimeAuth, discoveryAuth]) {
         expect(auth).toEqual({
           apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
@@ -977,9 +977,7 @@ describe("anthropic provider replay hooks", () => {
           nativeAuth: { runtime: "claude-cli", mode: "oauth", readiness },
         });
       }
-      expect(
-        await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
-      ).toBeUndefined();
+      expect(await provider.prepareSyntheticAuth?.({ provider: "claude-cli" })).toBeUndefined();
       expect(nativeLogin).toHaveBeenCalledOnce();
     },
   );
