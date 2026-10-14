@@ -602,6 +602,7 @@ export function createWorkerProviderLifecycle(
       await runtimeRefresher
         .refresh(record, provider, currentBundle, workSignal)
         .catch(async (error: unknown) => {
+          workSignal.throwIfAborted();
           await saveError(record, error);
         });
       return;
@@ -625,8 +626,9 @@ export function createWorkerProviderLifecycle(
         try {
           // Bundle identity is local and canonical for both install channels. A matching admitted
           // receipt must not depend on npm registry availability during routine reconciliation.
-          installation ??= await options.prepareInstallation("bundle", signal);
+          installation ??= await options.prepareInstallation("bundle", workSignal);
         } catch (error) {
+          workSignal.throwIfAborted();
           if (record.bootstrapReceipt && ["ready", "idle"].includes(record.state)) {
             await saveError(record, error);
             return;
@@ -640,8 +642,9 @@ export function createWorkerProviderLifecycle(
         }
         if (installFor(record) === "npm") {
           try {
-            installation = await options.prepareInstallation("npm", signal);
+            installation = await options.prepareInstallation("npm", workSignal);
           } catch (error) {
+            workSignal.throwIfAborted();
             await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
             return;
           }

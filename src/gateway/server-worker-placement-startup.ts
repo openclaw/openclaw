@@ -12,7 +12,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
-import { measureGatewayCloseStep } from "./restart-trace.js";
+import { measureGatewayCloseStep, measureGatewayRestartTrace } from "./restart-trace.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
@@ -472,19 +472,19 @@ export function createGatewayWorkerPlacementRuntime(
         trackOperation(
           "reconcile",
           (async () => {
-            await measureGatewayCloseStep("worker-placement.reconcile.session-retirement", () =>
+            await measureGatewayRestartTrace("worker-placement.reconcile.session-retirement", () =>
               sessionRetirement.reconcile(),
             );
             if (stopped) {
               return;
             }
-            await measureGatewayCloseStep("worker-placement.reconcile.active", () =>
+            await measureGatewayRestartTrace("worker-placement.reconcile.active", () =>
               dispatchService.reconcileActive(),
             );
             if (stopped) {
               return;
             }
-            await measureGatewayCloseStep("worker-placement.reconcile.publications", () =>
+            await measureGatewayRestartTrace("worker-placement.reconcile.publications", () =>
               reconcilePublications(),
             );
             void nodeWorkspaceRetention.schedule();
@@ -626,11 +626,11 @@ export function createGatewayWorkerPlacementRuntime(
             resolveWorkspace,
           }),
         async () => {
-          await measureGatewayCloseStep("worker-placement.startup.active", () =>
+          await measureGatewayRestartTrace("worker-placement.startup.active", () =>
             dispatchService.reconcile("startup"),
           );
           if (!stopped) {
-            await measureGatewayCloseStep("worker-placement.startup.publications", () =>
+            await measureGatewayRestartTrace("worker-placement.startup.publications", () =>
               reconcilePublications(),
             );
           }

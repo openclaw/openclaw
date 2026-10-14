@@ -715,13 +715,16 @@ describe("worker environment service", () => {
     }
   });
 
-  it.each(["bootstrap", "inspection"] as const)(
+  it.each(["bootstrap", "inspection", "bundle", "npm", "refresh"] as const)(
     "cancels startup %s before teardown and retains its actual producer until settlement",
     async (kind) => {
       const environmentId = "worker-owner-cancellation";
-      const initial = await (kind === "bootstrap"
-        ? support.seedBootstrapping(environmentId)
-        : support.seedReady(environmentId));
+      const preparing = kind === "bundle" || kind === "npm";
+      const initial = await (kind === "refresh"
+        ? support.seedReadyNodeDesktop(environmentId)
+        : kind === "bootstrap" || preparing
+          ? support.seedBootstrapping(environmentId, kind === "npm" ? "npm" : "bundle")
+          : support.seedReady(environmentId));
       const entered = createDeferred();
       const finishProducer = createDeferred();
       let activeSignal: AbortSignal | undefined;
@@ -739,6 +742,16 @@ describe("worker environment service", () => {
           return support.BOOTSTRAP_RECEIPT;
         });
       }
+      if (preparing || kind === "refresh") {
+        support.testState.prepareInstallation = vi.fn(async (install) => {
+          if (install === kind) {
+            await holdProducer();
+          }
+          return install === "bundle"
+            ? { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) }
+            : support.NPM_ARTIFACT;
+        });
+      }
       const destroy = vi.fn(async () => {});
       const provider = support.createProvider({
         inspect: async ({ signal }) => {
@@ -749,15 +762,29 @@ describe("worker environment service", () => {
         },
         destroy,
       });
-      const workerService = support.createService(provider);
+      const workerService = support.createService(provider, {
+        ensureNodeWorkerBundle: async ({ signal }) => {
+          await holdProducer(signal);
+          signal.throwIfAborted();
+          return support.BOOTSTRAP_RECEIPT;
+        },
+      });
       let stopping: Promise<void> | undefined;
       let stopped = false;
       try {
-        workerService.start();
+        const reconciliation = workerService.reconcileEnvironment(environmentId);
+        const reconciled = reconciliation.catch(() => undefined);
         await entered.promise;
-        expect(activeSignal?.aborted).toBe(false);
+        if (!preparing) {
+          expect(activeSignal?.aborted).toBe(false);
+        }
         workerService.beginClose();
-        expect(activeSignal?.aborted).toBe(true);
+        if (!preparing) {
+          expect(activeSignal?.aborted).toBe(true);
+        } else {
+          // The consumer releases its lock; stop still owns the real packaging producer.
+          await reconciled;
+        }
         expect(producerSettled).toBe(false);
         stopping = workerService.stop().then(() => {
           stopped = true;
@@ -778,6 +805,7 @@ describe("worker environment service", () => {
         ownerEpoch: initial.ownerEpoch,
         provisionOperationId: initial.provisionOperationId,
         destroyRequestedAtMs: null,
+        lastError: initial.lastError,
       });
       await expect(
         workerService.createWithRequest({
