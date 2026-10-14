@@ -80,7 +80,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 When `VLLM_API_KEY` is set (or an auth profile exists) and `models.providers.vllm` is **not** defined, OpenClaw queries `GET http://127.0.0.1:8000/v1/models` and converts the returned IDs into model entries.
 
-Discovery recognizes DeepSeek V4 and Nemotron 3 reasoning models, including served-name aliases such as `yk_deepseek_v4` and `yk_nemotron-3-super`. An explicitly configured `reasoning: false` still disables reasoning capability.
+Discovery recognizes DeepSeek V4 and Nemotron 3 Nano, Super, and Ultra reasoning models, including served-name aliases such as `yk_deepseek_v4` and `yk_nemotron-3-super`. An explicitly configured `reasoning: false` still disables reasoning capability.
 
 <Note>
 If you set `models.providers.vllm` explicitly, OpenClaw uses only your declared models. Add `"vllm/*": {}` to `agents.defaults.models` to make OpenClaw also query that configured provider's `/models` endpoint and include all advertised vLLM models.

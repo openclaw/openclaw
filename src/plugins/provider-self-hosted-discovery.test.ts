@@ -37,17 +37,19 @@ async function discoverModelContexts(
   return Object.fromEntries(models.map((model) => [model.id, model.contextWindow]));
 }
 
-describe("discoverOpenAICompatibleLocalModels reasoning capability", () => {
-  it("recognizes served reasoning-family aliases while preserving ordinary chat models", async () => {
-    const ids = [
-      "yk_nemotron-3-super",
-      "yk_deepseek_v4",
-      "DeepSeek-V4-Flash",
-      "deepseek-chat",
-      "plain-chat",
+describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
+  it("recognizes reasoning aliases without enabling legacy chat models", async () => {
+    const expected = [
+      { id: "yk_nemotron-3-super", reasoning: true },
+      { id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", reasoning: true },
+      { id: "nvidia/nemotron-3-8b-chat-4k-sft", reasoning: false },
+      { id: "yk_deepseek_v4", reasoning: true },
+      { id: "DeepSeek-V4-Flash", reasoning: true },
+      { id: "deepseek-chat", reasoning: false },
+      { id: "plain-chat", reasoning: false },
     ];
     fetchWithSsrFGuardMock.mockResolvedValueOnce(
-      guarded(new Response(JSON.stringify({ data: ids.map((id) => ({ id })) }))),
+      guarded(new Response(JSON.stringify({ data: expected.map(({ id }) => ({ id })) }))),
     );
     const models = await discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
@@ -55,17 +57,9 @@ describe("discoverOpenAICompatibleLocalModels reasoning capability", () => {
       discoverRuntimeContext: false,
       env: {},
     });
-    expect(models.map(({ id, reasoning }) => ({ id, reasoning }))).toEqual([
-      { id: "yk_nemotron-3-super", reasoning: true },
-      { id: "yk_deepseek_v4", reasoning: true },
-      { id: "DeepSeek-V4-Flash", reasoning: true },
-      { id: "deepseek-chat", reasoning: false },
-      { id: "plain-chat", reasoning: false },
-    ]);
+    expect(models.map(({ id, reasoning }) => ({ id, reasoning }))).toEqual(expected);
   });
-});
 
-describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
   it("preserves health and falls back from root /models to /v1/models", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(guarded(new Response(null, { status: 503 })))
