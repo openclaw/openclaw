@@ -14,10 +14,11 @@ import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-hel
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 
 const runtime = vi.hoisted(() => ({ run: vi.fn<typeof runEmbeddedAgentEntry>() }));
-// External runtime and Gateway waits are fixed I/O; chat admission and native custody stay real.
+// mock-isolation: Fix backend I/O while exercising real chat admission and native custody.
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
   runEmbeddedAgentEntry: runtime.run,
 }));
+// mock-isolation: Retained native task waits must never connect to a running Gateway.
 vi.mock("../call.js", () => ({
   callGateway: vi.fn(async () => await new Promise<never>(() => {})),
 }));
