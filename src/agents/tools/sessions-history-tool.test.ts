@@ -258,6 +258,21 @@ describe("sessions_history", () => {
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
   });
 
+  it("does not apply log redaction patterns to recalled session text", async () => {
+    useLoggingConfig("custom-patterns.json", {
+      redactSensitive: "off",
+      redactPatterns: [String.raw`\binternal-ticket-[A-Za-z0-9]+\b`],
+    });
+    const tool = createHistoryToolWithMessage("follow up on internal-ticket-AbC12345");
+
+    const result = await tool.execute("call-1", { sessionKey: "main" });
+    const serialized = JSON.stringify(result.details);
+
+    expect(serialized).toContain("internal-ticket-AbC12345");
+    expect(serialized).toContain("intern");
+    expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(false);
+  });
+
   it.each([0])("rejects invalid limit value %s", async (limit) => {
     const tool = createHistoryToolWithMessage("hello");
 

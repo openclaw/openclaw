@@ -156,6 +156,16 @@ describe("buildAgentSystemPrompt", () => {
       ["raw ->", "bootstrapMaxChars"],
     ],
     [
+      "includes model alias guidance when aliases are provided",
+      {
+        modelAliasLines: [
+          "- Opus: anthropic/claude-opus-4-5",
+          "- Sonnet: anthropic/claude-sonnet-4-6",
+        ],
+      },
+      ["## Model Aliases", "- Opus: anthropic/claude-opus-4-5"],
+    ],
+    [
       "reapplies provider prompt contributions",
       {
         toolNames: ["exec"],
@@ -222,6 +232,18 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it.each<PromptCase>([
+    [
+      "keeps generic callback guidance without a plugin override",
+      {
+        toolNames: ["message"],
+        runtimeInfo: {
+          channel: "custom",
+          capabilities: ["inlineButtons"],
+        },
+      },
+      ['"action":{"type":"callback"'],
+      [],
+    ],
     [
       "leaves custom button guidance to the plugin regardless of channel",
       {
@@ -410,7 +432,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompts[2]).toBe(prompts[0]);
   });
 
-  it.each(["full"] as const)(
+  it.each(["full", "minimal", "none"] as const)(
     "keeps the entire %s system prompt byte-identical across midnight",
     (promptMode) => {
       const clock = vi.spyOn(Date, "now");
@@ -755,6 +777,24 @@ function buildPromptParts(params: Partial<PromptParams>) {
 describe("system prompt memory and runtime cache boundary", () => {
   afterEach(() => {
     clearMemoryPluginState();
+  });
+
+  it("hands prepared memory lines to synchronous prompt assembly", async () => {
+    const prepare = vi.fn(async () => ["## Prepared Wiki", "Prepared before assembly.", ""]);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+    const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
+      enabled: true,
+      toolNames: ["WIKI_SEARCH"],
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    });
+    const prompt = renderPrompt({
+      toolNames: ["WIKI_SEARCH"],
+      runtimeInfo: { agentId: "main", sessionKey: "agent:main:main" },
+      preparedMemoryPrompt,
+    });
+    expect(prompt).toContain("## Prepared Wiki\nPrepared before assembly.");
+    expect(prepare).toHaveBeenCalledTimes(1);
   });
 
   it("keeps refreshed memory recall instructions after the cached project context", async () => {

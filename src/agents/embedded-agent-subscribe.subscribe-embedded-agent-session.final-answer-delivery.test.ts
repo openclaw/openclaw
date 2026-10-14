@@ -443,7 +443,7 @@ function toolBlock(id: string, name: string) {
 }
 
 describe("reasoning delivery", () => {
-  it.each(["text_end"] as const)(
+  it.each(["text_end", "message_end"] as const)(
     "delivers completed native reasoning before %s answers without repeating it at message_end",
     (blockReplyBreak) => {
       const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
@@ -470,6 +470,18 @@ describe("reasoning delivery", () => {
       expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
         expect.objectContaining({ text: "Because it helps", isReasoning: true }),
         expect.objectContaining({ text: "Final answer" }),
+      ]);
+    },
+  );
+
+  it.each(["text_end", "message_end"] as const)(
+    "orders terminal-only reasoning before %s answer blocks",
+    (blockReplyBreak) => {
+      const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
+      emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "Because it helps",
+        "Final answer",
       ]);
     },
   );
@@ -610,7 +622,7 @@ describe("unphased provider text delivery", () => {
     },
   );
 
-  it.each([true])(
+  it.each([true, false])(
     "preserves completions text around reasoning (interleaved: %s)",
     async (interleaved) => {
       const onPartialReply = vi.fn();
