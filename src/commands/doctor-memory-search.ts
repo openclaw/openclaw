@@ -575,11 +575,13 @@ async function inspectMemorySearchHealthForAgent(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
       `Semantic recall will not work without a valid API key.`,
+      "If this agent already has a vector index, memory sync also stops to protect it: new and changed memory files are not indexed, not even for keyword search, until embeddings work again.",
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
       `- Set ${envVar} in your environment`,
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
+      `- Keyword-only recall without a key: ${formatCliCommand("openclaw config set memory.search.provider none")}, then ${formatCliCommand("openclaw memory index --force")}`,
       `- To disable: ${formatCliCommand("openclaw config set memory.search.enabled false")}`,
       "",
       `Verify: ${formatCliCommand("openclaw memory status --deep")}`,

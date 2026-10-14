@@ -681,6 +681,10 @@ describe("noteMemorySearchHealth", () => {
         expect(note).not.toHaveBeenCalled();
       } else {
         expect(firstNoteMessage()).toContain("no API key was found");
+        expect(firstNoteMessage()).toContain(
+          "memory sync also stops to protect it: new and changed memory files are not indexed",
+        );
+        expect(firstNoteMessage()).toContain("openclaw config set memory.search.provider none");
       }
       expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
     },
