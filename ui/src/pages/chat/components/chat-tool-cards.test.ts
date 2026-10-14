@@ -19,7 +19,7 @@ import * as controlUiView from "../../../plugins/control-ui-view.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
-import { renderActivityGroup } from "./chat-message-group.ts";
+import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 import { renderToolFixture as render, settleToolBridges } from "./chat-tool-render.test-support.ts";

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { registerAgentDatabaseReaderCloser } from "../../infra/agent-database-readers.js";
@@ -43,7 +44,8 @@ export function createRuntimeAuthProfileFileObservation({
       return;
     }
     const identity = readAuthProfileDatabaseIdentity(databasePath);
-    if (!identity) {
+    // Workers retain physical-file observation, but native tasks reload their own rows.
+    if (!identity || !isMainThread) {
       return;
     }
     const capturedEnv = cloneEnvWithPlatformSemantics(env);

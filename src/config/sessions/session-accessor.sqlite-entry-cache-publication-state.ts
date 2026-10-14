@@ -23,7 +23,6 @@ import {
   type SessionEntryReplacementPublication,
   type SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
-import { stageIncognitoSharingPublication } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
   projectSessionEntryPredicateChange,
   publishRetainedSessionEntryPredicate,
@@ -67,13 +66,9 @@ export function stageSessionSharingPublication(
   sessionKey: string,
   change?: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
 ) {
-  const releaseIncognito = !database.db.location()
-    ? stageIncognitoSharingPublication(database.db, sessionKey)
-    : undefined;
   const reads = [...(retainedSharingReads(database, sessionKey) ?? [])];
   const token = {};
   const release = () => {
-    releaseIncognito?.();
     for (const read of reads) {
       read.pending.delete(token);
       read.predicate?.pending.delete(token);
@@ -396,7 +391,9 @@ export function retainPreparedSessionEntryPredicate(params: {
   const isCurrent = () =>
     canRefresh() && predicate.state === "current" && !retained.hasPendingPublication();
   return {
+    prepareRead: retained.prepareRead,
     isCurrent,
+    readRetainedEntry: () => predicate.entry,
     readCurrent: () => (isCurrent() ? { entry: structuredClone(predicate.entry) } : undefined),
     canRefresh,
     captureRevision: () => predicate.revision,

@@ -493,10 +493,12 @@ it.each(["operator.admin", "operator.read"])(
 );
 
 it.each(["disposed", "pending", "refreshed"] as const)(
-  "consumes private rows only from an active, ready frame: %s",
+  "consumes rows only from an active, ready frame: %s",
   async (preparation) => {
     const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-    const queries = vi.fn(() => [query]);
+    const queries = vi.fn(() => [
+      preparation === "pending" ? { ...query, key: "agent:main:prepared-durable" } : query,
+    ]);
     let database: DatabaseSync | undefined;
     let originalStateDir: string | undefined;
     let placement: ReturnType<typeof createSessionRowPlacementProjection> | undefined;
@@ -544,7 +546,7 @@ it.each(["disposed", "pending", "refreshed"] as const)(
         ? placement.withPreparedRows(
             owner,
             () => true,
-            () => undefined,
+            (target) => owner.describe(target),
             queries,
             () => undefined,
             consume,

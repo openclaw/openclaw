@@ -1,6 +1,7 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
-import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/sqlite";
+import { sql } from "kysely";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { jsonArrayFrom, jsonObjectFrom } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -14,6 +15,7 @@ import {
   readParticipantRecord,
   withProjectedParticipants,
 } from "./session-accessor.sqlite-participant-projection.js";
+import { seedSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import type {
   SessionActorHotState,
   SessionActorTarget,
@@ -24,7 +26,9 @@ import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
+import { sessionEntryWindowColumns } from "./session-entry-window.types.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { transcriptEventModelNavigationSql } from "./transcript-payload.js";
 import {
@@ -32,7 +36,7 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
-// Kysely's SQLite JSON helpers retain their SQL result type but node:sqlite returns TEXT.
+// SQL JSON projections retain their declared shape but cross the driver as TEXT.
 function decodeJsonProjection<T>(value: T | string): T {
   if (typeof value !== "string") {
     return value;
@@ -79,6 +83,7 @@ export function hydrateSessionActorState(
           : eb.lit(0)
         ).as("actor_has_board"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("session_participants")
             .select([
@@ -93,16 +98,20 @@ export function hydrateSessionActorState(
             .orderBy("first_prompted_at")
             .orderBy("actor_id")
             .orderBy("identity_namespace"),
+          ["first_prompted_at", "actor_id", "identity_namespace"],
         ).as("actor_participants"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("session_members")
             .select(["added_at", "added_by", "identity_id", "session_key"])
             .where("session_members.session_key", "=", eb.ref("session_nodes.session_key"))
             .orderBy("identity_id"),
+          ["identity_id"],
         ).as("actor_members"),
         tables?.has("session_pending_inputs")
           ? jsonArrayFrom(
+              database.db,
               db
                 .selectFrom("session_pending_inputs")
                 .select([
@@ -131,10 +140,12 @@ export function hydrateSessionActorState(
                 )
                 .orderBy("accepted_at")
                 .orderBy("input_id"),
+              ["accepted_at", "input_id"],
             ).as("actor_pending")
           : eb.val("[]").as("actor_pending"),
         tables?.has("session_input_completions")
           ? jsonArrayFrom(
+              database.db,
               db
                 .selectFrom("session_input_completions")
                 .select([
@@ -157,42 +168,18 @@ export function hydrateSessionActorState(
                   "=",
                   eb.ref("session_nodes.current_session_id"),
                 ),
+              [],
             ).as("actor_completions")
           : eb.val("[]").as("actor_completions"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("session_windows")
-            .select([
-              "account_id",
-              "acp_owned",
-              "agent_harness_id",
-              "channel",
-              "chat_type",
-              "created_at",
-              "display_name",
-              "ended_at",
-              "hook_external_content_source",
-              "model",
-              "model_provider",
-              "parent_session_key",
-              "plugin_owner_id",
-              "previous_session_id",
-              "primary_conversation_id",
-              "reason",
-              "session_entry_provenance",
-              "session_id",
-              "session_key",
-              "session_scope",
-              "spawned_by",
-              "started_at",
-              "status",
-              "transcript_observed_at",
-              "transcript_updated_at",
-              "updated_at",
-            ])
+            .select(sessionEntryWindowColumns)
             .where("session_windows.session_id", "=", eb.ref("session_nodes.current_session_id")),
         ).as("actor_window"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("transcript_rewrite_watermarks")
             .select(["generation", "session_id", "updated_at"])
@@ -203,6 +190,7 @@ export function hydrateSessionActorState(
             ),
         ).as("actor_rewrite"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("session_transcript_cold_archives")
             .select(sessionColdArchiveMetadataColumns)
@@ -213,6 +201,7 @@ export function hydrateSessionActorState(
             ),
         ).as("actor_cold"),
         jsonObjectFrom(
+          database.db,
           db
             .selectFrom("session_transcript_index_state")
             .select([
@@ -231,6 +220,7 @@ export function hydrateSessionActorState(
             ),
         ).as("actor_projection"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("transcript_event_identities")
             .select([
@@ -248,8 +238,10 @@ export function hydrateSessionActorState(
               eb.ref("session_nodes.current_session_id"),
             )
             .orderBy("seq"),
+          ["seq"],
         ).as("actor_identities"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("session_transcript_active_events")
             .select([
@@ -265,13 +257,23 @@ export function hydrateSessionActorState(
               eb.ref("session_nodes.current_session_id"),
             )
             .orderBy("active_position"),
+          ["active_position"],
         ).as("actor_active"),
         jsonArrayFrom(
+          database.db,
           db
             .selectFrom("transcript_events")
-            .select(["seq", transcriptEventModelNavigationSql().as("navigation_json")])
+            .select([
+              "seq",
+              "navigation_type",
+              "navigation_valid",
+              transcriptEventModelNavigationSql().as("navigation_json"),
+              /* kysely-allow-raw: retain exact stored JSONL sizes without loading payloads. */
+              sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
+            ])
             .where("transcript_events.session_id", "=", eb.ref("session_nodes.current_session_id"))
             .orderBy("seq"),
+          ["seq"],
         ).as("actor_navigation"),
       ])
       .where("session_nodes.session_key", "in", sqliteStringSet(keys)),
@@ -348,7 +350,8 @@ export function hydrateSessionActorState(
       row,
     ]),
   );
-  const navigation = (selected ? decodeJsonProjection(selected.actor_navigation) : []).map((row) =>
+  const storedNavigation = selected ? decodeJsonProjection(selected.actor_navigation) : [];
+  const navigation = storedNavigation.map((row) =>
     Object.assign(
       // SAFETY: The canonical model codec preserves discriminants with readable empty payloads.
       JSON.parse(row.navigation_json) as SessionTreeEntry,
@@ -408,6 +411,7 @@ export function hydrateSessionActorState(
         : undefined,
     },
   };
+  seedSessionActorContextMetadata(state, storedNavigation);
   state.hot = projectSessionActorHotState(state);
   return state;
 }

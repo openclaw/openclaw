@@ -7,9 +7,12 @@ import {
 } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
+import * as hostAccount from "../infra/host-account-name.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { readResidentGatewayOwnerProfile } from "../state/user-profile-list.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
@@ -71,6 +74,7 @@ it("warms projection before transport binding and joins early services before fi
       cron: { enabled: false },
     });
     state.applyEnv();
+    vi.spyOn(hostAccount, "resolveHostAccountName").mockResolvedValue("Startup Owner");
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:topic" },
       { sessionId: "startup-http-topic", updatedAt: 1 },
@@ -196,6 +200,9 @@ it("warms projection before transport binding and joins early services before fi
     expect(secondEntryResponse.writableEnded).toBe(false);
     releaseProjection.resolve();
     expect((await entryRequest).status).toBe(204);
+    expect(readResidentGatewayOwnerProfile(resolveOpenClawStateSqlitePath())?.displayName).toBe(
+      "Startup Owner",
+    );
     // Minimal Gateways bypass sidecar readiness, but startup still joins early services.
     expect(startupFinished).toBe(false);
     releaseEarlyRuntime.resolve();

@@ -20,18 +20,16 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
       sessionId: "retained-placement",
     };
     const read = await store.prepareSessionPlacement(session.sessionId);
-    const withoutSql = <T>(readPlacement: () => T) => {
+    const current = () => {
       const sql = observeHostDataSql();
       try {
-        return readPlacement();
+        const placement = read.current();
+        expect(sql.queries).toEqual([]);
+        return placement;
       } finally {
         sql.restore();
-        expect(sql.queries).toEqual([]);
       }
     };
-    const current = () => withoutSql(() => read.current());
-    // Worker-turn policy checks read the synchronous replica while that turn's ACKs commit.
-    const replica = () => withoutSql(() => store.get(session.sessionId));
     try {
       expect(current()).toBeUndefined();
       const claim = await store.claimTurn({
@@ -50,17 +48,14 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
         { placement: afterResult, pendingResult: undefined },
       );
       expect(current()).toEqual(beforeResult);
-      expect(replica()).toEqual(beforeResult);
       resultPublication.commit();
       expect(current()).toEqual(afterResult);
-      expect(replica()).toEqual(afterResult);
       const journalPublication = stagePlacementWorkspaceJournalWorkerPublication(
         identity,
         session.sessionId,
         true,
       );
       expect(current()).toEqual(afterResult);
-      expect(replica()).toEqual(afterResult);
       journalPublication.rollback();
       const local = await store.releaseTurn(claim);
       expect(current()).toEqual(local);
@@ -83,10 +78,8 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
       const pending = publication();
       expect(() => read.prepareRead()).toThrow("placement authority changed");
       expect(() => current()).toThrow("placement authority changed");
-      expect(() => replica()).toThrow("Await getAsync");
       pending.rollback();
       expect(current()).toEqual(failed);
-      expect(replica()).toEqual(failed);
       publication().invalidate();
       expect(() => current()).toThrow("placement authority changed");
     } finally {

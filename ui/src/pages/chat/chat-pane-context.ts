@@ -124,8 +124,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     outboxState?: string;
   };
 
-  constructor() {
-    super();
+  constructor(element: HTMLElement, context: ApplicationContext) {
+    super(element, context);
     void new SubscriptionsController(this)
       .watchStore(() => this.context?.navigation)
       .effect(

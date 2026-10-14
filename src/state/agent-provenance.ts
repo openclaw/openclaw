@@ -1,6 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  agentProvenancePublication,
+  withAgentProvenancePublication,
+} from "./agent-provenance-publication.js";
 import type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
@@ -26,8 +31,19 @@ export async function recordAgentProvenance(
     creatorAgentId: provenance.creatorAgentId ? normalizeAgentId(provenance.creatorAgentId) : null,
     createdAtMs: options.nowMs ?? Date.now(),
   };
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  await executeOpenClawStateWorker(context, { type: "agentProvenance.record", input });
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
+  await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "agentProvenance.record", input }),
+    {
+      createAdmission: withAgentProvenancePublication(
+        createSqliteWorkerWriteAdmission(context.admission.assertCurrent, [
+          context.admission.databasePath,
+        ]),
+        context,
+      ),
+    },
+  );
 }
 
 type AgentProvenanceReadOptions = Pick<OpenClawStateDatabaseOptions, "env" | "path">;
@@ -75,4 +91,5 @@ export function deleteAgentProvenanceForAgent(database: DatabaseSync, agentId: s
     database,
     db.deleteFrom("agent_provenance").where("agent_id", "=", normalizeAgentId(agentId)),
   );
+  agentProvenancePublication.stageDeletions(database, [normalizeAgentId(agentId)]);
 }

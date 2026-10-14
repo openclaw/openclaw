@@ -75,6 +75,7 @@ import {
   getTrustedToolPolicyMatcherScope,
   runTrustedToolPolicies,
 } from "../trusted-tool-policy.js";
+import type { OpenClawPluginApi } from "../types.js";
 import { registerHostHookFixture } from "./host-hook-fixture.js";
 import { hostHookUiProjection } from "./test-helpers/host-hook-ui-projection.js";
 
@@ -1382,6 +1383,27 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it.each(
+    ["start", { length: 1, 0: "start" }, [""], [" "], [1], [undefined]].map((phases) => ({
+      phases,
+    })),
+  )("rejects malformed agent event phases $phases", ({ phases }) => {
+    const { registry } = registerFixture({ id: "bad-phases" }, (api) => {
+      api.agent.events.registerAgentEventSubscription({
+        id: "events",
+        phases: phases as never,
+        handle: () => undefined,
+      });
+    });
+    expect(registry.registry.agentEventSubscriptions).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "bad-phases",
+        message: "agent event subscription phases must be an array of non-empty strings: events",
+      },
+    ]);
+  });
+
   it("requires explicit unset to remove plugin session extension state", async () => {
     const { registry } = registerFixture(
       {
@@ -2377,6 +2399,105 @@ describe("host-hook fixture plugin contract", () => {
       await cleanupPromise;
     }
   });
+  it("shares run context from admitted scoped hooks with the global service only", async () => {
+    const id = "run-context-bridge";
+    const config = { plugins: { entries: { [id]: { hooks: { allowConversationAccess: true } } } } };
+    const root = createPluginRegistryFixture(config);
+    const scoped = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    let rootApi!: OpenClawPluginApi;
+    let scopedApi!: OpenClawPluginApi;
+    let observing = false;
+    const observations: unknown[] = [];
+    const writes: boolean[] = [];
+    const reads: unknown[] = [];
+    const service = {
+      id: "observer",
+      start: () => {
+        observing = true;
+      },
+      stop: () => {
+        observing = false;
+      },
+    };
+    const runId = "scoped-run-context";
+    const params = { runId, namespace: "admission" };
+    registerTestPlugin({
+      ...root,
+      record: createPluginRecord({ id }),
+      register(api) {
+        rootApi = api;
+        api.registerService(service);
+        api.agent.events.registerAgentEventSubscription({
+          id: "observer",
+          streams: ["tool"],
+          handle(_event, ctx) {
+            if (observing) {
+              observations.push(ctx.getRunContext("admission"));
+            }
+          },
+        });
+      },
+    });
+    registerTestPlugin({
+      registry: scoped,
+      config,
+      record: createPluginRecord({ id }),
+      register(api) {
+        scopedApi = api;
+        api.on("llm_input", () => {
+          writes.push(api.runContext.setRunContext({ ...params, value: { admitted: true } }));
+          reads.push(api.runContext.getRunContext(params));
+          api.runContext.clearRunContext(params);
+          reads.push(api.runContext.getRunContext(params));
+          api.runContext.setRunContext({ ...params, value: { admitted: true } });
+        });
+      },
+    });
+    setActivePluginRegistry(root.registry.registry);
+    service.start();
+    try {
+      expect(rootApi.runContext.setRunContext({ ...params, value: "root" })).toBe(true);
+      expect(scopedApi.runContext.setRunContext({ ...params, value: "inspection" })).toBe(false);
+      expect(scopedApi.runContext.getRunContext(params)).toBeUndefined();
+      scopedApi.runContext.clearRunContext(params);
+      expect(rootApi.runContext.getRunContext(params)).toBe("root");
+      await createHookRunner(scoped.registry).runLlmInput(
+        {
+          runId,
+          sessionId: "session",
+          provider: "openai",
+          model: "model",
+          prompt: "work",
+          historyMessages: [],
+          imagesCount: 0,
+        },
+        { runId, sessionKey: "agent:main:main", agentId: "main", trigger: "user" },
+      );
+      expect(writes).toEqual([true]);
+      expect(reads).toEqual([{ admitted: true }, undefined]);
+      emitAgentEvent({
+        runId,
+        sessionKey: "agent:main:main",
+        stream: "tool",
+        data: { phase: "start", name: "exec" },
+      });
+      await waitForPluginEventHandlers();
+      expect(observations).toEqual([{ admitted: true }]);
+      await disposePluginRegistryInstances(scoped.registry);
+      expect(scopedApi.runContext.setRunContext({ ...params, value: "retired" })).toBe(false);
+      expect(scopedApi.runContext.getRunContext(params)).toBeUndefined();
+      scopedApi.runContext.clearRunContext(params);
+      expect(rootApi.runContext.getRunContext(params)).toEqual({ admitted: true });
+    } finally {
+      service.stop();
+      await disposePluginRegistryInstances(scoped.registry);
+    }
+  });
+
   it("does not register scheduler jobs globally during non-activating registry loads", () => {
     const registry = createPluginRegistry({
       logger: {

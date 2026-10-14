@@ -524,7 +524,7 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
 }
 
 const defaults: ToolRenderOptions = { messageKey: "" };
-defineSolidBridge<{
+export const ChatToolContent = defineSolidBridge<{
   card: ToolCard | null;
   options: ToolRenderOptions;
 }>(
@@ -541,10 +541,14 @@ defineSolidBridge<{
     },
   },
 );
-defineSolidBridge<{ text: string }>("openclaw-chat-tool-raw", RawOutputToggle, {
-  properties: { text: { default: "", attribute: false } },
-});
-defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
+export const ChatToolRawOutput = defineSolidBridge<{ text: string }>(
+  "openclaw-chat-tool-raw",
+  RawOutputToggle,
+  {
+    properties: { text: { default: "", attribute: false } },
+  },
+);
+export const ChatToolOutcome = defineSolidBridge<{ outcome: ToolCardOutcome; exitCode?: number }>(
   "openclaw-chat-tool-outcome",
   ToolOutcome,
   {

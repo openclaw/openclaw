@@ -29,10 +29,11 @@ const cleanupManagedOutgoingMediaRecordsMock = vi.fn(async () => ({
   deletedFileCount: 0,
   retainedCount: 0,
 }));
-const pruneExpiredDevicePairSetupCompletionsMock = vi.fn(async () => 0);
+const startDevicePairSetupMaintenanceMock = vi.fn(async () => 0);
 
+// mock-isolation: In-memory maintenance timers must not start the device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
-  pruneExpiredDevicePairSetupCompletions: pruneExpiredDevicePairSetupCompletionsMock,
+  startDevicePairSetupMaintenance: startDevicePairSetupMaintenanceMock,
 }));
 
 vi.mock("../media/store.js", async () => {
@@ -105,7 +106,7 @@ describe("startGatewayMaintenanceTimers", () => {
     cleanOldMediaMock.mockReset().mockResolvedValue(undefined);
     pruneOutboundMediaMock.mockReset().mockResolvedValue(undefined);
     prunePlaybackTranscodeCacheMock.mockReset().mockResolvedValue(undefined);
-    pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
+    startDevicePairSetupMaintenanceMock.mockReset().mockResolvedValue(0);
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue({
       deletedRecordCount: 0,
       deletedFileCount: 0,
@@ -239,6 +240,7 @@ describe("startGatewayMaintenanceTimers", () => {
 
   it("delays worktree cleanup until the first hourly tick and joins slow sweeps", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const sweep = createDeferred();
@@ -298,29 +300,14 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("runs setup-outcome cleanup immediately without overlapping minute ticks", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-    const prune = createDeferred<number>();
-    pruneExpiredDevicePairSetupCompletionsMock.mockReturnValueOnce(prune.promise);
+  it("delegates setup-outcome deadlines to the device owner", async () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledWith({
-      nowMs: Date.now(),
+    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledOnce();
+    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledWith({
+      scheduler: expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      onError: expect.any(Function),
     });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(1);
-
-    prune.resolve(0);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenLastCalledWith({
-      nowMs: Date.now(),
-    });
-    expect(pruneExpiredDevicePairSetupCompletionsMock).toHaveBeenCalledTimes(2);
-
     await stopMaintenanceTimers(timers);
   });
 

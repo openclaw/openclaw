@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../pages/apps/apps-page.tsx";
 import "./mcp-app-catalog.tsx";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
 import "./mcp-app-resources.tsx";
@@ -37,7 +38,7 @@ const result: McpAppDiscoverResult = {
   ],
 };
 
-function discoveryContext(request: ReturnType<typeof vi.fn>) {
+function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator.admin"]) {
   const events = new Set<(event: GatewayEventFrame) => void>();
   return {
     events,
@@ -46,7 +47,7 @@ function discoveryContext(request: ReturnType<typeof vi.fn>) {
         snapshot: {
           client: { request },
           phase: "connected",
-          hello: { features: { methods: ["mcp.app.discover"] } },
+          hello: gatewayHelloForMethods(["mcp.app.discover"], scopes),
         },
         connectionRevision: 1,
         subscribe: () => () => {},
@@ -79,6 +80,21 @@ function appendElement(element: HTMLElement) {
 }
 
 describe("app launch catalog", () => {
+  it.each([
+    { scope: "operator.read", discover: false },
+    { scope: "operator.sessions.read", discover: false },
+    { scope: "operator.sessions.write", discover: true },
+  ])("admits discovery according to granted scope $scope", async ({ scope, discover }) => {
+    const request = vi.fn(async () => ({ servers: [] }));
+    const { context } = discoveryContext(request, [scope]);
+    const catalog = document.createElement("openclaw-mcp-app-catalog");
+    catalog.sessionKey = "agent:main:one";
+    provide(catalog, context);
+    appendElement(catalog);
+    await catalog.updateComplete;
+    expect(request.mock.calls).toHaveLength(discover ? 1 : 0);
+  });
+
   it("shares pending discovery and refreshes after it settles", async () => {
     const current = createDeferred<McpAppDiscoverResult>();
     const remounted = createDeferred<McpAppDiscoverResult>();
@@ -237,7 +253,7 @@ describe("app launch catalog", () => {
             sessionKey: "agent:main:main",
             client: { request },
             phase: "connected",
-            hello: { features: { methods: ["mcp.app.discover"] } },
+            hello: gatewayHelloForMethods(["mcp.app.discover"]),
           },
           connectionRevision: 1,
           connection: { gatewayUrl: "ws://gateway.example.test" },
@@ -303,7 +319,7 @@ describe("app launch catalog", () => {
         snapshot: {
           client: { request },
           phase: "connected",
-          hello: { features: { methods: ["mcp.app.discover"] } },
+          hello: gatewayHelloForMethods(["mcp.app.discover"]),
         },
         connectionRevision: 1,
         subscribe: () => () => {},
@@ -352,7 +368,7 @@ describe("app launch catalog", () => {
           snapshot: {
             client: { request: () => read.promise },
             phase: "connected",
-            hello: { features: { methods: ["mcp.app.discover"] } },
+            hello: gatewayHelloForMethods(["mcp.app.discover"]),
           },
           connectionRevision: 1,
           subscribe: () => () => {},
@@ -380,7 +396,7 @@ describe("app launch catalog", () => {
         snapshot: {
           client: { request },
           phase: "connected",
-          hello: { features: { methods: ["mcp.app.discover"] } },
+          hello: gatewayHelloForMethods(["mcp.app.discover"]),
         },
         connectionRevision: 1,
         subscribe: () => () => {},
@@ -411,7 +427,7 @@ describe("app launch catalog", () => {
         client,
         phase: "connected",
         sessionKey: "agent:main:one",
-        hello: { features: { methods: ["mcp.app.discover"] } },
+        hello: gatewayHelloForMethods(["mcp.app.discover"]),
       },
       connectionRevision: 1,
       subscribe: () => () => {},

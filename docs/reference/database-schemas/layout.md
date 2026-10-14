@@ -29,6 +29,11 @@ to reconstruct history; selecting `event_json` alone omits compressed events.
 Memory chunk/cache embeddings are little-endian Float64 BLOBs. See
 [compact agent payload storage](/reference/database-schemas/agent-schema-history#compact-agent-payload-storage).
 
+PostgreSQL stores transcript bodies as plain text in `event_json`, with native
+TOAST compression. `event_zstd` is SQLite-only and remains `NULL` on PostgreSQL.
+A SQLite-to-PostgreSQL agent port must decompress retained transcript bodies into
+`event_json`.
+
 Retired Task and TaskFlow feature records remain in place. The Codex plugin's
 [Doctor migration](/gateway/doctor/config-migrations#native-codex-recovery-after-tasks-removal)
 copies eligible, owner-stamped native child recovery facts into existing parent

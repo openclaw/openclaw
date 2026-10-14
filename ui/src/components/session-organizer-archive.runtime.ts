@@ -3,6 +3,7 @@ import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-o
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
+import { customSnoozeStorageKey, rememberCustomSnooze } from "../lib/sessions/custom-snooze.ts";
 import { collectSessionArchiveTree } from "../lib/sessions/session-archive-tree.ts";
 import { resolveUiSessionRowAgentId, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
 import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
@@ -24,12 +25,19 @@ registerSessionOrganizationEnglish();
 export async function snoozeSessionWithUndo(
   host: SessionActionHost,
   session: SessionActionRow,
-  snoozedUntil: number,
+  choice: { snoozedUntil: number; rememberCustom?: boolean },
   scope: SidebarSessionMutationScope,
 ) {
+  const { snoozedUntil, rememberCustom } = choice;
   const result = await patchSession(host, session, { snoozedUntil }, scope, { sessionScope: true });
   if (result !== "completed" || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
+  }
+  if (rememberCustom) {
+    rememberCustomSnooze(
+      customSnoozeStorageKey(scope.client.gatewayUrl, scope.client.recoveryScope),
+      snoozedUntil,
+    );
   }
   const undoHost = sessionUndoHost(host, scope);
   showToast({

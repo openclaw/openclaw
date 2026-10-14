@@ -6,6 +6,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -233,14 +234,14 @@ suite.define(() => {
           .poll(() => progress.textContent())
           .toContain("The card changed while Details stayed closed.");
         const menu = progress.locator(".chat-details-progress__menu");
-        expect(await menu.locator("wa-dropdown-item").count()).toBe(0);
+        expect(await menu.locator('[role^="menuitem"]:visible').count()).toBe(0);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').waitFor({ state: "visible" });
-        expect(await menu.locator("wa-dropdown-item").count()).toBe(4);
+        await menu.locator('[data-value="hide"]').waitFor({ state: "visible" });
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
         await page.keyboard.press("Escape");
-        expect(await menu.locator("wa-dropdown-item").count()).toBe(4);
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').click();
+        await menu.locator('[data-value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(0);
         expect(await session.isVisible()).toBe(true);
         const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
@@ -258,10 +259,10 @@ suite.define(() => {
         await trigger.click();
         await expect.poll(() => progress.isVisible()).toBe(true);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="collapse"]').click();
+        await menu.locator('[data-value="collapse"]').click();
         expect(await progress.getAttribute("open")).not.toBeNull();
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
-        await menu.locator('wa-dropdown-item[value="hide"]').click();
+        await menu.locator('[data-value="hide"]').click();
         await expect.poll(showSetting).toBe(false);
         await page.reload();
         await trigger.waitFor();
@@ -305,8 +306,8 @@ suite.define(() => {
         await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await page.setViewportSize({ width: 430, height: 900 });
-        expect(await trigger.getAttribute("aria-expanded")).toBe("false");
-        await trigger.click();
+        expect(await details.isVisible()).toBe(false);
+        await openChatDetails(page);
         await expect.poll(() => details.getAttribute("role")).toBe("dialog");
         await geometry(false);
         await capture("narrow.png");

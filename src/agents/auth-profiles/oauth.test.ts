@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { createAuthProfileStoreFixture } from "./credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import type { AuthProfileCredential, AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 vi.hoisted(() => {
@@ -32,6 +33,7 @@ beforeAll(async () => {
     await import("./runtime-snapshots.js"));
 });
 beforeEach(() => {
+  prepareSharedAuthStoreOwnershipForNative();
   resolveProviderOAuthCredentialWithPlugin.mockClear();
   clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);

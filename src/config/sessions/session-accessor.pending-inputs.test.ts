@@ -110,6 +110,8 @@ describe("accepted input custody", () => {
 
   beforeEach(async () => {
     setRuntimeConfigSnapshot({ session: { store: fixture.storePath() } });
+    // Raw custody/savepoint fixtures need their native handle before worker writes start.
+    database();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
   afterEach(async () => {
@@ -432,12 +434,14 @@ describe("accepted input custody", () => {
         expect.objectContaining({ id: eventId }),
       );
     }
-    expect(() =>
-      receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
-    ).toThrow("does not match");
-    expect(
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toMatchObject({ ok: true, value: { appended: false } });
+    await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+      expect(() =>
+        receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
+      ).toThrow("does not match");
+      expect(
+        receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
+      ).toMatchObject({ ok: true, value: { appended: false } });
+    });
   });
 
   it("rejects a split-cursor replay before and after projection reconciliation", async () => {

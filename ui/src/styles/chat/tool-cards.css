@@ -916,12 +916,12 @@
   .chat-tool-card__preview:hover,
   .chat-tool-card__preview:focus-within,
   .chat-tool-card__preview[data-widget-actions-above],
-  .chat-tool-card__widget-actions[open]
+  .chat-tool-card__widget-actions [aria-expanded="true"]
 ) {
   content-visibility: visible;
 }
 
-.chat-tool-card__widget-actions::part(menu) {
+.chat-tool-card__widget-actions-panel {
   min-width: 164px;
   max-width: 208px;
   padding: var(--menu-padding);
@@ -957,7 +957,7 @@
 
 .chat-tool-card__preview:hover [data-widget-actions],
 .chat-tool-card__preview:focus-within [data-widget-actions],
-[data-widget-actions]:has(.chat-tool-card__widget-actions[open]) {
+[data-widget-actions]:has(.chat-tool-card__widget-actions [aria-expanded="true"]) {
   opacity: 1;
   pointer-events: auto;
 }

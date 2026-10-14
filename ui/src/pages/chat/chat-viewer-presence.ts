@@ -15,13 +15,12 @@ export class ChatViewerPresenceController {
     narrow: boolean,
     unboundPaneIds: ReadonlySet<string>,
   ) {
-    const nextGateway = gateway && typeof gateway.subscribe === "function" ? gateway : null;
-    if (this.gateway && this.gateway !== nextGateway) {
+    if (this.gateway && this.gateway !== gateway) {
       sessionViewerPresenceForGateway(this.gateway).unwatch(this.owner);
     }
-    this.gateway = nextGateway;
-    if (nextGateway) {
-      sessionViewerPresenceForGateway(nextGateway).watch(
+    this.gateway = gateway ?? null;
+    if (gateway) {
+      sessionViewerPresenceForGateway(gateway).watch(
         this.owner,
         visiblePanesOf(layout, narrow)
           .filter((pane) => !unboundPaneIds.has(pane.id))

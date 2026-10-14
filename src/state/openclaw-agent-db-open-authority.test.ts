@@ -16,7 +16,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import {
@@ -358,39 +357,6 @@ it("checks lost database ownership before consulting the initiating caller again
   expect(gate.joined()).toBe(true);
   expect(f.leases()).toEqual([]);
 });
-
-it.each([true])(
-  "keeps warm operation denial local without another native check (incognito=%s)",
-  async (incognito) => {
-    const f = fixture();
-    const options = incognito
-      ? {
-          ...f.options,
-          path: resolveIncognitoOpenClawAgentSqlitePath(f.options),
-        }
-      : f.options;
-    const database = openOpenClawAgentDatabase(options);
-    const check = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-    const refused = new Error("warm caller retired");
-    let allowed = true;
-    const work = own(
-      withOpenClawAgentDatabaseAsync(
-        options,
-        () => "forbidden",
-        () => {
-          if (!allowed) {
-            throw refused;
-          }
-        },
-      ),
-    );
-    allowed = false;
-    await expect(work).rejects.toBe(refused);
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(database);
-    expect(database.db.isOpen).toBe(true);
-    expect(check).not.toHaveBeenCalled();
-  },
-);
 
 it("does not treat a database-owner failure as a repairable integrity verdict", async () => {
   const f = fixture(true);

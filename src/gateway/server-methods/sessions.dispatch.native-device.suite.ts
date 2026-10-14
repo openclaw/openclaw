@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -58,6 +59,7 @@ export function registerNativeDeviceDispatchTests({
           },
         },
       };
+      setRuntimeConfigSnapshot(config, config);
       const node = connectedNode("scenario2-paired-node", 2);
       const runtime = createDeviceWorkerRuntime({
         getPairedDevice: async (id) => (id === node.nodeId ? pairedNode(id) : null),

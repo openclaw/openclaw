@@ -6,6 +6,10 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import { killProcessTree } from "../../process/kill-tree.js";
+import {
+  recordChildProcessSpawn,
+  withGitProcessOperation,
+} from "../../process/spawn-diagnostics.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import type { WorkspaceInventoryWriteCommand } from "./workspace-inventory-computation.js";
 import { workspaceInventoryError } from "./workspace-inventory-error.js";
@@ -108,6 +112,11 @@ export async function runWorkspaceInventoryCommandToFile(params: {
       ...(process.platform !== "win32" ? { detached: true } : {}),
       windowsHide: true,
     });
+    withGitProcessOperation(
+      "workspace.inventory",
+      () => recordChildProcessSpawn(command, child, undefined, args),
+      "default",
+    );
     const childStderr = child.stderr;
     if (!childStderr) {
       throw new Error("Worker workspace command has no stderr pipe");

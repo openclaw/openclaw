@@ -41,6 +41,7 @@ import {
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   createLazyPromiseLoader,
   createLazyRuntimeModule,
@@ -282,10 +283,10 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     return tracked;
   };
   const getSessionKeyModule = createLazyRuntimeModule(() => import("./server-session-key.js"));
+  // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
   const agentEventHandlerLoader = createLazyPromiseLoader(
-    () => {
-      // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
-      return Promise.all([import("./server-chat.js"), getSessionKeyModule()]).then(
+    () =>
+      Promise.all([import("./server-chat.js"), getSessionKeyModule()]).then(
         ([{ createAgentEventHandler }, { resolveSessionForRun }]) =>
           createAgentEventHandler({
             broadcast: params.broadcast,
@@ -367,20 +368,17 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 ),
               }),
           }),
-      );
-    },
+      ),
     { cacheRejections: true },
   );
-  const getSessionEventsModule = createLazyRuntimeModule(
-    () => import("./server-session-events.js"),
-  );
+  const getSessionEvents = createLazyRuntimeModule(() => import("./server-session-events.js"));
 
   const getTranscriptUpdateHandler = createLazyRuntimeSurface(
-    getSessionEventsModule,
+    getSessionEvents,
     ({ createTranscriptUpdateBroadcastHandler }) => createTranscriptUpdateBroadcastHandler(params),
   );
   const getLifecycleEventHandler = createLazyRuntimeSurface(
-    getSessionEventsModule,
+    getSessionEvents,
     ({ createLifecycleEventBroadcastHandler }) => createLifecycleEventBroadcastHandler(params),
   );
 
@@ -648,22 +646,25 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     // projection until this committed row has crossed its async publication path.
     const agentHandler = agentEventHandlerLoader.peek();
     const publication = createDeferredCore();
-    const dispatch = runOutsideAsyncWorkScope(() =>
-      dispatchEventHandler({
-        loadHandler: async () => {
-          if (agentHandler) {
-            await agentHandler.then(
-              (handler) => handler.retireTranscript(evt, publication.promise),
-              () => undefined,
-            );
-          }
-          return getTranscriptUpdateHandler();
-        },
-        event: evt,
-        log: params.log,
-        failureMessage: "Transcript update dispatch failed",
-        context: { sessionKey: evt.sessionKey },
-      }),
+    // Committed publication retains Gateway work, not the producer's actor handle.
+    const dispatch = runWithRetainedGatewayRootWork(() =>
+      runInDetachedAsyncContext(() =>
+        dispatchEventHandler({
+          loadHandler: async () => {
+            if (agentHandler) {
+              await agentHandler.then(
+                (handler) => handler.retireTranscript(evt, publication.promise),
+                () => undefined,
+              );
+            }
+            return getTranscriptUpdateHandler();
+          },
+          event: evt,
+          log: params.log,
+          failureMessage: "Transcript update dispatch failed",
+          context: { sessionKey: evt.sessionKey },
+        }),
+      ),
     );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => {
@@ -709,12 +710,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   const unsubscribeSuspension = onGatewaySuspendAdmissionChange((phase) => {
     params.broadcast("gateway.suspension", { phase });
   });
-  const lifecycleUnsub = () => {
-    unsubscribeSessionIdentity();
-    unsubscribeSuspension();
-    unsubscribeProfileChanges();
-    unsubscribeLifecycle();
-  };
 
   return {
     channelAdmissionAudit,
@@ -725,6 +720,11 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
-    lifecycleUnsub,
+    lifecycleUnsub() {
+      unsubscribeSessionIdentity();
+      unsubscribeSuspension();
+      unsubscribeProfileChanges();
+      unsubscribeLifecycle();
+    },
   };
 }

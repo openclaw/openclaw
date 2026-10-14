@@ -37,6 +37,11 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Startup guidance to keep local CLI/SDK and Gateway versions aligned uses `info`;
+it does not indicate that a version mismatch was detected. In-memory auth storage
+initialization does not emit synchronous-storage deprecation warnings. Explicit
+calls to deprecated storage APIs still warn with their replacements.
+
 Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
 `info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
 a stack on every routine message. `error` and `fatal` records retain it. All levels

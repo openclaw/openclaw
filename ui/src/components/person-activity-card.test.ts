@@ -1,5 +1,5 @@
-import { getQueriesForElement } from "@solidjs/testing-library";
 /* @vitest-environment jsdom */
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createRoot, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -80,12 +80,14 @@ it("retains the open card's recent selection and focused link while fresh roster
     expect.stringContaining("three"),
   ]);
   const focused = links()[1]!;
+  const title = focused.querySelector(".person-activity-card__session-name")!;
   focused.focus();
   disposeCaller();
   show(data([{ ...initial[1]!, label: "two updated", updatedAt: 4 }, initial[2]!, initial[3]!]));
   flush();
   expect(links()).toHaveLength(2);
   expect(links()[0]).toBe(focused);
+  expect(focused.querySelector(".person-activity-card__session-name")).toBe(title);
   expect(document.activeElement).toBe(focused);
   expect(focused.textContent).toContain("two updated");
   const click = new MouseEvent("click", { bubbles: true, cancelable: true });

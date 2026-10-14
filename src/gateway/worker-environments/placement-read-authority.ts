@@ -15,23 +15,17 @@ export function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?
   return [...owner.pending].some((change) => affectsPlacementObservation(change, sessionId));
 }
 
-/** Claim writes can move the execution target; result, ACK, and journal writes cannot. */
-export function hasPendingClaimPublication(
-  owner: PlacementAuthorityOwner,
-  sessionId: string,
-): boolean {
-  return [...owner.pending].some(
-    (change) => change.kind === "claim" && change.sessionId === sessionId,
-  );
-}
-
 export function affectsPlacementObservation(change: ClaimChange, sessionId?: string): boolean {
-  return (
-    change.kind !== "tools" &&
-    (sessionId === undefined
-      ? change.kind !== "claim" || !change.localOnly
-      : change.sessionId === sessionId)
-  );
+  if (change.kind === "tools") {
+    return false;
+  }
+  if (sessionId !== undefined) {
+    return change.sessionId === sessionId;
+  }
+  // Turn, ACK, result, and journal bookkeeping leave preservation ownership unchanged.
+  return change.kind === "claim"
+    ? !change.localOnly && (!change.inventoryUnchanged || change.indeterminate === true)
+    : change.indeterminate === true;
 }
 
 export function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): void {
@@ -135,7 +129,13 @@ export function retainSessionPlacementRead(
     },
     current(this: void) {
       assertUsable();
-      if (reader.revoked || hasPendingClaimPublication(owner, sessionId)) {
+      // Result, ACK, and journal writes leave this read's execution target unchanged.
+      if (
+        reader.revoked ||
+        [...owner.pending].some(
+          (change) => change.kind === "claim" && change.sessionId === sessionId,
+        )
+      ) {
         throw new Error(`Session ${sessionId} placement authority changed`);
       }
       return reader.placement;
@@ -298,10 +298,11 @@ export async function readCachedPlacementRecoveryCandidates(
     const signal = getAsyncWorkSignal();
     signal?.throwIfAborted();
     assertUsable();
-    const candidates = owner.recoveryCandidatesEmpty ? [] : await read();
+    // Candidate discovery is a snapshot; each recovery effect acquires its exact owner.
+    const candidates =
+      owner.recoveryCandidatesEmpty && !hasPendingPublication(owner) ? [] : await read();
     signal?.throwIfAborted();
     assertUsable();
-    // Discovery may overlap Stop; recovery acquires exact session authority before acting.
     if (
       candidates.length === 0 &&
       observation.revokedBy.size === 0 &&

@@ -349,6 +349,13 @@ describe("worker workspace recovery transcript reporting", () => {
           activeWriterRunId: "report-writer",
         });
         const { reportFailure } = await createHandlers();
+        const reportTarget = await (
+          await loadSessionRuntime()
+        ).resolveGatewaySessionStoreTargetInWorker({
+          cfg: getRuntimeConfig(),
+          key: IDENTITY.sessionKey,
+          agentId: IDENTITY.agentId,
+        });
         let releaseWriter!: () => void;
         const { promise: writerHeld, resolve: signalWriterHeld } = createDeferred();
         const release = new Promise<void>((resolve) => {
@@ -378,15 +385,7 @@ describe("worker workspace recovery transcript reporting", () => {
                 {
                   sessionTarget: {
                     ...IDENTITY,
-                    storePath: (
-                      await (
-                        await loadSessionRuntime()
-                      ).resolveGatewaySessionStoreTargetInWorker({
-                        cfg: getRuntimeConfig(),
-                        key: IDENTITY.sessionKey,
-                        agentId: IDENTITY.agentId,
-                      })
-                    ).storePath,
+                    storePath: reportTarget.storePath,
                     expectedWriterRunId: "report-writer",
                   },
                   withTranscriptWrite: async (run) => await run(),

@@ -11,6 +11,12 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+Session lists reconcile invalidated metadata before returning rows. If a native
+session changes ownership during a list read, the Gateway retries its runtime
+metadata once. Continued changes temporarily use the configured model metadata
+for that row while other sessions remain available. The next list read retries
+its native metadata.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
@@ -370,9 +376,9 @@ eligible sessions age out without further traffic. Reply preparation does not wa
 for unrelated retention cleanup. Writes that cannot change
 age or count maintenance outcomes skip candidate scans. Automatic planning reads
 only retention and protection metadata before entering the foreground write queue;
-cap selection retains only the required oldest eligible entries. The writer checks
-the prepared store revision before applying changes, so concurrent updates are
-reconsidered instead of overwritten.
+cap selection retains only the required oldest eligible entries. The writer rechecks the selected rows and their protection before applying
+changes, so concurrent updates are reconsidered instead of overwritten. Activity
+on unrelated sessions and protection that has ended do not invalidate the plan.
 If writes invalidate an automatic maintenance plan, its replacement waits for
 a quiet window after the last write (one second, then two seconds). Three
 consecutive invalidations pause automatic retries and log the cause; a new

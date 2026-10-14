@@ -5,6 +5,8 @@ import {
 } from "../state/openclaw-state-db-existing-write.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { SqliteWorkerAdmissionTimeoutError } from "./sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { resolveUpdateRunCodecEnv, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import type {
@@ -29,6 +31,33 @@ export function openUpdateRunWriter(options: UpdateRunLedgerOptions): ExistingOp
     schemaSql: updateRunLedgerSchema,
     operationLabel: "update.run",
   });
+}
+
+/** Retry only a rolled-back attempt, without giving later worker commands its FIFO slot. */
+export function withUpdateRunWriteAdmission<T>(
+  operation: (assertCurrent: (stage: "transaction" | "commit") => void) => T,
+): T {
+  const assertCurrent = (stage: "transaction" | "commit") =>
+    requestSqliteWorkerOperationAdmission({
+      stage,
+      facts: undefined,
+      // The serving Gateway's writers have a five-second lock budget. A busy
+      // updater host must release this lock well before that budget expires.
+      ...(stage === "commit" ? { deadlineMs: 1_000 } : {}),
+    });
+  for (;;) {
+    try {
+      return operation(assertCurrent);
+    } catch (error) {
+      // Transaction helpers finish rollback before throwing. Cleanup/rollback
+      // failures and authority refusals escape; neither certifies a safe retry.
+      if (!(error instanceof SqliteWorkerAdmissionTimeoutError)) {
+        throw error;
+      }
+      // Fresh transaction admission waits outside BEGIN, so a stalled host no
+      // longer holds SQLite's writer. Each attempt rereads authoritative rows.
+    }
+  }
 }
 
 export function recordUpdateRunMutationInWorker(

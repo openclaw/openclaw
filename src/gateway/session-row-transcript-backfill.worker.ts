@@ -1,61 +1,89 @@
-import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
+import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
+import { preserveSessionEntryCacheAcrossWrite } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
-import { readSessionTerminalFallbackModel } from "../status/session-fallback-model.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { readSessionTranscriptTerminalModel } from "../sessions/transcript-terminal-model.js";
+import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
-import type {
-  SessionRowTranscriptFields,
-  SessionRowTranscriptReadParams,
-} from "./session-row-transcript-backfill.types.js";
-import { SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES } from "./session-row-transcript-preview.js";
+import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
+import {
+  SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES,
+  SESSION_ROW_TRANSCRIPT_TERMINAL_MAX_BYTES,
+  type SessionRowTranscriptProjection,
+} from "./session-row-transcript-preview.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 
-/** The retained history worker reads bounded preview and terminal fallback facts. */
-export function readSessionRowTranscriptFields(
+/** Read and persist bounded derived facts in the existing writer's transaction. */
+export function backfillSessionRowTranscriptFieldsInDatabase(
+  database: OpenClawAgentDatabase,
   params: SessionRowTranscriptReadParams,
-): SessionRowTranscriptFields {
+): SessionRowTranscriptProjection | undefined {
   const transcriptScope = { ...params, agentId: params.storeAgentId ?? params.agentId };
   try {
-    const tail = readSessionTranscriptBoundedMessageTailPage(transcriptScope, {
-      maxMessages: 20,
-      maxBytes: SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES,
-      offset: 0,
-      readOnly: true,
-    });
-    const terminalModel = params.includeTerminalModel
-      ? readSessionTerminalFallbackModel({
-          sessionEntry: params.sessionEntry,
-          sessionScope: transcriptScope,
-          terminalEvent: tail.newestContiguousEventCount ? tail.events.at(-1)?.event : undefined,
-        })
-      : undefined;
-    // Older text cannot stand in for an oversized message skipped at the newest edge.
-    const events = tail.newestContiguousEventCount
-      ? tail.events.slice(-tail.newestContiguousEventCount)
-      : [];
-    for (const event of events.toReversed()) {
-      const projected = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event), {
-        flattenMarkdown: true,
-      });
-      if (projected) {
-        // Detach resident strings from the parsed transcript payload.
-        return {
-          lastMessagePreview: Buffer.from(projected.text, "utf16le").toString("utf16le"),
-          ...(terminalModel ? { terminalModel } : {}),
+    return withCurrentProjectionSnapshot(
+      transcriptScope,
+      (projection) => {
+        const tail = readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
+          maxMessages: 20,
+          maxBytes: SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES,
+          offset: 0,
+        });
+        const terminalEvent = tail.newestContiguousEventCount
+          ? tail.events.at(-1)?.event
+          : tail.totalMessages
+            ? readSessionTranscriptBoundedMessageTailPageFromProjection(projection, {
+                maxMessages: 1,
+                maxBytes: SESSION_ROW_TRANSCRIPT_TERMINAL_MAX_BYTES,
+                offset: 0,
+              }).events[0]?.event
+            : undefined;
+        const fields: SessionRowTranscriptProjection = {
+          lastMessagePreview: null,
+          terminalModel: readSessionTranscriptTerminalModel(terminalEvent),
+          indexedSeq: projection.state.indexedSeq < 0 ? null : projection.state.indexedSeq,
         };
-      }
-    }
-    return terminalModel ? { terminalModel } : {};
+        // Older text cannot stand in for an oversized message skipped at the newest edge.
+        const events = tail.newestContiguousEventCount
+          ? tail.events.slice(-tail.newestContiguousEventCount)
+          : [];
+        for (const event of events.toReversed()) {
+          const projected = projectSessionDisplayMessage(sqliteMessageEventWithSeq(event), {
+            flattenMarkdown: true,
+          });
+          if (projected) {
+            fields.lastMessagePreview = Buffer.from(projected.text, "utf16le").toString("utf16le");
+            break;
+          }
+        }
+        preserveSessionEntryCacheAcrossWrite(database, () => {
+          executeSqliteQuerySync(
+            database.db,
+            getSessionKysely(database.db)
+              .updateTable("session_windows")
+              .set({
+                row_transcript_json: JSON.stringify(fields),
+                row_transcript_updated_at: projection.version.updatedAt,
+              })
+              .where("session_id", "=", params.sessionId),
+          );
+        });
+        return fields;
+      },
+      { transaction: database },
+    );
   } catch (error) {
     if (
       isSessionTranscriptProjectionUnavailableError(error) ||
       error instanceof SessionTranscriptStorageUnavailableError ||
       error instanceof SessionTranscriptColdError
     ) {
-      return {};
+      return undefined;
     }
     throw error;
   }

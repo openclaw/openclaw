@@ -14,7 +14,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { createActiveRun } from "./server-methods/chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const { createQueuedReservation, requestContext, launchedRunIds } = useQueuedCollectorFixture();
 
@@ -30,10 +30,12 @@ it.each(["active", "queued", "pending-chat"] as const)(
       actor: { type: "human", source: "profile", id: client.authenticatedUserProfile!.profileId },
     });
     expectDefined(
-      loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry,
+      (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
       "collector session",
     );
-    expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry?.createdActor).toEqual({
+    expect(
+      (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry?.createdActor,
+    ).toEqual({
       type: "human",
       source: "profile",
       id: client.authenticatedUserProfile!.profileId,

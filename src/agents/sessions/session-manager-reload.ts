@@ -14,7 +14,9 @@ import { resolveSqliteSessionTranscriptReadFence } from "../../config/sessions/s
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
 import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContextLimits,
@@ -177,15 +179,19 @@ export function readCommittedSessionManagerReload(
   target: SessionTranscriptRuntimeTarget,
   limits: SessionManagerBoundedContextLimits | undefined,
 ): Promise<PreparedSessionTranscriptReload> {
-  return withSessionTranscriptReadSource(
-    target,
-    () => readSessionManagerReload(target, limits, true),
-    ({ scope, resolved, owner, expectedIdentity }) =>
-      owner.readTranscript({
-        target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
-        resolvedScope: resolved,
-        limits,
-        expectedIdentity,
-      }),
+  const memory = captureSessionManagerIncognitoBinding(target);
+  if (memory) {
+    return prepareSessionManagerMemoryRead(memory).read("session.history.hydrate", {
+      sessionId: target.sessionId,
+      limits,
+    });
+  }
+  return withSessionTranscriptReadSource(target, ({ scope, resolved, owner, expectedIdentity }) =>
+    owner.readTranscript({
+      target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
+      resolvedScope: resolved,
+      limits,
+      expectedIdentity,
+    }),
   );
 }

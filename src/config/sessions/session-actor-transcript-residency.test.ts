@@ -34,6 +34,7 @@ import {
   prepareSessionColdBatchInWorker,
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 
@@ -466,6 +467,12 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
     try {
       context.seed();
       const databaseOptions = { agentId: "main", path: f.database.path };
+      const readColdMetadata = () =>
+        readRetainedSessionEntryFacts(databaseOptions, {
+          sessionKeys: [f.target.sessionKey],
+          includeColdMetadata: true,
+        });
+      expect(readColdMetadata()?.coldArchives).toEqual([]);
       const beforeMs = Date.UTC(2030, 0, 1);
       const prepared = await prepareSessionColdBatchInWorker({
         databaseOptions,
@@ -495,6 +502,9 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       expect(context.read()).toBeUndefined();
       expect(context.anchors()).toBeUndefined();
       expect(context.summary()).toBeUndefined();
+      expect(readColdMetadata()).toBeUndefined();
+      expect(context.replica.beginRead().install(f.read())).toBe(true);
+      expect(readColdMetadata()).toBeUndefined();
       const plan = {
         kind: "cold-restore" as const,
         databaseOptions,
@@ -508,7 +518,9 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       expect(context.read()).toBeUndefined();
       expect(context.anchors()).toBeUndefined();
       expect(context.summary()).toBeUndefined();
+      expect(readColdMetadata()).toBeUndefined();
       context.seed();
+      expect(readColdMetadata()?.coldArchives).toEqual([]);
       expect(context.read()?.snapshot.events).toEqual(transcript(f));
       expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
         "question",

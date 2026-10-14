@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Message } from "grammy/types";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
@@ -768,4 +769,43 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       "Terminal failure",
     ]);
   });
+
+  it.each(["first", "batched"] as const)(
+    "supplies one %s tool reply slot per turn and resets it for queued followups",
+    async (replyToMode) => {
+      let previousRef: { value: boolean } | undefined;
+      for (let turnIndex = 0; turnIndex < 2; turnIndex++) {
+        const context = createContext();
+        await dispatchProgressTurn(
+          async (options, channelOptions) => {
+            const ref = expectDefined(options?.hasRepliedRef, "dispatch tool reply state");
+            expect(ref).toEqual({ value: false });
+            expect(ref).toBe(channelOptions?.hasRepliedRef);
+            expect(ref).not.toBe(previousRef);
+
+            // The shared message-tool resolver owns consumption; dispatch owns reset.
+            ref.value = true;
+            expect(channelOptions?.hasRepliedRef?.value).toBe(true);
+
+            await expectDefined(
+              channelOptions?.onQueuedFollowupAdmitted,
+              "queued followup admission callback",
+            )();
+            expect(options?.hasRepliedRef).toBe(ref);
+            expect(ref.value).toBe(false);
+            ref.value = true;
+            previousRef = ref;
+          },
+          {
+            context,
+            mode: "off",
+            toolProgress: false,
+            replyToMode,
+            finalReply: { text: `Final answer ${turnIndex}.` },
+          },
+        );
+      }
+      expect([...visibleMessages.values()]).toEqual(["Final answer 0.", "Final answer 1."]);
+    },
+  );
 });

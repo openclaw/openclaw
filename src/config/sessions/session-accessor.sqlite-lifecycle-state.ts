@@ -55,49 +55,14 @@ import {
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import { shouldRemoveSessionEntry } from "./session-entry-lifecycle-removal.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
+export { shouldRemoveSessionEntry } from "./session-entry-lifecycle-removal.js";
+
 // Transcript-state reclamation owner. Planning stays async-free; transactions revalidate before delete.
-
-type SessionEntryRemovalExpectation = Pick<
-  SessionEntryLifecycleRemoval,
-  "expectedEntry" | "expectedLifecycleRevision" | "expectedUpdatedAt"
-> & {
-  expectedSessionId?: string | null;
-};
-
-export function shouldRemoveSessionEntry(
-  entry: SessionEntry | undefined,
-  removal: SessionEntryRemovalExpectation,
-): entry is SessionEntry {
-  if (!entry) {
-    return false;
-  }
-  if (
-    removal.expectedEntry !== undefined &&
-    !sqliteSessionEntriesEqual(entry, removal.expectedEntry)
-  ) {
-    return false;
-  }
-  // Null requires an entry without a physical ID; undefined leaves the ID unconstrained.
-  if (
-    removal.expectedSessionId !== undefined &&
-    (removal.expectedSessionId === null
-      ? entry.sessionId !== undefined
-      : entry.sessionId !== removal.expectedSessionId)
-  ) {
-    return false;
-  }
-  if (
-    removal.expectedLifecycleRevision !== undefined &&
-    entry.lifecycleRevision !== removal.expectedLifecycleRevision
-  ) {
-    return false;
-  }
-  return removal.expectedUpdatedAt === undefined || entry.updatedAt === removal.expectedUpdatedAt;
-}
 
 /** Session ids protected by live node state. */
 export function readReferencedSessionIds(

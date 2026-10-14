@@ -13,7 +13,6 @@ import {
 
 export {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
-  readPluginMetadataStateRowsInDatabase,
   type PluginMetadataStateKey,
   type PluginMetadataStateRow,
   type PluginMetadataStateSelector,

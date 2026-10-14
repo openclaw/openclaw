@@ -899,6 +899,43 @@ describe("BrowserPanelController capture and input ownership", () => {
     ).toEqual([]);
   });
 
+  it("scrolls at the remote point under the wheel pointer", async () => {
+    vi.useFakeTimers();
+    const scroll = vi.fn();
+    const hitTest = vi.fn(() => null);
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/act") {
+        const fn = envelope.body?.fn;
+        if (typeof fn !== "string") {
+          throw new Error("Expected a browser evaluate script");
+        }
+        return {
+          result: runInNewContext(`(${fn})()`, {
+            document: { elementFromPoint: hitTest },
+            window: { scrollBy: scroll },
+          }),
+        };
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+
+    controller.handleWheel(
+      new WheelEvent("wheel", { deltaY: 60, clientX: 30, clientY: 40, cancelable: true }),
+    );
+    controller.handleWheel(
+      new WheelEvent("wheel", { deltaY: 40, clientX: 32, clientY: 44, cancelable: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    const actions = request.mock.calls
+      .map(([, envelope]) => envelope as BrowserRequestEnvelope)
+      .filter((envelope) => envelope.path === "/act");
+    expect(actions).toHaveLength(1);
+    expect(hitTest).toHaveBeenCalledExactlyOnceWith(32, 44);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 100);
+  });
+
   it("never forwards a queued wheel action to a newly selected tab", async () => {
     vi.useFakeTimers();
     const { client, request } = createBrowserClient(async (envelope) => {

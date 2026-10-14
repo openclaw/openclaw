@@ -98,9 +98,13 @@ export class SessionOrganizerController {
     return operations.patchSession(this.host, session, patch, scope, options);
   };
 
-  snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+  snoozeSessionWithUndo(
+    session: SidebarRecentSession,
+    snoozedUntil: number,
+    rememberCustom = false,
+  ): Promise<void> {
     return this.runOperation((operations, scope) =>
-      operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
+      operations.snoozeSessionWithUndo(this.host, session, { snoozedUntil, rememberCustom }, scope),
     );
   }
 
@@ -741,21 +745,25 @@ export class SessionOrganizerController {
   setSessionsGrouping(grouping: SidebarSessionsGrouping) {
     this.host.sessionsGrouping = grouping;
     storeSidebarSessionsGrouping(grouping);
+    this.host.requestUpdate();
   }
 
   setSessionsShowCron(show: boolean) {
     this.host.sessionsShowCron = show;
     storeSidebarSessionsShowCron(show);
+    this.host.requestUpdate();
   }
 
   setSessionsShowPreview(show: boolean) {
     this.host.sessionsShowPreview = show;
     storeSidebarSessionsShowPreview(show);
+    this.host.requestUpdate();
   }
 
   setSessionsShowSystem(show: boolean) {
     this.host.sessionsShowSystem = show;
     storeSidebarSessionsShowSystem(show);
+    this.host.requestUpdate();
   }
 
   setSessionsStatusFilter(statusFilter: SidebarSessionStatusFilter) {

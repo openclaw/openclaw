@@ -68,6 +68,7 @@ export function createAgentDatabaseNativeGeneration(
   assertCleanupOwned: () => void,
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined,
   acceptFileIdentity: (identity: AgentDatabaseExecutionFileIdentity) => void,
+  onTerminal: (reason: Error) => void,
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
 ): AgentDatabaseNativeGeneration {
@@ -101,11 +102,15 @@ export function createAgentDatabaseNativeGeneration(
   let preparationPublished = false;
 
   // The actor retains this observer; keep it outside the opening caller's scope.
-  const onNativeLost = () => {
+  const onNativeLost = (reason: Error) => {
     lifetime.retire();
     // Before the lease handoff this generation has borrowed no validation.
     if (lease) {
       invalidateOpenClawAgentDatabaseValidation(pathname);
+    }
+    // Failed opening admission can be ordinary lock contention; run classifies it after settlement.
+    if (preparationPublished) {
+      onTerminal(reason);
     }
   };
   const assertCurrent = () => {

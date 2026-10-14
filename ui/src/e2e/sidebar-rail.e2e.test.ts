@@ -220,8 +220,7 @@ suite.define(() => {
               }
             : null;
         const snapshot = (phase: string, event?: Event) => {
-          const dropdown =
-            document.querySelector<HTMLElementTagNameMap["wa-dropdown"]>(".sidebar-rail-pin-menu");
+          const dropdown = document.querySelector<HTMLElement>(".sidebar-rail-pin-menu");
           const active: Array<ReturnType<typeof describe>> = [];
           let element = document.activeElement;
           while (element && active.length < 5) {
@@ -237,7 +236,9 @@ suite.define(() => {
             target: describe(event?.composedPath()[0] ?? null),
             source: describe(sourceElement),
             sourceFocused: sourceElement === document.activeElement,
-            menu: dropdown ? { ...describe(dropdown), open: dropdown.open } : null,
+            menu: dropdown
+              ? { ...describe(dropdown), open: dropdown.matches(":popover-open") }
+              : null,
             active,
           };
         };
@@ -269,7 +270,7 @@ suite.define(() => {
           capture: true,
           signal: lifetime.signal,
         });
-        for (const type of ["wa-hide", "wa-after-hide"]) {
+        for (const type of ["overlay-hide", "overlay-after-hide"]) {
           document.addEventListener(
             type,
             (event) => {
@@ -325,7 +326,9 @@ suite.define(() => {
       await expect.poll(() => menu.getAttribute("aria-label")).toContain("Research plan");
       expect(await previousMenu!.evaluate((element) => element.isConnected)).toBe(false);
       await previousMenu!.evaluate((element) =>
-        element.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true })),
+        element.dispatchEvent(
+          new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
+        ),
       );
       await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
       await page.keyboard.press("Escape");

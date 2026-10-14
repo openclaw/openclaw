@@ -3,6 +3,10 @@ import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-sig
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./auth-profiles/path-resolve.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
@@ -97,6 +101,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       });
     }
   };
+  assertAdmission();
+  if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    await prepareSharedAuthStoreOwnership(rawInput.env);
+  }
   assertAdmission();
   let replacement = context.getPendingReplacement(rawInput);
   // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.

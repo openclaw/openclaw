@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -36,6 +37,7 @@ import { createWorkerSessionPlacementStore } from "../worker-environments/placem
 import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
+import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
@@ -187,6 +189,19 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         throw new Error("Session preparation failed");
       }
       const session = await qualifyChatSendSession(prepared.value);
+      let clock = 0;
+      using _ = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const log = { info: vi.fn() };
+      using diagnostics = startChatSendDiagnostics(log);
+      const queued = createDeferred();
+      const begin = createDeferred();
+      const beginAdmission = sessionLifecycle.beginSessionWorkAdmission;
+      using delayedAdmission = vi.spyOn(sessionLifecycle, "beginSessionWorkAdmission");
+      delayedAdmission.mockImplementationOnce(async (params) => {
+        queued.resolve();
+        await begin.promise;
+        return beginAdmission(params);
+      });
       const acquired = createDeferred();
       const consume = createDeferred();
       const committed = createDeferred();
@@ -257,9 +272,17 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
             consuming.resolve();
           }
         },
+        diagnostics,
       });
       let admitted: Awaited<typeof pending> | undefined;
       try {
+        await awaitGateBeforeSettlement(
+          queued.promise,
+          pending,
+          "chat skipped lifecycle admission",
+        );
+        clock = 300;
+        begin.resolve();
         await awaitGateBeforeSettlement(
           acquired.promise,
           pending,
@@ -271,6 +294,7 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           completion,
           "worker completion skipped its native commit",
         );
+        clock = 600;
         nativePending = true;
         consume.resolve();
         await awaitGateBeforeSettlement(
@@ -283,10 +307,17 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         } else if (change === "session replaced") {
           replaceSessionEntrySync(scope, { sessionId: "replacement-session", updatedAt: 2 });
         }
+        clock = 900;
         nativePending = false;
         publishCommit?.();
         releaseReply.resolve();
         admitted = await pending;
+        clock = 1_900;
+        diagnostics.finish();
+        // Later reporting cannot extend either a completed or rejected owner's span.
+        expect(log.info).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("detail.admission.revalidate=600ms detail.admission.work=900ms"),
+        );
         expect(admitted.ok, JSON.stringify(respond.mock.calls[0]?.[2])).toBe(
           change === "unchanged",
         );
@@ -302,6 +333,7 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           );
         }
       } finally {
+        begin.resolve();
         consume.resolve();
         publishCommit?.();
         releaseReply.resolve();
@@ -694,9 +726,13 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
 it.each([
   "caller revocation",
   "lifecycle rotation",
+  "completed workspace result",
+  "new remote placement",
+  "retired placement",
+  "indeterminate publication",
   "service replacement",
   "unavailable reader",
-] as const)("refuses %s while preparing placement admission", async (change) => {
+] as const)("handles %s while preparing placement admission", async (change) => {
   await withOpenClawTestState({ label: "chat-placement-admission" }, async () => {
     const cfg = {
       agents: { ownership: "explicit", entries: { main: {} } },
@@ -705,8 +741,25 @@ it.each([
     const sessionKey = "agent:main:dashboard:placement-admission";
     const runId = "chat-placement-admission";
     const scope = { agentId: "main", sessionKey };
-    const entry: SessionEntry = { sessionId: "placement-session", updatedAt: 1 };
+    const now = Date.now();
+    const entry: SessionEntry = { sessionId: "placement-session", updatedAt: now };
+    const accepted =
+      change === "completed workspace result" ||
+      change === "new remote placement" ||
+      change === "retired placement";
     replaceSessionEntrySync(scope, entry);
+    if (accepted) {
+      await sessionAccessor.appendTranscriptEvent(
+        { ...scope, sessionId: entry.sessionId },
+        {
+          type: "session",
+          version: 3,
+          id: entry.sessionId,
+          timestamp: new Date(now).toISOString(),
+          cwd: "/synthetic/workspace",
+        },
+      );
+    }
     const client = sharingPolicyClient({
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
@@ -717,13 +770,50 @@ it.each([
     if (!request.ok) {
       throw new Error(request.error);
     }
-    const placements = createWorkerSessionPlacementStore();
+    const database = openOpenClawStateDatabase();
+    const placements = createWorkerSessionPlacementStore({ database });
+    const completingClaim =
+      change === "completed workspace result"
+        ? await (async () => {
+            const active = await advancePlacementFixtureToActive(placements, database, {
+              ...scope,
+              sessionId: entry.sessionId,
+            });
+            const claim = await placements.claimTurn({
+              ...scope,
+              sessionId: entry.sessionId,
+              owner: {
+                kind: "worker",
+                environmentId: active.environmentId,
+                ownerEpoch: active.activeOwnerEpoch,
+              },
+              claimId: "completed-workspace-claim",
+              runId: "completed-workspace-run",
+            });
+            await placements.markWorkspaceResultPending(claim);
+            await placements.acceptWorkspaceResult(claim);
+            return claim;
+          })()
+        : undefined;
+    const retiredPlacement =
+      change === "retired placement"
+        ? await placements.releaseTurn(
+            await placements.claimTurn({
+              ...scope,
+              sessionId: entry.sessionId,
+              owner: { kind: "local" },
+              claimId: "retired-placement-claim",
+              runId: "retired-placement-run",
+            }),
+          )
+        : undefined;
     const getMany = vi.fn(() => new Map());
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
       workerSessionPlacementService: change === "unavailable reader" ? { getMany } : placements,
     });
     const prepared = await prepareChatSendSession({
+      isDirectExternalUser: accepted,
       request: request.value,
       client,
       context,
@@ -767,22 +857,53 @@ it.each([
           callerCurrent = false;
         } else if (change === "lifecycle rotation") {
           rotateAgentEventLifecycleGeneration();
+        } else if (change === "completed workspace result") {
+          await placements.completeWorkspaceResultAndReleaseTurn(completingClaim!);
+        } else if (change === "new remote placement") {
+          await placements.startDispatch({ ...scope, sessionId: entry.sessionId });
+        } else if (change === "retired placement") {
+          await placements.retireSessionPlacementAsync({
+            sessionId: entry.sessionId,
+            expectedState: "local",
+            expectedGeneration: retiredPlacement!.generation,
+          });
+        } else if (change === "indeterminate publication") {
+          const placement = await placements.startDispatch({
+            ...scope,
+            sessionId: entry.sessionId,
+          });
+          stagePlacementTurnClaimWorkerPublication(
+            requireOpenClawStateDatabaseIdentity({ db: database.db }),
+            placement,
+            undefined,
+            placement.state,
+            placement,
+          ).invalidate();
         } else {
           context.workerSessionPlacementService = createWorkerSessionPlacementStore();
         }
         resume.resolve();
       }
-      expect((await pending).ok).toBe(false);
-      expect(respond).toHaveBeenCalledOnce();
-      expect(context.chatAbortControllers.size).toBe(0);
+      const result = await pending;
+      expect(result.ok).toBe(accepted);
+      if (accepted && result.ok) {
+        expect(respond).not.toHaveBeenCalled();
+        expect(context.chatAbortControllers.size).toBe(1);
+        expect(Boolean(result.value.restartSafeAdmission)).toBe(change === "retired placement");
+      } else {
+        expect(respond).toHaveBeenCalledOnce();
+        expect(context.chatAbortControllers.size).toBe(0);
+      }
       expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
       expect(sessionAccessor.loadSessionEntry(scope)).toEqual(initialEntry);
-      expect(
-        sessionLifecycle.getSessionWorkAdmissionRelease({
-          scope: session.storePath,
-          identities: [sessionKey, entry.sessionId],
-        }),
-      ).toBeUndefined();
+      if (!accepted) {
+        expect(
+          sessionLifecycle.getSessionWorkAdmissionRelease({
+            scope: session.storePath,
+            identities: [sessionKey, entry.sessionId],
+          }),
+        ).toBeUndefined();
+      }
       if (change === "unavailable reader") {
         expect(respond.mock.calls[0]?.[2]?.message).toContain(
           "Worker placement admission reader is unavailable",
@@ -801,6 +922,16 @@ it.each([
         admitted.value.cleanupAdmittedRun();
       }
       clearAgentRunContext(runId);
+    }
+    expect(context.chatAbortControllers.size).toBe(0);
+    expect(
+      sessionLifecycle.getSessionWorkAdmissionRelease({
+        scope: session.storePath,
+        identities: [sessionKey, entry.sessionId],
+      }),
+    ).toBeUndefined();
+    if (admitted?.ok) {
+      expect(admitted.value.gatewayWorkAdmission.isActive()).toBe(false);
     }
   });
 });

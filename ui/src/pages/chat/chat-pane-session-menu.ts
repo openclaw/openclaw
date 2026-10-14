@@ -391,7 +391,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           break;
         }
         case "snooze":
-          await operations.snoozeSessionWithUndo(host, session, action.snoozedUntil, scope);
+          await operations.snoozeSessionWithUndo(host, session, action, scope);
           break;
         case "wake":
           await operations.patchSession(host, session, { snoozedUntil: null }, scope, {

@@ -37,10 +37,14 @@ export function createStateReadPool(
       workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
       maxWorkers: resolveStateReadWorkerCount(),
       idleTimeoutMs: SQLITE_IDLE_HANDLE_TTL_MS,
+      // Keep one reader warm; release surplus isolates after a short idle period.
+      burstIdleTimeoutMs: 30_000,
       maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
       maxPendingBytes: DEFAULT_WORKER_PENDING_BYTES,
     },
-    nativeSource ? { retainedTransport: true, nativeSource } : undefined,
+    nativeSource
+      ? { retainedTransport: true, nativeSource, databaseAccess: "read-only" }
+      : { databaseAccess: "read-only" },
   );
   if (process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development") {
     const closeResources = pool.closeResources;

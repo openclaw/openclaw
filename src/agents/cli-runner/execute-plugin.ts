@@ -12,6 +12,7 @@ import {
 } from "../../plugin-sdk/windows-spawn.js";
 import type {
   CliBackendExecute,
+  CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
   CliBackendUserInputRequest,
@@ -43,6 +44,7 @@ import {
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
+import { createSteeredCliMessageInjection } from "./execute-plugin.steered-transcript.js";
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
@@ -495,10 +497,22 @@ export async function executePluginOwnedProcess(params: {
   let stopAskUserDeadlineListener: (() => void) | undefined;
   let stopCompactionWorkListener: (() => void) | undefined;
 
-  const detachReplyBackend = attachCliReplyBackend(run, () => {
-    termination.reason = "manual-cancel";
-    controller.abort(createCliAbortError());
-  });
+  let messageInjection: CliBackendMessageInjection | undefined;
+  const detachReplyBackend = attachCliReplyBackend(
+    run,
+    () => {
+      termination.reason = "manual-cancel";
+      controller.abort(createCliAbortError());
+    },
+    {
+      messageInjectionV2: createSteeredCliMessageInjection({
+        getInjection: () => messageInjection,
+        signal,
+        assertCurrent,
+        cwd: run.cwd ?? run.workspaceDir,
+      }),
+    },
+  );
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
@@ -599,6 +613,13 @@ export async function executePluginOwnedProcess(params: {
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
         ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
         ...(liveSession ? { liveSession } : {}),
+        ...(detachReplyBackend
+          ? {
+              registerMessageInjection: (injection: CliBackendMessageInjection) => {
+                messageInjection = injection;
+              },
+            }
+          : {}),
         // Warm transports retain their first turn's async context across plugin refreshes.
         requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
         requestUserInput: createPluginUserInputHandler({

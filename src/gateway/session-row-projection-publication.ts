@@ -154,6 +154,10 @@ export function createSessionRowPublication(owner: {
     const activitySummaryWatermark =
       projection?.activitySummaryWatermark ??
       (sameSession ? previousFacts.activitySummaryWatermark : undefined);
+    const sameTranscript =
+      sameSession &&
+      previousFacts.activitySummaryWatermark?.generation === activitySummaryWatermark?.generation &&
+      previousFacts.activitySummaryWatermark?.maxSeq === activitySummaryWatermark?.maxSeq;
     // Entry-only writes preserve Board/transcript facts. Shared facets retain their
     // independent lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
@@ -163,13 +167,10 @@ export function createSessionRowPublication(owner: {
             entry,
             hasBoard: projection.hasBoard,
             activitySummaryWatermark,
-            transcriptPreview:
-              sameSession &&
-              previousFacts.activitySummaryWatermark?.generation ===
-                activitySummaryWatermark?.generation &&
-              previousFacts.activitySummaryWatermark?.maxSeq === activitySummaryWatermark?.maxSeq
-                ? previousFacts.transcriptPreview
-                : undefined,
+            transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
+            transcriptTerminalModel: sameTranscript
+              ? previousFacts.transcriptTerminalModel
+              : undefined,
             runtimeOwnership: sameRuntimeOwner ? previousFacts.runtimeOwnership : undefined,
             runtimeOwnershipDependencies: sameRuntimeOwner
               ? previousFacts.runtimeOwnershipDependencies

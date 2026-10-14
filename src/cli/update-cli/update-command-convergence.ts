@@ -185,22 +185,20 @@ export async function convergeUpdatePlugins(params: {
           return {
             resultWithPostUpdate: {
               ...failedTargetRuntime(),
-              ...(freshProcessResult.failureFacts?.length
-                ? {
-                    steps: [
-                      ...params.result.steps,
-                      {
-                        name: "post-update verification",
-                        command: "openclaw update",
-                        cwd: postUpdateRoot,
-                        durationMs: 0,
-                        exitCode: freshProcessResult.exitCode,
-                        stderrTail: freshProcessResult.error,
-                        failureFacts: freshProcessResult.failureFacts,
-                      },
-                    ],
-                  }
-                : {}),
+              steps: [
+                ...params.result.steps,
+                {
+                  name: "post-update verification",
+                  command: "openclaw update",
+                  cwd: postUpdateRoot,
+                  durationMs: 0,
+                  exitCode: freshProcessResult.exitCode,
+                  stderrTail: freshProcessResult.error,
+                  failureFacts: freshProcessResult.failureFacts?.length
+                    ? freshProcessResult.failureFacts
+                    : [{ check: "runtime", code: "post-core-update-failed" }],
+                },
+              ],
             },
             detail: freshProcessResult.error,
             cancelled: freshProcessResult.exitCode === 130 || freshProcessResult.exitCode === 143,

@@ -9,6 +9,10 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/router-outlet.test.tsx",
   "ui/src/components/app-sidebar-native-gateways.test.ts",
+  // Captured native frame functions must belong to this file's JSDOM window.
+  "ui/src/components/app-sidebar.catalog-events.test.ts",
+  // The catalog suite exceeds the CI deadline in a shared Bun worker.
+  "ui/src/components/app-sidebar.catalog.test.ts",
   "ui/src/components/gateway-url-confirmation.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
   "ui/src/components/markdown-tables.test.ts",

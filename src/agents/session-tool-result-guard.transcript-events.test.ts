@@ -350,6 +350,7 @@ describe("guardSessionManager transcript updates", () => {
   it.each(["physical", "alias"])(
     "consumes staged input via the %s database path through a reused guard with one approval",
     async (locator) => {
+      setRuntimeConfigSnapshot({});
       const { root, target, sessionEntry } = await openPersistedSessionManager();
       const recorderTarget = { ...target, sessionEntry };
       const aliasRoot = path.join(root, "alias");

@@ -201,6 +201,15 @@ export async function resolveSubagentChildPlan(params: {
       spawnedWorkspaceDir,
       requesterOrigin,
       childSessionOrigin,
+      // Forks, delayed collectors, and thread setup retain ordinary admission.
+      firstAdmission:
+        params.request.context === "isolated" &&
+        !incognito &&
+        !params.request.collect &&
+        !params.request.thread &&
+        params.requesterAgentId === params.targetAgentId
+          ? { delivery: childSessionOrigin, group: toolSpawnMetadata }
+          : undefined,
       incognito,
       childSessionKey,
       childRuntimeSandboxed,

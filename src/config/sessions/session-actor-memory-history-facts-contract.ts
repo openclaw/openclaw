@@ -30,6 +30,18 @@ import type {
 } from "./session-transcript-hydration.types.js";
 
 type Reads = {
+  "visibility-inputs": {
+    input: { runIds: string[] };
+    output: Array<{
+      seq: number;
+      message: {
+        role: "user";
+        idempotencyKey: unknown;
+        provenance: unknown;
+        __openclaw: { runId: unknown; steerTargetRunId: unknown; idempotencyKey: unknown };
+      };
+    }>;
+  };
   title: {
     input: { includeInterSession?: boolean };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
