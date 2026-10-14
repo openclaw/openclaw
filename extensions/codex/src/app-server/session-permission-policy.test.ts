@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { canUseCodexModelBackedApprovalsReviewerForModel } from "./config-reviewer.js";
 import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./config.js";
 import {
   applyCodexSessionPermissionPolicy,
@@ -68,6 +69,36 @@ describe("Codex session permission policy", () => {
       sandbox: expected.sandbox,
       approvalPolicy: expected.approvalPolicy,
       approvalsReviewer: expected.approvalsReviewer,
+      sessionRoot: "/workspace/project",
+    });
+  });
+
+  it("preserves Workspace AI review with a configured ChatGPT OAuth route", () => {
+    const canUseAutoReview = canUseCodexModelBackedApprovalsReviewerForModel({
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            openai: { baseUrl: "https://chatgpt.com/backend-api", models: [] },
+          },
+        },
+      },
+      env: {},
+      codexConfigToml: null,
+    });
+    const resolved = applyCodexSessionPermissionPolicy({
+      appServer: appServer(),
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/project",
+      defaultRoot,
+      pluginConfig,
+      canUseAutoReview,
+    });
+    expect(resolved).toMatchObject({
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
       sessionRoot: "/workspace/project",
     });
   });
