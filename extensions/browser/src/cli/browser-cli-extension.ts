@@ -269,6 +269,9 @@ export function registerBrowserExtensionCommands(
           defaultRuntime.writeJson(status);
           return;
         }
+        for (const issue of status.issues) {
+          defaultRuntime.error(theme.warn(issue));
+        }
         defaultRuntime.log(
           [
             `Extension copy: ${status.installedCopy.owned ? "installed" : "bundled fallback"}`,

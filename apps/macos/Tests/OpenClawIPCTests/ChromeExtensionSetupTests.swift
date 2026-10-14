@@ -290,6 +290,22 @@ struct ChromeExtensionSetupTests {
         ])
     }
 
+    @Test func `blocked profile discovery survives decoding and the legacy bridge`() throws {
+        let blocked = Self.pending.replacingOccurrences(
+            of: "\"automaticBootstrapSupported\":true}",
+            with: "\"automaticBootstrapSupported\":true,\"discoveryBlocked\":true}")
+        let result = try ChromeExtensionSetup.readResult(blocked, action: .install)
+        #expect(result.installation.discoveryBlocked == true)
+        let bytes = try JSONEncoder().encode(result.legacyInstallation)
+        let actual = try #require(JSONSerialization.jsonObject(with: bytes) as? NSDictionary)
+        // Keep the unknown-install fact visible to older dashboard projections.
+        #expect(actual == [
+            "nativeHostRegistered": true, "installRequested": true, "installedProfiles": 1, "discoveredProfiles": 0,
+            "discoveryBlocked": true,
+        ])
+        #expect(ChromeExtensionSetup.readResult(Self.pending, action: .install).installation.discoveryBlocked == nil)
+    }
+
     @Test func `registration and pending approval preserve controller state without claiming connected`() throws {
         let result = try ChromeExtensionSetup.readResult(Self.pending, action: .install)
         #expect(result.installation.nativeHostRegistered)

@@ -149,6 +149,19 @@ describe("browser extension pairing Gateway URL", () => {
     expect(loggedMessages().join("\n")).toContain("approve Chrome's prompt");
   });
 
+  it("prints blocked profile warnings above the human-readable status summary", async () => {
+    installMocks.browserExtensionStatus.mockResolvedValue({
+      ...createExtensionStatus(),
+      discoveryBlocked: ["Google Chrome"],
+      issues: ["Google Chrome: could not list profiles (Error: EPERM: operation not permitted)"],
+    });
+    await run(["status"]);
+    const warnings = output.error.mock.calls.map(([message]) => String(message)).join("\n");
+    const summary = output.log.mock.calls.map(([message]) => String(message)).join("\n");
+    expect(warnings).toContain("could not list profiles");
+    expect(summary).toContain("unknown (Chrome profile files unreadable for Google Chrome");
+  });
+
   it("removes Store requests without removing native hosts", async () => {
     await run(["uninstall-store", "--json"]);
     expect(installMocks.removeChromeStoreInstallRequests).toHaveBeenCalledOnce();

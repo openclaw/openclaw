@@ -30,8 +30,9 @@ export function ChromeSetupStatus(props: ChromeSetupStatusProps) {
       }
       const installed = (installation.installedProfiles ?? installation.discoveredProfiles) > 0;
       const known = installation.installedProfiles !== undefined;
-      // Blocked profile reads mean unknown, not "Not installed".
-      const inspectionBlocked = result?.reason === "profile_inspection_blocked";
+      // Blocked profile reads mean unknown, not "Not installed". This fact is
+      // independent of the connection reason, so it survives Verify connection.
+      const inspectionBlocked = installation.discoveryBlocked === true;
       add(installed ? "Detected" : inspectionBlocked || !known ? "Unknown" : "NotInstalled", true);
       if (inspectionBlocked) {
         add("InspectionBlocked");

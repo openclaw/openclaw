@@ -149,4 +149,101 @@ suite.define(() => {
       );
     },
   );
+
+  it("keeps unknown install state through blocked inspect and a connected verify", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("chrome-extension-blocked");
+    const blockedInstallation = {
+      nativeHostRegistered: true,
+      installRequested: false,
+      installedProfiles: 0,
+      discoveredProfiles: 0,
+      awaitingApproval: false,
+      automaticBootstrapSupported: true,
+      discoveryBlocked: true,
+    };
+    await suite.withPage(
+      { viewport: { width: 1440, height: 1000 }, colorScheme: "light" },
+      async ({ page }) => {
+        await installNativeWebChrome(page);
+        const snapshot = createNativeDeviceSettingsSnapshot();
+        const inspectResult = createChromeExtensionSetupResult({
+          phase: "waiting_for_connection",
+          reason: "profile_inspection_blocked",
+          installation: blockedInstallation,
+          nextAction: "check_connection",
+        });
+        // A connected verify proves the relay, not the installation count, so
+        // the same blocked installation fact must cross into its response.
+        const verifyResult = createChromeExtensionSetupResult({
+          action: "verify",
+          phase: "ready",
+          reason: "connected",
+          installation: blockedInstallation,
+          connection: { state: "connected", extensionVersion: "2.3.0" },
+          nextAction: "none",
+        });
+        await page.addInitScript(
+          ({ snapshot: initialSnapshot, inspect: inspectPayload, verify: verifyPayload }) => {
+            Object.assign(window, {
+              __OPENCLAW_NATIVE_DEVICE_SETTINGS__: initialSnapshot,
+              webkit: {
+                messageHandlers: {
+                  openclawDeviceSettings: {
+                    postMessage(message: { type: string; action?: string }) {
+                      if (
+                        message.type === "chrome-extension-setup" &&
+                        message.action === "inspect"
+                      ) {
+                        return Promise.resolve(inspectPayload);
+                      }
+                      if (
+                        message.type === "chrome-extension-setup" &&
+                        message.action === "verify"
+                      ) {
+                        return Promise.resolve(verifyPayload);
+                      }
+                      return Promise.resolve(initialSnapshot);
+                    },
+                  },
+                },
+              },
+            });
+          },
+          {
+            snapshot,
+            inspect: inspectResult,
+            verify: verifyResult,
+          },
+        );
+        await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(`${suite.server.baseUrl}settings/device`);
+        const card = page.locator(".settings-section").filter({
+          has: page.locator(".device-extension-setup"),
+        });
+        await page.locator(".device-extension-setup").waitFor();
+        await card.scrollIntoViewIfNeeded();
+
+        await card.getByRole("button", { name: "Refresh setup status" }).click();
+        await expect.poll(() => card.textContent()).toContain("Status unavailable");
+        expect(await card.textContent()).toContain("Chrome profile files are unreadable");
+        expect(await card.textContent()).not.toContain("Not installed");
+        await page.screenshot({
+          path: path.join(artifactDir, "chrome-extension-blocked-inspect.png"),
+          animations: "disabled",
+          fullPage: false,
+        });
+
+        await card.getByRole("button", { name: "Verify connection" }).click();
+        await expect.poll(() => card.textContent()).toContain("Extension connected on this device");
+        // The regression: connection success must not erase the blocked fact.
+        expect(await card.textContent()).toContain("Status unavailable");
+        expect(await card.textContent()).not.toContain("Not installed");
+        await page.screenshot({
+          path: path.join(artifactDir, "chrome-extension-blocked-verified.png"),
+          animations: "disabled",
+          fullPage: false,
+        });
+      },
+    );
+  });
 });
