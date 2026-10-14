@@ -3,6 +3,19 @@ name: Published driver update
 on:
   workflow_call:
     inputs:
+      readiness_enforced:
+        required: false
+        type: string
+        # Legacy callers omit readiness; CI must supply an explicit admission binding.
+        default: "false"
+      readiness_request_id:
+        required: false
+        type: string
+        default: ""
+      readiness_attempt:
+        required: false
+        type: string
+        default: ""
       candidate_artifact_id:
         required: true
         type: string
@@ -12,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   update:
@@ -28,6 +42,64 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Verify CI readiness before work
+        id: readiness_work_start
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          READINESS_PHASE: work-start
+          READINESS_ENFORCED: ${{ inputs.readiness_enforced }}
+          READINESS_REQUEST_ID: ${{ inputs.readiness_request_id }}
+          READINESS_ATTEMPT: ${{ inputs.readiness_attempt }}
+        with:
+          script: |
+            if (context.eventName !== "pull_request") return;
+            if (process.env.READINESS_ENFORCED === "false") return;
+            if (process.env.READINESS_ENFORCED !== "true") throw new Error("Missing CI readiness enforcement binding");
+            const base = context.payload.pull_request?.base.sha;
+            if (!/^[a-f0-9]{40}$/.test(base ?? "")) throw new Error("Missing immutable CI readiness base");
+            const { mkdtemp, mkdir, readFile, writeFile, rm } = require("node:fs/promises");
+            const { dirname, join } = require("node:path");
+            const { tmpdir } = require("node:os");
+            const { pathToFileURL } = require("node:url");
+            const root = await mkdtemp(join(tmpdir(), "openclaw-readiness-"));
+            try {
+              // Only immutable base-owned code may authorize candidate work.
+              for (const path of [
+                ".github/ci-readiness.json",
+                "scripts/ci-readiness.mjs",
+                "scripts/lib/plain-gh.mjs",
+                "scripts/pr-lib/gh-api-preflight.mjs",
+                "scripts/lib/direct-run.mjs",
+              ]) {
+                const { data } = await github.rest.repos.getContent({ ...context.repo, path, ref: base });
+                if (data.type !== "file" || data.encoding !== "base64" || typeof data.content !== "string") {
+                  throw new Error("Unavailable immutable CI readiness source: " + path);
+                }
+                const target = join(root, path);
+                await mkdir(dirname(target), { recursive: true });
+                await writeFile(target, Buffer.from(data.content, "base64"));
+              }
+              const policy = JSON.parse(await readFile(join(root, ".github/ci-readiness.json"), "utf8"));
+              const { inspectReadiness } = await import(pathToFileURL(join(root, "scripts/ci-readiness.mjs")).href);
+              const result = await inspectReadiness({
+                api: async (path) => (await github.request("GET /" + path, { headers: { "cache-control": "no-cache" } })).data,
+                repository: context.repo.owner + "/" + context.repo.repo,
+                event: context.payload,
+                policy,
+                testedSha: context.sha,
+                phase: process.env.READINESS_PHASE,
+                requestId: process.env.READINESS_REQUEST_ID ?? "",
+                admittedAttempt: process.env.READINESS_ATTEMPT ?? "",
+                runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "",
+                triggeringActor: process.env.GITHUB_TRIGGERING_ACTOR ?? "",
+              });
+              if (result.enforced !== "true" || result.broad_ci !== "true") {
+                throw new Error("CI readiness authority rejected: " + result.reason);
+              }
+              core.info(result.reason);
+            } finally {
+              await rm(root, { recursive: true, force: true });
+            }
       - uses: ./.github/actions/setup-node-env
         timeout-minutes: 2
         with:

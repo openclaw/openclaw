@@ -162,6 +162,7 @@ packages/worker-runtime/src/worker.ts
 scripts/changed-lanes.mts
 scripts/check-changelog-attributions.mjs
 scripts/check-changelog-attributions.mts
+scripts/ci-readiness.mjs
 scripts/crabbox-untrusted-bootstrap.sh
 scripts/generate-kysely-types.mts
 scripts/lib/arg-utils.mts

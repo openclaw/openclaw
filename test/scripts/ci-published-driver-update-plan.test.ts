@@ -117,13 +117,33 @@ describe("published-driver update selection", () => {
       }),
     ).toBe(revision);
     expect(workflow.on.workflow_call.inputs.target_sha).toBeUndefined();
-    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "read" });
     expect(checkout.with["persist-credentials"]).toBe(false);
     expect(
       job.steps.find((step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env").with[
         "cache-mode"
       ],
     ).toBe("off");
+  });
+
+  it("forwards the admitted authority through the reusable workflow", () => {
+    const caller = readCiWorkflow().jobs["published-driver-update"];
+    const expected = {
+      readiness_enforced: "true",
+      readiness_request_id: "101",
+      readiness_attempt: "2",
+    };
+    for (const [input, value] of Object.entries(expected)) {
+      expect(
+        evaluateWorkflowExpression(caller.with[input], {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 2,
+          preflightOutputs: expected,
+        }),
+      ).toBe(value);
+    }
+    expect(caller.permissions).toEqual({ contents: "read", "pull-requests": "read" });
   });
 
   it("consumes only the candidate artifact produced by this run", () => {

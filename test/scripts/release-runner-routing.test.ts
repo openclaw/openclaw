@@ -66,6 +66,9 @@ const workflows = new Map(
 );
 const group = 'Release "reserved"';
 const context = {
+  eventName: "workflow_dispatch" as const,
+  repository: "openclaw/openclaw",
+  runAttempt: 1,
   matrix: { runner: "ubuntu-24.04", group: "fixture", task: "test", check_name: "fixture" },
   runnerBackend: "github" as const,
   preflightOutputs: { node_runner_backend: "github" },
@@ -129,6 +132,40 @@ describe("release runner reservation", () => {
       ];
       for (const [jobName, job] of Object.entries(workflow.jobs)) {
         if (!job["runs-on"]) {
+          continue;
+        }
+        const condition = job.if?.startsWith("${{") ? job.if : `\${{ ${job.if ?? "true"} }}`;
+        if (
+          mixed.includes(name) &&
+          !job["runs-on"].startsWith("${{") &&
+          evaluateWorkflowExpression(condition, {
+            ...context,
+            eventName: "pull_request",
+            action: "synchronize",
+          }) === true
+        ) {
+          // A fixed PR runner is valid only when non-PR events cannot allocate it.
+          for (const selection of [
+            { eventName: "push" },
+            { eventName: "schedule" },
+            { eventName: "workflow_dispatch", dispatchId: "" },
+            { eventName: "workflow_dispatch", dispatchId: "hourly-main-123-1" },
+            { eventName: "workflow_dispatch", dispatchId: "full-release-validation-123-1" },
+            {
+              eventName: "workflow_dispatch",
+              dispatchId: "full-release-validation-123-1",
+              releaseGate: true,
+            },
+          ] as const) {
+            expect(
+              evaluateWorkflowExpression(condition, {
+                ...context,
+                ...selection,
+                releaseRunnerGroup: group,
+              }),
+              `${name}/${jobName} must not allocate a fixed PR runner for ${selection.eventName}`,
+            ).toBe(false);
+          }
           continue;
         }
         for (const { release, eventName } of cases) {

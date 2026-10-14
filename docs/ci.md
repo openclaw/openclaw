@@ -45,6 +45,9 @@ Full hybrid PR checks share central formatting and scripts lint with core lint s
 
 Default fork first attempts run their existing core lint stripes on Blacksmith16, retaining the same core and extension chunk assignments and restore-only caches. Retries and the GitHub override remain hosted; see [runner placement](/ci/runners#runners).
 
+[PR CI readiness](/ci/readiness) documents the disabled-by-default, candidate-bound
+request path for deferring expensive PR validation while keeping security feedback.
+
 [Automation admission](/ci/scheduled-workflows#comment-automation) filters known
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
@@ -91,8 +94,9 @@ Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
-Android screenshot-input PRs and ordinary full manual CI run the existing phone
-and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
+Android screenshot-input changes on non-PR CI runs and ordinary full manual CI run
+the existing phone and Wear store capture script in one hosted Ubuntu job. Ordinary
+PR CI does not select screenshot capture. When selected, the final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
 

@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowExpression,
+  evaluateWorkflowRunner,
+  readinessGuardedCondition,
+} from "./ci-workflow.test-support.js";
 
 const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 const job = workflow.jobs["android-access-native"];
@@ -58,7 +62,9 @@ describe("Android Access native workflow", () => {
     expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
       "${{ steps.manifest.outputs.run_android_access_native }}",
     );
-    expect(job.if).toBe("needs.preflight.outputs.run_android_access_native == 'true'");
+    expect(job.if).toBe(
+      readinessGuardedCondition("needs.preflight.outputs.run_android_access_native == 'true'"),
+    );
     expect(step.run).toContain(":app:connectedPlayDebugAndroidTest");
     expect(step.run).toContain(
       "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
@@ -73,6 +79,31 @@ describe("Android Access native workflow", () => {
       "android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}",
     );
   });
+
+  it.each([
+    ["pull_request", "false", "true", "2", false],
+    ["pull_request", "true", "true", "2", true],
+    ["pull_request", "true", "true", "1", false],
+    ["pull_request", "true", "true", "", false],
+    ["pull_request", "true", "false", "1", true],
+    ["workflow_dispatch", "true", "true", "1", true],
+  ] as const)(
+    "preserves Android selection with %s selected=%s enforced=%s attempt=%s",
+    (eventName, selected, enforced, attempt, expected) => {
+      expect(
+        evaluateWorkflowExpression(job.if, {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 2,
+          preflightOutputs: {
+            run_android_access_native: selected,
+            readiness_enforced: enforced,
+            readiness_attempt: attempt,
+          },
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
     expect(job.strategy).toEqual({

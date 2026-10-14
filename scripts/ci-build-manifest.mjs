@@ -1717,6 +1717,7 @@ if (hybridHostedEligible) {
   // The guard independently expands the workflow to catch inventory drift.
   // Qualification authenticates on hosted preflight before paid admission.
   hybridHostedBaseRows = Object.values({
+    readiness: count(workflowEventName === "pull_request"),
     preflight: count(ciQualification),
     "check-plan": count(hostedPlanner && runCheckPlan),
     "pr-failure-report": count(

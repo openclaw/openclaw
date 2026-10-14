@@ -68,6 +68,7 @@ import {
   readAndroidToolchainAction,
   readBuildArtifactsTestboxWorkflow,
   readCiWorkflow,
+  readinessGuardedCondition,
   readMaturityScorecardWorkflow,
   readReleaseChecksWorkflow,
   readTrackedText,
@@ -498,6 +499,42 @@ function runReleaseFallbackHistoryFixture(options: {
   }
 }
 describe("release fast lane label", () => {
+  it("observes readiness label events without admitting fast-lane-only changes", () => {
+    const workflow = readCiWorkflow();
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
+    expect(manifestStep.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL).toBe(
+      "${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release-fast-lane') && 'true' || 'false' }}",
+    );
+    expect(workflow.jobs.preflight.outputs.release_fast_lane).toBe(
+      "${{ steps.manifest.outputs.release_fast_lane }}",
+    );
+    expect(workflow.on.pull_request.types).toEqual([
+      "opened",
+      "reopened",
+      "synchronize",
+      "ready_for_review",
+      "converted_to_draft",
+      "edited",
+      "closed",
+      "labeled",
+      "unlabeled",
+    ]);
+    for (const action of ["labeled", "unlabeled"]) {
+      for (const label of ["release-fast-lane", "ci:ready:" + "a".repeat(40)]) {
+        expect(
+          evaluateWorkflowExpression("${{ " + workflow.jobs.readiness.if + " }}", {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            githubEvent: { action, pull_request: { draft: false }, label: { name: label } },
+          }),
+        ).toBe(label.startsWith("ci:ready:"));
+      }
+    }
+  });
+
   it("declines fork heads before any reduced check can reach the aggregate gate", () => {
     const workflow = readCiWorkflow();
     const manifestStep = workflow.jobs.preflight.steps.find(
@@ -517,7 +554,7 @@ describe("release fast lane label", () => {
     );
     // Reduced selection only ever reaches the gate through preflight outputs.
     const gate = workflow.jobs["ci-gate"];
-    expect(gate.needs[0]).toBe("preflight");
+    expect(gate.needs.slice(0, 2)).toEqual(["readiness", "preflight"]);
     const rows: string[] = gate.steps
       .find((candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes")
       .env.JOB_RESULTS.trim()
@@ -528,12 +565,34 @@ describe("release fast lane label", () => {
       expect(selected).not.toContain("release_fast_lane");
     }
   });
+
+  it("shows admission at the gate while preserving every lane result", () => {
+    const gate = readCiWorkflow().jobs["ci-gate"];
+    const step = gate.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+    );
+    expect(step.env.RELEASE_FAST_LANE).toBe("${{ needs.preflight.outputs.release_fast_lane }}");
+    expect(
+      step.run.startsWith(
+        'set -euo pipefail\necho "release fast lane: ${RELEASE_FAST_LANE:-false}"\n',
+      ),
+    ).toBe(true);
+    const rows: string[] = step.env.JOB_RESULTS.trim().split("\n");
+    expect(rows.map((row) => row.split("=")[0])).toEqual(
+      gate.needs.filter((id: string) => id !== "readiness"),
+    );
+    expect(step.env.READINESS_RESULT).toBe("${{ needs.readiness.result }}");
+    for (const row of rows) {
+      const name = row.split("=")[0];
+      expect(row.slice(0, row.lastIndexOf("|")), row).toContain(`needs.${name}.result`);
+    }
+  });
 });
 
 describe("ci workflow guards", () => {
   it("keeps Android PR capture on the release script without store authority", () => {
     const job = readCiWorkflow().jobs["android-screenshots"];
-    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.permissions).toEqual({ contents: "read", "pull-requests": "read" });
     expect(job.environment).toBeUndefined();
     expect(evaluateWorkflowRunner(job["runs-on"])).toBe("ubuntu-24.04");
     const toolchain = job.steps.find(
@@ -1492,7 +1551,9 @@ AFTER_CD
       (step: WorkflowStep) => step.name === "Check plugin inventory",
     );
 
-    expect(job.if).toBe("needs.preflight.outputs.run_check_docs == 'true'");
+    expect(job.if).toBe(
+      readinessGuardedCondition("needs.preflight.outputs.run_check_docs == 'true'"),
+    );
     expect(configDocsCheck?.run).toBe("pnpm config:docs:check");
     expect(pluginInventoryCheck?.run).toBe("pnpm plugins:inventory:check");
   });
@@ -1659,14 +1720,20 @@ AFTER_CD
       docker_seed_lanes: "${{ steps.manifest.outputs.docker_seed_lanes }}",
       run_docker_seed_e2e: "${{ steps.manifest.outputs.run_docker_seed_e2e }}",
     });
-    expect(job.if).toBe("needs.preflight.outputs.run_docker_seed_e2e == 'true'");
+    expect(job.if).toBe(
+      readinessGuardedCondition("needs.preflight.outputs.run_docker_seed_e2e == 'true'"),
+    );
     expect(job.needs).toEqual(["preflight"]);
     expect(job["timeout-minutes"]).toBe(115);
-    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.permissions).toEqual({ contents: "read", "pull-requests": "read" });
     expect(job.strategy).toBeUndefined();
     expect(job.steps[0]).toEqual(jobs["build-artifacts"].steps[0]);
-    expect(job.steps[1].uses).toBe("./.ci-harness/.github/actions/setup-node-env");
-    expect(job.steps[1].with).toMatchObject({
+    expect(job.steps[1].id).toBe("readiness_work_start");
+    const setup = job.steps.find(
+      (step: WorkflowStep) => step.uses === "./.ci-harness/.github/actions/setup-node-env",
+    );
+    expect(job.steps.indexOf(setup)).toBeGreaterThan(1);
+    expect(setup.with).toMatchObject({
       "build-all-cache-scope": "full",
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
     });
@@ -5422,8 +5489,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(shards).toEqual(scenario.shards);
     expect(ui.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 3 });
     expect(ui.needs).toEqual(["preflight"]);
-    expect(ui.if).toBe("needs.preflight.outputs.run_ui_tests == 'true'");
-    expect(ui.permissions).toEqual({ contents: "read" });
+    expect(ui.if).toBe(readinessGuardedCondition("needs.preflight.outputs.run_ui_tests == 'true'"));
+    expect(ui.permissions).toEqual({ contents: "read", "pull-requests": "read" });
     // Hosted rows (full-release dispatches, github backend, hybrid retries,
     // fork PRs) run the Control UI suites slower than Blacksmith; a frozen
     // full-release dispatch measured 15-20 min per shard against a 20 min cap.

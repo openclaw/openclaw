@@ -58,6 +58,7 @@ import {
   readAndroidToolchainAction,
   readBuildArtifactsTestboxWorkflow,
   readCiWorkflow,
+  readinessGuardedCondition,
   readTrackedText,
   readWorkflow,
   readWorkflowOutputs,
@@ -183,6 +184,14 @@ function runCiGateFixture(jobResults: string, env: Record<string, string> = {}) 
     encoding: "utf8",
     env: {
       ...process.env,
+      // These aggregate fixtures model admitted manual CI unless a case supplies PR admission.
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_RUN_ATTEMPT: "1",
+      READINESS_RESULT: "success",
+      READINESS_ATTEMPT: "1",
+      READINESS_ENFORCED: "false",
+      READINESS_REQUEST_ID: "",
+      BROAD_CI: "true",
       JOB_RESULTS: jobResults,
       ...env,
     },
@@ -3051,8 +3060,8 @@ describe("ci workflow guards", () => {
       expect(ordinary.outputs.split_pr_guards).toBe("true");
       expect(qualification.outputs.split_pr_guards).toBe("false");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        // Qualification retains native rows; ordinary PRs add one parallel guard row.
-        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2 + 3 + 2 + 1 - 1,
+        // Qualification retains native rows; ordinary PRs add guard and readiness rows.
+        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2 + 3 + 2 + 1 - 1 - 1,
       );
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
@@ -4622,7 +4631,7 @@ describe("ci workflow guards", () => {
     });
 
     it.each(["pending", "running"])(
-      "converted_to_draft cancels %s CI and skips its jobs",
+      "converted_to_draft cancels %s broad CI and remains wholly skipped",
       (state) => {
         const scheduler = admissionDriver();
         const previous = scheduler.admit(event(1));
@@ -4750,7 +4759,13 @@ describe("ci workflow guards", () => {
       scheduler.start(newest[1]!);
       expect(newest.map((run) => run.state)).toEqual(["running", "running"]);
       expect(workflow.jobs["runner-admission"]).toBeUndefined();
-      expect(workflow.jobs.preflight.needs).toBeUndefined();
+      expect(workflow.jobs.preflight.needs).toEqual(["readiness"]);
+      expect(
+        evaluateWorkflowExpression(
+          `\${{ ${workflow.jobs.readiness.if} }}`,
+          expectDefined(newest[0], "newest main run").context,
+        ),
+      ).toBe(false);
       expect(workflow.jobs["security-fast"].needs).toEqual(["preflight"]);
     });
 
@@ -9744,10 +9759,10 @@ describe("ci workflow guards", () => {
     expect(releaseCandidateStep.if).toBe("inputs.release_candidate_ref != ''");
     expect(releaseCandidateStep.run).toContain('[[ "$branch_sha" != "$EXPECTED_SHA" ]]');
     expect(workflow.jobs["qa-smoke-ci-profile"].if).toBe(
-      "needs.preflight.outputs.run_qa_smoke_ci == 'true'",
+      readinessGuardedCondition("needs.preflight.outputs.run_qa_smoke_ci == 'true'"),
     );
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].if).toBe(
-      "needs.preflight.outputs.run_channel_contracts_shards == 'true'",
+      readinessGuardedCondition("needs.preflight.outputs.run_channel_contracts_shards == 'true'"),
     );
     const swiftInstall = workflow.jobs["macos-swift"].steps.find(
       (step: { name?: string }) => step.name === "Install XcodeGen / SwiftLint / SwiftFormat",
@@ -10462,10 +10477,12 @@ describe("ci workflow guards", () => {
       "ui-e2e-projects-contract-v1",
     );
 
-    expect(uiE2e.permissions).toEqual({ contents: "read" });
+    expect(uiE2e.permissions).toEqual({ contents: "read", "pull-requests": "read" });
     expect(uiE2e.needs).toEqual(["preflight"]);
     expect(uiE2e.if).toBe(
-      "needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+      readinessGuardedCondition(
+        "needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+      ),
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     expect(uiE2e["timeout-minutes"]).toBe(25);
@@ -10513,7 +10530,9 @@ describe("ci workflow guards", () => {
     expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
     expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
     expect(uiE2eRealGateway.if).toBe(
-      "needs.preflight.outputs.run_ui_real_gateway == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+      readinessGuardedCondition(
+        "needs.preflight.outputs.run_ui_real_gateway == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+      ),
     );
     expect(uiE2eRealGateway.env).toBeUndefined();
     expect(uiE2eRealGateway.strategy).toEqual({
@@ -10964,7 +10983,9 @@ describe("ci workflow guards", () => {
       "keeps shipped locales structurally aligned with English",
     );
     expect(localeJob.needs).toEqual(["preflight"]);
-    expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
+    expect(localeJob.if).toBe(
+      readinessGuardedCondition("needs.preflight.outputs.run_control_ui_i18n == 'true'"),
+    );
     expect(localeJob["continue-on-error"]).toBeUndefined();
     expect(localeJob.env.COMPATIBILITY_TARGET).toBe(
       "${{ needs.preflight.outputs.compatibility_target }}",
@@ -11950,15 +11971,21 @@ describe("ci workflow guards", () => {
     ];
 
     expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
-    expect(gate.name).toBe("openclaw/ci-gate");
-    expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
+    expect(
+      evaluateWorkflowExpression(gate.name, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+      }),
+    ).toBe("openclaw/ci-gate");
+    expect(gate.needs).toEqual(["readiness", ...requiredJobs, ...selectedJobs]);
     // Every workload is gated; the release-only receipt sealer runs after this gate.
     expect(gate.needs.toSorted()).toEqual(
       Object.keys(workflow.jobs)
         .filter((job) => job !== "ci-gate" && job !== "seal_release_child_evidence")
         .toSorted(),
     );
-    expect(gate.permissions).toEqual({ contents: "read" });
+    expect(gate.permissions).toEqual({ contents: "read", "pull-requests": "read" });
 
     const verifyStep = gate.steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
@@ -11974,7 +12001,7 @@ describe("ci workflow guards", () => {
           : `${job}=\${{ needs.${job}.result }}|`,
       );
     }
-    expect(resultRows).toHaveLength(gate.needs.length);
+    expect(resultRows).toHaveLength(gate.needs.length - 1);
   });
 
   it("ci-gate selection projections match their owning job predicates", () => {
@@ -12000,8 +12027,17 @@ describe("ci workflow guards", () => {
       }
       // Gate inputs duplicate eligibility, never dependency status or cancellation.
       // Bind that projection to its owner so a routing change cannot leave stale selection.
-      const eligible = workflow.jobs[job].if
-        .replace(/^\$\{\{\s*|\s*\}\}$/gu, "")
+      const condition = workflow.jobs[job].if;
+      if (job === "ios-release-e2e") {
+        expect(condition, job).toBe("${{ " + selection + " }}");
+        continue;
+      }
+      const unguarded = expectDefined(
+        condition.match(/^\$\{\{ \((.*)\) && \(github\.event_name /u)?.[1],
+        job,
+      );
+      expect(condition, job).toBe(readinessGuardedCondition(unguarded));
+      const eligible = unguarded
         .replace(/!cancelled\(\)\s*&&\s*(?:(?:always\(\)|!failure\(\))\s*&&\s*)?/gu, "")
         .replace(
           /^\(needs\.preflight\.outputs\.shared_sdk_declarations != 'true' \|\| needs\.check-extension-package-boundary\.outputs\.artifact_id != ''\)\s*&&\s*/u,
@@ -12487,8 +12523,9 @@ describe("ci workflow guards", () => {
     "ci-gate checks all downstream lanes (selected=%s, result=%s)",
     (selected, result, exit) => {
       const workflow = readCiWorkflow();
-      const jobs: string[] = workflow.jobs["ci-gate"].needs.slice(2);
+      const jobs: string[] = workflow.jobs["ci-gate"].needs.slice(3);
       const qualificationSha = "a".repeat(40);
+
       const jobResults = renderCiGateEnvironment(
         {
           eventName: selected ? "workflow_dispatch" : "push",
