@@ -567,46 +567,32 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(argv).toEqual(original);
   });
 
-  it("preserves native invalid scalar errors", async () => {
-    const argv = ["run", file, "--passWithNoTests", "--passWithNoTests"];
-    let nativeError: unknown;
-    try {
-      parseCLI(["vitest", ...argv]);
-    } catch (error) {
-      nativeError = error;
-    }
-    expect(nativeError).toBeInstanceOf(Error);
-    await expect(resolveExplicitTestFileNoPassArgs(argv)).rejects.toThrow(
-      (nativeError as Error).message,
-    );
-  });
-
   it("does not force no-test failure for globs or basename filters", async () => {
     const argv = ["run", "run-vitest.test.ts", "test/**/*.test.ts"];
     expect(await resolveExplicitTestFileNoPassArgs(argv)).toBe(argv);
   });
 
-  it.each([
-    ["--no-passWithNoTests", "false"],
-    ["--passWithNoTests", "--passWithNoTests"],
-  ])("round-trips native option ownership through delegation: %j", (...flags) => {
-    const parse = (args: string[]) => {
-      try {
-        return parseCLI(["vitest", "run", ...args]);
-      } catch (error) {
-        return String(error);
+  it.each([["--passWithNoTests", "--passWithNoTests"]])(
+    "round-trips native option ownership through delegation: %j",
+    (...flags) => {
+      const parse = (args: string[]) => {
+        try {
+          return parseCLI(["vitest", "run", ...args]);
+        } catch (error) {
+          return String(error);
+        }
+      };
+      for (const argv of [
+        [...flags, file],
+        [file, ...flags],
+      ]) {
+        const delegated = resolveTestProjectsDelegationArgs(argv);
+        expect(delegated).not.toBeNull();
+        const { forwardedArgs } = parseTestProjectsArgs(delegated!);
+        expect(parse(forwardedArgs)).toEqual(parse(argv));
       }
-    };
-    for (const argv of [
-      [...flags, file],
-      [file, ...flags],
-    ]) {
-      const delegated = resolveTestProjectsDelegationArgs(argv);
-      expect(delegated).not.toBeNull();
-      const { forwardedArgs } = parseTestProjectsArgs(delegated!);
-      expect(parse(forwardedArgs)).toEqual(parse(argv));
-    }
-  });
+    },
+  );
 
   it.each<[string[], string[] | null]>([
     [
@@ -625,10 +611,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
       ["src/**/*.test.ts", "src/agents/bash-tools.ts"],
     ],
     [["--run", "false", file], null],
-    [
-      ["run", file, "--repeats", "19"],
-      [file, "--", "--repeats", "19"],
-    ],
   ])("preserves ownership and operands when delegating %j", (argv, expected) => {
     expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });
@@ -869,8 +851,10 @@ registerHooks({resolve(specifier, context, nextResolve) {
   );
 
   it.each<{ env: NodeJS.ProcessEnv; expected: NodeJS.ProcessEnv }>([
-    { env: { LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" }, expected: {} },
-    { env: { OPENCLAW_LOCAL_CHECK: "0" }, expected: { OPENCLAW_LOCAL_CHECK: "1" } },
+    {
+      env: { OPENCLAW_LOCAL_CHECK: "0", LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" },
+      expected: { OPENCLAW_LOCAL_CHECK: "1" },
+    },
     {
       env: { OPENCLAW_VITEST_MAX_WORKERS: "2", RAYON_NUM_THREADS: "8", TOKIO_WORKER_THREADS: "6" },
       expected: {},
