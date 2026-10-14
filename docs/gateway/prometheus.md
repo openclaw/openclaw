@@ -544,8 +544,9 @@ live Workers. Direct Workers contribute to `workerCount` without a pool entry.
 These are JavaScript Worker counts, not an operating-system thread census.
 
 `openclaw_child_process_spawn_total{family="...",operation="..."}` counts successful launches
-through OpenClaw's shared spawn and exec owners, including brokered launches,
-and the streaming workspace inventory runner.
+through OpenClaw's shared spawn and exec owners, including brokered and native
+PTY launches, and the streaming workspace inventory runner. Windows PTYs are
+attributed at their first output or exit after their asynchronous PID publication.
 Diagnostics must be enabled. The existing heartbeat publishes accumulated
 counts after at least one minute, with debug logs reporting counts and rates
 using the actual elapsed interval. Failed launches, direct calls bypassing
@@ -568,7 +569,15 @@ Global Git options and their values are skipped before classifying the command;
 unrecognized commands, aliases, and option layouts use `unscoped.other`.
 These labels replace `unknown` for unscoped launches, so update queries that
 select that label. Invalid explicit owners still use `unknown`.
-Other executable families use `none`.
+Other executable families use bounded owners such as `agent.exec`, `shell.snapshot`,
+and `service.relay`, or fixed fallback classifications such as
+`unscoped.shell-command`, `unscoped.shell`, `unscoped.runtime`, `unscoped.version`,
+`unscoped.gh`, and `unscoped.command`. Relays for agent exec retain `agent.exec`.
+SQLite read launches retain their `sqlite.scoped-read.broker`,
+`sqlite.scoped-read.native`, `sqlite.session.broker`, or `sqlite.session.native` labels.
+Update queries selecting `operation="none"` to select the relevant owners or
+remove the operation filter to retain the per-family view. Linux OOM-protection
+exec wrappers report the logical target family, since the broker can omit the shell.
 Arguments, repository paths, session IDs, and free-text caller names are never recorded.
 For launches per minute grouped by Git owner, use
 `60 * sum by (operation) (rate(openclaw_child_process_spawn_total{family="git"}[5m]))`.

@@ -55,10 +55,8 @@ describe("Crabbox profile warm images", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
     expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
   });
-  it("captures distinct images when setup, machine class, desktop, provider, or setup environment names change", async () => {
-    const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
-    vi.stubEnv("WARM_A", "first-secret");
-    vi.stubEnv("WARM_B", "second-secret");
+  it("captures distinct images when setup, machine class, desktop, or provider changes", async () => {
+    const profile = { ...PROFILE, setup: "install-node" };
     const { provider, calls } = createWarmProvider();
     await captureWarmImage(provider, profile);
 
@@ -67,7 +65,6 @@ describe("Crabbox profile warm images", () => {
       { ...profile, class: "fast" },
       { ...profile, desktop: true },
       { ...profile, provider: "hetzner" },
-      { ...profile, setupEnv: ["WARM_A"] },
     ].entries()) {
       calls.length = 0;
       await captureWarmImage(provider, changed, `provision:v2:${String(index + 1).repeat(64)}`);
@@ -75,14 +72,16 @@ describe("Crabbox profile warm images", () => {
     }
   });
 
-  it("rejects explicit warm images without sizing before reading mutable setup inputs", async () => {
+  it("rejects explicit warm images without sizing before opening setup secrets", async () => {
     const { provider, calls } = createWarmProvider();
     await expect(
       provisionWarmProfile(provider, {
         ...CLASSLESS_PROFILE,
         warmImage: true,
         setup: "install-node",
-        setupEnv: ["WARM_POLICY_INPUT"],
+        setupSecrets: {
+          WARM_POLICY_INPUT: { source: "store", provider: "default", id: "SETUP" },
+        },
       }),
     ).rejects.toMatchObject({ code: "invalid_profile" });
     expect(calls).toEqual([]);
@@ -153,7 +152,17 @@ describe("Crabbox profile warm images", () => {
     const bin = path.join(home, "bin");
     const workdir = path.join(home, "crabbox-workdir");
     const envFile = path.join(workdir, ".crabbox", "env", "forwarded.env");
+    const egressEnvFile = path.join(workdir, ".crabbox", "env-setup");
     const scrubScript = path.join(workdir, ".crabbox", "scripts", "scrub.sh");
+    const tmp = path.join(home, "tmp");
+    const setupCa = path.join(tmp, "openclaw-setup-egress.fixture", "ca.pem");
+    const fixedTmp = path.join(home, "fixed-tmp");
+    const fixedSetupCa = path.join(fixedTmp, "openclaw-setup-egress.fixed", "ca.pem");
+    // Map the owned Linux /tmp root into the fixture without scanning host temporary files.
+    const scrubInput = String(scrub?.options.input).replace('"/tmp"', JSON.stringify(fixedTmp));
+    const unrelatedTemp = path.join(tmp, "unrelated", "keep");
+    const repoConfig = path.join(workdir, ".npmrc");
+    const homeConfig = path.join(home, ".gitconfig");
     fs.mkdirSync(workspace, { recursive: true });
     fs.mkdirSync(path.dirname(npmCache), { recursive: true });
     fs.mkdirSync(bin);
@@ -164,7 +173,12 @@ describe("Crabbox profile warm images", () => {
     fs.mkdirSync(path.dirname(envFile), { recursive: true });
     fs.mkdirSync(path.dirname(scrubScript), { recursive: true });
     fs.writeFileSync(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
-    fs.writeFileSync(scrubScript, String(scrub?.options.input));
+    fs.writeFileSync(egressEnvFile, "SETUP_TOKEN=synthetic-sentinel");
+    for (const file of [setupCa, fixedSetupCa, unrelatedTemp, repoConfig, homeConfig]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "preserved configuration or temporary data");
+    }
+    fs.writeFileSync(scrubScript, scrubInput);
     fs.writeFileSync(path.join(workspace, "private.txt"), "session workspace bytes");
     fs.writeFileSync(npmCache, "reusable npm package");
     for (const file of [path.join(sshWorkspace, "private.txt"), bundle, gitSeed]) {
@@ -214,6 +228,7 @@ describe("Crabbox profile warm images", () => {
         env: {
           ...process.env,
           HOME: home,
+          TMPDIR: tmp,
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         },
       });
@@ -228,6 +243,12 @@ describe("Crabbox profile warm images", () => {
     expect(fs.existsSync(path.join(home, ".openclaw", "cloud-workers"))).toBe(false);
     expect(fs.existsSync(sshWorkspace)).toBe(false);
     expect(fs.existsSync(envFile)).toBe(false);
+    expect(fs.existsSync(egressEnvFile)).toBe(false);
+    expect(fs.existsSync(path.dirname(setupCa))).toBe(false);
+    expect(fs.existsSync(path.dirname(fixedSetupCa))).toBe(false);
+    for (const file of [unrelatedTemp, repoConfig, homeConfig]) {
+      expect(fs.readFileSync(file, "utf8")).toBe("preserved configuration or temporary data");
+    }
     expect(fs.existsSync(scrubScript)).toBe(false);
     expect(fs.readFileSync(npmCache, "utf8")).toBe("reusable npm package");
     expect(fs.readFileSync(bundle, "utf8")).toBe(bundle);
@@ -235,7 +256,7 @@ describe("Crabbox profile warm images", () => {
     fs.mkdirSync(path.dirname(envFile), { recursive: true });
     fs.mkdirSync(path.dirname(scrubScript), { recursive: true });
     fs.writeFileSync(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
-    fs.writeFileSync(scrubScript, String(scrub?.options.input));
+    fs.writeFileSync(scrubScript, scrubInput);
     fs.writeFileSync(
       path.join(bin, "rm"),
       '#!/bin/sh\ncase "$*" in *".crabbox/env"*) exit 7;; esac\nexec /bin/rm "$@"\n',
@@ -247,6 +268,7 @@ describe("Crabbox profile warm images", () => {
         env: {
           ...process.env,
           HOME: home,
+          TMPDIR: tmp,
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         },
       }),

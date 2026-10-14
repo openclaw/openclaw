@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -29,7 +29,7 @@ import type {
   WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
-function listUserGitHubConnections(db: DatabaseSync): Array<{
+function listUserGitHubConnections(db: EngineConnection): Array<{
   owner: string;
   connection: UserGitHubConnection;
 }> {

@@ -3,13 +3,22 @@ import { describe, expect, it } from "vitest";
 import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageSecurity,
+  listClawHubPackages,
   resolveLatestVersionFromPackage,
+  searchClawHubPackages,
 } from "./clawhub-packages.js";
 
 const packageSelector = { name: "@openclaw/diagnostics-otel", version: "2026.3.22" };
 const securityReport = {
   package: { name: packageSelector.name, displayName: "Diagnostics", family: "code-plugin" },
-  release: { releaseId: "rel_demo", version: packageSelector.version },
+  release: {
+    releaseId: "rel_demo",
+    version: packageSelector.version,
+    artifactKind: "npm-pack",
+    artifactSha256: "a".repeat(64),
+    npmIntegrity: "sha512-proof",
+    npmShasum: "abc",
+  },
   overview: "The plugin uses privileged local APIs.\n\nReview those capabilities.",
   securityAuditUrl:
     "https://clawhub.ai/plugins/@openclaw/diagnostics-otel/security-audit?version=2026.3.22",
@@ -31,6 +40,75 @@ function jsonResponse(body: unknown) {
 }
 
 describe("clawhub packages", () => {
+  it("lists official Claws with an opaque continuation cursor", async () => {
+    const page = {
+      items: [
+        {
+          name: "@openclaw/research-briefing",
+          displayName: "Research Briefing",
+          family: "claw",
+          channel: "official",
+          isOfficial: true,
+          ownerHandle: "openclaw",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+      nextCursor: "next page",
+    };
+    let requestedUrl = "";
+    await expect(
+      listClawHubPackages({
+        family: "claw",
+        isOfficial: true,
+        limit: 100,
+        cursor: "prior page",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return jsonResponse(page);
+        },
+      }),
+    ).resolves.toEqual(page);
+    expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages");
+    expect(Object.fromEntries(new URL(requestedUrl).searchParams)).toEqual({
+      family: "claw",
+      isOfficial: "true",
+      limit: "100",
+      cursor: "prior page",
+    });
+  });
+
+  it("rejects malformed package list items before catalog projection", async () => {
+    await expect(
+      listClawHubPackages({
+        fetchImpl: async () => jsonResponse({ items: [null], nextCursor: null }),
+      }),
+    ).rejects.toThrow("Malformed ClawHub package list response");
+  });
+
+  it("requests official search results before ClawHub applies the result cap", async () => {
+    let requestedUrl = "";
+    await expect(
+      searchClawHubPackages({
+        query: " research ",
+        family: "claw",
+        isOfficial: true,
+        limit: 1,
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return jsonResponse({ results: [] });
+        },
+      }),
+    ).resolves.toEqual([]);
+    expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages/search");
+    expect(Object.fromEntries(new URL(requestedUrl).searchParams)).toEqual({
+      q: "research",
+      family: "claw",
+      isOfficial: "true",
+      limit: "1",
+    });
+  });
+
   it("resolves latest versions from latestVersion before tags", () => {
     const pkg = {
       name: "demo",
@@ -87,7 +165,14 @@ describe("clawhub packages", () => {
       }),
     ).resolves.toEqual({
       ...securityReport,
-      release: { id: "rel_demo", version: "2026.3.22" },
+      release: {
+        id: "rel_demo",
+        version: "2026.3.22",
+        artifactKind: "npm-pack",
+        artifactSha256: "a".repeat(64),
+        npmIntegrity: "sha512-proof",
+        npmShasum: "abc",
+      },
     });
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",

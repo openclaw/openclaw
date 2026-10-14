@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
@@ -9,7 +10,7 @@ type SessionWindowWriteRow = Omit<ReturnType<typeof bindSessionRoot>, "primary_c
 };
 
 // Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
-export const getSessionEntryWriteQueries = createSqliteQueryCache((database) => {
+export const getSessionEntryWriteQueries = createSqliteQueryCache((database: DatabaseSync) => {
   const db = getSessionKysely(database);
   const window = (retainOwner: boolean) =>
     prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>

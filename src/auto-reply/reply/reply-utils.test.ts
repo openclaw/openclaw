@@ -157,16 +157,19 @@ describe("normalizeReplyPayload", () => {
     expect(onSkip.mock.calls).toEqual([["silent"]]);
   });
 
-  it("strips JSON NO_REPLY action text but keeps media payload", () => {
-    const reply = expectNormalizedReply(
-      normalizeReplyPayload({
-        text: '{"action":"NO_REPLY"}',
-        mediaUrl: "https://example.com/img.png",
-      }),
-    );
-    expect(reply.text).toBe("");
-    expect(reply.mediaUrl).toBe("https://example.com/img.png");
-  });
+  it.each(['{"action":"NO_REPLY"}', "think\ninternal reasoning\nNO_REPLY."])(
+    "strips silent text %j but keeps media payload",
+    (text) => {
+      const reply = expectNormalizedReply(
+        normalizeReplyPayload({
+          text,
+          mediaUrl: "https://example.com/img.png",
+        }),
+      );
+      expect(reply.text).toBe("");
+      expect(reply.mediaUrl).toBe("https://example.com/img.png");
+    },
+  );
 });
 
 describe("typing controller", () => {

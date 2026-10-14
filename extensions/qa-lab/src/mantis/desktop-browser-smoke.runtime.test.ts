@@ -37,6 +37,67 @@ describe("mantis desktop browser smoke runtime", () => {
     await fs.rm(repoRoot, { force: true, recursive: true });
   });
 
+  async function describeCommandFailure(error: unknown) {
+    const session = await createMantisCrabboxSession(
+      {
+        commandRunner: async () => {
+          throw error;
+        },
+        crabboxBin: "/tmp/crabbox",
+      },
+      { env: {}, repoRoot },
+    );
+    await expect(session.acquire()).rejects.toBe(error);
+    return session.describe();
+  }
+
+  it("reports recovery candidates from the middle of verbose command failures", async () => {
+    const result = await defaultCommandRunner(
+      process.execPath,
+      [
+        "-e",
+        `
+      process.stdout.write('x'.repeat(40000));
+      process.stderr.write('x'.repeat(20000) + '\\nleased cbx_0123456789ab slug=fixture server=1 type=tiny ip=private\\nprovisioned lease=cbx_abcdef012345 server=2 type=tiny\\nleased cbx_0123456789ab slug=fixture\\n' + 'x'.repeat(20000));
+      process.exitCode = 1;
+    `,
+      ],
+      {},
+    ).catch((error: unknown) => error);
+    const description = await describeCommandFailure(result);
+    expect(description.recoveryLeaseCandidates).toEqual(["cbx_0123456789ab", "cbx_abcdef012345"]);
+    expect(JSON.stringify(description)).not.toContain("ip=private");
+  });
+
+  it("bounds recovery candidates and ignores non-acquisition lease text", async () => {
+    const error = await defaultCommandRunner(
+      process.execPath,
+      [
+        "-e",
+        `
+      process.stderr.write('requested cbx_aaaaaaaaaaaa\\nprovisioning lease=cbx_bbbbbbbbbbbb\\n');
+      for (let index = 0; index < 10; index++) {
+        const id = 'cbx_' + index.toString(16).padStart(12, '0');
+        process.stderr.write('leased ' + id + ' slug=fixture\\nleased ' + id + ' slug=fixture\\n');
+      }
+      process.exitCode = 1;
+    `,
+      ],
+      {},
+    ).catch((failure: unknown) => failure);
+    const description = await describeCommandFailure(error);
+    expect(description.recoveryLeaseCandidates).toEqual([
+      "cbx_000000000002",
+      "cbx_000000000003",
+      "cbx_000000000004",
+      "cbx_000000000005",
+      "cbx_000000000006",
+      "cbx_000000000007",
+      "cbx_000000000008",
+      "cbx_000000000009",
+    ]);
+  });
+
   it("stops before leasing when the managed binary cannot be prepared", async () => {
     const runner = vi.fn();
     vi.mocked(ensureManagedCrabboxBinary).mockRejectedValueOnce(new Error("release unavailable"));

@@ -7,6 +7,7 @@ import {
   assertStateDatabaseAccessAllowed,
   resolveGatewayStateOwnerPath,
 } from "../infra/gateway-state-owner.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteCommittedPublication,
@@ -51,10 +52,10 @@ it.each(["unchanged schema", "future schema"] as const)(
       path: path.join(tempDirs.make("state-first-write-schema-"), "state.sqlite"),
     };
     const marker = resolveGatewayStateOwnerPath(options.path);
-    let opened: DatabaseSync | undefined;
+    let opened: EngineConnection | undefined;
     let foreignHeld = false;
     let injected = false;
-    const callback = vi.fn(({ db }: { db: DatabaseSync }) => {
+    const callback = vi.fn(({ db }: { db: EngineConnection }) => {
       expect(foreignHeld).toBe(false);
       db.prepare(
         "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
@@ -141,7 +142,7 @@ it.each([
       });
       restoreRollback = () => rollback.mockRestore();
     });
-    const callback = vi.fn(({ db }: { db: DatabaseSync }) => {
+    const callback = vi.fn(({ db }: { db: EngineConnection }) => {
       db.prepare(
         "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
       ).run("no-replay", "must-roll-back", "{}", 1);
@@ -224,7 +225,7 @@ it("refuses a single-statement write before its effect when shared-state admissi
   const options = { path: path.join(tempDirs.make("state-single-refused-"), "state.sqlite") };
   const database = openOpenClawStateDatabase(options);
   const marker = publishForeignSchemaOwner(database.path);
-  const write = vi.fn(({ db }: { db: DatabaseSync }) =>
+  const write = vi.fn(({ db }: { db: EngineConnection }) =>
     db
       .prepare(
         "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
@@ -253,7 +254,7 @@ it("publishes a committed single statement without an envelope or replaying a fa
   using reader = new DatabaseSync(database.path, { readOnly: true });
   const events: string[] = [];
   const exec = vi.spyOn(database.db, "exec");
-  const write = vi.fn(({ db }: { db: DatabaseSync }) => {
+  const write = vi.fn(({ db }: { db: EngineConnection }) => {
     expect(db.isTransaction).toBe(false);
     expect(
       stageSqliteCommittedPublication(db, {

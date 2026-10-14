@@ -53,7 +53,7 @@ type CommandFailureDiagnostics = CommandResult & { recoveryLeaseCandidates: stri
 // Keep private command output out of Error serialization and routine Mantis reports.
 const commandFailureDiagnostics = new WeakMap<Error, CommandFailureDiagnostics>();
 
-export function getCommandFailureDiagnostics(error: unknown) {
+function getCommandFailureDiagnostics(error: unknown) {
   return error instanceof Error ? commandFailureDiagnostics.get(error) : undefined;
 }
 
