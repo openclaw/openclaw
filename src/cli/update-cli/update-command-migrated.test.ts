@@ -687,7 +687,6 @@ it.each([
                     runtimePin: originalRuntimePin!,
                   },
                   service: { serviceEnv: env },
-                  packageFingerprint: originalFingerprint,
                   packageIdentity: originalFingerprint,
                   // Deliberately uncertified; these fields must not grant recovery.
                   launcher: {
@@ -832,12 +831,6 @@ it.each([
     }
     const result = await work;
     expect(result.candidateStartAttempted).toBe(false);
-    expect(result.automaticTriage).toMatchObject({
-      kind: "update",
-      phase: "state-migrated-no-rollback",
-      installationRoot: root,
-      gateway: "preserve",
-    });
     expect(result.exitCode).not.toBe(0);
     expect(result.result).toMatchObject({
       runId: created.runId,

@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { expect, vi } from "vitest";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { getRuntimeConfig } from "../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import * as canonical from "../config/sessions/session-canonical-key.js";
@@ -9,14 +9,15 @@ import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-fac
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabases from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready, type Row } from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import * as rowInputs from "./session-utils-row.js";
@@ -44,7 +45,13 @@ export async function withAcceptedSuffix(
   } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    getRuntimeConfig();
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { utilityModel: "unit-test/small" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const keys = [
       "agent:main:accepted-a",
       options.acpMeta === undefined ? "agent:main:accepted-b" : "agent:main:acp:accepted-b",
@@ -102,12 +109,7 @@ export async function withAcceptedSuffix(
     }
     const releaseForeground = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { utilityModel: "unit-test/small" },
-        },
-      },
+      cfg,
       modelCatalog: [],
     });
     const paused = createDeferredCore();
@@ -205,6 +207,12 @@ export async function withAcceptedSuffix(
           { agentId: "main", sessionKey },
           { ...entries[index]!, updatedAt: 2, label: `accepted-${index}` },
         );
+        sessionChanges.emit({
+          agentId: "main",
+          storePath: previous.storeTarget.storePath,
+          sessionKey,
+          factsInvalidated: true,
+        });
       }
       reading = projection.ensureMaterialized();
       await Promise.race([

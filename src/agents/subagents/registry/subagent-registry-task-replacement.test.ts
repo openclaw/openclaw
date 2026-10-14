@@ -16,7 +16,7 @@ import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environme
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
-import { resolveWorkerTurnTranscriptTarget } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
@@ -44,8 +44,6 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   finalizeInterruptedSubagentRun,
   releaseSubagentRun,
@@ -61,6 +59,8 @@ it("does not recreate a source released before replacement admission", async () 
   await registerSubagentRun({
     runId: "released-source",
     childSessionKey: "agent:main:subagent:released-source",
+    childAgentId: "main",
+    sessionEntry: { sessionId: "released-source-session" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "original task",
@@ -113,6 +113,8 @@ it("hydrates a cold durable source before advancing its replacement generation",
   await registerSubagentRun({
     runId: "cold-original",
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: "cold-replacement-session" },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "restored replacement source",
@@ -173,6 +175,8 @@ it.each(["transaction", "commit"] as const)(
     await registerSubagentRun({
       runId: "lifecycle-predecessor",
       childSessionKey: "agent:main:subagent:lifecycle-replacement",
+      childAgentId: "main",
+      sessionEntry: { sessionId: "lifecycle-replacement-session" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "original task",
@@ -241,6 +245,8 @@ it.each(["end", "error"] as const)(
     await registerSubagentRun({
       runId: "timeout-predecessor",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Continue bounded work",
@@ -307,13 +313,14 @@ it.each(["end", "error"] as const)(
       expectedLifecycleRevision: entry.lifecycleRevision,
       expectedWriterRunId: entry.activeWriterRunId,
     };
+    await using sourceAuthority = await prepareWorkerTurnTranscriptSource(sessionTarget);
     const source = {
       sessionTarget,
       receiptAuthority: () => {
         if (!placementGate.validateWorkerTurn(turnClaim)) {
           throw new Error("worker turn was revoked");
         }
-        resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
+        sourceAuthority();
       },
     };
     const receiver = createWorkerLiveEventReceiver();
@@ -451,6 +458,8 @@ it.each(["successor", "source retirement"] as const)(
     await registerSubagentRun({
       runId: "rollback-predecessor",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: "rearm-rollback-session" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Resume interrupted work",
@@ -553,6 +562,8 @@ it("rearms native execution for an interrupted run's successor", async () => {
   await registerSubagentRun({
     runId: "interrupted-task-old",
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
     requesterSessionKey,
     requesterDisplayKey: "main",
     task: "Resume interrupted work",
@@ -643,11 +654,17 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
     agentId: "main",
     sessionKey: childSessionKey,
     defaultSessionId: "held-browser-cleanup-session",
+    lifecycleRevision: "held-browser-cleanup-revision",
   });
   try {
     await registerSubagentRun({
       runId: "browser-cleanup-predecessor",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: {
+        sessionId: "held-browser-cleanup-session",
+        lifecycleRevision: "held-browser-cleanup-revision",
+      },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "Finish browser work",
@@ -694,10 +711,8 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
 it.each([
   "committed",
   "caller retired",
-  "source replaced",
   "stamp admitted during wait",
   "caller retired during late stamp",
-  "source replaced during late stamp",
   "cleanup admitted during wait",
 ] as const)(
   "settles the predecessor's admitted writes before follow-up publication (%s)",
@@ -709,6 +724,8 @@ it.each([
     await registerSubagentRun({
       runId: "pending-ended-hook",
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: "pending-ended-hook-session" },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "original work",
@@ -734,9 +751,14 @@ it.each([
       ]),
     }));
     const original = subagentRuns.get("pending-ended-hook")!;
-    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
-      createHookRunner(createEmptyPluginRegistry()),
-    );
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "test",
+      hookName: "subagent_ended",
+      source: "test",
+      handler: async () => {},
+    });
+    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(createHookRunner(registry));
     const cleanup = createSubagentRegistryContextCleanup({
       isEndedHookOwnerCurrent: (entry) =>
         isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
@@ -747,7 +769,6 @@ it.each([
     const lateCleanup = transition === "cleanup admitted during wait";
     const lateWrite = lateStamp || lateCleanup;
     const callerRetired = transition.startsWith("caller retired");
-    const sourceReplaced = transition.startsWith("source replaced");
     const firstEntered = createDeferred();
     const releaseFirst = createDeferred();
     const secondAdmitted = createDeferred();
@@ -875,32 +896,16 @@ it.each([
       }
       if (callerRetired) {
         callerCurrent = false;
-      } else if (sourceReplaced) {
-        const replacement = structuredClone(subagentRuns.get(original.runId)!);
-        replacement.generation = original.generation! + 1;
-        replacement.task = "replacement owner";
-        // An independent writer changes the durable execution while the worker is held.
-        writeSubagentRunValuesInDatabase(
-          openOpenClawStateDatabase(),
-          [bindSubagentRunRecord(replacement)],
-          [],
-        );
       }
       release.resolve();
       await hook;
-      if (callerRetired || sourceReplaced) {
+      if (callerRetired) {
         expect(await followup).toMatchObject({
-          error: new Error(
-            callerRetired
-              ? "follow-up caller retired"
-              : "subagent follow-up source changed while its writes settled",
-          ),
+          error: new Error("follow-up caller retired"),
         });
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.has("after-ended-hook")).toBe(false);
-        expect(stored.get(original.runId)?.task).toBe(
-          sourceReplaced ? "replacement owner" : "original work",
-        );
+        expect(stored.get(original.runId)?.task).toBe("original work");
       } else {
         expect(await followup).toEqual({ value: true });
         const stored = loadSubagentRegistryFromSqlite();

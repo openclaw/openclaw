@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureRepositoryWorkspacePendingResultSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -27,7 +27,7 @@ type WorkspaceResultDatabase = Pick<
   "worker_session_placements" | "worker_workspace_pending_results" | "session_repository_workspaces"
 >;
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
 export function pendingResultFromRow(
   row: StateDatabase["worker_workspace_pending_results"],
@@ -62,7 +62,7 @@ export async function findPendingWorkerWorkspaceResult(
 }
 
 export function hasCurrentWorkspaceResultClaim(
-  db: DatabaseSync,
+  db: EngineConnection,
   claim: WorkerSessionTurnClaim,
 ): boolean {
   const placement = getRequired(db, claim.sessionId);
@@ -76,7 +76,7 @@ export function hasCurrentWorkspaceResultClaim(
   return Boolean(row && matchesWorkspaceResultClaim(placement, pendingResultFromRow(row), claim));
 }
 
-export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
+export function clearWorkerWorkspacePendingResult(db: EngineConnection, sessionId: string): void {
   executeSqliteQuerySync(
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
@@ -85,7 +85,7 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
 }
 
 export function readWorkerWorkspaceReconciliationFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionIds: readonly string[],
 ): {
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
@@ -129,7 +129,7 @@ export function readWorkerWorkspaceReconciliationFacts(
   };
 }
 
-export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): boolean {
+export function hasWorkerWorkspacePendingResult(db: EngineConnection, sessionId: string): boolean {
   return Boolean(
     executeSqliteQuerySync(
       db,
@@ -142,7 +142,7 @@ export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: str
 }
 
 export function hasAcceptedWorkerWorkspacePendingResult(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): boolean {
   return Boolean(
@@ -157,12 +157,24 @@ export function hasAcceptedWorkerWorkspacePendingResult(
   );
 }
 
+function publishPendingResult(
+  db: EngineConnection,
+  placement: WorkerSessionPlacementRecord,
+  row: StateDatabase["worker_workspace_pending_results"],
+): void {
+  publishPlacementWorkspaceResultState(db, placement.sessionId, {
+    placement,
+    pendingResult: pendingResultFromRow(row),
+  });
+  sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
+}
+
 export function insertWorkerWorkspacePendingResult(
-  db: DatabaseSync,
+  db: EngineConnection,
   claim: WorkerSessionTurnClaim,
   nowMs: number,
   gatewayInstanceId: string,
-): void {
+): WorkerSessionPlacementRecord {
   const placement = getRequired(db, claim.sessionId);
   const environment = resolvePlacementTurnEnvironment(placement, claim);
   if (!environment) {
@@ -190,12 +202,8 @@ export function insertWorkerWorkspacePendingResult(
       .returningAll(),
   );
   if (result.rows.length === 1) {
-    publishPlacementWorkspaceResultState(db, placement.sessionId, {
-      placement,
-      pendingResult: pendingResultFromRow(result.rows[0]!),
-    });
-    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
-    return;
+    publishPendingResult(db, placement, result.rows[0]!);
+    return placement;
   }
   const existing = executeSqliteQuerySync(
     db,
@@ -214,44 +222,10 @@ export function insertWorkerWorkspacePendingResult(
   ) {
     throw new Error(`Worker workspace result is already pending for ${claim.sessionId}`);
   }
+  return placement;
 }
 
-function markWorkerWorkspacePendingResultAccepted(
-  db: DatabaseSync,
-  claim: WorkerSessionTurnClaim,
-  nowMs: number,
-): void {
-  const placement = getRequired(db, claim.sessionId);
-  const environment = resolvePlacementTurnEnvironment(placement, claim);
-  if (!environment && !hasCurrentWorkspaceResultClaim(db, claim)) {
-    throw new Error(`Cannot accept stale worker workspace result for ${claim.sessionId}`);
-  }
-  const environmentId = environment?.environmentId ?? placement.environmentId!;
-  const ownerEpoch = environment?.ownerEpoch ?? placement.activeOwnerEpoch!;
-  const result = executeSqliteQuerySync(
-    db,
-    query(db)
-      .updateTable("worker_workspace_pending_results")
-      .set({ workspace_accepted_at_ms: nowMs })
-      .where("session_id", "=", claim.sessionId)
-      .where("environment_id", "=", environmentId)
-      .where("owner_epoch", "=", ownerEpoch)
-      .where("placement_generation", "=", claim.placementGeneration)
-      .where("claim_id", "=", claim.claimId)
-      .where("run_id", "=", claim.runId)
-      .returningAll(),
-  );
-  if (result.rows.length !== 1) {
-    throw new Error(`Cannot accept stale worker workspace result for ${claim.sessionId}`);
-  }
-  publishPlacementWorkspaceResultState(db, placement.sessionId, {
-    placement,
-    pendingResult: pendingResultFromRow(result.rows[0]!),
-  });
-  sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
-}
-
-const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
+const assertPendingClaim = (db: EngineConnection, claim: WorkerSessionTurnClaim) => {
   const placement = getRequired(db, claim.sessionId);
   const row = executeSqliteQuerySync(
     db,
@@ -267,11 +241,11 @@ const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => 
 };
 
 export function recordStagedWorkerWorkspaceResult(
-  db: DatabaseSync,
+  db: EngineConnection,
   claim: WorkerSessionTurnClaim,
   stagedResultRef: string,
   repositoryWorkspaceId?: string,
-): void {
+): WorkerSessionPlacementRecord {
   if (!/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(stagedResultRef)) {
     throw new Error("Worker workspace staged result reference is invalid");
   }
@@ -324,15 +298,12 @@ export function recordStagedWorkerWorkspaceResult(
   if (result.rows.length !== 1) {
     throw new Error(`Cannot stage stale worker workspace result for ${claim.sessionId}`);
   }
-  publishPlacementWorkspaceResultState(db, placement.sessionId, {
-    placement,
-    pendingResult: pendingResultFromRow(result.rows[0]!),
-  });
-  sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
+  publishPendingResult(db, placement, result.rows[0]!);
+  return placement;
 }
 
 export function listPendingWorkerWorkspaceResultsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId?: string,
 ): WorkerWorkspacePendingResult[] {
   let select = query(db).selectFrom("worker_workspace_pending_results").selectAll();
@@ -346,24 +317,39 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
   const { instanceId, now, write } = runtime;
 
   return {
-    markWorkspaceResultPending(claim: WorkerSessionTurnClaim): void {
-      write((db) => {
-        insertWorkerWorkspacePendingResult(db, claim, now(), instanceId);
-      });
+    markWorkspaceResultPending(claim: WorkerSessionTurnClaim) {
+      return write((db) => insertWorkerWorkspacePendingResult(db, claim, now(), instanceId));
     },
 
-    acceptWorkspaceResult(claim: WorkerSessionTurnClaim): void {
-      write((db) => {
-        assertPendingClaim(db, claim);
-        markWorkerWorkspacePendingResultAccepted(db, claim, now());
+    acceptWorkspaceResult(claim: WorkerSessionTurnClaim) {
+      return write((db) => {
+        const { placement } = assertPendingClaim(db, claim);
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_workspace_pending_results")
+            .set({ workspace_accepted_at_ms: now() })
+            .where("session_id", "=", claim.sessionId)
+            .where("environment_id", "=", placement.environmentId)
+            .where("owner_epoch", "=", placement.activeOwnerEpoch)
+            .where("placement_generation", "=", claim.placementGeneration)
+            .where("claim_id", "=", claim.claimId)
+            .where("run_id", "=", claim.runId)
+            .returningAll(),
+        );
+        if (result.rows.length !== 1) {
+          throw new Error(`Cannot accept stale worker workspace result for ${claim.sessionId}`);
+        }
+        publishPendingResult(db, placement, result.rows[0]!);
         // Keep the applied journal as the crash-safe marker until this fence is
         // accepted. Recovery then inspects reality instead of replaying a result.
         clearWorkerWorkspaceReconciliation(db, claim.sessionId);
+        return placement;
       });
     },
 
-    handoffWorkspaceResultRecovery(claim: WorkerSessionTurnClaim): void {
-      write((db) => {
+    handoffWorkspaceResultRecovery(claim: WorkerSessionTurnClaim) {
+      return write((db) => {
         const { row: pending, placement } = assertPendingClaim(db, claim);
         if (pending.gateway_instance_id !== instanceId) {
           throw new Error(
@@ -382,11 +368,8 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         if (result.rows.length !== 1) {
           throw new Error(`Worker workspace result changed for ${claim.sessionId}`);
         }
-        publishPlacementWorkspaceResultState(db, placement.sessionId, {
-          placement,
-          pendingResult: pendingResultFromRow(result.rows[0]!),
-        });
-        sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
+        publishPendingResult(db, placement, result.rows[0]!);
+        return placement;
       });
     },
 

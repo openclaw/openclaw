@@ -233,6 +233,7 @@ describe("config file observation", () => {
       const initialMode = setting === "1" ? "poll" : "auto";
       expect(h.sources[0]!.options).toMatchObject({
         mode: initialMode,
+        intervalMs: 300_000,
         pollIntervalMs: 250,
       });
       const fail = () => {

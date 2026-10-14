@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity, type ExactFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -98,7 +98,7 @@ async function readMemoryHostEventExportOwnership(
   | {
       kind: "owned";
       content: string | undefined;
-      identity: FileIdentityStat;
+      identity: ExactFileIdentity;
       ownerContent: string;
       needsFinalize: boolean;
     }
@@ -121,7 +121,7 @@ async function readMemoryHostEventExportOwnership(
   }
   if (
     !isRecord(parsed) ||
-    parsed.schemaVersion !== 3 ||
+    (parsed.schemaVersion !== 3 && parsed.schemaVersion !== 4) ||
     parsed.kind !== "openclaw-memory-host-events-export" ||
     parsed.stateHash !== owner.stateHash ||
     parsed.workspaceHash !== owner.workspaceHash ||
@@ -132,9 +132,9 @@ async function readMemoryHostEventExportOwnership(
     (parsed.fileDev === undefined) !== (parsed.fileIno === undefined) ||
     (parsed.fileDev !== undefined &&
       (typeof parsed.fileDev !== "string" ||
-        !/^\d+$/u.test(parsed.fileDev) ||
+        !/^-?\d+$/u.test(parsed.fileDev) ||
         typeof parsed.fileIno !== "string" ||
-        !/^\d+$/u.test(parsed.fileIno)))
+        !/^-?\d+$/u.test(parsed.fileIno)))
   ) {
     return { kind: "foreign" };
   }
@@ -142,6 +142,17 @@ async function readMemoryHostEventExportOwnership(
     typeof parsed.fileDev === "string" && typeof parsed.fileIno === "string"
       ? { dev: BigInt(parsed.fileDev), ino: BigInt(parsed.fileIno) }
       : undefined;
+  // Only v3 came from String(number stats); reject spellings that writer could
+  // never produce. Its rounded-ID blind spot lasts until the next exact marker.
+  const legacyIdentity = parsed.schemaVersion === 3;
+  if (
+    legacyIdentity &&
+    storedIdentity &&
+    (String(Number(storedIdentity.dev)) !== parsed.fileDev ||
+      String(Number(storedIdentity.ino)) !== parsed.fileIno)
+  ) {
+    return { kind: "foreign" };
+  }
   let openedExport: Awaited<ReturnType<typeof workspaceRoot.open>> | undefined;
   try {
     openedExport = await workspaceRoot.open(owner.relativePath);
@@ -158,12 +169,14 @@ async function readMemoryHostEventExportOwnership(
     return { kind: "orphan", ownerContent: content };
   }
   let exportContent: string | undefined;
-  const exportIdentity: FileIdentityStat = {
-    dev: openedExport.stat.dev,
-    ino: openedExport.stat.ino,
-  };
+  const exportIdentity = openedExport.exactIdentity;
+  // Numeric stats exposed unsigned IDs; bigint stats expose signed 64-bit IDs.
   const identityOwned =
-    storedIdentity !== undefined && sameFileIdentity(storedIdentity, exportIdentity);
+    storedIdentity !== undefined &&
+    (legacyIdentity
+      ? Number(BigInt.asUintN(64, exportIdentity.dev)) === Number(storedIdentity.dev) &&
+        Number(BigInt.asUintN(64, exportIdentity.ino)) === Number(storedIdentity.ino)
+      : sameFileIdentity(storedIdentity, exportIdentity));
   {
     await using exportOwner = openedExport;
     if (openedExport.stat.size > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
@@ -184,6 +197,7 @@ async function readMemoryHostEventExportOwnership(
         identity: exportIdentity,
         ownerContent: content,
         needsFinalize:
+          legacyIdentity ||
           exportContent === undefined ||
           exportSha256 !== currentSha256 ||
           pendingSha256 !== undefined,
@@ -248,7 +262,7 @@ async function materializeMemoryHostEventExport(params: {
       }
       const content = storedEvents.length > 0 ? serializeMemoryHostEventExport(storedEvents) : "";
       const contentSha256 = sha256Hex(content);
-      let publishedIdentity: FileIdentityStat | undefined;
+      let publishedIdentity: ExactFileIdentity | undefined;
       if (ownership.kind === "missing") {
         const existing = await readMemoryHostEventArtifactText(workspaceRoot, owner.relativePath);
         if (existing !== undefined) {

@@ -24,6 +24,9 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { deriveMeetingTranscriptSessionColumns } from "../transcripts/store-columns.js";
+import { meetingTranscriptDb } from "../transcripts/store-sqlite.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { snapshotFiles } from "./state-migrations.caller-mode.test-helpers.js";
 import {
   autoMigrateLegacyState,
@@ -196,7 +199,7 @@ describe("legacy state migration caller storage", () => {
       malformed: true,
     },
     {
-      name: "explicit tilde legacy directory",
+      name: "explicit tilde legacy directory in a named profile",
       agentId: "worker",
       custom: true,
       override: "tilde",
@@ -208,7 +211,11 @@ describe("legacy state migration caller storage", () => {
     async (testCase) => {
       const { malformed } = testCase;
       await withOpenClawTestState(
-        { label: "install-agent-dir", layout: "split", agentEnv: "clear" },
+        {
+          label: "install-agent-dir",
+          layout: testCase.override === "tilde" ? "split" : "home",
+          agentEnv: "clear",
+        },
         async (state) => {
           const legacyDir = path.join(state.home, ".openclaw", "agent");
           const configuredDir = testCase.custom
@@ -252,7 +259,7 @@ describe("legacy state migration caller storage", () => {
           await withEnvAsync(
             {
               OPENCLAW_AGENT_DIR: testCase.override === "tilde" ? "~/.openclaw/agent" : overrideDir,
-              OPENCLAW_HOME: state.path("alternate-home"),
+              OPENCLAW_PROFILE: testCase.override === "tilde" ? "isolated" : undefined,
               OPENCLAW_OFFLINE: "1",
               SDK_FIXTURE_AGENT_DIR: undefined,
             },
@@ -329,20 +336,20 @@ describe("legacy state migration caller storage", () => {
   );
 
   it.each(["before detection", "after detection"])(
-    "keeps rehearsal SDK sources confined when an ancestor symlink escapes %s",
+    "keeps rehearsal state-root sources confined when an ancestor symlink escapes %s",
     async (timing) => {
       const fixture = await makeFixture();
-      const externalParent = path.join(fixture.homeDir, ".openclaw");
-      const externalBinary = path.join(externalParent, "agent/bin/fd");
+      const externalParent = path.join(fixture.homeDir, ".openclaw", "agent");
+      const externalBinary = path.join(externalParent, "bin/fd");
       fs.mkdirSync(path.dirname(externalBinary), { recursive: true });
       fs.writeFileSync(externalBinary, "uncopied SDK binary");
-      const copiedParent = path.join(fixture.stateDir, ".openclaw");
+      const copiedParent = path.join(fixture.stateDir, "agent");
       const symlinkKind = process.platform === "win32" ? "junction" : "dir";
       if (timing === "before detection") {
         fs.symlinkSync(externalParent, copiedParent, symlinkKind);
       } else {
-        fs.mkdirSync(path.join(copiedParent, "agent/bin"), { recursive: true });
-        fs.writeFileSync(path.join(copiedParent, "agent/bin/fd"), "copied SDK binary");
+        fs.mkdirSync(path.join(copiedParent, "bin"), { recursive: true });
+        fs.writeFileSync(path.join(copiedParent, "bin/fd"), "copied SDK binary");
       }
       const env = {
         ...fixture.env,
@@ -428,24 +435,24 @@ describe("legacy state migration caller storage", () => {
       stateDatabase.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
       stateDatabase.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       const historicalSlug = `meeting-${"x".repeat(2200)}`;
-      stateDatabase
-        .prepare(
-          `INSERT INTO meeting_transcript_sessions
-             (session_id, started_at, selector, export_key, session_slug, provider_id,
-              source_json, created_at_ms, updated_at_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          "wal-meeting",
-          "2026-09-03T00:00:00.000Z",
-          `2026-09-03/${historicalSlug}`,
-          `2026-09-03/${historicalSlug}`,
-          historicalSlug,
-          "manual-transcript",
-          JSON.stringify({ providerId: "manual-transcript", channelId: "room" }),
-          1,
-          1,
-        );
+      const sourceJson = JSON.stringify({ providerId: "manual-transcript", channelId: "room" });
+      executeSqliteQuerySync(
+        stateDatabase,
+        meetingTranscriptDb(stateDatabase)
+          .insertInto("meeting_transcript_sessions")
+          .values({
+            session_id: "wal-meeting",
+            started_at: "2026-09-03T00:00:00.000Z",
+            selector: `2026-09-03/${historicalSlug}`,
+            export_key: `2026-09-03/${historicalSlug}`,
+            session_slug: historicalSlug,
+            provider_id: "manual-transcript",
+            source_json: sourceJson,
+            ...deriveMeetingTranscriptSessionColumns(sourceJson, null),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          }),
+      );
       expect(fs.existsSync(`${agentDatabasePath}-wal`)).toBe(true);
       expect(fs.existsSync(`${stateDatabasePath}-wal`)).toBe(true);
 

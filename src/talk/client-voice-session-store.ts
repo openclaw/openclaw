@@ -40,7 +40,7 @@ export type ClientVoiceSessionRecord = {
   transcriptFailureKeys: string[];
   /** Declared at create when the client speaks the transcript protocol (sent sessionKey). */
   transcriptCapable?: boolean;
-  /** Set once a finalized user utterance persisted; gates spoken confirmation capability. */
+  /** Set once a finalized user utterance persisted; records observed transcript capability. */
   hasUserTranscript?: boolean;
 };
 
@@ -156,7 +156,7 @@ type VoiceSessionFacts = Readonly<
   >
 >;
 /** Synchronous tool policy reads the current record without a separate freshness probe. */
-export function readVoiceSessionFacts(
+function readVoiceSessionFacts(
   agentId: string,
   voiceSessionId: string,
   options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,

@@ -1,3 +1,4 @@
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
@@ -114,6 +115,7 @@ async function createFixture(
     cfg.gateway = gateway;
   };
   await activatePolicy({});
+  setRuntimeConfigSnapshot(cfg);
   let live = true;
   let gateway = createCommandOwnerTestGateway(cfg);
   const owner = {

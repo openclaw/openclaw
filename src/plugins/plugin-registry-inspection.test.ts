@@ -2,10 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   refreshPersistedInstalledPluginIndex,
@@ -29,9 +27,9 @@ beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
+  await closeStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -89,6 +87,57 @@ function createEmptyIndex(stateDir: string): InstalledPluginIndex {
 }
 
 describe("plugin registry inspection", () => {
+  it.each([false, true])(
+    "revalidates a configured-path warning after cold inspection (removed: %s)",
+    async (removed) => {
+      const stateDir = makeTempDir();
+      const missingPath = path.join(stateDir, "missing-plugin");
+      const env = {
+        ...hermeticEnv(),
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      };
+      const configured = { plugins: { load: { paths: [missingPath] } } };
+      const refreshed = await refreshPluginRegistry({
+        reason: "manual",
+        stateDir,
+        config: configured,
+        env,
+      });
+      const warning = {
+        code: "configured-plugin-path-unavailable",
+        source: missingPath,
+      };
+      expect(refreshed.diagnostics).toContainEqual(expect.objectContaining(warning));
+      expect(
+        refreshed.diagnostics.find((diagnostic) => diagnostic.source === missingPath)?.pluginId,
+      ).toBeUndefined();
+
+      const config = removed ? {} : configured;
+      for (let inspectionNumber = 0; inspectionNumber < 2; inspectionNumber += 1) {
+        await closeOpenClawStateDatabaseAsync();
+        clearPluginMetadataLifecycleCaches();
+        const inspection = await inspectPluginRegistry({ stateDir, config, env });
+        // Inspection changes the returned view, not the persisted refresh ledger.
+        expect(inspection.persisted?.diagnostics).toContainEqual(expect.objectContaining(warning));
+        expect
+          .soft(
+            inspection.current.diagnostics.some(
+              (diagnostic) => diagnostic.code === warning.code && diagnostic.source === missingPath,
+            ),
+          )
+          .toBe(!removed);
+      }
+
+      const repaired = await refreshPluginRegistry({ reason: "manual", stateDir, config, env });
+      expect(
+        repaired.diagnostics.some(
+          (diagnostic) => diagnostic.code === warning.code && diagnostic.source === missingPath,
+        ),
+      ).toBe(!removed);
+    },
+  );
+
   it("derives without persisted install records when persisted reads are disabled", async () => {
     const stateDir = makeTempDir();
     const pluginDir = makeTempDir();

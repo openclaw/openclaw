@@ -403,6 +403,9 @@ export function normalizeConfigUiHints(
     if ("presentation" in hint && hint.presentation !== "phone-number") {
       delete hint.presentation;
     }
+    if ("multiline" in hint && typeof hint.multiline !== "boolean") {
+      delete hint.multiline;
+    }
     normalized[hintPath] = hint as PluginConfigUiHint;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;

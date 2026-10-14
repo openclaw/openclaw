@@ -34,6 +34,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7",
+  "google/gemini-4-argon",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.5-flash",
   "cohere/command-a-plus-05-2026",

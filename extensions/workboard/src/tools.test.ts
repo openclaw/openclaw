@@ -354,6 +354,39 @@ describe("workboard tools", () => {
     );
   });
 
+  it("keeps the read card and context together and reads committed edits on the next call", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Before edit", notes: "Original instructions" });
+    const read = expectDefined(
+      createWorkboardTools({ store }).find((tool) => tool.name === "workboard_read"),
+      "Workboard read",
+    );
+    const lookup = stores.cards.lookup.bind(stores.cards);
+    using concurrentEdit = vi.spyOn(stores.cards, "lookup");
+    concurrentEdit.mockImplementationOnce(async (id) => {
+      const captured = await lookup(id);
+      await store.update(card.id, { title: "After edit", notes: "Revised instructions" });
+      return captured;
+    });
+
+    const captured = readPayload(await read.execute("captured", { id: card.id }));
+    expect(captured.card).toMatchObject({
+      title: "Before edit",
+      notes: "Original instructions",
+    });
+    expect(captured.workerContext).toContain("Title: Before edit");
+    expect(captured.workerContext).toContain("Original instructions");
+    expect(captured.workerContext).not.toContain("Revised instructions");
+
+    const updated = readPayload(await read.execute("updated", { id: card.id }));
+    expect(updated.card).toMatchObject({ title: "After edit", notes: "Revised instructions" });
+    expect(updated.workerContext).toContain("Title: After edit");
+    expect(updated.workerContext).toContain("Revised instructions");
+    await expect(read.execute("missing", { id: "missing-card" })).rejects.toThrow(
+      "card not found: missing-card",
+    );
+  });
+
   it("keeps blocked-card mutations out of the host tool failure contract", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const keyed = stores.cards;

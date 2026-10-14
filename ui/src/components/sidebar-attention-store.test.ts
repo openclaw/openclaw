@@ -6,6 +6,7 @@ import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/in
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { outboxStorageScope } from "../lib/chat/outbox-payload-store.runtime.ts";
@@ -66,6 +67,76 @@ describe("sidebar attention source publication", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("retains cron inventory without reviving stale auth when returning to an agent", async () => {
+    vi.useFakeTimers();
+    const inventory = deferred<CompactCronPage>();
+    const oldAuth = deferred<ModelAuthStatusResult>();
+    const writerAuth = deferred<ModelAuthStatusResult>();
+    const currentAuth = deferred<ModelAuthStatusResult>();
+    let mainAuthCalls = 0;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        return inventory.promise;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1 };
+      }
+      return isRecord(params) && params.agentId === "main"
+        ? (++mainAuthCalls === 1 ? oldAuth : currentAuth).promise
+        : writerAuth.promise;
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    let selectionListener = () => {};
+    const selection = {
+      state: { selectedId: "main", scopeId: null },
+      subscribe: (listener: () => void) => {
+        selectionListener = listener;
+        return () => {};
+      },
+    } as unknown as ApplicationContext["agentSelection"];
+    store = createStore(harness.gateway, undefined, selection);
+    store.activate(SidebarAttentionStoreController);
+    try {
+      selection.state.selectedId = "writer";
+      selectionListener();
+      selectionListener();
+      harness.update({});
+      await vi.advanceTimersByTimeAsync(0);
+
+      invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
+      harness.emitEvent("chat.metadata.changed", { authChanged: true });
+      selection.state.selectedId = "main";
+      selectionListener();
+      inventory.resolve(cronPage("incident"));
+      currentAuth.resolve({ ts: 2, providers: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.entries).toMatchObject([{ label: "incident" }]);
+      expect(mainAuthCalls).toBe(2);
+
+      oldAuth.resolve({
+        ts: 1,
+        providers: [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.entries).toMatchObject([{ label: "incident" }]);
+      for (const method of ["cron.list", "cron.status"]) {
+        expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+      }
+      expect(request.mock.calls.filter(([name]) => name === "models.authStatus")).toEqual([
+        ["models.authStatus", { agentId: "main" }],
+        ["models.authStatus", { agentId: "writer" }],
+        ["models.authStatus", { agentId: "main" }],
+      ]);
+    } finally {
+      store.dispose();
+      inventory.resolve(cronPage("incident"));
+      for (const pending of [oldAuth, writerAuth, currentAuth]) {
+        pending.resolve({ ts: 2, providers: [] });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+    }
   });
 
   it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
@@ -889,6 +960,7 @@ describe("sidebar attention source publication", () => {
     ).toBe(true);
     store = createStore(harness.gateway);
     store.activate(SidebarAttentionStoreController);
+    await import("../pages/chat/chat-outbox-owner.ts");
     await waitForFast(() =>
       expect(store?.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]),
     );

@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -148,7 +148,7 @@ function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): str
 
 function resolveBrowserFetchOperatorHint(url: string): string {
   if (isAbsoluteHttp(url)) {
-    return "If this is a sandboxed session, ensure the sandbox browser is running.";
+    return "If this is a sandboxed session, check that the sandbox browser is running.";
   }
   try {
     const cfg = getRuntimeConfig();

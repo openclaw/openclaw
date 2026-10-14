@@ -85,7 +85,7 @@ async function createRegisteredResume() {
   const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>();
   const runtime = createPluginRuntimeMock({
     config: { current: () => config },
-    agent: { session: { getSessionEntry: () => sessionEntry } },
+    agent: { session: { getSessionEntryAsync: async () => sessionEntry } },
     nodes: { invoke },
   });
   const logger = { info() {}, warn() {}, error() {}, debug() {} };

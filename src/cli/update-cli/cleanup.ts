@@ -6,7 +6,8 @@ import {
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
 import { readSourceConfigBestEffort } from "../../config/io.js";
-import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime, ExitError, writeRuntimeJson } from "../../runtime.js";
+import { updateMaintenanceError } from "./update-maintenance-error.js";
 
 function renderCleanup(report: RecoveryCleanupReport): void {
   defaultRuntime.log(`Recovery cleanup: ${report.stateDir}`);
@@ -18,6 +19,16 @@ function renderCleanup(report: RecoveryCleanupReport): void {
   defaultRuntime.log(
     `Candidates: ${report.totals.candidateBytes} bytes; verification required: ${report.totals.verificationRequiredBytes}; protected: ${report.totals.protectedBytes}; blocked: ${report.totals.blockedBytes}.`,
   );
+  const captures = report.artifacts.filter((item) => item.kind === "update-capture");
+  if (captures.length > 0) {
+    const sum = (outcome?: string) =>
+      captures
+        .filter((item) => outcome === undefined || item.outcome === outcome)
+        .reduce((bytes, item) => bytes + item.bytes, 0);
+    defaultRuntime.log(
+      `Update captures: ${captures.length} (${sum()} bytes); candidates: ${sum("candidate")} bytes; protected: ${sum("protected")} bytes.`,
+    );
+  }
   defaultRuntime.log(
     "Retiring originals permanently loses rollback, including pre-repair branches and metadata. Logical bytes are not a promise of physical space reclaimed.",
   );
@@ -81,10 +92,15 @@ export async function updateCleanupCommand(options: {
       defaultRuntime.exit(1);
     }
   } catch (error) {
+    // Refusal and blocked outcomes were already rendered above.
+    if (error instanceof ExitError) {
+      throw error;
+    }
+    const message = String(updateMaintenanceError(error));
     if (options.json) {
-      writeRuntimeJson(defaultRuntime, { ...report, status: "blocked", error: String(error) });
+      writeRuntimeJson(defaultRuntime, { ...report, status: "blocked", error: message });
     } else {
-      defaultRuntime.error(String(error));
+      defaultRuntime.error(message);
     }
     defaultRuntime.exit(1);
   }

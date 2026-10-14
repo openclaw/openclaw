@@ -1,10 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
-  collectSqliteSchemaIssues,
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   getStateRuntimeSchemaAdmission,
@@ -27,11 +27,6 @@ import {
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import {
-  isOpenClawStateStartupRepairableSchemaIssue,
-  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-} from "./openclaw-state-schema-compatibility.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 /** Metadata is validated with the physical database's first runtime admission. */
 function assertExistingOpenClawStateRuntimeMetadata(
@@ -76,18 +71,29 @@ function assertExistingOpenClawStateRuntimeMetadata(
   return version;
 }
 
-/** Prove the existing runtime contract without certifying this release's repairs. */
+/** Validate an existing runtime schema without applying repairs. */
 export function assertExistingOpenClawStateRuntimeSchema(
   database: DatabaseSync,
   pathname: string,
   integrity?: OpenClawStateIntegrityAdmission,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
-  if (getStateRuntimeSchemaAdmission(database)) {
+  const admitted = getStateRuntimeSchemaAdmission(database)
+    ? getAdmittedSqliteSchemaFacts(database)
+    : undefined;
+  if (admitted) {
+    // Every warm handle must retain revocation custody for the integrity proof it borrows.
+    assertOpenClawStateRuntimeIntegrity(
+      database,
+      pathname,
+      admitted,
+      integrity,
+      integrityPolicy,
+    )?.();
     return;
   }
   let publishIntegrity: (() => void) | undefined;
-  const startupReady = runSqliteDeferredTransactionSync(
+  runSqliteDeferredTransactionSync(
     database,
     () => {
       const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname);
@@ -107,15 +113,9 @@ export function assertExistingOpenClawStateRuntimeSchema(
       const readTable = createSqliteTableContractReader(database);
       assertCurrentStateRuntimeSchema(database, pathname, readTable);
       assertNoLegacyStateRuntimeRepair(database, pathname);
-      return !collectSqliteSchemaIssues(
-        database,
-        OPENCLAW_STATE_SCHEMA_SQL,
-        STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-        readTable,
-      ).some(isOpenClawStateStartupRepairableSchemaIssue);
     },
     { operationLabel: "state.admission.existing-schema" },
   );
   publishIntegrity?.();
-  publishStateRuntimeSchemaAdmission(database, startupReady);
+  publishStateRuntimeSchemaAdmission(database, true);
 }

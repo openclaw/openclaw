@@ -5,6 +5,7 @@ import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../reply-completion.js";
+import { readToolEffectReceipt } from "../../tool-effect-receipt.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
@@ -33,6 +34,8 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const TEXT_TOOL_CALL_RETRY_INSTRUCTION =
+  "You wrote a tool call as text, so nothing ran for that call. Continue from the current state and call the tool natively through the tool interface. Do not print tool-call JSON or markup as your answer.";
 const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION =
   "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need through the tool interface instead of writing the call as text, or produce the visible answer now. Do not restart from scratch.";
 const REJECTED_TOOL_CALL_RETRY_INSTRUCTION =
@@ -112,6 +115,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   attempt: IncompleteTurnAttempt;
   /** Silent classification can tolerate completed effects, never unfinished work or replay. */
   tolerateSideEffects?: boolean;
+  consumedToolFailure?: boolean;
 }): boolean {
   return Boolean(
     params.aborted ||
@@ -120,7 +124,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
+    (params.attempt.lastToolError && !params.consumedToolFailure) ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
     params.attempt.itemLifecycle.activeCount > 0 ||
     params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount ||
@@ -311,6 +315,7 @@ export function resolveSettledToolTerminalContinuationInstruction(
   const {
     assistant: toolBatchAssistant,
     allToolsProvenSettled,
+    parkedCodeModeRun,
     failedToolNames,
     hasUnsettledToolError,
     intentionalTermination,
@@ -347,6 +352,7 @@ export function resolveSettledToolTerminalContinuationInstruction(
       ? !allToolsProvenSettled
       : !emptyStopAfterSettledTools) ||
     intentionalTermination ||
+    parkedCodeModeRun ||
     hasUnsettledToolError ||
     hasAsyncActivity(attempt.toolMetas) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
@@ -384,10 +390,41 @@ export function resolveEmptyResponseRetryInstruction(
     (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
       isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
     readSettledToolCalls(assistant).length === 0;
-  // Settled earlier effects are tolerated only for a call that never ran;
-  // unfinished, async or failed work still blocks the continuation.
-  if (shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: rejectedBeforeDispatch })) {
+  let consumedToolFailure = false;
+  if (rejectedBeforeDispatch && params.attempt.lastToolError?.executionStarted === false) {
+    const messages = params.attempt.messagesSnapshot;
+    const failureIndex = messages.findLastIndex(
+      (message) => message.role === "toolResult" && message.isError,
+    );
+    const failure = messages[failureIndex];
+    const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
+    // A later refusal cannot erase an earlier failure that may have caused effects.
+    consumedToolFailure =
+      failureIndex > latestUserIndex &&
+      failureIndex < messages.indexOf(assistant) &&
+      failure?.role === "toolResult" &&
+      failure.toolName === params.attempt.lastToolError.toolName &&
+      messages
+        .slice(latestUserIndex + 1, failureIndex + 1)
+        .every(
+          (message) =>
+            message.role !== "toolResult" ||
+            !message.isError ||
+            readToolEffectReceipt(message)?.state === "not_started",
+        );
+  }
+  if (
+    shouldSkipNonVisibleTurnRetry({
+      ...params,
+      tolerateSideEffects: rejectedBeforeDispatch,
+      consumedToolFailure,
+    })
+  ) {
     return null;
+  }
+
+  if (params.attempt.textToolCallAttempt) {
+    return TEXT_TOOL_CALL_RETRY_INSTRUCTION;
   }
 
   // A tool-use stop with no structured call executed nothing; its text is not an answer.

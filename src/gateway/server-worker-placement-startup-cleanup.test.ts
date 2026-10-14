@@ -2,7 +2,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDiskSpace: vi.fn(),
@@ -44,6 +47,85 @@ async function preservedSessionKeys() {
 describe("worker placement startup cleanup ownership", () => {
   workerEnvironmentSupport.setupWorkerEnvironmentServiceSuite();
 
+  it("aborts in-flight inspection before joining placement reconciliation and retains producer custody", async () => {
+    await workerEnvironmentSupport.seedReadyNodeDesktop("worker-close-inspection");
+    const inspectionStarted = createDeferredCore();
+    const producerSettled = createDeferredCore();
+    const time = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(time.clock);
+    let holdInspection = false;
+    let inspectionSignal: AbortSignal | undefined;
+    const environments = workerEnvironmentSupport.createService(
+      workerEnvironmentSupport.createProvider({
+        inspect: async ({ signal }) => {
+          if (holdInspection) {
+            inspectionSignal = signal;
+            inspectionStarted.resolve();
+            await producerSettled.promise;
+          }
+          return { status: "active" };
+        },
+      }),
+      { scheduler },
+    );
+    const placements = createWorkerSessionPlacementStore({
+      database: workerEnvironmentSupport.testState.stateDb,
+    });
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
+    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+      read: vi.fn(),
+      version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
+      sweep: vi.fn().mockResolvedValue(undefined),
+    });
+    const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
+      scheduler,
+      getCommittedRuntimeConfig: getRuntimeConfig,
+      cancelSessionWork: vi.fn(async () => {}),
+      placements,
+      environments,
+      gatewayNamespace: "gateway-test",
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    const sidecar = await runtime.startRuntime({
+      isClosePreludeStarted: () => false,
+      registerSidecar: vi.fn(),
+      unregisterSidecar: vi.fn(),
+    });
+    if (!sidecar) {
+      throw new Error("worker placement runtime did not start");
+    }
+    let stopping: Promise<void> | undefined;
+    let stopped = false;
+    try {
+      holdInspection = true;
+      void time.advanceBy(60_000);
+      await inspectionStarted.promise;
+      stopping = sidecar.stop().then(() => {
+        stopped = true;
+      });
+      expect(inspectionSignal?.aborted).toBe(true);
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      expect(workerEnvironmentSupport.testState.store.get("worker-close-inspection")).toMatchObject(
+        {
+          state: "ready",
+          leaseId: "lease:worker-close-inspection",
+        },
+      );
+      producerSettled.resolve();
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      producerSettled.resolve();
+      await (stopping ?? sidecar?.stop());
+      await scheduler.stop();
+    }
+  });
+
   it("defers workspace cleanup for 50 failed placements until the first background sweep", async () => {
     const placements = createWorkerSessionPlacementStore({
       database: workerEnvironmentSupport.testState.stateDb,
@@ -69,7 +151,7 @@ describe("worker placement startup cleanup ownership", () => {
         recoveryError: "worker admission deadline exceeded",
       });
     }
-    const before = placements.list();
+    const before = await placements.listAsync();
     const environments = workerEnvironmentSupport.createService(
       workerEnvironmentSupport.createProvider(),
     );
@@ -83,13 +165,16 @@ describe("worker placement startup cleanup ownership", () => {
         path: path.join(workerEnvironmentSupport.testState.root, sessionId),
       };
     });
-    const recovery = createPlacementRecoveryActions({
-      placements,
-      environments,
-      failure: createPlacementFailureActions({ placements, environments }),
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace }),
-    });
+    const recovery = createPlacementRecoveryActions(
+      {
+        placements,
+        environments,
+        failure: createPlacementFailureActions({ placements, environments }),
+        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+        ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace }),
+      },
+      before,
+    );
     const starting = recovery.reconcile("startup");
     let sweeping: Promise<void> | undefined;
     try {
@@ -111,7 +196,7 @@ describe("worker placement startup cleanup ownership", () => {
       expect(resolveWorkspace).toHaveBeenCalledTimes(50);
       await recovery.reconcileActive();
       expect(resolveWorkspace).toHaveBeenCalledTimes(50);
-      expect(placements.list()).toEqual(before);
+      expect(await placements.listAsync()).toEqual(before);
     } finally {
       releaseCleanup.resolve();
       await starting;
@@ -182,7 +267,8 @@ describe("worker placement startup cleanup ownership", () => {
         workerEnvironmentSupport.testState.stateDb.db
           .prepare("UPDATE worker_session_placements SET environment_id = ? WHERE session_id = ?")
           .run(environmentId, failed.sessionId);
-        failed = placements.get(failed.sessionId);
+        // This crash-era fixture bypasses receipts, so reload the durable row explicitly.
+        failed = (await placements.getWithMoveAsync(failed.sessionId)).placement;
       } else {
         const starting = await seedStartingPlacement(placements, environmentId, "remote-exec");
         failed = await placements.fail({
@@ -196,7 +282,8 @@ describe("worker placement startup cleanup ownership", () => {
             "UPDATE worker_session_placements SET active_owner_epoch = 1 WHERE session_id = ?",
           )
           .run(failed.sessionId);
-        failed = placements.get(failed.sessionId);
+        // This crash-era fixture bypasses receipts, so reload the durable row explicitly.
+        failed = (await placements.getWithMoveAsync(failed.sessionId)).placement;
       }
       expect(failed).toMatchObject({
         state: "failed",
@@ -212,9 +299,12 @@ describe("worker placement startup cleanup ownership", () => {
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
         version: vi.fn(() => 0),
+        invalidate: vi.fn(),
+        nextSweepAtMs: () => Infinity,
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: await placements.listAsync(),
         scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
@@ -317,9 +407,12 @@ describe("worker placement startup cleanup ownership", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: await placements.listAsync(),
       scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),

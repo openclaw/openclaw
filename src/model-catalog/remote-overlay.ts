@@ -21,7 +21,7 @@ import {
   isRemoteCatalogSourceActive,
   isRemoteModelCatalogRefreshEnabled,
 } from "./remote-config.js";
-import { readRemoteModelCatalog, readRemoteModelCatalogAsync } from "./remote-store.js";
+import { readRemoteModelCatalogAsync } from "./remote-store.js";
 
 export type RemoteCatalogPublicationResult = "published" | "unchanged" | "superseded";
 
@@ -55,7 +55,7 @@ function isCompatible(bundle: RemoteModelCatalogWireBundle, bundledGeneratedAt: 
 }
 
 function selectCompatibleRemoteModelCatalog(
-  stored: ReturnType<typeof readRemoteModelCatalog>,
+  stored: Awaited<ReturnType<typeof readRemoteModelCatalogAsync>>,
   bundledGeneratedAt: number,
 ): ActiveRemoteModelCatalog | null {
   if (!stored) {
@@ -92,22 +92,9 @@ function publishRemoteModelCatalogStartupSnapshot(
   return snapshot;
 }
 
+/** Read the already-published startup pair without loading persistent state. */
 export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
-  const inherited = inheritedRemoteModelCatalogStartupSnapshot();
-  if (inherited !== undefined) {
-    return inherited.catalog;
-  }
-  let snapshot: ActiveRemoteModelCatalog | null;
-  try {
-    const bundledGeneratedAt = bundledCatalogGeneratedAt();
-    snapshot =
-      bundledGeneratedAt === undefined
-        ? null
-        : selectCompatibleRemoteModelCatalog(readRemoteModelCatalog(), bundledGeneratedAt);
-  } catch {
-    snapshot = null;
-  }
-  return publishRemoteModelCatalogStartupSnapshot(snapshot);
+  return inheritedRemoteModelCatalogStartupSnapshot()?.catalog ?? null;
 }
 
 /** Prepare the same first-winner startup pair without host-thread SQLite reads. */
@@ -194,18 +181,13 @@ export function publishRemoteModelCatalogSnapshot(
 
 export function getActiveRemoteModelCatalog(
   config: OpenClawConfig,
-  captureStartup = true,
 ): ActiveRemoteModelCatalog | undefined {
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
   }
   const scoped = remoteCatalogScope.getStore();
   const snapshot =
-    scoped !== undefined
-      ? scoped.catalog
-      : captureStartup
-        ? captureRemoteModelCatalogStartupSnapshot()
-        : inheritedRemoteModelCatalogStartupSnapshot()?.catalog;
+    scoped !== undefined ? scoped.catalog : captureRemoteModelCatalogStartupSnapshot();
   return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl) ? snapshot : undefined;
 }
 

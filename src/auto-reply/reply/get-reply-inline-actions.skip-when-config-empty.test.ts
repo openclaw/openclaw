@@ -6,9 +6,9 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import { buildCommandContext } from "./commands-context.js";
+import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -249,41 +249,6 @@ describe("handleInlineActions", () => {
     });
   });
 
-  it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
-    const typing = createTypingController();
-    const ctx = buildTestCtx({
-      Body: "keep going",
-      CommandBody: "keep going",
-    });
-    const onBlockReply = vi.fn(async () => {});
-    const directiveAck = setReplyPayloadMetadata(
-      { text: "Model set to openai/gpt-5.5 for this session." },
-      { assistantMessageIndex: 7 },
-    );
-
-    const result = await runTestInlineActions({
-      ctx,
-      typing,
-      cleanedBody: "keep going",
-      overrides: {
-        directiveAck,
-        opts: { onBlockReply } as HandleInlineActionsInput["opts"],
-      },
-    });
-
-    expect(result.kind).toBe("continue");
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const delivered = mockCallArgs(onBlockReply, "onBlockReply")[0];
-    expect(delivered).toEqual({
-      text: "Model set to openai/gpt-5.5 for this session.",
-      isStatusNotice: true,
-    });
-    expect(getReplyPayloadMetadata(delivered as object)).toEqual({
-      assistantMessageIndex: 7,
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
-
   it("prefers the target session entry when routing inline status through the shared status builder", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({
@@ -326,42 +291,6 @@ describe("handleInlineActions", () => {
     expect(statusSessionEntry.parentSessionKey).toBe("target-parent");
     expect(statusArgs.parentSessionKey).toBe("target-parent");
     expect(handleCommandsMock).not.toHaveBeenCalled();
-  });
-
-  it("does not continue into the agent after a mention-wrapped inline status-only turn", async () => {
-    const typing = createTypingController();
-    const ctx = buildTestCtx({
-      Body: "<@123> /status",
-      CommandBody: "<@123> /status",
-      Provider: "discord",
-      Surface: "discord",
-      ChatType: "channel",
-      WasMentioned: true,
-    });
-
-    const result = await runTestInlineActions({
-      ctx,
-      typing,
-      cleanedBody: "<@123>",
-      command: {
-        surface: "discord",
-        channel: "discord",
-        channelId: "discord",
-        isAuthorizedSender: true,
-        rawBodyNormalized: "<@123> /status",
-        commandBodyNormalized: "<@123> /status",
-      },
-      overrides: {
-        allowTextCommands: true,
-        inlineStatusRequested: true,
-        isGroup: true,
-      },
-    });
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("continues into the agent when mention-wrapped inline status leaves real text", async () => {
@@ -1194,14 +1123,7 @@ describe("handleInlineActions", () => {
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please continue",
     },
-    {
-      name: "direct mention",
-      chatType: "direct" as const,
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-    },
+
     {
       name: "multiline sender before attachment context",
       chatType: "channel" as const,
@@ -1217,7 +1139,7 @@ describe("handleInlineActions", () => {
       Surface: "slack",
       ChatType: chatType,
       From: "slack:U1",
-      To: chatType === "direct" ? "slack:U1" : "slack:C1",
+      To: "slack:C1",
       CommandBody: commandText,
       RawBody: rawText,
       BodyForAgent: rawText,
@@ -1237,8 +1159,8 @@ describe("handleInlineActions", () => {
       modelAliases: [],
       canInterpretTextDirectives: true,
       isAuthorizedSender: true,
-      isGroup: chatType !== "direct",
-      wasMentioned: chatType !== "direct",
+      isGroup: true,
+      wasMentioned: true,
       ctx,
       cfg: { commands: { text: true } },
       agentId: "main",

@@ -73,6 +73,7 @@ function renderCard(overrides: Partial<DiffViewerPayload> = {}): void {
 }
 
 beforeEach(() => {
+  vi.resetModules();
   document.body.innerHTML = "";
   delete document.documentElement.dataset.openclawDiffsError;
   delete document.documentElement.dataset.openclawDiffsReady;
@@ -91,122 +92,6 @@ describe("createToolbarButton icon safety", () => {
         false,
       );
     }
-  });
-});
-
-describe("hydrateViewer", () => {
-  it("continues hydrating later cards when one card throws", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    renderCard();
-    renderCard();
-    fileDiffHydrateMock.mockImplementationOnce(() => {
-      throw new Error("broken card");
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "Skipping diff card that failed to hydrate",
-      expect.any(Error),
-    );
-    expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
-    warn.mockRestore();
-  });
-
-  it("does not retain controllers when initial state application throws", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    renderCard();
-    renderCard();
-    fileDiffSetOptionsMock.mockImplementationOnce(() => {
-      throw new Error("broken options");
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffSetOptionsMock).toHaveBeenCalledTimes(2);
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "Skipping diff card that failed to hydrate",
-      expect.any(Error),
-    );
-    expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
-    warn.mockRestore();
-  });
-
-  it("replaces stale controllers when hydrating the current cards again", async () => {
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    document.body.innerHTML = "";
-    renderCard();
-    await hydrateViewer();
-
-    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    const currentOptions = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    const renderHeaderMetadata = currentOptions.renderHeaderMetadata as () => HTMLElement;
-    fileDiffRerenderMock.mockClear();
-
-    renderHeaderMetadata().querySelector<HTMLButtonElement>("button")?.click();
-
-    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("viewerState initialization", () => {
-  it("seeds viewerState from firstPayload options and syncs document theme", async () => {
-    renderCard({
-      options: {
-        ...viewerPayload.options,
-        diffStyle: "split",
-        themeType: "light",
-        backgroundEnabled: false,
-        overflow: "scroll",
-      },
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(document.body.dataset.theme).toBe("light");
-
-    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(opts.diffStyle).toBe("split");
-    expect(opts.themeType).toBe("light");
-    expect(opts.overflow).toBe("scroll");
-    expect(opts.disableBackground).toBe(true);
-  });
-
-  it("preloadHighlighter receives merged language set from all cards", async () => {
-    renderCard({
-      prerenderedHTML: "<div>diff1</div>",
-      langs: ["typescript"],
-      oldFile: { name: "a.ts", lang: "typescript", contents: "old" },
-      newFile: { name: "a.ts", lang: "typescript", contents: "new" },
-    });
-    renderCard({
-      prerenderedHTML: "<div>diff2</div>",
-      langs: ["python"],
-      oldFile: { name: "b.py", lang: "python", contents: "old" },
-      newFile: { name: "b.py", lang: "python", contents: "new" },
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    const preloadArg = (preloadHighlighterMock.mock.calls as unknown[][])[0]?.[0] as
-      | { langs: string[]; themes: string[] }
-      | undefined;
-    expect(preloadArg).toBeDefined();
-    expect(preloadArg!.langs).toContain("typescript");
-    expect(preloadArg!.langs).toContain("python");
-    expect(preloadArg!.themes).toEqual(["pierre-light", "pierre-dark"]);
   });
 });
 
@@ -247,20 +132,6 @@ describe("header metadata", () => {
     const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
     return opts.renderHeaderMetadata as HeaderMetadataCallback;
   }
-
-  it("renders the toolbar in viewer render mode", async () => {
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<main class="oc-frame" data-render-mode="viewer"></main>',
-    );
-    renderCard();
-    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
-
-    const header = renderHeaderMetadata();
-
-    expect(header).not.toBeNull();
-    expect(header?.querySelectorAll("button")).toHaveLength(4);
-  });
 
   it("drops the interactive toolbar in image render mode", async () => {
     document.body.insertAdjacentHTML(

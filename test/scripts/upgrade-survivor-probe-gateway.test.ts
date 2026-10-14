@@ -147,14 +147,26 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
   });
 
   it("rejects degraded ready responses by default even when failing components are allowlisted", async () => {
-    const server = createHttpServer((_request, response) => {
-      response.writeHead(503, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ready: false, failing: ["telegram"] }));
-    });
-    const baseUrl = await listen(server);
+    const baseUrl = "http://probe.test";
     const out = path.join(tempDirs.make("openclaw-upgrade-probe-"), "ready-degraded.json");
-    try {
-      const result = await runProbe([
+    const nodeArgs = writeProbeImport(
+      [
+        "const realSetTimeout = globalThis.setTimeout;",
+        "let now = 0;",
+        "Date.now = () => now;",
+        'globalThis.fetch = async () => new Response(JSON.stringify({ ready: false, failing: ["telegram"] }), { status: 503, headers: { "content-type": "application/json" } });',
+        "globalThis.setTimeout = (callback, delay = 0, ...args) => {",
+        "  if (delay === 50) {",
+        "    now += delay;",
+        "    return realSetTimeout(callback, 0, ...args);",
+        "  }",
+        "  return realSetTimeout(callback, delay, ...args);",
+        "};",
+      ].join("\n"),
+    );
+    // Test strict readiness policy without racing transport scheduling against the deadline.
+    const result = await runProbe(
+      [
         "--base-url",
         baseUrl,
         "--path",
@@ -166,15 +178,18 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
         "--out",
         out,
         "--timeout-ms",
-        "300",
-      ]);
+        "50",
+        "--attempt-timeout-ms",
+        "25",
+      ],
+      LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+      { OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED: "0" },
+      nodeArgs,
+    );
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("probe failed with HTTP 503");
-      expect(fs.existsSync(out)).toBe(false);
-    } finally {
-      server.close();
-    }
+    expect(result).toMatchObject({ status: 1, signal: null, error: undefined });
+    expect(result.stderr).toContain("probe failed with HTTP 503");
+    expect(fs.existsSync(out)).toBe(false);
   });
 
   it("keeps failed probe retries inside the total timeout", async () => {

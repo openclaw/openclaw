@@ -5,9 +5,11 @@ import {
   type ErrorShape,
   type MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -29,24 +31,32 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 export const SESSION_KEY = "agent:main:dashboard:mention-test";
 export const SESSION_ID = "mention-test-session";
 const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
-type InboxFixtureOptions = { notifications?: boolean; beforeInbox?: () => void };
+type InboxFixtureOptions = {
+  notifications?: boolean;
+  beforeInbox?: () => void;
+  retainProfileCatalog?: boolean;
+};
 
 export async function withMentionInbox(
   run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
   cfg: OpenClawConfig = {},
   options: InboxFixtureOptions = {},
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await createFixture(cfg, options);
-    try {
-      await run(fixture);
-    } finally {
-      await fixture.dispose();
-    }
-  });
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: options.retainProfileCatalog !== false },
+    async () => {
+      const fixture = await createFixture(cfg, options);
+      try {
+        await run(fixture);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
 }
 
 async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) {
+  setRuntimeConfigSnapshot(cfg);
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
   const alice = ensureProfileForEmail("alice@mentions.example.test");
@@ -74,6 +84,8 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
       },
     );
   await setSession({ displayName: "Design review" });
+  const catalog =
+    options.retainProfileCatalog === false ? undefined : await prepareUserProfileCatalog();
   const inboxes = new Set<MentionInbox>();
   const openInbox = (gatewayInstanceId = "mention-gateway") => {
     const inbox = createMentionInbox({
@@ -141,8 +153,12 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     setSession,
     openInbox,
     async dispose() {
-      await Promise.all([...inboxes].map((instance) => instance.dispose()));
-      await scheduler.stop();
+      try {
+        await Promise.all([...inboxes].map((instance) => instance.dispose()));
+        await scheduler.stop();
+      } finally {
+        catalog?.release();
+      }
     },
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {
       let committedSource = committedSources.get(sourceId);

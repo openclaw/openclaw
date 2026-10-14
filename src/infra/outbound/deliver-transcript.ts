@@ -1,5 +1,4 @@
 // Mirrors successful outbound payloads into the configured session transcript.
-import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -20,14 +19,14 @@ export async function mirrorDeliveredPayloads(params: {
   if (!mirror || params.payloads.length === 0) {
     return;
   }
-  const mirrorText = resolveMirroredTranscriptText({
+  const mirrorContent = {
     text: params.payloads
       .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
       .filter((text) => text.trim())
       .join("\n"),
     mediaUrls: params.payloads.flatMap((payload) => payload.mediaUrls),
-  });
-  if (!mirrorText) {
+  };
+  if (!mirrorContent.text && mirrorContent.mediaUrls.length === 0) {
     return;
   }
   const warnFailure = (reason: string) =>
@@ -50,7 +49,7 @@ export async function mirrorDeliveredPayloads(params: {
         ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
         : {}),
       ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-      text: mirrorText,
+      ...mirrorContent,
       idempotencyKey: mirror.idempotencyKey,
       deliveryMirror: mirror.deliveryMirror,
       config: params.delivery.cfg,

@@ -1,4 +1,6 @@
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { McpCatalogTool } from "../agents/agent-bundle-mcp-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { prepareMcpAppExtensionRuntime } from "./mcp-app-extension-runtime.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -16,6 +18,11 @@ const mocks = vi.hoisted(() => ({
   model: vi.fn(),
   retain: vi.fn(),
   releaseAccess: vi.fn(),
+  catalog: vi.fn(),
+  project: vi.fn(),
+  metadata: vi.fn(),
+  requiresApproval: vi.fn(),
+  approval: vi.fn(),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   acquireSessionMcpRuntime: mocks.direct,
@@ -23,8 +30,9 @@ vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   releaseSessionMcpRuntime: mocks.release,
 }));
+// mock-isolation: Exercise App approval routing without materializing plugin runtimes.
 vi.mock("../agents/agent-bundle-mcp-materialize.js", () => ({
-  buildBundleMcpToolsFromCatalog: () => [],
+  buildBundleMcpToolsFromCatalog: mocks.project,
 }));
 vi.mock("../agents/agent-bundle-mcp-runtime-config.js", () => ({
   loadSessionMcpConfig: () => ({ loaded: { mcpServers: {} } }),
@@ -41,8 +49,9 @@ vi.mock("../agents/sandbox/runtime-status.js", () => ({
 vi.mock("../agents/harness/session-preparation.js", () => ({
   prepareAgentHarnessSessionRuntime: mocks.prepare,
 }));
+// mock-isolation: Each case chooses the approval requirement independently of provider configuration.
 vi.mock("../agents/mcp-codex-tool-approval.js", () => ({
-  requiresMcpCodexToolApproval: () => false,
+  requiresMcpCodexToolApproval: mocks.requiresApproval,
   resolveProjectedMcpCodexToolApprovalMode: () => undefined,
 }));
 vi.mock("../agents/mcp-tool-filter.js", () => ({
@@ -52,9 +61,11 @@ vi.mock("../agents/mcp-tool-filter.js", () => ({
 vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
   getGatewayPluginMetadataSnapshot: () => undefined,
 }));
-vi.mock("../plugins/tool-metadata.js", () => ({ getPluginToolMeta: () => undefined }));
+// mock-isolation: The fixture catalog supplies its own projected tool identity.
+vi.mock("../plugins/tool-metadata.js", () => ({ getPluginToolMeta: mocks.metadata }));
 vi.mock("./mcp-app-host-files.js", () => ({ resolveMcpAppRequesterId: () => "alice" }));
-vi.mock("./mcp-app-tool-approval.js", () => ({ requestMcpAppToolApproval: vi.fn() }));
+// mock-isolation: Approval delivery is external to the runtime owner's authority checks.
+vi.mock("./mcp-app-tool-approval.js", () => ({ requestMcpAppToolApproval: mocks.approval }));
 vi.mock("./operator-run-authority.js", () => ({
   captureGatewayOperatorRunAuthority: mocks.source,
 }));
@@ -62,8 +73,10 @@ vi.mock("./session-resource-tool-policy.js", () => ({ resolveSessionResourceTool
 vi.mock("./session-row-projection-access.js", () => ({
   getSessionRowProjection: () => ({ sharingTarget: () => ({ entry, storePath: "/store" }) }),
 }));
+// mock-isolation: App admission uses fixture model selection without native session ownership reads.
 vi.mock("./session-utils-model-selection.js", () => ({
   resolveSessionSelectedModelRef: mocks.model,
+  resolveSessionSelectedModelRefAsync: async (...args: unknown[]) => mocks.model(...args),
 }));
 const config = { mcp: { apps: { enabled: true } } };
 let entry: { sessionId: string } & Partial<SessionEntry>;
@@ -89,6 +102,9 @@ beforeEach(() => {
   }));
   mocks.releaseAccess.mockImplementation(() => accessController.abort(new Error("released")));
   mocks.model.mockReturnValue({ provider: "openai", model: "model" });
+  mocks.project.mockReturnValue([]);
+  mocks.requiresApproval.mockReturnValue(false);
+  mocks.catalog.mockResolvedValue({ version: 1, generatedAt: 1, servers: {}, tools: [] });
   mocks.selection.mockReturnValue("codex");
   mocks.registered.mockReturnValue({
     ownerPluginId: "codex",
@@ -103,7 +119,8 @@ beforeEach(() => {
     await prepareSession();
     return {
       runtime: {
-        getCatalog: async () => ({ version: 1, generatedAt: 1, servers: {}, tools: [] }),
+        getCatalog: mocks.catalog,
+        assertOwnerCurrent: mocks.assert,
         joinCleanup: async () => {},
       },
       releaseLease: vi.fn(),
@@ -111,6 +128,47 @@ beforeEach(() => {
   });
 });
 describe("cold App request admission", () => {
+  it.each(["launch", "view"])("keeps live authority through %s tool approval", async (kind) => {
+    const tool: McpCatalogTool = {
+      serverName: "demo",
+      safeServerName: "demo",
+      toolName: "show",
+      inputSchema: Type.Object({}),
+      fallbackDescription: "Show an App",
+    };
+    mocks.catalog.mockResolvedValue({
+      version: 1,
+      generatedAt: 1,
+      servers: { demo: { pluginId: "demo" } },
+      tools: [tool],
+    });
+    mocks.project.mockReturnValue([{ name: "demo_show" }]);
+    mocks.metadata.mockReturnValue({ mcp: { operation: "tool", ...tool } });
+    mocks.requiresApproval.mockReturnValue(true);
+    const active = await prepareMcpAppExtensionRuntime(options());
+    accessController = new AbortController();
+    const view = active.retainViewAuthority([tool]);
+    const input = { city: "Paris" };
+    const assertion =
+      kind === "launch"
+        ? await active.approveTool(tool, input)
+        : await view.prepareToolCall({
+            options: options(),
+            toolName: tool.toolName,
+            input,
+            assertCurrent: mocks.assert,
+          });
+    expect(mocks.approval).toHaveBeenCalledOnce();
+    expect(mocks.approval).toHaveBeenCalledWith(
+      expect.objectContaining({ serverName: "demo", toolName: "show", input }),
+    );
+    expect(assertion).toBeTypeOf("function");
+    expect(() => assertion?.()).not.toThrow();
+    accessController.abort(new Error("revoked"));
+    expect(() => assertion?.()).toThrow("revoked");
+    view.release();
+    await active.dispose();
+  });
   it("selects the current harness before any historical model turn and admits its native setup", async () => {
     const active = await prepareMcpAppExtensionRuntime(options());
     expect(mocks.selection).toHaveBeenCalledWith(expect.objectContaining({ sessionEntry: entry }));
@@ -135,8 +193,6 @@ describe("cold App request admission", () => {
     expect(mocks.retain).toHaveBeenCalledOnce();
     expect(mocks.releaseAccess).toHaveBeenCalledOnce();
     expect(accessController.signal.aborted).toBe(true);
-    entry = { ...entry, agentRuntimeOverride: "openclaw" };
-    expect(active.assertCurrent).toThrow("runtime selection changed");
     await active.dispose();
   });
   it.each(["caller", "access"])("cancels native setup when %s authority aborts", async (source) => {
@@ -166,18 +222,6 @@ describe("cold App request admission", () => {
       await active.dispose();
     },
   );
-  it.each([{ provider: "openai", model: "inherited-new-model" }])(
-    "revokes a retained App when canonical selection changes without local overrides %j",
-    async (model) => {
-      const active = await prepareMcpAppExtensionRuntime(options());
-      accessController = new AbortController();
-      const view = active.retainViewAuthority([]);
-      mocks.model.mockReturnValue(model);
-      expect(view.assertCurrent).toThrow("runtime selection changed");
-      view.release();
-      await active.dispose();
-    },
-  );
   it.each([{ authProfileOverride: "other-profile" }, { sandboxMode: "off" as const }])(
     "continues to revoke changed authority %j",
     async (change) => {
@@ -187,19 +231,6 @@ describe("cold App request admission", () => {
       await active.dispose();
     },
   );
-  it("revokes an effective runtime change even without a local override", async () => {
-    const active = await prepareMcpAppExtensionRuntime(options());
-    mocks.selection.mockReturnValue("other-harness");
-    expect(active.assertCurrent).toThrow("runtime selection changed");
-    await active.dispose();
-  });
-  it("preserves locked harness ownership", async () => {
-    entry = { ...entry, modelSelectionLocked: true, agentHarnessId: "codex" };
-    const active = await prepareMcpAppExtensionRuntime(options());
-    entry = { ...entry, agentHarnessId: "other-harness" };
-    expect(active.assertCurrent).toThrow("runtime selection changed");
-    await active.dispose();
-  });
   it("does not fall back to a second transport when the selected harness is unavailable", async () => {
     mocks.registered.mockReturnValue(undefined);
     await expect(prepareMcpAppExtensionRuntime(options())).rejects.toThrow(

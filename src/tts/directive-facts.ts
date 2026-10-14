@@ -3,6 +3,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { replaceOutsideCodeRegionParts } from "../utils/directive-tags.js";
 
+/** Colon bodies without directive tokens are visible speech, except reserved text markers. */
+export function resolveTtsDirectiveBody(body: string): string | undefined {
+  const text = body.trim();
+  return text && !text.includes("=") && text.toLowerCase() !== "text" ? text : undefined;
+}
+
 /** Extract final-text TTS syntax into persisted facts, leaving markdown code spans unchanged. */
 export function extractTtsDirectiveFacts(text: string): {
   cleanedText: string;
@@ -57,6 +63,11 @@ export function extractTtsDirectiveParts(texts: readonly string[]): Array<{
 
   const directiveRegex = /\[\[\s*tts\s*:\s*([^\]]+)\]\]/gi;
   replaceStage(directiveRegex, ([body], next) => {
+    const spoken = resolveTtsDirectiveBody(String(body));
+    if (spoken) {
+      next.text ??= spoken;
+      return spoken;
+    }
     const tokens = String(body).split(/\s+/).filter(Boolean);
     let provider: string | undefined;
     const values: Record<string, string> = {};

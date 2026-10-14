@@ -7,6 +7,8 @@ export type SessionEventProjection = {
   payload: unknown;
   /** Certifies a fresh, mutable payload envelope and row bytes for this publication. */
   serializeSession?: () => string;
+  /** Publication-owned UTF-8 message field, including its trailing comma. */
+  serializeMessage?: () => Buffer;
   delivered?: () => void;
 };
 

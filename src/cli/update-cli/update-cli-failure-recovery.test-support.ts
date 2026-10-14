@@ -98,15 +98,20 @@ export function registerForegroundFailureRecoveryTests({
           settled: true,
         },
         steps: [
-          recoveryVerificationStep(undefined, root),
+          expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
           {
-            name: "update",
+            name: "post-update verification",
             command: "openclaw update",
             cwd: root,
             durationMs: 0,
-            exitCode: null,
-            failureFacts: [{ check: "update", code: "update-failed" }],
+            exitCode,
+            stderrTail: undefined,
+            failureFacts: [
+              { check: "runtime", code: "post-core-update-failed" },
+              { check: "update", code: "update-failed" },
+            ],
           },
+          recoveryVerificationStep(undefined, root),
         ],
       });
       expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();

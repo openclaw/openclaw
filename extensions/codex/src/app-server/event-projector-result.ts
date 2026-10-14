@@ -42,6 +42,7 @@ export type CodexAppServerToolTelemetry = Partial<
   > & {
     didDeliverSourceReplyViaMessageTool?: boolean;
     sourceReplyDelivered?: true;
+    finalSourceReplyDelivered?: true;
     confirmedMediaDeliveries?: Readonly<
       AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
     >;
@@ -164,10 +165,15 @@ export abstract class CodexTurnProjection {
     );
     this.assistantProjection = new CodexAssistantProjection(
       this.settlement.params,
-      (event) => this.emitAgentEvent(event),
+      (event) => {
+        if (!options.hasDeliveredFinalSourceReply?.()) {
+          this.emitAgentEvent(event);
+        }
+      },
       (text) => this.toolProgressProjection.matchesEcho(text),
       this.transcriptCheckpoint.nextTimestamp,
       this.transcriptCheckpoint.enqueueCommentary,
+      options.hasDeliveredFinalSourceReply,
     );
     this.reasoningProjection = new CodexReasoningProjection(
       this.settlement.params,
@@ -228,7 +234,9 @@ export abstract class CodexTurnProjection {
     // Close this turn's audit scope without inventing process completion. The
     // existing unknown-outcome diagnostic remains distinct from execution failure.
     this.nativeToolLifecycleProjector.finalizeActive(undefined, retainedCommands);
-    const assistantTexts = this.assistantProjection.collectAssistantTexts();
+    const assistantTexts = toolTelemetry.finalSourceReplyDelivered
+      ? []
+      : this.assistantProjection.collectAssistantTexts();
     const asyncMessages = this.assistantProjection.collectAsyncMessages();
     const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
     const reasoningText = this.reasoningProjection.reasoningText();
@@ -277,9 +285,11 @@ export abstract class CodexTurnProjection {
             assistantMessageOptions,
           )
         : undefined;
-    let currentAttemptAssistant = providerRefusal
-      ? lastAssistant
-      : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+    let currentAttemptAssistant = toolTelemetry.finalSourceReplyDelivered
+      ? undefined
+      : providerRefusal
+        ? lastAssistant
+        : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
     // Tool-authored completion belongs to this native turn, not another input's
     // projected answer. Preserve the same identity even for a tool-only turn.
     if (

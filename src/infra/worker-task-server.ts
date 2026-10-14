@@ -5,20 +5,18 @@ import {
   type WorkerTaskChannel,
   type WorkerTaskControl,
 } from "@openclaw/worker-runtime/worker";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
 import {
   applyAgentDatabaseReaderRequest,
   decodeAgentDatabaseReaderRequest,
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
-import {
-  installSqliteDatabaseAdmissions,
-  withSqliteDatabaseAdmissionExchange,
-} from "./sqlite-database-admission.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
-} from "./sqlite-worker-operation-admission.js";
+} from "./sqlite-worker-database-admission-relay.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-transport.js";
@@ -34,7 +32,7 @@ type WorkerTaskHandler<Output> = (
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output>(
   handler: WorkerTaskHandler<Output>,
-  options: { transferList?: (value: Output) => Transferable[] } = {},
+  options: { transferList?: (value: Output) => Transferable[]; retireOnError?: boolean } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
@@ -46,12 +44,14 @@ export function serveOwnedWorkerTasks<Output>(
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
     encodeResourceError?: (error: unknown) => unknown;
+    /** Unknown native state cannot publish a reusable task failure before isolate exit. */
+    retireOnError?: boolean;
   } = {},
 ): void {
   let memoryPort: MessagePort;
   let taskPort: MessagePort | undefined;
   let databaseAdmissionPort: MessagePort | undefined;
-  let memorySamplesStarted = false;
+  let closeMemorySamples: (() => void) | undefined;
   const runWithDatabaseAdmission = async <T>(operation: () => T | Promise<T>): Promise<T> => {
     const port = databaseAdmissionPort;
     if (!port) {
@@ -107,21 +107,32 @@ export function serveOwnedWorkerTasks<Output>(
         taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
-        if (sampleMemory && !memorySamplesStarted) {
-          memorySamplesStarted = true;
-          serveWorkerMemorySamples(memoryPort);
+        if (sampleMemory && !closeMemorySamples) {
+          closeMemorySamples = serveWorkerMemorySamples(memoryPort);
         }
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
-        installSqliteDatabaseAdmissions(context.databaseAdmissions);
         if (context.databaseAdmissionPort) {
           bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);
         }
         databaseAdmissionPort ??= context.databaseAdmissionPort;
       },
-      onIdle: scheduleWorkerIdleGc,
+      onIdle() {
+        // Later tasks can load additional modules; an empty native flush does no I/O.
+        scheduleOpenClawCompileCacheFlush();
+        scheduleWorkerIdleGc();
+      },
+      onRetire() {
+        cancelWorkerIdleGc();
+        try {
+          closeMemorySamples?.();
+        } finally {
+          // Exchanges are synchronous; the runtime already joined task cleanup and resource receipts.
+          databaseAdmissionPort?.close();
+        }
+      },
     },
   );
 }

@@ -357,7 +357,6 @@ export class LogbookService {
     }
     this.analysisInFlight = true;
     return this.trackOperation(async () => {
-      let handedOff = false;
       try {
         // Explicit user action is the retry path for failed batches; automatic
         // retries could loop model spend on a persistently failing batch.
@@ -369,15 +368,11 @@ export class LogbookService {
           }
         }
         this.requireStore();
-        this.analysisInFlight = false;
-        void this.analysisTick();
-        handedOff = true;
-        return { started: true };
       } finally {
-        if (!handedOff) {
-          this.analysisInFlight = false;
-        }
+        this.analysisInFlight = false;
       }
+      void this.analysisTick();
+      return { started: true };
     });
   }
 

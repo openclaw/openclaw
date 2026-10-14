@@ -4,6 +4,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubOAuth from "../agents/github-oauth-client.js";
 import {
   resolveManagedGitHubProfileDir,
@@ -14,12 +18,14 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionEntries from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as cloneRuntime from "../projects/project-clone-runtime.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import * as projectCloning from "../projects/project-clone.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import * as secretsRuntime from "../secrets/runtime-state.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
@@ -35,7 +41,10 @@ const git = async (cwd: string, args: string[]) =>
   (await exec("git", ["-C", cwd, ...args])).stdout.trim();
 
 describe("explicit repository move to Gateway", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    memorySessionActorOwners.reset();
+    vi.restoreAllMocks();
+  });
 
   it.each([
     "system",
@@ -44,6 +53,7 @@ describe("explicit repository move to Gateway", () => {
     "host mismatch",
     "revoked",
     "reset",
+    "clone reset",
     "auth failure",
   ] as const)(
     "keeps the current shared GitHub identity and move authority at clone admission: %s",
@@ -160,7 +170,24 @@ describe("explicit repository move to Gateway", () => {
               : new Error("fixture clone transport reached");
           const clone = vi
             .spyOn(projectCloning, "materializeProjectClone")
-            .mockRejectedValue(cloneFailure);
+            .mockImplementation(async (_request, options) => {
+              if (scenario === "clone reset") {
+                const sql = observeHostDataSql();
+                try {
+                  expect(options?.assertCurrent).toBeTypeOf("function");
+                  options?.assertCurrent?.();
+                  expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+                  await sessionEntries.patchSessionEntryCore(scope, () => ({
+                    lifecycleRevision: "reset-at-clone-effect",
+                  }));
+                  expect(options?.assertCurrent).toThrow("Repository workspace changed");
+                  expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+                } finally {
+                  sql.restore();
+                }
+              }
+              throw cloneFailure;
+            });
           const operation = materializeSessionRepositoryWorkspaceOnGateway({
             ...scope,
             cfg,
@@ -219,6 +246,7 @@ describe("explicit repository move to Gateway", () => {
     "postcommit failure",
     "publication unavailable",
     "requested topic",
+    "unbound incognito",
   ] as const)("retains only committed materialization: %s", async (outcome) => {
     await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
       const cfg = {
@@ -271,7 +299,13 @@ describe("explicit repository move to Gateway", () => {
                 publicationStagingRoot,
               ])
             ).stdout.trim();
-      const scope = { agentId: "main", sessionKey: "agent:main:dashboard:materialization" };
+      const scope = {
+        agentId: "main",
+        sessionKey:
+          outcome === "unbound incognito"
+            ? "agent:main:dashboard:incognito-materialization"
+            : "agent:main:dashboard:materialization",
+      };
       const repositories = getSessionRepositoryWorkspaceStore();
       let repository = await repositories.create({
         ...scope,
@@ -300,98 +334,137 @@ describe("explicit repository move to Gateway", () => {
       });
       repository = await checkpoint.publish();
       const sessionId = "repository-materialization-session";
-      await upsertSessionEntryCore(scope, {
-        sessionId,
-        repositoryWorkspaceId: repository.workspaceId,
-      });
-      const assertCurrent = () => {
-        const worktree = findLiveRegistryWorktreeByOwner(process.env, "session", scope.sessionKey);
-        if (
-          outcome === "revoked" &&
-          worktree &&
-          fs.existsSync(path.join(worktree.path, "added.txt"))
-        ) {
-          throw new Error("move authority revoked");
-        }
-      };
-      vi.spyOn(cloneRuntime, "readProjectCheckoutRemoteHead").mockImplementation(
-        async ({ branch }) =>
-          outcome === "requested topic" && branch === "topic" ? baseCommit : undefined,
+      const owner =
+        outcome === "unbound incognito"
+          ? memorySessionActorOwners.get({
+              agentId: "main",
+              path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+            })
+          : undefined;
+      const actor = await owner?.acquire(
+        { database: owner.identity, sessionKey: scope.sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
       );
-      if (outcome === "postcommit failure") {
-        const patchSessionEntry = sessionEntries.patchSessionEntryCore;
-        vi.spyOn(sessionEntries, "patchSessionEntryCore").mockImplementationOnce(
-          async (...args) => {
-            await patchSessionEntry(...args);
-            throw new Error("postcommit observer failed");
-          },
-        );
-      }
-      const operation = materializeSessionRepositoryWorkspaceOnGateway({
-        ...scope,
-        cfg,
-        sessionId,
-        assertCurrent,
-      });
-      if (outcome === "revoked") {
-        await expect(operation).rejects.toThrow("move authority revoked");
-        expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
-      } else {
-        if (outcome === "postcommit failure") {
-          await expect(operation).rejects.toThrow("postcommit observer failed");
+      const authority = { assertCurrent() {}, authorize() {} };
+      const readEntry = async () =>
+        owner ? owner.readSession(scope.sessionKey, authority)?.entry : loadSessionEntry(scope);
+      const run = async () => {
+        const entry = { sessionId, repositoryWorkspaceId: repository.workspaceId };
+        if (actor) {
+          expect(
+            (
+              await actor.storage!.mutate(
+                {
+                  type: "session.entry.create",
+                  input: { entry: { ...entry, updatedAt: Date.now(), incognito: true } },
+                },
+                authority,
+              )
+            ).kind,
+          ).toBe("committed");
         } else {
-          await operation;
+          await upsertSessionEntryCore(scope, entry);
         }
-        const entry = loadSessionEntry(scope)!;
-        const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
-        expect(entry.repositoryWorkspaceId).toBeUndefined();
-        expect(entry.worktree?.id).toBe(worktree.id);
-        expect(worktree.baseRef).toBe(outcome === "requested topic" ? "topic" : "HEAD");
-        expect(entry.spawnedCwd).toBe(worktree.path);
-        expect(await fsp.readFile(path.join(worktree.path, "edited.txt"), "utf8")).toBe(
-          "accepted\n",
+        const assertCurrent = () => {
+          const worktree = findLiveRegistryWorktreeByOwner(
+            process.env,
+            "session",
+            scope.sessionKey,
+          );
+          if (
+            outcome === "revoked" &&
+            worktree &&
+            fs.existsSync(path.join(worktree.path, "added.txt"))
+          ) {
+            throw new Error("move authority revoked");
+          }
+        };
+        vi.spyOn(cloneRuntime, "readProjectCheckoutRemoteHead").mockImplementation(
+          async ({ branch }) =>
+            outcome === "requested topic" && branch === "topic" ? baseCommit : undefined,
         );
-        expect(await fsp.readFile(path.join(worktree.path, "added.txt"), "utf8")).toBe("new\n");
-        await expect(fsp.stat(path.join(worktree.path, "deleted.txt"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
-        expect(await fsp.readFile(path.join(worktree.path, "published[1].ignored"), "utf8")).toBe(
-          "publishable\n",
-        );
-        expect(await fsp.readFile(path.join(worktree.path, "retained.ignored"), "utf8")).toBe(
-          "recovery only\n",
-        );
-        expect(await git(worktree.path, ["ls-files", "--", "published[1].ignored"])).toBe(
-          publicationDigest ? "published[1].ignored" : "",
-        );
-        expect(await git(worktree.path, ["ls-files", "--", "retained.ignored"])).toBe("");
-        expect(await git(worktree.path, ["diff", "--cached", "--name-only"])).toBe(
-          publicationDigest ? "deleted.txt" : "",
-        );
-        const normalized = await captureGitHubPublicationWorkspaceSnapshot({
-          cwd: worktree.path,
-        });
-        const published = (
-          await git(worktree.path, ["ls-tree", "-r", "--name-only", normalized.workspaceTree])
-        ).split("\n");
-        expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
-        expect(published).not.toContain("retained.ignored");
-        await materializeSessionRepositoryWorkspaceOnGateway({
+        if (outcome === "postcommit failure") {
+          const patchSessionEntry = sessionEntries.patchSessionEntryCore;
+          vi.spyOn(sessionEntries, "patchSessionEntryCore").mockImplementationOnce(
+            async (...args) => {
+              await patchSessionEntry(...args);
+              throw new Error("postcommit observer failed");
+            },
+          );
+        }
+        const operation = materializeSessionRepositoryWorkspaceOnGateway({
           ...scope,
           cfg,
           sessionId,
           assertCurrent,
         });
-        expect((await managedWorktrees.findLiveByOwner("session", scope.sessionKey))?.id).toBe(
-          worktree.id,
-        );
+        if (outcome === "revoked") {
+          await expect(operation).rejects.toThrow("move authority revoked");
+          expect((await readEntry())?.repositoryWorkspaceId).toBe(repository.workspaceId);
+          expect(
+            await managedWorktrees.findLiveByOwner("session", scope.sessionKey),
+          ).toBeUndefined();
+        } else {
+          if (outcome === "postcommit failure") {
+            await expect(operation).rejects.toThrow("postcommit observer failed");
+          } else {
+            await operation;
+          }
+          const materialized = (await readEntry())!;
+          const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
+          expect(materialized.repositoryWorkspaceId).toBeUndefined();
+          expect(materialized.worktree?.id).toBe(worktree.id);
+          expect(worktree.baseRef).toBe(outcome === "requested topic" ? "topic" : "HEAD");
+          expect(materialized.spawnedCwd).toBe(worktree.path);
+          expect(await fsp.readFile(path.join(worktree.path, "edited.txt"), "utf8")).toBe(
+            "accepted\n",
+          );
+          expect(await fsp.readFile(path.join(worktree.path, "added.txt"), "utf8")).toBe("new\n");
+          await expect(fsp.stat(path.join(worktree.path, "deleted.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
+          expect(await fsp.readFile(path.join(worktree.path, "published[1].ignored"), "utf8")).toBe(
+            "publishable\n",
+          );
+          expect(await fsp.readFile(path.join(worktree.path, "retained.ignored"), "utf8")).toBe(
+            "recovery only\n",
+          );
+          expect(await git(worktree.path, ["ls-files", "--", "published[1].ignored"])).toBe(
+            publicationDigest ? "published[1].ignored" : "",
+          );
+          expect(await git(worktree.path, ["ls-files", "--", "retained.ignored"])).toBe("");
+          expect(await git(worktree.path, ["diff", "--cached", "--name-only"])).toBe(
+            publicationDigest ? "deleted.txt" : "",
+          );
+          const normalized = await captureGitHubPublicationWorkspaceSnapshot({
+            cwd: worktree.path,
+          });
+          const published = (
+            await git(worktree.path, ["ls-tree", "-r", "--name-only", normalized.workspaceTree])
+          ).split("\n");
+          expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
+          expect(published).not.toContain("retained.ignored");
+          await materializeSessionRepositoryWorkspaceOnGateway({
+            ...scope,
+            cfg,
+            sessionId,
+            assertCurrent,
+          });
+          expect((await managedWorktrees.findLiveByOwner("session", scope.sessionKey))?.id).toBe(
+            worktree.id,
+          );
+        }
+        // Retained publication may still need the original immutable source after the move.
+        expect(await repositories.get(repository.workspaceId)).toEqual(repository);
+        expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
+        expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
+      };
+      try {
+        await run();
+      } finally {
+        await actor?.release();
       }
-      // Retained publication may still need the original immutable source after the move.
-      expect(await repositories.get(repository.workspaceId)).toEqual(repository);
-      expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
-      expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
     });
   });
 });

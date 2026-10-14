@@ -62,7 +62,7 @@ import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../operator-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -244,7 +244,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               ) {
                 // Native sends could use account defaults without a target. Resolve that
                 // owner fact before core routing and source-reply receipts require it.
-                const target = resolveOutboundTarget({ channel, plugin, cfg, accountId });
+                const target = await resolveOutboundTarget({ channel, plugin, cfg, accountId });
                 if (!target.ok) {
                   throw target.error;
                 }
@@ -549,7 +549,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
       work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to,
             cfg,
@@ -662,7 +662,12 @@ export const sendHandlers: GatewayRequestHandlers = {
             }
           }
           if (outboundSessionKey && isAgentHarnessSessionKey(outboundSessionKey)) {
-            const { canonicalKey, entry } = loadSessionEntry(outboundSessionKey);
+            const { canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg,
+              key: outboundSessionKey,
+              assertActive: commitAgentRuntimeAuthority,
+              excludeInternalEffects: true,
+            });
             const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
               canonicalKey,
               entry,
@@ -867,7 +872,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         };
         const threadId = normalizeOptionalString(request.threadId);
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to: request.to.trim(),
             cfg,

@@ -1,10 +1,15 @@
 // Serves channel-owned conversation images without exposing media-store paths.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { getRuntimeConfig } from "../config/io.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
+import { matchesChannelAvatarSender } from "./channel-avatar-reference.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
@@ -33,7 +38,9 @@ const channelAvatarLoads = new Map<
   }
 >();
 
-const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
+const getSessionStoreModule = createLazyRuntimeModule(
+  () => import("./session-utils-store-worker.js"),
+);
 
 async function loadChannelAvatar(
   sessionKey: string,
@@ -86,7 +93,8 @@ export async function handleChannelAvatarHttpRequest(
     basePath?: string;
   },
 ): Promise<boolean> {
-  const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
+  const requestUrl = new URL(req.url ?? "/", "http://localhost");
+  const pathname = requestUrl.pathname;
   const parsed = parseControlUiResourcePath("channelAvatar", pathname, opts.basePath);
   if (!parsed.matched) {
     return false;
@@ -94,6 +102,18 @@ export async function handleChannelAvatarHttpRequest(
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
+  }
+  const requestedKey = parsed.value;
+  const sessionKey = requestedKey
+    ? normalizeSessionKeyPreservingOpaquePeerIds(requestedKey)
+    : undefined;
+  let selected: Result<ReturnType<typeof captureSessionEntryMetadataRead>, unknown>;
+  try {
+    selected = ok(
+      sessionKey ? captureSessionEntryMetadataRead({ sessionKey }, () => {}) : undefined,
+    );
+  } catch (error) {
+    selected = err(error);
   }
   const requestAuth = await authorizeControlUiSessionOwnerReadRequestOrReply({
     ...opts,
@@ -104,41 +124,74 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   }
   requestAuth.assertCurrent();
-  if (!parsed.value) {
+  if (!selected.ok) {
+    throw selected.error;
+  }
+  const source = selected.value;
+  if (!requestedKey || !sessionKey) {
     res.setHeader("cache-control", "no-store");
     respondNotFound(res);
     return true;
   }
 
+  const serve = async (reference: string | undefined, assertCurrent: () => void) => {
+    assertCurrent();
+    if (!reference) {
+      res.setHeader("cache-control", "no-store");
+      respondNotFound(res);
+      return true;
+    }
+
+    let image: HttpImageRepresentation | undefined;
+    try {
+      image = await loadChannelAvatar(sessionKey, reference);
+    } catch {
+      // The media may have expired or been pruned after the session row was written.
+    }
+    assertCurrent();
+    if (!image) {
+      res.setHeader("cache-control", "no-store");
+      respondNotFound(res);
+      return true;
+    }
+    sendHttpImageResponse({ req, res, image, filename: "channel-avatar" });
+    return true;
+  };
+  if (source) {
+    const entry = source.readCurrent();
+    const origin = sessionDeliveryOrigin(entry);
+    const reference = origin?.avatar;
+    const assertCurrent = () => {
+      requestAuth.assertCurrent();
+      const current = source.readCurrent();
+      if (
+        current?.sessionId !== entry?.sessionId ||
+        current?.lifecycleRevision !== entry?.lifecycleRevision ||
+        sessionDeliveryOrigin(current)?.avatar !== reference
+      ) {
+        throw new Error("Channel avatar session authority changed");
+      }
+    };
+    return serve(
+      matchesChannelAvatarSender(requestUrl.searchParams, origin) ? reference : undefined,
+      assertCurrent,
+    );
+  }
   let reference: string | undefined;
   try {
-    const { entry } = (await getSessionStoreModule()).loadGatewaySessionEntryReadOnly(
-      parsed.value,
-      { clone: false },
-    );
-    reference = sessionDeliveryOrigin(entry)?.avatar;
+    const { entry } = await (
+      await getSessionStoreModule()
+    ).loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: requestedKey,
+      assertActive: requestAuth.assertCurrent,
+    });
+    const origin = sessionDeliveryOrigin(entry);
+    reference = matchesChannelAvatarSender(requestUrl.searchParams, origin)
+      ? origin?.avatar
+      : undefined;
   } catch {
     // Invalid or missing session keys are ordinary route misses.
   }
-  requestAuth.assertCurrent();
-  if (!reference) {
-    res.setHeader("cache-control", "no-store");
-    respondNotFound(res);
-    return true;
-  }
-
-  let image: HttpImageRepresentation | undefined;
-  try {
-    image = await loadChannelAvatar(parsed.value, reference);
-  } catch {
-    // The media may have expired or been pruned after the session row was written.
-  }
-  requestAuth.assertCurrent();
-  if (!image) {
-    res.setHeader("cache-control", "no-store");
-    respondNotFound(res);
-    return true;
-  }
-  sendHttpImageResponse({ req, res, image, filename: "channel-avatar" });
-  return true;
+  return serve(reference, requestAuth.assertCurrent);
 }

@@ -29,7 +29,9 @@ import {
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
+  readSessionTranscriptEvents,
   readVisibleSessionTranscriptMessageEntries,
+  withSessionTranscriptWrite,
   type SessionTranscriptAssistantMirrorAppendParams,
 } from "./session-transcript-runtime.js";
 
@@ -74,6 +76,218 @@ describe("channel-final transcript mirrors", () => {
       scope.sessionId,
     );
   const entries = () => readVisibleSessionTranscriptMessageEntries(scope);
+
+  it.each([false, true])("replays shipped SDK mirror bytes with media=%s", async (media) => {
+    const request = {
+      ...delivery("shipped-sdk-mirror", "Chart"),
+      ...(media ? { mediaUrls: ["https://example.com/one/chart.png"] } : {}),
+    };
+    // Literal v2026.10.2 SDK representation, independent of the current producer.
+    const original = await append({
+      role: "assistant",
+      content: [{ type: "text", text: media ? "Chart\nchart.png" : "Chart" }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1_700_000_000_000,
+      idempotencyKey: request.idempotencyKey,
+      openclawDeliveryMirror: request.deliveryMirror,
+    });
+    const before = rows();
+    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual({
+      ok: true,
+      messageId: original.messageId,
+    });
+    expect(rows()).toEqual(before);
+    await expect(
+      appendAssistantMirrorMessageByIdentity({ ...request, text: "Different chart" }),
+    ).rejects.toThrow("conflicts with the admitted message");
+    expect(rows()).toEqual(before);
+  });
+
+  it("retains distinct unkeyed media identities and suppresses an exact repeat", async () => {
+    const mediaUrls: [string, string] = [
+      "https://example.com/one/chart.png",
+      "https://example.com/two/chart.png",
+    ];
+    const results = [];
+    for (const mediaUrl of [...mediaUrls, mediaUrls[1]]) {
+      results.push(
+        await appendAssistantMirrorMessageByIdentity({
+          ...scope,
+          text: "Chart",
+          mediaUrls: [mediaUrl],
+          updateMode: "none",
+        }),
+      );
+    }
+    expect(await readSessionTranscriptEvents(scope)).toEqual([
+      expect.objectContaining({ type: "session", id: scope.sessionId }),
+      ...mediaUrls.map((mediaUrl) =>
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "Chart\nchart.png" }],
+            openclawDelivery: { mediaUrls: [mediaUrl] },
+          }),
+        }),
+      ),
+    ]);
+    expect(results[2]).toEqual(results[1]);
+  });
+
+  it("replays keyed media exactly and rejects a different same-basename attachment", async () => {
+    const request = {
+      ...delivery("media-delivery", "Chart"),
+      mediaUrls: ["https://example.com/one/chart.png"],
+    };
+    const first = await appendAssistantMirrorMessageByIdentity(request);
+    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(first);
+    const before = await readSessionTranscriptEvents(scope);
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...request,
+        mediaUrls: ["https://example.com/two/chart.png"],
+      }),
+    ).rejects.toThrow("conflicts with the admitted message");
+    expect(await readSessionTranscriptEvents(scope)).toEqual(before);
+  });
+
+  it("rejects adding media to a new keyed text-only mirror with identical display text", async () => {
+    const request = delivery("text-only-media-collision", "Chart\nchart.png");
+    const original = await appendAssistantMirrorMessageByIdentity(request);
+    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(original);
+    const before = await readSessionTranscriptEvents(scope);
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...request,
+        text: "Chart",
+        mediaUrls: ["https://example.com/chart.png"],
+      }),
+    ).rejects.toThrow("conflicts with the admitted message");
+    expect(await readSessionTranscriptEvents(scope)).toEqual(before);
+  });
+
+  it.each(["latest", "source run"])(
+    "correlates authored media captions through %s source lookup",
+    async (lookup) => {
+      const mediaUrls = ["https://example.com/one/chart.png"];
+      await append(
+        {
+          role: "assistant",
+          content: "Chart",
+          openclawDelivery: { mediaUrls },
+          __openclaw: { runId: "media-source-run" },
+        },
+        "media-source-answer",
+      );
+      if (lookup === "source run") {
+        await append(
+          { role: "assistant", content: "Chart", __openclaw: { runId: "media-source-run" } },
+          "plain-source-answer",
+        );
+      }
+      const request = {
+        ...delivery("media-source-delivery", "Chart"),
+        mediaUrls,
+        ...(lookup === "source run" ? { sourceRunId: "media-source-run" } : {}),
+      };
+      await appendAssistantMirrorMessageByIdentity(request);
+      const plainRequest = {
+        ...delivery("plain-source-delivery", "Chart"),
+        sourceRunId: "media-source-run",
+      };
+      if (lookup === "source run") {
+        await appendAssistantMirrorMessageByIdentity(plainRequest);
+      }
+      const mirrors = (await entries()).filter((entry) => entry.idempotencyKey);
+      expect(mirrors[0]?.message).toMatchObject({
+        content: [{ type: "text", text: "Chart\nchart.png" }],
+      });
+      const sourceIds = [
+        "media-source-answer",
+        ...(lookup === "source run" ? ["plain-source-answer"] : []),
+      ];
+      expect(mirrors).toMatchObject(
+        sourceIds.map((sourceAssistantMessageId) => ({
+          message: { openclawDeliveryMirror: { sourceAssistantMessageId } },
+        })),
+      );
+      const beforeReplay = rows();
+      await appendAssistantMirrorMessageByIdentity(request);
+      if (lookup === "source run") {
+        await appendAssistantMirrorMessageByIdentity(plainRequest);
+      }
+      expect(rows()).toEqual(beforeReplay);
+    },
+  );
+
+  it.each([false, true])(
+    "correlates queued answers from the source run (identical text: %s)",
+    async (identical) => {
+      const firstText = "The train leaves at noon.";
+      const secondText = identical ? firstText : "The next train leaves at two.";
+      await append(
+        { role: "assistant", content: firstText, __openclaw: { runId: "queued-run" } },
+        "first-answer",
+      );
+      await append({ role: "user", content: "And the next train?" });
+      await append(
+        { role: "assistant", content: secondText, __openclaw: { runId: "queued-run" } },
+        "second-answer",
+      );
+      // Delivery can settle after another run has already appended its answer.
+      await append(
+        { role: "assistant", content: firstText, __openclaw: { runId: "later-run" } },
+        "later-answer",
+      );
+      const facts = await withSessionTranscriptWrite(scope, (writer) =>
+        writer.readMessageFacts({ idempotencyKeys: [], sourceRunId: "queued-run" }),
+      );
+      expect(facts.sourceEvents).toMatchObject([{ id: "first-answer" }, { id: "second-answer" }]);
+      const first = { ...delivery("first-delivery", firstText), sourceRunId: "queued-run" };
+      const second = { ...delivery("second-delivery", secondText), sourceRunId: "queued-run" };
+      await appendAssistantMirrorMessageByIdentity(first);
+      await appendAssistantMirrorMessageByIdentity(second);
+
+      expect((await entries()).filter((entry) => entry.idempotencyKey)).toMatchObject([
+        { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "first-answer" } } },
+        { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "second-answer" } } },
+      ]);
+      const beforeReplay = rows();
+      await appendAssistantMirrorMessageByIdentity(first);
+      await appendAssistantMirrorMessageByIdentity(second);
+      expect(rows()).toEqual(beforeReplay);
+    },
+  );
+
+  it("does not correlate another run's matching text when the source run does not match", async () => {
+    await append(
+      {
+        role: "assistant",
+        content: "The train leaves at noon.",
+        __openclaw: { runId: "other-run" },
+      },
+      "other-answer",
+    );
+    const request = {
+      ...delivery("unmatched-run-delivery"),
+      sourceRunId: "source-run",
+    };
+    await appendAssistantMirrorMessageByIdentity(request);
+    expect((await entries()).at(-1)?.message).not.toHaveProperty(
+      "openclawDeliveryMirror.sourceAssistantMessageId",
+    );
+  });
 
   it.each([
     { name: "different answer", message: { role: "assistant", content: "A different departure." } },

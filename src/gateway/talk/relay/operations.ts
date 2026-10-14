@@ -144,7 +144,7 @@ export function closeRelaySession(
       session,
       reason,
       closing,
-      () => closeRelayVoiceSession(session),
+      (disposition) => closeRelayVoiceSession(session, disposition),
       options,
     );
   };
@@ -166,7 +166,7 @@ function finishRelaySessionClose(
   session: RelaySession,
   reason: "completed" | "error",
   closing: NonNullable<RelaySession["closing"]>,
-  closeVoice: () => Promise<void>,
+  closeVoice: (disposition: "abort" | "detach") => Promise<void>,
   options?: RealtimeVoiceCloseOptions & { eventReason?: "output-cancelled" },
 ): Promise<void> {
   const disposition =
@@ -175,7 +175,7 @@ function finishRelaySessionClose(
       ? "detach"
       : "abort");
   unregisterTalkVoiceSession(session.id, session.connId, session.sessionTarget.agentId);
-  session.confirmationReadiness.close();
+  session.transcriptReadiness.close();
   session.harness.close();
   session.outputOwnership.drain?.resolve();
   relaySessions.delete(session.id);
@@ -187,7 +187,7 @@ function finishRelaySessionClose(
     disposition === "detach" ? undefined : reason === "error" ? "relay-error" : "relay-closed",
   );
   const finish = () => {
-    const voiceClose = closeVoice();
+    const voiceClose = closeVoice(disposition).finally(() => session.runAuthority?.release());
     void voiceClose.then(
       () => drainingRelaySessions.delete(session),
       () => drainingRelaySessions.delete(session),
@@ -248,16 +248,15 @@ export function sendTalkRealtimeRelayAudio(params: {
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
   const turnId = ensureRelayTurn(session);
   session.bridge.sendAudio(audio);
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "inputAudio",
-    byteLength: audio.byteLength,
-    talkEvent: session.harness.talk.emit({
+  broadcastToOwner(
+    session,
+    { type: "inputAudio", byteLength: audio.byteLength },
+    {
       type: "input.audio.delta",
       turnId,
       payload: { byteLength: audio.byteLength },
-    }),
-  });
+    },
+  );
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
@@ -529,11 +528,10 @@ export function prepareTalkRealtimeRelayAgentControl(
     if (relaySessions.get(session.id) !== session) {
       return finalResult;
     }
-    broadcastToOwner(session.context, session.connId, {
-      relaySessionId: session.id,
-      type: "toolProgress",
-      result: finalResult,
-      talkEvent: session.harness.talk.emit({
+    broadcastToOwner(
+      session,
+      { type: "toolProgress", result: finalResult },
+      {
         type: "tool.progress",
         turnId,
         payload: {
@@ -542,8 +540,8 @@ export function prepareTalkRealtimeRelayAgentControl(
           result: finalResult,
         },
         final: finalResult.mode === "cancel" || finalResult.mode === "status",
-      }),
-    });
+      },
+    );
     return finalResult;
   };
 }
@@ -652,6 +650,9 @@ export async function cancelTalkRealtimeRelayTurn(params: {
 export function stopTalkRealtimeRelaySession(params: {
   relaySessionId: string;
   connId: string;
+  disposition?: RealtimeVoiceCloseOptions["disposition"];
 }): void | Promise<void> {
-  return closeRelaySession(getRelaySession(params.relaySessionId, params.connId), "completed");
+  return closeRelaySession(getRelaySession(params.relaySessionId, params.connId), "completed", {
+    disposition: params.disposition ?? "abort",
+  });
 }

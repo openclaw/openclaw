@@ -1,12 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { EngineConnection } from "./sql-connection.js";
+import { sqlPublicationAnchor } from "./sql-connection.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 
 type PendingTransactionState = {
+  /** Fence transferable readers immediately before the physical COMMIT. */
+  prepareCommit?: () => void;
   commit: () => void;
   prepareObservers?: () => void;
-  /** Retire affected facts if installation fails after the durable COMMIT. Must not throw. */
+  /** Retire facts on failed installation or unknown native outcome. Must not throw. */
   invalidate?: (error: unknown) => void;
   rollback: (error: unknown) => void;
 };
@@ -111,7 +115,7 @@ export function publishSqliteCommittedState(
 
 /** Stage a complete owner publication; native savepoints share the outer commit. */
 export function stageSqliteCommittedPublication(
-  db: DatabaseSync,
+  db: EngineConnection,
   publication: SqliteCommittedPublication,
 ): boolean {
   if (
@@ -137,13 +141,16 @@ const pendingTransactionState = resolveGlobalSingleton(
 );
 
 /** Snapshots read within this managed transaction can still roll back. */
-export function hasSqlitePostCommitScope(db: DatabaseSync): boolean {
-  return pendingPublications.has(db);
+export function hasSqlitePostCommitScope(db: EngineConnection): boolean {
+  return pendingPublications.has(sqlPublicationAnchor(db));
 }
 
 /** Publications are non-throwing observers, never part of a durable transaction's result. */
-export function deferSqlitePostCommitPublication(db: DatabaseSync, publish: () => void): boolean {
-  const pending = pendingPublications.get(db);
+export function deferSqlitePostCommitPublication(
+  db: EngineConnection,
+  publish: () => void,
+): boolean {
+  const pending = pendingPublications.get(sqlPublicationAnchor(db));
   if (!pending) {
     return false;
   }
@@ -156,15 +163,16 @@ export function deferSqlitePostCommitPublication(db: DatabaseSync, publish: () =
  * Observer preparation follows every committed state update. All callbacks must not throw.
  */
 export function stageSqliteTransactionState(
-  db: DatabaseSync,
+  db: EngineConnection,
   state: PendingTransactionState & { stage: () => void },
 ): boolean {
-  const pending = pendingTransactionState.get(db);
+  const pending = pendingTransactionState.get(sqlPublicationAnchor(db));
   if (!pending) {
     return false;
   }
   state.stage();
   pending.push({
+    prepareCommit: state.prepareCommit,
     commit: state.commit,
     prepareObservers: state.prepareObservers,
     invalidate: state.invalidate,
@@ -173,11 +181,26 @@ export function stageSqliteTransactionState(
   return true;
 }
 
-function rollbackTransactionState(states: PendingTransactionState[], error: unknown): void {
+/** Tentative native writes stay private until their owner's final commit guard succeeds. */
+export function prepareSqliteTransactionCommit(db: EngineConnection): void {
+  for (const state of pendingTransactionState.get(sqlPublicationAnchor(db)) ?? []) {
+    state.prepareCommit?.();
+  }
+}
+
+function rollbackTransactionState(
+  states: PendingTransactionState[],
+  error: unknown,
+  outcome: "rolled-back" | "unknown" = "rolled-back",
+): void {
   const failures: unknown[] = [];
   for (const state of states.toReversed()) {
     try {
-      state.rollback(error);
+      if (outcome === "unknown" && state.invalidate) {
+        state.invalidate(error);
+      } else {
+        state.rollback(error);
+      }
     } catch (failure) {
       failures.push(failure);
     }
@@ -191,48 +214,27 @@ function rollbackTransactionState(states: PendingTransactionState[], error: unkn
   }
 }
 
-/** Install a received commit without borrowing a reentrant native transaction's rollback scope. */
-export function withSqliteCommittedPublications<T>(db: DatabaseSync, stage: () => T): T {
-  const outerPublications = pendingPublications.get(db);
-  const outerState = pendingTransactionState.get(db);
-  const publications: Array<() => void> = [];
-  const states: PendingTransactionState[] = [];
-  pendingPublications.set(db, publications);
-  pendingTransactionState.set(db, states);
-  let result: T;
-  try {
-    result = stage();
-  } catch (error) {
-    rollbackTransactionState(states, error);
-    throw error;
-  } finally {
-    if (outerPublications) {
-      pendingPublications.set(db, outerPublications);
-    } else {
-      pendingPublications.delete(db);
-    }
-    if (outerState) {
-      pendingTransactionState.set(db, outerState);
-    } else {
-      pendingTransactionState.delete(db);
-    }
-  }
-  installCommittedState(states, publications);
-  return result;
-}
-
 /** A lost transaction invalidates every savepoint's staged state and observers. */
-export function discardSqliteTransactionState(db: DatabaseSync, error: unknown): void {
+export function discardSqliteTransactionState(
+  database: EngineConnection,
+  error: unknown,
+  outcome: "rolled-back" | "unknown" = "unknown",
+): void {
+  const db = sqlPublicationAnchor(database);
   pendingPublications.get(db)?.splice(0);
   const rolledBackState = pendingTransactionState.get(db)?.splice(0) ?? [];
   pendingPublications.delete(db);
   pendingTransactionState.delete(db);
-  rollbackTransactionState(rolledBackState, error);
+  rollbackTransactionState(rolledBackState, error, outcome);
 }
 
 /** Nested rollback restores staged state and discards observers; savepoints wait for outer commit. */
-export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transaction: () => T): T {
-  const nested = db.isTransaction || pendingPublications.has(db);
+export function withSqlitePostCommitPublications<T>(
+  database: EngineConnection,
+  transaction: () => T,
+): T {
+  const db = sqlPublicationAnchor(database);
+  const nested = database.isTransaction || pendingPublications.has(db);
   const publications = nested ? pendingPublications.get(db) : [];
   const transactionState = nested ? pendingTransactionState.get(db) : [];
   const publicationStart = publications?.length ?? 0;

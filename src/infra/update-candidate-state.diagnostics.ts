@@ -117,7 +117,15 @@ export function createUpdateStateInspectionReporter(legacy = false, entryProgres
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
     emittedBytes += Buffer.byteLength(line);
-    writeSync(2, line);
+    try {
+      writeSync(2, line);
+    } catch (error) {
+      // Advisory progress must not fail inspection when the nonblocking pipe is full.
+      const code = extractErrorCode(error);
+      if (code !== "EAGAIN" && code !== "EWOULDBLOCK") {
+        throw error;
+      }
+    }
   };
 }
 

@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type {
   McpAppDiscoverResult,
   McpAppDiscoveredServer,
@@ -9,15 +8,20 @@ import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
-import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { canCallGatewayMethod } from "./gateway-methods.ts";
 
 const discoveryRequests = new WeakMap<
   GatewayBrowserClient,
-  { invalidation?: object; pending: Map<string, Promise<McpAppDiscoverResult>> }
+  Map<string, Promise<McpAppDiscoverResult>>
 >();
 
+type McpAppCatalogHost = {
+  requestUpdate(): void;
+  addController?(controller: McpAppCatalogController): void;
+};
+
 /** Presentation cache only. The Gateway remains the discovery and authorization owner. */
-export class McpAppCatalogController implements ReactiveController {
+export class McpAppCatalogController {
   servers: McpAppDiscoveredServer[] = [];
   onboarding: NonNullable<McpAppDiscoverResult["onboarding"]> = [];
   loading = false;
@@ -28,16 +32,18 @@ export class McpAppCatalogController implements ReactiveController {
   private cleanup: (() => void)[] = [];
   private connected = false;
   constructor(
-    private host: ReactiveControllerHost,
+    private host: McpAppCatalogHost,
     private context: () => ApplicationContext | undefined,
     private target: () => McpAppExtensionTarget,
     private prepareSession: () => boolean = () => false,
   ) {
-    host.addController(this);
+    host.addController?.(this);
   }
   get available() {
+    const snapshot = this.context()?.gateway.snapshot;
     return (
-      isGatewayMethodAdvertised(this.context()?.gateway.snapshot ?? {}, "mcp.app.discover") === true
+      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write") ||
+      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.sessions.write")
     );
   }
   hostConnected() {
@@ -58,7 +64,7 @@ export class McpAppCatalogController implements ReactiveController {
       this.cleanup.push(
         context.gateway.subscribeEvents((event) => {
           if (event.event === "config.changed") {
-            void this.refresh(event);
+            void this.refresh();
           }
         }),
       );
@@ -98,10 +104,10 @@ export class McpAppCatalogController implements ReactiveController {
     this.error = null;
     this.loading = false;
     if (gateway.snapshot.phase === "connected" && this.available && target.sessionKey) {
-      void this.refresh(null);
+      void this.refresh();
     }
   }
-  async refresh(invalidation: object | null = {}) {
+  async refresh() {
     const context = this.context();
     const client = context?.gateway.snapshot.client;
     const target = this.target();
@@ -116,18 +122,12 @@ export class McpAppCatalogController implements ReactiveController {
     }
     const generation = ++this.generation;
     const scope = gatewayPresentationScope(context.gateway).key;
-    let discovery = discoveryRequests.get(client);
-    if (!discovery) {
-      discovery = { pending: new Map() };
-      discoveryRequests.set(client, discovery);
+    let pending = discoveryRequests.get(client);
+    if (!pending) {
+      pending = new Map();
+      discoveryRequests.set(client, pending);
     }
-    // Gateway observers receive the same event object; retire old reads once
-    // before any consumer awaits session preparation or issues its replacement.
-    if (invalidation && discovery.invalidation !== invalidation) {
-      discovery.invalidation = invalidation;
-      discovery.pending.clear();
-    }
-    const pending = discovery.pending;
+    // A config change during discovery may show the older catalog until the next refresh.
     const requestKey = JSON.stringify([scope, target.agentId, target.sessionKey]);
     this.loading = true;
     this.error = null;

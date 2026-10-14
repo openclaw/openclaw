@@ -10,6 +10,7 @@ import {
   resolveNodeWorkerLaunchToolNames,
 } from "../infra/node-runner-inventory.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
+import { createNodeInvokeResponder } from "./client.js";
 import { startNodeHostConnection } from "./connection.js";
 import * as hostStats from "./host-stats.js";
 
@@ -178,6 +179,7 @@ function startConnectionFixture(
   workerHostingEnabled = false,
   preparedWorkspacesEnabled = false,
   nativeInferenceEnabled = false,
+  deviceFoldersEnabled = false,
 ) {
   const request = vi.fn().mockResolvedValue({ ok: true, handled: false });
   const runtime = {
@@ -197,6 +199,7 @@ function startConnectionFixture(
     workerHostingEnabled,
     preparedWorkspacesEnabled,
     nativeInferenceEnabled,
+    ...(deviceFoldersEnabled ? { deviceFoldersEnabled: true as const } : {}),
     initialInventory: { skills: [], pluginTools: [] },
     start,
   };
@@ -210,6 +213,48 @@ function startConnectionFixture(
   const publications = () => request.mock.calls.filter(([method]) => method === "node.event");
   return { connection, request, publications, writeStderrLine, start, prepared, runtime };
 }
+
+it("sends permission details only while the connected Gateway advertises support", async () => {
+  const { connection, request, start } = startConnectionFixture();
+  const runtimeClient = start.mock.calls[0]![0].client;
+  const response = createNodeInvokeResponder(runtimeClient, {
+    id: "screen-capture",
+    nodeId: "test-mac",
+    command: "system.run",
+  });
+  const failure = {
+    ok: false,
+    error: {
+      code: "PERMISSION_MISSING",
+      message: "PERMISSION_MISSING: screenRecording",
+      details: { capabilities: ["screenRecording"], state: "not-determined" as const },
+    },
+  };
+  const legacyResult = {
+    id: "screen-capture",
+    nodeId: "test-mac",
+    ok: false,
+    error: { code: "PERMISSION_MISSING", message: "PERMISSION_MISSING: screenRecording" },
+  };
+  try {
+    connection.connect({
+      ...gateway,
+      capabilities: [GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS],
+    });
+    await response.send(failure);
+    expect(request).toHaveBeenLastCalledWith("node.invoke.result", {
+      ...legacyResult,
+      error: failure.error,
+    });
+    connection.disconnect();
+    connection.connect(gateway);
+    await vi.advanceTimersByTimeAsync(0);
+    await response.send(failure);
+    expect(request).toHaveBeenLastCalledWith("node.invoke.result", legacyResult);
+  } finally {
+    await connection.close();
+  }
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -656,6 +701,36 @@ it.each([
       } else {
         delete process.versions.bun;
       }
+    }
+  },
+);
+
+it.each([
+  { enabled: false, supported: true },
+  { enabled: true, supported: true },
+  { enabled: true, supported: false },
+])(
+  "advertises device folders unless disabled, with Gateway support (%j)",
+  async ({ enabled, supported }) => {
+    const { connection, request, start } = startConnectionFixture(true, false, false, enabled);
+    try {
+      start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS] : [],
+      });
+      await Promise.resolve();
+      const inventory = request.mock.calls.find(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(inventory).toMatchObject({ workerHost: { enabled: true } });
+      const parsed = parseNodeRunnerInventoryDeclaration(inventory);
+      expect(parsed).not.toBeNull();
+      if (parsed && "workerHost" in parsed && parsed.workerHost.enabled) {
+        expect(parsed.workerHost.deviceFolders).toBe(enabled && supported ? true : undefined);
+      }
+    } finally {
+      await connection.close();
     }
   },
 );

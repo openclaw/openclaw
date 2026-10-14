@@ -7,6 +7,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
+import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
   SOURCE_FENCE_ACCEPTED,
   SOURCE_FENCE_READY,
@@ -22,8 +23,8 @@ import {
   assertSqliteWorkerCommitReceiptPending,
   requestSqliteWorkerOperationAdmission,
   takeSqliteWorkerOperationAdmissionAttachment,
-  withSqliteWorkerSourceReservations,
 } from "./sqlite-worker-operation-admission.js";
+import { currentSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-settlement.js";
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSourceFenceBindings"),
@@ -101,6 +102,23 @@ function rollbackReservations(reservations: readonly SqliteSourceFenceDatabase[]
   }
   if (failures.length) {
     throw new AggregateError(failures, "SQLite source reservation cleanup failed");
+  }
+}
+
+/** A native waiter may block MAIN; this interval must complete without host messages. */
+function withSqliteWorkerSourceReservations<T>(operation: () => T): T {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active || scope.owner.sourceReservations) {
+    throw new SqliteWorkerError(
+      "SQLite source fence requires exclusive operation custody",
+      "closed",
+    );
+  }
+  scope.owner.sourceReservations = true;
+  try {
+    return operation();
+  } finally {
+    delete scope.owner.sourceReservations;
   }
 }
 
@@ -184,6 +202,10 @@ export async function runSqliteSourceFence<T>(
                 for (const source of ordered) {
                   runWithSqliteBusyTimeout(source.database, 0, () => {
                     source.database.exec("BEGIN IMMEDIATE");
+                    const timing = currentSqliteOperationTiming();
+                    if (timing) {
+                      timing.transactions.count += 1;
+                    }
                     reservations.push(source);
                   });
                 }

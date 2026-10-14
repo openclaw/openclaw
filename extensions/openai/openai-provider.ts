@@ -28,8 +28,9 @@ import {
   projectOpenAIAccountModels,
 } from "./account-models.js";
 import {
-  OPENAI_CODEX_MODELS_ENDPOINT,
   OPENAI_CODEX_RESPONSES_BASE_URL,
+  resolveOpenAICodexModelsEndpoint,
+  type OpenAICodexModelsEndpointContext,
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
   isOpenAIApiBaseUrl,
@@ -47,6 +48,7 @@ import {
   OPENAI_CODEX_DEFAULT_MODEL,
   OPENAI_DEFAULT_MODEL,
 } from "./default-models.js";
+import { classifyOpenAiFailoverCode } from "./failover-code.js";
 import {
   buildOpenAIUnknownModelHint,
   OPENAI_CHAT_LATEST_MODEL_ID,
@@ -62,6 +64,7 @@ import {
   OPENAI_GPT_56_SOL_MODEL_ID,
   OPENAI_GPT_56_TERRA_MODEL_ID,
   OPENAI_GPT_6_MODEL_IDS,
+  OPENAI_GPT_61_SOL_MODEL_ID,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
@@ -82,6 +85,7 @@ import { createOpenAIProvider } from "./provider-contract-api.js";
 import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
+  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
@@ -93,16 +97,6 @@ import {
 
 const PROVIDER_ID = "openai";
 
-function classifyOpenAiFailoverCode(code: string | undefined) {
-  switch (code?.trim().toUpperCase()) {
-    case "SERVER_ERROR":
-      return "server_error" as const;
-    case "INSUFFICIENT_QUOTA":
-      return "billing" as const;
-    default:
-      return undefined;
-  }
-}
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -290,6 +284,9 @@ function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | und
     (candidate) =>
       normalizeLowercaseStringOrEmpty(candidate.id) === normalizeLowercaseStringOrEmpty(modelId),
   );
+  if (fallbackModel?.id === OPENAI_GPT_61_SOL_MODEL_ID) {
+    return { ...fallbackModel, contextTokens: OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS };
+  }
   return fallbackModel ? normalizeOpenAICodexCatalogModel(fallbackModel) : undefined;
 }
 
@@ -399,15 +396,17 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
 async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
+  catalogContext?: OpenAICodexModelsEndpointContext;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
+  const endpoint = await resolveOpenAICodexModelsEndpoint(params.catalogContext);
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
-      endpoint: OPENAI_CODEX_MODELS_ENDPOINT,
+      endpoint,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,
@@ -422,7 +421,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       cacheKeyParts: [
         PROVIDER_ID,
         "codex-model-rows",
-        OPENAI_CODEX_MODELS_ENDPOINT,
+        endpoint,
         params.discoveryApiKey,
         params.accountId ?? "",
       ],
@@ -714,7 +713,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const [
-          { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata },
+          { resolveApiKeyForProvider, resolveProviderAuthProfileMetadataAsync },
           { isNonSecretApiKeyMarker },
         ] = await Promise.all([
           import("openclaw/plugin-sdk/provider-auth-runtime"),
@@ -740,7 +739,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           }
         }
         if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
-          const metadata = resolveProviderAuthProfileMetadata({
+          const metadata = await resolveProviderAuthProfileMetadataAsync({
             provider: PROVIDER_ID,
             cfg: ctx.config,
             ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
@@ -752,6 +751,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
             await buildOpenAICodexLiveProviderConfig({
               discoveryApiKey: runtimeAuth.apiKey,
               accountId: metadata.accountId,
+              catalogContext: ctx,
             }),
             runtimeAuth.profileId ?? auth.profileId,
           );
@@ -767,7 +767,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
             };
           }
           return projectOpenAICatalog(
-            await buildOpenAICodexLiveProviderConfig({ discoveryApiKey }),
+            await buildOpenAICodexLiveProviderConfig({ discoveryApiKey, catalogContext: ctx }),
           );
         }
         if (auth.profileId && isCodexCatalogAuthMode(auth.mode)) {
@@ -897,7 +897,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
-    classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
+    classifyFailoverReason: ({ code, errorMessage }) =>
+      /^Provider (?:finish_reason|incomplete_reason): content_filter$/.test(errorMessage)
+        ? "format"
+        : classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat, thinkingLevelMap }) =>
       normalizeProviderId(provider) === PROVIDER_ID

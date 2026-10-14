@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
@@ -13,6 +13,7 @@ import {
   deleteCronJobRowInDatabase,
   loadedCronStoreFromRows,
   loadCronRows,
+  projectCronJobThroughStorageCodec,
   replaceCronRows,
   upsertCronJobRow,
   updateCronRuntimeRows,
@@ -92,7 +93,7 @@ export function prepareCronStoreChanges(
 }
 
 /** Both save modes fence only the definitions this mutation intends to change. */
-export function assertCronStoreChangesCurrent(
+function assertCronStoreChangesCurrent(
   prepared: PreparedCronStoreChanges,
   currentById: ReadonlyMap<string, CronStoredJob>,
   resolvedStorePath: string,
@@ -116,7 +117,7 @@ export function assertCronStoreChangesCurrent(
 
 /** Applies prepared changes inside the caller's synchronous write transaction. */
 export function saveCronStoreChangesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   resolvedStorePath: string,
   prepared: PreparedCronStoreChanges,
@@ -169,7 +170,13 @@ export function saveCronStoreChangesInDatabase(
     );
     if (hasCanonicalCronDeliveryMode(persisted.delivery)) {
       replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [persisted] });
-      currentById.set(jobId, persisted);
+      const postimage = projectCronJobThroughStorageCodec(persisted);
+      if (persisted.runtimeAuthorityRecoveryRequired === true) {
+        postimage.runtimeAuthorityRecoveryRequired = true;
+      } else if (persisted.runtimeAuthority) {
+        postimage.runtimeAuthority = persisted.runtimeAuthority;
+      }
+      currentById.set(jobId, postimage);
     }
   }
   hooks?.hooks.afterWrite?.(db, hooks.receiptSchema);
@@ -177,7 +184,7 @@ export function saveCronStoreChangesInDatabase(
 }
 
 function replaceCronStoreRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   store: CronStoreFile,
   preserveRuntimeState: boolean,

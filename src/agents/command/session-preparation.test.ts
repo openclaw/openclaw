@@ -21,9 +21,13 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 import { prepareCommandConversationContext } from "./conversation-context.js";
-import { prepareEmbeddedSessionState } from "./session-preparation.js";
+import {
+  prepareCommandSessionRecoveryEntry,
+  prepareEmbeddedSessionState,
+} from "./session-preparation.js";
 
 vi.mock("../embedded-agent-runner/runs.js", () => ({
   resolveEmbeddedAgentSessionProgressState: () => undefined,
@@ -39,15 +43,89 @@ vi.mock("../../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 vi.mock("./attempt-execution.shared.js", () => ({ persistAgentSession: vi.fn() }));
+// mock-isolation: Session-preparation tests own their skill snapshot and exec eligibility without host storage.
 vi.mock("./runtime-loaders.js", () => ({
   loadSkillsRuntime: async () => ({
     getRemoteSkillEligibility: () => ({}),
     resolveReusableWorkspaceSkillSnapshot: () => ({ snapshot: undefined, shouldRefresh: false }),
   }),
   loadExecDefaultsRuntime: async () => ({
-    resolveNodeExecEligibility: () => ({ canExec: false }),
+    resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   }),
 }));
+
+it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
+  "retains original operator recovery custody only for the exact requester settle source: %s",
+  (sourceTool) => {
+    const runId = "announce:requester-settle:main:agent:main:main:child-run";
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "original-operator",
+      scopes: ["operator.read"],
+      assertCurrent() {},
+      recoverySnapshot: {
+        profileId: "original-operator",
+        scopes: ["operator.read"],
+        assignedRole: null,
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "original-grant",
+          role: "operator",
+          authMethod: "token",
+        },
+        controlUiAdmin: false,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    });
+    const { nextEntry } = prepareCommandSessionRecoveryEntry({
+      entry: {
+        sessionId: "requester-session",
+        lifecycleRevision: "requester-revision",
+        updatedAt: 1,
+      },
+      sessionId: "requester-session",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      runId,
+      now: 2,
+      lifecycleGeneration: "current-generation",
+      isSessionRollover: false,
+      opts: {
+        message: "Child completed",
+        operatorAuthority,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool,
+          sourceChannel: "internal",
+          sourceSessionKey: "agent:main:subagent:child",
+        },
+      },
+    });
+    if (sourceTool !== "subagent_settle") {
+      expect(nextEntry.restartRecoveryOperatorSource).toBeUndefined();
+      return;
+    }
+    expect(nextEntry).toMatchObject({
+      restartRecoveryDeliverySourceRunId: runId,
+      restartRecoverySourceIngress: "internal",
+      restartRecoveryOperatorSource: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "requester-session",
+        lifecycleRevision: "requester-revision",
+        sourceRunId: runId,
+        snapshot: {
+          profileId: "original-operator",
+          scopes: ["operator.read"],
+          controlUiAdmin: false,
+        },
+      },
+    });
+  },
+);
 
 it.each([
   { internal: false, coordination: false },

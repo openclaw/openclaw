@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { icons } from "../../../components/icons.ts";
 import {
@@ -11,7 +10,7 @@ import {
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
-import "./chat-sidebar-region.runtime.ts";
+import "./chat-sidebar-region.runtime.tsx";
 
 const shells: HTMLElement[] = [];
 const firstTab: PanelHostedTab = {
@@ -50,7 +49,7 @@ async function mount(
   );
   region.panelDefinitions = sidebarPanelDefinitions().map((definition) =>
     Object.assign(definition, {
-      content: definition.slot === slot ? html`${panel}` : null,
+      content: definition.slot === slot ? panel : null,
     }),
   );
   region.fetchFavicon = options.fetchFavicon;
@@ -82,7 +81,7 @@ async function mount(
 }
 
 function labels(shell: HTMLElement) {
-  return [...shell.querySelectorAll("wa-tab .tabstrip-tab__label")].map(
+  return [...shell.querySelectorAll(".tabstrip-tab .tabstrip-tab__label")].map(
     (label) => label.textContent,
   );
 }
@@ -95,6 +94,20 @@ afterEach(() => {
 });
 
 describe("chat sidebar hosted tabs", () => {
+  it("restores an expanded hosted panel only from its active page tab", async () => {
+    const { region, shell } = await mount();
+    region.layout = { ...region.layout, expanded: true, expandedSide: true };
+    await region.updateComplete;
+    shell
+      .querySelector<HTMLElement>('.tabstrip-tab[data-tab-value="hosted:browser:remote:page:1"]')!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledExactlyOnceWith("browser");
+    shell
+      .querySelector<HTMLElement>('.tabstrip-tab[data-tab-value="hosted:browser:native:page:2"]')!
+      .click();
+    expect(region.callbacks?.togglePanelExpanded).toHaveBeenCalledTimes(1);
+  });
+
   it("drags passive header chrome while keeping changing tabs and controls interactive", async () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
@@ -124,12 +137,12 @@ describe("chat sidebar hosted tabs", () => {
         expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "window-drag" });
       }
       for (const target of shell.querySelectorAll(
-        ".side-panel__header wa-tab, .side-panel__header .tabstrip-tab__label, .side-panel__header button, .side-panel__header button svg, .side-panel-type-menu__item, .side-panel-type-option__label",
+        ".side-panel__header .tabstrip-tab, .side-panel__header .tabstrip-tab__label, .side-panel__header button, .side-panel__header button svg, .side-panel-type-menu__item, .side-panel-type-option__label",
       )) {
         expect(press(target).defaultPrevented).toBe(false);
         expect(postMessage).not.toHaveBeenCalled();
       }
-      const menu = shell.querySelector("wa-dropdown")!.shadowRoot!.querySelector('[role="menu"]')!;
+      const menu = shell.querySelector('.side-panel-type-menu [role="menu"]')!;
       expect(press(menu).defaultPrevented).toBe(false);
       expect(postMessage).not.toHaveBeenCalled();
       expect(press(panel).defaultPrevented).toBe(false);
@@ -141,23 +154,21 @@ describe("chat sidebar hosted tabs", () => {
     const { region, panel, shell } = await mount();
     region.layout = activatePanel(region.layout, "workspace");
     await region.updateComplete;
-    shell.querySelector("wa-tab-group")!.dispatchEvent(
-      new CustomEvent("wa-tab-show", {
-        bubbles: true,
-        detail: { name: "hosted:browser:native:page:2" },
-      }),
-    );
+    shell
+      .querySelector<HTMLButtonElement>(
+        '.tabstrip-tab[data-tab-value="hosted:browser:native:page:2"]',
+      )!
+      .click();
     expect(region.callbacks!.activatePanel).toHaveBeenCalledExactlyOnceWith("browser");
     expect(panel.selectHostedTab).toHaveBeenCalledExactlyOnceWith("native:page:2");
     expect(region.callbacks!.activatePanel).toHaveBeenCalledBefore(panel.selectHostedTab);
     region.layout = activatePanel(region.layout, "browser");
     await region.updateComplete;
-    shell.querySelector("wa-tab-group")!.dispatchEvent(
-      new CustomEvent("wa-tab-show", {
-        bubbles: true,
-        detail: { name: "hosted:browser:native:page:2" },
-      }),
-    );
+    shell
+      .querySelector<HTMLButtonElement>(
+        '.tabstrip-tab[data-tab-value="hosted:browser:native:page:2"]',
+      )!
+      .click();
     expect(region.callbacks!.activatePanel).toHaveBeenCalledTimes(1);
     expect(panel.selectHostedTab).toHaveBeenCalledTimes(2);
   });
@@ -213,7 +224,7 @@ describe("chat sidebar hosted tabs", () => {
       ],
     });
     expect(labels(shell)).toEqual(["Review", "zsh", "Files"]);
-    const tab = shell.querySelector('wa-tab[panel="hosted:terminal:shell:1"]')!;
+    const tab = shell.querySelector('.tabstrip-tab[data-tab-value="hosted:terminal:shell:1"]')!;
     expect(tab.getAttribute("title")).toBe("main: /workspace");
     expect(tab.querySelector(".tabstrip-tab__status")?.textContent).toBe("Exited (0)");
     expect(tab.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
@@ -249,7 +260,7 @@ describe("chat sidebar hosted tabs", () => {
       "favicon-ready.example",
       expect.any(AbortSignal),
     );
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     expect(fetchFavicon).toHaveBeenCalledOnce();
   });
@@ -270,12 +281,12 @@ describe("chat sidebar hosted tabs", () => {
     expect(shell.querySelector("img.tabstrip-tab__favicon")).toBeNull();
     expect(
       shell.querySelector(
-        'wa-tab[panel="hosted:browser:remote:page:1"] .tabstrip-tab__icon path[d="M2 12h20"]',
+        '.tabstrip-tab[data-tab-value="hosted:browser:remote:page:1"] .tabstrip-tab__icon path[d="M2 12h20"]',
       ),
     ).not.toBeNull();
     expect(
       shell.querySelector(
-        'wa-tab[panel="hosted:browser:native:page:2"] .tabstrip-tab__icon rect[width="20"][height="14"]',
+        '.tabstrip-tab[data-tab-value="hosted:browser:native:page:2"] .tabstrip-tab__icon rect[width="20"][height="14"]',
       ),
     ).not.toBeNull();
   });

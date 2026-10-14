@@ -8,6 +8,7 @@ import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as fileDescriptor from "./file-descriptor.js";
 import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
@@ -356,6 +357,19 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
     );
   },
 );
+
+it("retains unchanged files without rehashing the ctime change caused by its own link", async () => {
+  const content = "export const retained = true;\n";
+  const f = await fixture(async (source) => {
+    await fs.writeFile(path.join(source, "dist", "unique.js"), content);
+  });
+  const original = path.join(f.source, "dist", "unique.js");
+  const hash = vi.spyOn(fileDescriptor, "hashFileMutationSnapshotSync");
+  await f.link();
+  expect(hash.mock.calls.filter(([file]) => file === original)).toHaveLength(0);
+  await fs.rm(f.source, { recursive: true });
+  expect(await fs.readFile(path.join(f.destination, "dist", "unique.js"), "utf8")).toBe(content);
+});
 
 it("refuses entries that changed after the inventory and never links a replacement", async () => {
   const f = await fixture();

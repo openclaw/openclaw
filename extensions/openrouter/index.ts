@@ -51,7 +51,10 @@ import {
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
-const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
+// Upstream families with OpenRouter prompt caching, so pruning waits out the cache TTL.
+// OpenRouter documents implicit Gemini caching only for the 2.5 series and newer.
+const OPENROUTER_CACHE_TTL_MODEL_FAMILY =
+  /^(?:(?:anthropic|deepseek|moonshot(?:ai)?|x-ai|z-?ai)\/|google\/gemini-(?:2\.5|3))/;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
 // Configured rows keep their sizing and opt-outs, but the OpenRouter model
@@ -382,9 +385,11 @@ export default defineSingleProviderPluginEntry({
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.OPENROUTER_API_KEY],
-        });
+        const apiKey = (
+          await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+            envDirect: [ctx.env.OPENROUTER_API_KEY],
+          })
+        )?.[0];
         return apiKey ? { token: apiKey } : null;
       },
       fetchUsageSnapshot: async (ctx) =>

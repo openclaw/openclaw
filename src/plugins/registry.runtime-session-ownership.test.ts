@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { createPluginRecord } from "./loader-records.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -28,6 +33,84 @@ function createApis(runtime: PluginRuntime, config: OpenClawConfig = {}) {
 }
 
 describe("plugin registry runtime session ownership", () => {
+  it.each(["upsert", "route"] as const)(
+    "refuses a prepared %s when its plugin retires before worker admission",
+    async (operation) => {
+      const runtime = createPluginRuntime();
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const original = { sessionId: "managed", updatedAt: 1, label: "original" };
+      const delivery = normalizeSessionDeliveryState({
+        context: { channel: "slack", to: "C123" },
+      });
+      let stored: SessionEntry = original;
+      runtime.agent.session.getSessionEntryAsync = async () => stored;
+      runtime.agent.session.upsertSessionEntry = async ({ entry }) => {
+        entered.resolve();
+        await resume.promise;
+        stored = entry;
+      };
+      runtime.agent.session.prepareSessionEntryPatch = async (params) => {
+        const patch = await params.prepare(stored, { existingEntry: stored });
+        entered.resolve();
+        await resume.promise;
+        if (params.authority?.kind === "host") {
+          params.authority.assertCurrent();
+        }
+        if (params.authority?.kind === "source") {
+          params.authority.source();
+        }
+        if (patch) {
+          stored = { ...stored, ...patch };
+        }
+        return stored;
+      };
+      runtime.channel.session.updateLastRoute = async () => {
+        entered.resolve();
+        await resume.promise;
+        stored = { ...stored, delivery };
+        return stored;
+      };
+      runtime.channel.session.updateLastRouteWithAuthority = async ({ authority }) => {
+        entered.resolve();
+        await resume.promise;
+        if (authority.kind === "host") {
+          authority.assertCurrent();
+        } else {
+          authority.source();
+        }
+        stored = { ...stored, delivery };
+        return stored;
+      };
+      const registry = createRuntimeTestRegistry(runtime);
+      const record = createPluginRecord({
+        id: "managed-writer",
+        source: "/plugins/managed-writer/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      });
+      const api = registry.createApi(record, { config: {} });
+      const writing =
+        operation === "upsert"
+          ? api.runtime.agent.session.upsertSessionEntry({
+              sessionKey: "agent:main:managed",
+              entry: { ...original, label: "must not persist" },
+            })
+          : api.runtime.channel.session.updateLastRoute({
+              sessionKey: "agent:main:managed",
+              storePath: "/synthetic/sessions.json",
+              channel: "slack",
+            });
+      await entered.promise;
+      const refused = expect(writing).rejects.toThrow("runtime is no longer active");
+      revokePluginRecord(registry.registry, record);
+      resume.resolve();
+      await refused;
+      expect(stored).toEqual(original);
+    },
+  );
+
   it.each(["key", "id"] as const)(
     "fences a managed asynchronous %s read when its plugin retires before disclosure",
     async (selection) => {
@@ -150,8 +233,8 @@ describe("plugin registry runtime session ownership", () => {
     };
     const runtime = createPluginRuntime();
     runtime.config.current = () => cfg;
-    runtime.agent.session.getSessionEntry = vi.fn(() => entry);
-    runtime.agent.session.listSessionEntries = vi.fn(() => [{ sessionKey, entry }]);
+    runtime.agent.session.getSessionEntryAsync = vi.fn(async () => entry);
+    runtime.agent.session.listSessionEntriesAsync = vi.fn(async () => [{ sessionKey, entry }]);
     let executionScope = getPluginRuntimeGatewayRequestScope();
     const runEmbeddedAgent = vi.fn<PluginRuntime["agent"]["runEmbeddedAgent"]>(async () => {
       executionScope = getPluginRuntimeGatewayRequestScope();
@@ -222,6 +305,9 @@ describe("plugin registry runtime session ownership", () => {
   });
 
   it("limits locked harness session mutation and execution to the harness owner", async () => {
+    const cfg: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const key = {
       reserved: "agent:main:harness:codex:thread-1",
       ordinary: "agent:main:ordinary",
@@ -270,6 +356,7 @@ describe("plugin registry runtime session ownership", () => {
     } as unknown as Record<string, SessionEntry>;
     const subagent = {
       complete: vi.fn(async () => ({ text: "completed" })),
+      forkSession: vi.fn(async () => ({ text: "completed" })),
       run: vi.fn(async () => ({ runId: "subagent-run" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
@@ -277,8 +364,8 @@ describe("plugin registry runtime session ownership", () => {
     } satisfies PluginRuntime["subagent"];
     const runtime = createPluginRuntime({ subagent });
     const session = runtime.agent.session;
-    session.getSessionEntry = vi.fn((params) => entries[params.sessionKey]);
-    session.listSessionEntries = vi.fn(() =>
+    session.getSessionEntryAsync = vi.fn(async (params) => entries[params.sessionKey]);
+    session.listSessionEntriesAsync = vi.fn(async () =>
       Object.entries(entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
     );
     session.patchSessionEntry = vi.fn(async (params) => {
@@ -288,6 +375,17 @@ describe("plugin registry runtime session ownership", () => {
       }
       const patch = await params.update(structuredClone(entry), {
         existingEntry: structuredClone(entry),
+      });
+      return patch ? { ...entry, ...patch } : entry;
+    });
+    session.prepareSessionEntryPatch = vi.fn(async (params) => {
+      const existingEntry = entries[params.sessionKey];
+      const entry = existingEntry ?? params.fallbackEntry;
+      if (!entry) {
+        return null;
+      }
+      const patch = await params.prepare(structuredClone(entry), {
+        existingEntry: existingEntry ? structuredClone(existingEntry) : undefined,
       });
       return patch ? { ...entry, ...patch } : entry;
     });
@@ -313,7 +411,7 @@ describe("plugin registry runtime session ownership", () => {
     const gatewayRequest = vi.fn(async () => ({ ok: true }));
     runtime.gateway.isAvailable = vi.fn(async () => true);
     runtime.gateway.request = gatewayRequest as unknown as PluginRuntime["gateway"]["request"];
-    const createApi = createApis(runtime);
+    const createApi = createApis(runtime, cfg);
     const owner = createApi("codex-owner");
     const other = createApi("other-plugin");
     const voice = createApi("voice-call");
@@ -464,6 +562,12 @@ describe("plugin registry runtime session ownership", () => {
       "does not match its reserved session key",
     );
     const otherSession = other.runtime.agent.session;
+    await rejectedByOwner(
+      otherSession.upsertSessionEntry({
+        sessionKey: key.locked,
+        entry: { ...plugin, sessionId: locked.sessionId },
+      }),
+    );
     await expect(
       otherSession.upsertSessionEntry({
         sessionKey: key.legacy,
@@ -481,9 +585,9 @@ describe("plugin registry runtime session ownership", () => {
       otherSession.runWithWorkAdmission(legacyAdmission, async () => "admitted"),
     ).resolves.toBe("admitted");
     const ownershipChangedRun = vi.fn(async () => "must-not-run");
-    vi.mocked(session.getSessionEntry)
-      .mockImplementationOnce(() => legacy)
-      .mockImplementationOnce(() => reserved);
+    vi.mocked(session.getSessionEntryAsync)
+      .mockImplementationOnce(async () => legacy)
+      .mockImplementationOnce(async () => reserved);
     await expect(
       otherSession.runWithWorkAdmission(legacyAdmission, ownershipChangedRun),
     ).rejects.toThrow("does not match its reserved session key");

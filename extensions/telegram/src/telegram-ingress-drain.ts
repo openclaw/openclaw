@@ -15,6 +15,7 @@ import {
 } from "./approval-callback-data.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import {
+  recordTelegramUpdateReceivedAt,
   runWithTelegramSpooledReplayUpdate,
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -27,7 +28,6 @@ import {
 import {
   getPreparedTelegramPollAnswer,
   isEligibleTelegramPollAnswerUpdate,
-  prepareTelegramPollAnswerContext,
   prepareTelegramPollAnswerContextAsync,
   recordPreparedTelegramPollAnswer,
   settleTelegramPollAnswerContext,
@@ -324,12 +324,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     TelegramSpooledUpdatePayload
   >({
     queue: params.queue,
-    inspect: (update, context) => {
-      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
-        prepareTelegramPollAnswerContext({ update, accountId: params.accountId });
-      }
-      return inspect(update, context);
-    },
+    inspect,
     inspectAsync: async (update, context) => {
       if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
@@ -354,8 +349,11 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       },
       deserialize: (payload) => {
         const update = payload.update;
-        if (payload.preparedPollAnswer && typeof update === "object" && update !== null) {
-          recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+        if (typeof update === "object" && update !== null) {
+          recordTelegramUpdateReceivedAt(update, payload.receivedAt);
+          if (payload.preparedPollAnswer) {
+            recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+          }
         }
         return update;
       },

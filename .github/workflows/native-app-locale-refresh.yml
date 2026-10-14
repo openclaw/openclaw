@@ -30,6 +30,8 @@ on:
       - .github/actions/publish-generated-pr/action.yml
       - .github/actions/publish-generated-pr/policy.py
       - .github/workflows/native-app-locale-refresh.yml
+      - "!apps/ios/README.md"
+      - "!apps/ios/AGENTS.md"
   workflow_dispatch:
     inputs:
       full_refresh:

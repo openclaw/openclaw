@@ -6,7 +6,10 @@ import {
   AuthStorage as PublicAuthStorage,
   ModelRegistry as PublicModelRegistry,
 } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as sdkDeprecation from "../../plugins/sdk-deprecation.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createApiKeyCredential,
@@ -29,10 +32,12 @@ vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
   };
 });
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { refreshAuthProfileFileState } from "../auth-profiles/file-state.js";
 import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
 } from "../auth-profiles/legacy-source-diagnostic.js";
+import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -43,6 +48,7 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../auth-profiles/sqlite.js";
+import * as authProfileStoreUpdate from "../auth-profiles/store-update.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import { AuthStorage, OAuthProviderConfiguredUnavailableError } from "./auth-storage.js";
 
@@ -72,9 +78,58 @@ describe("SQLite auth storage", () => {
     return agentDir;
   }
 
+  it("initializes detached in-memory credentials without a legacy reload warning", () => {
+    const warn = vi.spyOn(sdkDeprecation, "warnPluginSdkDeprecation").mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+    const credential = { type: "api_key" as const, key: "synthetic-initial-key" };
+    const storage = PublicAuthStorage.inMemory({ fixture: credential });
+    credential.key = "synthetic-mutated-key";
+
+    expect(storage.get("fixture")).toEqual({ type: "api_key", key: "synthetic-initial-key" });
+    expect(warn).not.toHaveBeenCalled();
+
+    storage.reload();
+    expect(warn).toHaveBeenCalledWith({
+      family: "auth-profile-sync-operations",
+      method: "AuthStorage.reload",
+      replacement: "AuthStorage.reloadAsync",
+    });
+    expect(storage.get("fixture")).toEqual({ type: "api_key", key: "synthetic-initial-key" });
+  });
+
+  it("merges async SDK writes and reloads committed peer changes without host SQLite", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "auth-async-sdk-" },
+      async (state) => {
+        const agentDir = state.agentDir("worker");
+        fs.mkdirSync(agentDir, { recursive: true });
+        const left = await PublicAuthStorage.forAgentAsync(agentDir);
+        const right = await PublicAuthStorage.forAgentAsync(agentDir);
+        const sql = observeHostDataSql();
+        try {
+          await Promise.all([
+            left.setAsync("openai", { type: "api_key", key: "synthetic-openai" }),
+            right.setAsync("anthropic", { type: "api_key", key: "synthetic-anthropic" }),
+          ]);
+          await left.reloadAsync();
+          expect(left.list().toSorted()).toEqual(["anthropic", "openai"]);
+          await right.removeAsync("openai");
+          await left.reloadAsync();
+          expect(left.get("openai")).toBeUndefined();
+          expect(await left.getApiKey("anthropic")).toBe("synthetic-anthropic");
+          expect(
+            sql.queries.filter((query) => /\bauth_profile_(?:store|state)\b/i.test(query)),
+          ).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+      },
+    );
+  });
+
   it("dispatches callback-based login to the owning provider plugin", async () => {
     const agentDir = makeAgentDir();
-    const storage = AuthStorage.forAgent(agentDir);
+    const storage = await AuthStorage.forAgentAsync(agentDir);
     const callbacks = {
       onAuth: vi.fn(),
       onPrompt: vi.fn(async () => ""),
@@ -138,6 +193,7 @@ describe("SQLite auth storage", () => {
     const agentDir = makeAgentDir();
     const storage = AuthStorage.forAgent(agentDir);
     writePersistedAuthProfileStoreRaw({ version: 1, profiles: "invalid-profile-map" }, agentDir);
+    await refreshAuthProfileFileState();
     vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
     storage.reload();
 
@@ -247,7 +303,7 @@ describe("SQLite auth storage", () => {
       }),
       agentDir,
     );
-    const storage = PublicAuthStorage.forAgent(agentDir);
+    const storage = await PublicAuthStorage.forAgentAsync(agentDir);
     PublicModelRegistry.inMemory(storage).registerProvider("test-oauth", {
       oauth: {
         name: "Test OAuth",
@@ -267,7 +323,15 @@ describe("SQLite auth storage", () => {
       },
     });
 
-    await expect(storage.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
+    const sql = observeHostDataSql();
+    try {
+      await expect(storage.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
+      expect(
+        sql.queries.filter((query) => /\bauth_profile_(?:store|state)\b/i.test(query)),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
     expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
       type: "oauth",
       provider: "test-oauth",
@@ -520,6 +584,7 @@ describe("SQLite auth storage", () => {
     const storage = AuthStorage.forAgent(agentDir);
     vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
     fs.writeFileSync(path.join(agentDir, "auth.json"), '{"openai":{"key":"fake-late"}}\n');
+    await refreshAuthProfileFileState();
 
     await expect(storage.getApiKey("openai")).rejects.toThrow(
       "requires legacy credential migration",
@@ -561,6 +626,8 @@ describe("SQLite auth storage", () => {
     );
     const left = AuthStorage.forAgent(agentDir);
     const right = AuthStorage.forAgent(agentDir);
+    const refreshEntered = createDeferredCore();
+    const releaseRefresh = createDeferredCore();
     let refreshCalls = 0;
     let activeRefreshes = 0;
     let maxActiveRefreshes = 0;
@@ -574,9 +641,8 @@ describe("SQLite auth storage", () => {
         refreshCalls += 1;
         activeRefreshes += 1;
         maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
-        await new Promise((resolve) => {
-          setTimeout(resolve, 50);
-        });
+        refreshEntered.resolve();
+        await releaseRefresh.promise;
         activeRefreshes -= 1;
         return {
           access: "fake-fresh-access",
@@ -591,9 +657,40 @@ describe("SQLite auth storage", () => {
     getAuthStorageOAuthProviderRegistry(left).register(provider);
     getAuthStorageOAuthProviderRegistry(right).register(provider);
 
-    await expect(
-      Promise.all([left.getApiKey("test-oauth"), right.getApiKey("test-oauth")]),
-    ).resolves.toEqual(["fake-fresh-access", undefined]);
+    const ownerKey = left.getApiKey("test-oauth");
+    try {
+      await refreshEntered.promise;
+      const peerSelected = createDeferredCore();
+      const runUpdate = authProfileStoreUpdate.runAuthProfileStoreUpdate;
+      const observePeer = vi
+        .spyOn(authProfileStoreUpdate, "runAuthProfileStoreUpdate")
+        .mockImplementationOnce((params) => {
+          const selecting = runUpdate({
+            ...params,
+            update: (prepared, owner) => {
+              const credential = prepared.store.profiles["test-oauth:default"];
+              expect(credential?.type === "oauth" && isPendingOAuthRefreshFence(credential)).toBe(
+                true,
+              );
+              return params.update(prepared, owner);
+            },
+          });
+          void selecting.then(peerSelected.resolve, peerSelected.reject);
+          return selecting;
+        });
+      onTestFinished(() => observePeer.mockRestore());
+      const peerKey = right.getApiKey("test-oauth");
+      void peerKey.catch(peerSelected.reject);
+      await peerSelected.promise;
+      releaseRefresh.resolve();
+      await expect(peerKey).resolves.toBeUndefined();
+      await expect(Promise.all([ownerKey, peerKey])).resolves.toEqual([
+        "fake-fresh-access",
+        undefined,
+      ]);
+    } finally {
+      releaseRefresh.resolve();
+    }
     expect(refreshCalls).toBe(1);
     expect(maxActiveRefreshes).toBe(1);
     await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");

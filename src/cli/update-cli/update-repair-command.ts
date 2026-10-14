@@ -57,9 +57,15 @@ import {
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import { updateMaintenanceError } from "./update-maintenance-error.js";
 
-/** Public repair can clear a stale ledger without entering post-core maintenance. */
-export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  return repairUpdate(opts).catch((error: unknown) => {
+    throw updateMaintenanceError(error);
+  });
+}
+
+async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   // Recovery refusal precedes discovery; later mutation checks still revalidate.
   await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();

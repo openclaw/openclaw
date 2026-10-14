@@ -1,6 +1,7 @@
 import { etc } from "@noble/ed25519";
 import {
   ConnectErrorDetailCodes,
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
@@ -25,6 +26,7 @@ import type {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
+import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
@@ -137,12 +139,13 @@ export class GatewayBrowserClient {
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
+  private connectionHello: GatewayHelloOk | null = null;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private maxInboundSilenceMs: number | null = null;
-  private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private readonly remoteIngress = isRemoteControlUiIngress();
   private nativeAuthAbort: AbortController | null = null;
   private nativeAuthError: GatewayRequestError | null = null;
   // Close/stop advances this generation before another socket can make stale hello work look active.
@@ -153,8 +156,20 @@ export class GatewayBrowserClient {
   private pairingFailure: GatewayRequestError | null = null;
 
   constructor(private opts: GatewayBrowserClientOptions) {
+    if (this.remoteIngress) {
+      // The ingress owns admission and supplies its scope ceiling for an empty request.
+      Object.assign(this.opts, {
+        token: undefined,
+        password: undefined,
+        bootstrapToken: undefined,
+        bootstrapProfile: undefined,
+        nativeConnectAuth: undefined,
+        scopes: [],
+      });
+    }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.connectionHello = null;
         this.pendingPairing = null;
         this.pairingFailure = null;
         this.reachabilityProbe?.abort();
@@ -198,10 +213,11 @@ export class GatewayBrowserClient {
       onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
+        this.connectionHello = null;
         this.nativeAuthAbort?.abort();
         this.chatEvents.clear();
         this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
-        this.stopTickWatch();
+        this.clearInboundActivity();
         this.scopeUpgradeBinding = null;
         const error = this.pairingFailure ?? context.connectFailure?.error ?? this.nativeAuthError;
         this.pendingPairing = null;
@@ -257,7 +273,7 @@ export class GatewayBrowserClient {
       },
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
-      handshake: { mode: "fallback", timeoutMs: 750 },
+      handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
       reconnect: { initialMs: 800, multiplier: 1.7, maxMs: 15_000 },
       nowMs: () =>
         typeof performance !== "undefined" && typeof performance.now === "function"
@@ -279,11 +295,12 @@ export class GatewayBrowserClient {
   }
 
   stop() {
+    this.connectionHello = null;
     this.nativeAuthAbort?.abort();
     this.reachabilityProbe?.abort();
     this.reachabilityProbe = null;
     this.chatEvents.clear();
-    this.stopTickWatch();
+    this.clearInboundActivity();
     this.recovery = { ...this.recovery, generation: this.recovery.generation + 1, resolved: false };
     this.client.stop();
     this.cancelScopeUpgrade();
@@ -294,6 +311,14 @@ export class GatewayBrowserClient {
 
   get connected() {
     return this.client.connected;
+  }
+
+  get auth() {
+    return this.connectionHello?.auth ?? null;
+  }
+
+  get hello() {
+    return this.connectionHello;
   }
 
   get needsWakeReconnect() {
@@ -366,6 +391,7 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    this.connectionHello = hello;
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
     this.recovery.value = hello.auth?.recoveryScope ?? "";
@@ -373,17 +399,20 @@ export class GatewayBrowserClient {
     this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
     this.offlineStorageRetired = false;
     this.maxPayloadBytes = hello.policy?.maxPayload;
-    this.startTickWatch(hello);
+    this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
     this.opts.bootstrapProfile = undefined;
-    this.scopeUpgradeBinding = plan.deviceIdentity && {
-      clientId: plan.params.client.id,
-      deviceId: plan.deviceIdentity.deviceId,
-      role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
-    };
-    if (hello?.auth?.deviceToken && plan.deviceIdentity) {
+    this.scopeUpgradeBinding =
+      !this.remoteIngress && plan.deviceIdentity
+        ? {
+            clientId: plan.params.client.id,
+            deviceId: plan.deviceIdentity.deviceId,
+            role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
+          }
+        : null;
+    if (!this.remoteIngress && hello?.auth?.deviceToken && plan.deviceIdentity) {
       const role = hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE;
       const scopes =
         role === plan.params.role && hello.auth.deviceToken === plan.selectedAuth.storedToken
@@ -403,10 +432,12 @@ export class GatewayBrowserClient {
   private async resolveRecoveryScope(hello: GatewayHelloOk, plan: ConnectPlan) {
     const serverScope = hello.auth?.recoveryScope;
     const legacyScope = await deriveLegacyV4RecoveryScope(
-      hello.auth?.deviceToken ??
-        plan.selectedAuth.authDeviceToken ??
-        plan.selectedAuth.resolvedDeviceToken ??
-        plan.selectedAuth.authToken,
+      this.remoteIngress
+        ? undefined
+        : (hello.auth?.deviceToken ??
+            plan.selectedAuth.authDeviceToken ??
+            plan.selectedAuth.resolvedDeviceToken ??
+            plan.selectedAuth.authToken),
     );
     const migrateRecoveryScope =
       serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
@@ -422,11 +453,9 @@ export class GatewayBrowserClient {
     this.opts.onRecoveryScopeChange?.();
   }
 
-  private startTickWatch(hello: GatewayHelloOk): void {
-    this.stopTickWatch();
+  private initializeInboundActivity(hello: GatewayHelloOk): void {
     const advertisedTickIntervalMs = hello.policy?.tickIntervalMs;
-    // Gateway policy is remote input; use the shared timer clamp so an
-    // oversized interval cannot wrap into a resource-exhausting hot loop.
+    // Retain the bounded stale-tab window advertised by the Gateway.
     const tickIntervalMs = resolveSafeTimeoutDelayMs(
       typeof advertisedTickIntervalMs === "number" &&
         Number.isFinite(advertisedTickIntervalMs) &&
@@ -437,20 +466,11 @@ export class GatewayBrowserClient {
     );
     this.maxInboundSilenceMs = tickIntervalMs * 2;
     this.lastInboundActivityAtMs = Date.now();
-    this.tickWatchTimer = setInterval(() => {
-      // Preserve long-running requests while real Gateway heartbeats arrive;
-      // only a silent socket should enter the shared reconnect lifecycle.
-      if (this.connected && this.needsWakeReconnect) {
-        this.forceReconnect("tick timeout");
-      }
-    }, tickIntervalMs);
+    // Transport ping/pong owns dead-peer detection. Delayed application ticks
+    // must not reconnect a busy Gateway; silence only informs tab-wake recovery.
   }
 
-  private stopTickWatch(): void {
-    if (this.tickWatchTimer !== null) {
-      clearInterval(this.tickWatchTimer);
-      this.tickWatchTimer = null;
-    }
+  private clearInboundActivity(): void {
     this.lastInboundActivityAtMs = null;
     this.maxInboundSilenceMs = null;
   }
@@ -559,6 +579,9 @@ export class GatewayBrowserClient {
     role: string;
     deviceId: string;
   }): GatewayConnectAuthSelection {
+    if (this.remoteIngress) {
+      return {};
+    }
     const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
       gatewayUrl: this.opts.url,

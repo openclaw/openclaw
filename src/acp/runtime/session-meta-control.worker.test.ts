@@ -3,6 +3,7 @@ import { renameSync } from "node:fs";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -50,6 +51,7 @@ afterEach(async () => {
 it("rechecks same-binding metadata updates and clear through fresh joins without host data SQL", async () => {
   await withOpenClawTestState({ label: "acp-control-fresh" }, async () => {
     const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       cfg,
       sessionKey: "agent:main:acp:control",
@@ -94,6 +96,7 @@ it.each(["owner", "lifecycle", "shared-source"] as const)(
   async (replacement) => {
     await withOpenClawTestState({ label: "acp-control-replacement" }, async (state) => {
       const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const scope = { cfg, sessionKey: "agent:main:acp:control", agentId: "main" };
       const entry = {
         sessionId: "same-id",
@@ -137,6 +140,7 @@ it("keeps the physical shared-store owner and validates canonical ACP aliases in
       agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
       session: { store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     const sessionKey = "agent:worker:acp:control";
     const scope = { cfg, storePath, sessionKey, agentId: "worker" };
@@ -222,6 +226,7 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
         session: { scope: "global", store: storePath },
       };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const scope = { cfg, agentId: "main", sessionKey: "global", skipMaintenance: true };
       await replaceSessionEntry(
         { ...scope, storePath },

@@ -40,7 +40,7 @@ type NativeFixtureThread = {
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
-  persistedThreads?: string[];
+  persistedThreads?: Array<string | ReturnType<typeof nativeThreadStartResult>>;
   unsubscribe?: (threadId: string) => unknown;
 }) {
   const threads = new Map<string, NativeFixtureThread>();
@@ -65,8 +65,8 @@ export function createCodexLifecycleHarness(options: {
     };
     threads.set(response.thread.id, entry);
   };
-  for (const threadId of options.persistedThreads ?? []) {
-    remember(nativeThreadStartResult(threadId), false, false);
+  for (const thread of options.persistedThreads ?? []) {
+    remember(typeof thread === "string" ? nativeThreadStartResult(thread) : thread, false, false);
   }
   const dispatch = async (request: RpcRequest) => {
     const params = isJsonObject(request.params) ? request.params : {};

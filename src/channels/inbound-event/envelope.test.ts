@@ -6,6 +6,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelInboundEnvelopeBuilder,
   resolveChannelInboundRouteEnvelope,
@@ -34,6 +35,44 @@ const cfg = {
 
 describe("channel inbound envelope", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("warns once with an awaited replacement while retaining the released envelope result", () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      withPluginRuntimePluginScope({ pluginId: "envelope-deprecation-consumer" }, () => {
+        for (let i = 0; i < 2; i += 1) {
+          const buildEnvelope = createInboundEnvelopeBuilder({
+            cfg,
+            route: resolveAgentRoute(),
+            sessionStore: cfg.session?.store,
+            resolveStorePath,
+            readSessionUpdatedAt: readSessionUpdatedAtCore,
+            resolveEnvelopeFormatOptions,
+            formatAgentEnvelope,
+          });
+          expect(
+            buildEnvelope({
+              channel: "Telegram",
+              from: "Alice",
+              body: "hello",
+              timestamp: 120_000,
+            }),
+          ).toEqual({
+            storePath: "/state/main/sessions.json",
+            body: "[Telegram Alice +1m Thu 1970-01-01T00:02:00Z] hello",
+          });
+        }
+      });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "createInboundEnvelopeBuilder is deprecated; use await createChannelInboundEnvelopeBuilderAsync",
+        ),
+        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
 
   it.each(["direct", "routed", "runtime"] as const)(
     "preserves the shipped SDK resolveStorePath callback through the %s helper",

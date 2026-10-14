@@ -731,6 +731,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   function bindEvents() {
+    const bindClicks = (selector: string, onClick: (node: HTMLElement) => void) => {
+      root.querySelectorAll<HTMLElement>(selector).forEach((node) => {
+        node.addEventListener("click", () => onClick(node));
+      });
+    };
     const bindValue = (
       selector: string,
       event: "input" | "change",
@@ -751,34 +756,30 @@ export async function createQaLabApp(root: HTMLDivElement) {
       ["data-evidence-entry-key", "selectedEvidenceEntryKey", null],
       ["data-capture-event", "selectedCaptureEventKey", null],
     ] as const) {
-      root.querySelectorAll<HTMLElement>(`[${attribute}]`).forEach((node) => {
-        node.addEventListener("click", () => {
-          state[field] = node.getAttribute(attribute);
-          if (field === "selectedConversationKey") {
-            state.selectedThreadId = null;
-          }
-          if (tab) {
-            state.activeTab = tab;
-          }
-          render();
-        });
-      });
-    }
-
-    root.querySelectorAll<HTMLElement>("[data-thread-select]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const val = node.dataset.threadSelect;
-        if (val === "root") {
+      bindClicks(`[${attribute}]`, (node) => {
+        state[field] = node.getAttribute(attribute);
+        if (field === "selectedConversationKey") {
           state.selectedThreadId = null;
-        } else {
-          state.selectedThreadId = val ?? null;
-          const conversationKey = node.dataset.threadConversationKey;
-          if (conversationKey) {
-            state.selectedConversationKey = conversationKey;
-          }
+        }
+        if (tab) {
+          state.activeTab = tab;
         }
         render();
       });
+    }
+
+    bindClicks("[data-thread-select]", (node) => {
+      const val = node.dataset.threadSelect;
+      if (val === "root") {
+        state.selectedThreadId = null;
+      } else {
+        state.selectedThreadId = val ?? null;
+        const conversationKey = node.dataset.threadConversationKey;
+        if (conversationKey) {
+          state.selectedConversationKey = conversationKey;
+        }
+      }
+      render();
     });
 
     const bindAction = (action: string, handler: () => void) => {
@@ -790,13 +791,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
     bindAction("reset", () => void resetState());
     bindAction("toggle-theme", toggleTheme);
     bindAction("toggle-sidebar", toggleSidebar);
-    root.querySelectorAll<HTMLElement>("[data-sidebar-panel]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const panel = node.dataset.sidebarPanel;
-        if (panel === "config" || panel === "run" || panel === "scenarios") {
-          setSidebarPanel(panel);
-        }
-      });
+    bindClicks("[data-sidebar-panel]", (node) => {
+      const panel = node.dataset.sidebarPanel;
+      if (panel === "config" || panel === "run" || panel === "scenarios") {
+        setSidebarPanel(panel);
+      }
     });
     bindAction("self-check", () => void runSelfCheck());
     bindAction("run-suite", () => void runSuite());
@@ -974,18 +973,16 @@ export async function createQaLabApp(root: HTMLDivElement) {
       persistCaptureSavedViews(state.captureSavedViews);
       render();
     });
-    root.querySelectorAll<HTMLButtonElement>("[data-capture-session-remove]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const sessionId = node.dataset.captureSessionRemove?.trim();
-        if (!sessionId) {
-          return;
-        }
-        state.selectedCaptureSessionIds = state.selectedCaptureSessionIds.filter(
-          (id) => id !== sessionId,
-        );
-        state.selectedCaptureEventKey = null;
-        void refresh();
-      });
+    bindClicks("[data-capture-session-remove]", (node) => {
+      const sessionId = node.dataset.captureSessionRemove?.trim();
+      if (!sessionId) {
+        return;
+      }
+      state.selectedCaptureSessionIds = state.selectedCaptureSessionIds.filter(
+        (id) => id !== sessionId,
+      );
+      state.selectedCaptureEventKey = null;
+      void refresh();
     });
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
@@ -1187,31 +1184,27 @@ export async function createQaLabApp(root: HTMLDivElement) {
       ["data-capture-lane-toggle", "captureCollapsedLaneIds"],
       ["data-capture-lane-pin", "capturePinnedLaneIds"],
     ] as const) {
-      root.querySelectorAll<HTMLElement>(`[${attribute}]`).forEach((node) => {
-        node.addEventListener("click", () => {
-          const laneId = node.getAttribute(attribute);
-          if (!laneId) {
-            return;
-          }
-          const selected = new Set(state[field]);
-          if (selected.has(laneId)) {
-            selected.delete(laneId);
-          } else {
-            selected.add(laneId);
-          }
-          state[field] = [...selected];
-          render();
-        });
-      });
-    }
-    root.querySelectorAll<HTMLButtonElement>("[data-copy-text]").forEach((node) => {
-      node.addEventListener("click", () => {
-        const text = node.dataset.copyText ?? "";
-        if (!text) {
+      bindClicks(`[${attribute}]`, (node) => {
+        const laneId = node.getAttribute(attribute);
+        if (!laneId) {
           return;
         }
-        void navigator.clipboard.writeText(text).catch(() => undefined);
+        const selected = new Set(state[field]);
+        if (selected.has(laneId)) {
+          selected.delete(laneId);
+        } else {
+          selected.add(laneId);
+        }
+        state[field] = [...selected];
+        render();
       });
+    }
+    bindClicks("[data-copy-text]", (node) => {
+      const text = node.dataset.copyText ?? "";
+      if (!text) {
+        return;
+      }
+      void navigator.clipboard.writeText(text).catch(() => undefined);
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {
       const readWindow = () => {

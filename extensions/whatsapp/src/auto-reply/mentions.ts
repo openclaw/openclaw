@@ -86,8 +86,6 @@ export function debugMention(
   const admission = requireWhatsAppInboundAdmission(msg);
   const details = {
     from: admission.conversation.id,
-    body: msg.payload.body,
-    bodyClean: normalizeMentionText(msg.payload.body),
     mentionedJids: msg.group?.mentions?.jids ?? null,
     normalizedMentionedJids: mentionTargets.normalizedMentions.length
       ? mentionTargets.normalizedMentions.map((identity) => getComparableIdentityValues(identity))

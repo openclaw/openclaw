@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { toolIcons } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
@@ -8,6 +9,21 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import "./chat-skill-learned-notice.tsx";
+import "./chat-permission-card.tsx";
+import "./chat-run-failure-notice.tsx";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+export function renderChatPermissionCard(
+  request: NodePermissionRequest,
+  onRetry?: (message: string) => void,
+) {
+  // Some transcript leaves mount independent Solid roots. The bridge recovers the app's DOM context.
+  return html`<openclaw-chat-permission-card
+    .request=${request}
+    .onRetry=${onRetry}
+  ></openclaw-chat-permission-card>`;
+}
 
 export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
   const archiveActor = activeSession?.archivedBy;
@@ -96,7 +112,55 @@ export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) 
   `;
 }
 
-export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
+export function renderChatNotice(
+  item: Extract<ChatItem, { kind: "notice" }>,
+  onPermissionRetry?: (message: string) => void,
+  recovery?: Pick<
+    ChatThreadProps,
+    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onChangeFailureModel"
+  >,
+) {
+  if (item.runError) {
+    const runId = item.runError.runId;
+    const canRecover =
+      recovery &&
+      runId === recovery.failureActionsRunId &&
+      !recovery.runActive &&
+      !recovery.runWorking;
+    const failureActions = canRecover
+      ? {
+          onRetry: recovery.onRetryRun ? () => recovery.onRetryRun?.(runId) : undefined,
+          onChangeModel: recovery.onChangeFailureModel
+            ? () => recovery.onChangeFailureModel?.(runId)
+            : undefined,
+        }
+      : undefined;
+    return html`<div
+      data-chat-row-key=${item.key}
+      data-ts=${String(item.timestamp)}
+      data-run-failure=${item.runError.runId}
+    >
+      <openclaw-chat-run-failure-notice
+        .summary=${item.runError.summary}
+        .onRetry=${failureActions?.onRetry}
+        .onChangeModel=${failureActions?.onChangeModel}
+      ></openclaw-chat-run-failure-notice>
+    </div>`;
+  }
+  if (item.permissionMissing) {
+    return html`<div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+      ${renderChatPermissionCard(item.permissionMissing, onPermissionRetry)}
+    </div>`;
+  }
+  if (item.skillChanges) {
+    return html`
+      <div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+        <openclaw-chat-skill-learned-notice
+          .notice=${item.skillChanges}
+        ></openclaw-chat-skill-learned-notice>
+      </div>
+    `;
+  }
   const body = item.text
     ? html`
         <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>

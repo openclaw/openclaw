@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -15,20 +16,18 @@ import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-job
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceiptAsync,
-  prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
-import { reserveQueuedCronRun } from "./run-admission.js";
+import { list } from "./ops-read.js";
 import { createCronRunHandle } from "./run-history.js";
 import { createCronServiceState } from "./state.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { authorCronRunCompletion } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receipts-" });
@@ -55,6 +54,52 @@ function authorOutcome(outcome: Omit<TimedCronRunOutcome, "completionStatus" | "
 }
 
 describe("cron outcome receipt finalization", () => {
+  it("refreshes the public job view after a committed terminal reply is lost", async () => {
+    const { storePath } = fixtures.makeStorePath();
+    const startedAt = Date.parse("2026-02-06T10:05:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "lost-terminal-reply",
+      nowMs: startedAt,
+      nextRunAtMs: startedAt,
+    });
+    job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+    job.state.runningAtMs = startedAt;
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const runReceipt = claimReceipt(storePath, job, startedAt);
+    const state = createCronRegressionState({
+      storePath,
+      nowMs: () => startedAt + 1,
+      runIsolatedAgentJob: vi.fn(),
+    });
+    state.schedulerStarted = true;
+    expect((await list(state))[0]?.state.runningAtMs).toBe(startedAt);
+    const dropped = loseFirstCronMutationReply("cron.finalizeRuns");
+    try {
+      await expect(
+        finalizeCompletedCronRunOutcomes(state, [
+          authorOutcome({
+            jobId: job.id,
+            job,
+            activeJobMarker: markCronJobActive(job.id),
+            runReceipt,
+            runReceiptContext: captureOpenClawStateWorkerContext(),
+            status: "ok",
+            startedAt,
+            endedAt: startedAt + 1,
+          }),
+        ]),
+      ).rejects.toThrow();
+      expect(dropped.wasDropped()).toBe(true);
+      await dropped.waitForExit();
+      expect((await loadCronStore(storePath)).jobs[0]?.state.lastRunStatus).toBe("ok");
+      const visible = (await list(state))[0];
+      expect(visible?.state.lastRunStatus).toBe("ok");
+      expect(visible?.state.runningAtMs).toBeUndefined();
+    } finally {
+      await dropped.close();
+    }
+  });
+
   it.each([false, true])(
     "preserves authored rows while finalizing a retired outcome without consuming a same-millisecond successor (replaced=%s)",
     async (replaced) => {
@@ -92,10 +137,6 @@ describe("cron outcome receipt finalization", () => {
         runReceipt: retiredReceipt,
       }).runId;
       const retiredMarker = markCronJobActive(retired.id);
-      const reservationIdentity = reserveQueuedCronRun(state, retired.id, startedAt, {
-        runReceipt: retiredReceipt,
-        runReceiptContext,
-      });
       advanceCronActiveJobGeneration();
       const currentMarker = markCronJobActive(current.id);
       let successor: ReturnType<typeof claimReceipt> | undefined;
@@ -135,7 +176,6 @@ describe("cron outcome receipt finalization", () => {
             job: retired,
             taskRunId,
             activeJobMarker: retiredMarker,
-            reservationIdentity,
             runReceipt: retiredReceipt,
             runReceiptContext,
             status: "ok",
@@ -323,6 +363,7 @@ describe("cron outcome receipt finalization", () => {
       runIsolatedAgentJob: vi.fn(),
     });
 
+    expect(state.store).toBeNull();
     await finalizeCompletedCronRunOutcomes(state, [
       authorOutcome({
         jobId: completed.id,

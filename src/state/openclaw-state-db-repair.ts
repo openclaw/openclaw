@@ -64,6 +64,7 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import { ensureOpenClawStateRuntimeSchema } from "./openclaw-state-db-schema-runtime.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { migratePredicateColumnsV21 } from "./openclaw-state-db-schema-v21-columns.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import * as retirements from "./openclaw-state-db-table-retirements.js";
@@ -96,7 +97,12 @@ export function repairStateSchema(
     const closeReadAdmission =
       scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
     try {
-      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: pathname,
+        env,
+        inspectOwnership: scope === "automatic" ? undefined : true,
+      });
       assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
     } finally {
       closeReadAdmission?.();
@@ -115,7 +121,12 @@ export function repairStateSchema(
       scope !== "readability" && !hasDanglingSkillWorkshopCollectionReviewIndex(db);
     const assertIndexRepairCurrent = () => {
       assertOpenClawStateDatabaseOwner(db, { pathname });
-      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: pathname,
+        env,
+        inspectOwnership: true,
+      });
     };
     indexChanges = canInspectIndexes
       ? repairDoctorSqliteIndexCorruption(db, pathname, {
@@ -176,7 +187,12 @@ export function repairStateSchema(
         ...runSqliteImmediateTransactionSync(
           db,
           () => {
-            assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+            assertOpenClawStateWriteAllowed({
+              database: db,
+              databasePath: pathname,
+              env,
+              inspectOwnership: true,
+            });
             return recoverOrphanTaskDeliveryRows(db, pathname);
           },
           {
@@ -248,6 +264,12 @@ export function repairStateSchema(
         // Recognized schema-1 stores predate audit; Doctor must finish their schema
         // before its later read-only workspace and agent readers can consume it.
         if (preAuditSchema || tableExists(db, "audit_events")) {
+          // Historical delivery repair below already writes and reads the promoted columns.
+          if (migratePredicateColumnsV21(db, previousVersion)) {
+            applied.push(
+              "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
+            );
+          }
           ensureAdditiveStateColumns(db, "repair");
           for (const migration of versionedStateMigrations) {
             if (migration.migrate(db, previousVersion)) {

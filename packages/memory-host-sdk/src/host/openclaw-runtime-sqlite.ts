@@ -11,10 +11,19 @@ export {
   createSqliteTableContractReader,
   type SqliteTableContractReader,
 } from "../../../../src/infra/sqlite-schema-contract.js";
-export { canReuseSqliteSchemaInTransaction } from "../../../../src/infra/sqlite-schema-facts.js";
+export {
+  canReuseSqliteSchemaInTransaction,
+  getAdmittedSqliteSchemaFacts,
+} from "../../../../src/infra/sqlite-schema-facts.js";
+export { createSqliteSchemaEnsurer } from "../../../../src/infra/sqlite-schema-ensure.js";
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../../../../src/infra/sqlite-database-admission.js";
 export { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
+export { stageSqliteTransactionState } from "../../../../src/infra/sqlite-post-commit.js";
+export {
+  sqlPublicationAnchor,
+  type PostgresSqlConnection,
+} from "../../../../src/infra/sql-connection.js";

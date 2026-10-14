@@ -64,6 +64,7 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
 
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly gemini31LiveModel: boolean;
+  private readonly completeInputTranscripts: boolean;
   private readonly extendedThinkingModel: boolean;
   private ws: WebSocket | null = null;
   private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -96,6 +97,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const modelId = session.model?.replace(/^models\//, "") ?? "";
     this.gemini31LiveModel =
       !session.model || (modelId.startsWith("gemini-3.1-") && modelId.includes("-live"));
+    this.completeInputTranscripts = this.gemini31LiveModel || modelId.startsWith("gemini-3.8-live");
     this.extendedThinkingModel =
       modelId.startsWith("gemini-3.8-live") && modelId.includes("extended-thinking");
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
@@ -423,8 +425,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     transcript: { text?: string; finished?: boolean },
   ): boolean {
     const pending = this.pendingTranscripts[role];
-    // Live 3.1 input messages are complete utterances even without finished.
-    const completeInput = role === "user" && this.gemini31LiveModel;
+    // Live 3.1 and 3.8 send complete input utterances without a finished flag.
+    const completeInput = role === "user" && this.completeInputTranscripts;
     if (transcript.text) {
       pending.byteCount += utf8Encoder.encode(transcript.text).byteLength;
       if (pending.byteCount > GOOGLE_LIVE_MAX_TRANSCRIPT_BYTES) {

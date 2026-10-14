@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary } from "../cli-runtime-api.js";
 import {
   CRABBOX_MIN_VERSION,
+  isCrabboxVersionAtLeast,
   probeCrabboxVersion,
   resolveManagedCrabboxBinaryPath,
 } from "./crabbox-managed-binary.js";
@@ -574,6 +575,18 @@ describe("managed Crabbox", () => {
 });
 
 describe("Crabbox version admission", () => {
+  it.each([
+    ["0.78.0", true],
+    ["0.78.0+build", true],
+    ["0.78.1", true],
+    ["1.0.0", true],
+    ["0.77.9", false],
+    ["0.78.0-rc.1", false],
+    ["unparseable", false],
+  ])("compares %s against a release floor (%s)", (version, expected) => {
+    expect(isCrabboxVersionAtLeast(version, "0.78.0")).toBe(expected);
+  });
+
   it("reports a redacted version failure without retaining private error data", async () => {
     const token = "synthetic-version-secret-0123456789";
     const cause = Object.assign(

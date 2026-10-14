@@ -44,6 +44,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     inheritedToolAllowlist,
+    inheritedPublicationToolRef,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -130,6 +131,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ...mcpConfig,
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
+        agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
         // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
@@ -222,10 +224,14 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         (tool) => getPluginToolMeta(tool),
       );
       if (inheritedToolAllowlist?.length) {
-        // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
-        // only after final policy and schema projection so children inherit the
-        // parent's complete authorized surface, never denied bundled tools.
-        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+        // Refresh late-bound tools only after policy and schema projection.
+        // Publication passed core policy but is unavailable in this workspace;
+        // preserve its child capability under the final runtime cap.
+        const publicationTool = inheritedPublicationToolRef?.current;
+        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
+          ...schemaProjection.tools,
+          ...applyRuntimeAllowlist(toolsEnabled && publicationTool ? [publicationTool] : []),
+        ]);
       }
       recordQuarantine({
         diagnostics: schemaProjection.diagnostics,

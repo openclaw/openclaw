@@ -20,7 +20,15 @@ vi.mock("./subagent-announce.requester-settle-descendants.js", () => ({
 const startTurn = vi.hoisted(() => vi.fn());
 const deliver = vi.hoisted(() => vi.fn());
 const loadRequester = vi.hoisted(() =>
-  vi.fn<typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry>(),
+  vi.fn<
+    (
+      ...args: Parameters<
+        typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry
+      >
+    ) => Awaited<
+      ReturnType<typeof import("./subagent-announce-delivery.runtime.js").loadRequesterSessionEntry>
+    >
+  >(),
 );
 const registryRead = vi.hoisted(() => ({
   countPendingDescendantRuns: vi.fn<typeof countPendingDescendantRuns>(
@@ -61,8 +69,11 @@ vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRead);
+// mock-isolation: Dispatch fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: (sessionKey: string) =>
+    sessionKey.split(":subagent:").length - 1,
+  getSubagentDepthFromSessionStoreInWorker: async (sessionKey: string) =>
     sessionKey.split(":subagent:").length - 1,
 }));
 // mock-isolation: Dispatch fixtures select the delivery boundary and requester store explicitly.

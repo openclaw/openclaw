@@ -225,7 +225,11 @@ export function createChannelIngressDrain<
             markLeaseReclaimed(state);
           }
         })
-        .catch(() => undefined);
+        .catch((err: unknown) => {
+          log(
+            `ingress drain: claim refresh failed for event ${state.claim.id}; holding claim: ${formatError(err)}`,
+          );
+        });
     }, intervalMs);
     state.claimRefreshTimer.unref?.();
   };

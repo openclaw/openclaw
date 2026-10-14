@@ -15,6 +15,7 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type { SessionCommunicationPolicy } from "../../../packages/gateway-protocol/src/session-communication.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -346,6 +347,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedCwd?: string;
     /** Content-free fingerprints for checkout changes that predate this session generation. */
     sessionDiffBaseline?: SessionDiffBaseline;
+    /** Canonical existing directory owned by the user on a paired session host. */
+    deviceFolder?: { deviceId: string; path: string };
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
@@ -535,12 +538,16 @@ type SessionEntryCore = SessionRestartRecoveryState &
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
+    /** Human-selected peer messaging preferences; omitted directions inherit configuration. */
+    communication?: SessionCommunicationPolicy;
     queueMode?: QueueMode;
     queueDebounceMs?: number;
     queueCap?: number;
     queueDrop?: "old" | "new" | "summarize";
     inputTokens?: number;
     outputTokens?: number;
+    /** Completeness of the latest run's token and cost accounting. */
+    usageReport?: { state: "available" | "unavailable" };
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
     pendingDeliveryNotice?: PendingDeliveryNoticeState;
@@ -581,6 +588,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
+    /** A committed lossy compaction affected this history; cleared with a new session. */
+    compactionQualityDegraded?: true;
     memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;
     cliSessionBindings?: Record<string, CliSessionBinding>;

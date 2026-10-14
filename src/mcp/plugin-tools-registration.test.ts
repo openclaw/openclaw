@@ -188,7 +188,7 @@ describe("MCP serving registration ownership", () => {
     "releases registrations and only its owned scheduler after validation fails (%s)",
     async (ownership) => {
       const fixture = nativePlugin();
-      const clock = createGatewaySchedulerClock(Date.now());
+      const clock = createGatewaySchedulerClock(0);
       const scheduler = createTestGatewayScheduler(clock.clock);
       const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
       host?.bindScheduler(scheduler);

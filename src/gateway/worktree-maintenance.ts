@@ -224,6 +224,7 @@ export function startWorktreeMaintenance(params: {
     id: "maintenance:worktrees",
     delayMs: WORKTREE_GC_INTERVAL_MS,
     everyMs: WORKTREE_GC_INTERVAL_MS,
+    phase: "maintenance",
     run: () => {
       if (!isGatewayWorkAdmissionClosed()) {
         owner.request();

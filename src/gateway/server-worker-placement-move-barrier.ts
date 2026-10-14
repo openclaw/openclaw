@@ -3,6 +3,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   interruptSessionWorkAdmissions,
+  isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   startSessionWorkAdmissionInterruption,
@@ -34,7 +35,7 @@ export async function runWorkerPlacementHandoff<T>(
   begin: (resolved: Awaited<ReturnType<typeof resolveWorkerPlacementSessionTarget>>) => Promise<T>,
 ): Promise<T> {
   const { sessionId, sessionKey, agentId, action, signal } = request;
-  const target = resolveWorkerPlacementSessionStoreTarget(
+  const target = await resolveWorkerPlacementSessionStoreTarget(
     sessionRuntime,
     getRuntimeConfig(),
     request,
@@ -46,7 +47,7 @@ export async function runWorkerPlacementHandoff<T>(
     identities: lifecycleIdentities,
     signal,
     prepare: async () => {
-      const resolved = await resolveWorkerPlacementSessionTarget({
+      using resolved = await resolveWorkerPlacementSessionTarget({
         sessionRuntime,
         config: getRuntimeConfig(),
         sessionId,
@@ -56,6 +57,14 @@ export async function runWorkerPlacementHandoff<T>(
         errorMessage: `Session ${sessionKey} changed before ${action === "dispatch" ? "cloud worker dispatch" : "placement move"}. Retry.`,
       });
       resolved.assertCurrent(getRuntimeConfig());
+      if (
+        action === "dispatch" &&
+        isCompetingSessionWorkAdmissionActive(target.storePath, lifecycleIdentities)
+      ) {
+        throw new Error(
+          `Session ${sessionKey} is busy with active work; wait for the turn to finish and retry dispatch.`,
+        );
+      }
       begun = await begin(resolved);
       if (action === "dispatch" && request.requiredProfile) {
         // Initial required placement belongs to this held input; there is no local
@@ -114,7 +123,12 @@ export function createGatewayWorkerPlacementMoveBarrier(
       params,
       { ...request, action: "move" },
       await params.loadSessionRuntime(),
-      async () => {
+      async ({ workspace }) => {
+        if (workspace.kind === "device-folder") {
+          throw new Error(
+            "Device folders cannot move or Continue on Gateway; reconnect the original device or start a new session.",
+          );
+        }
         request.authorize?.();
         return await request.begin(async (runId) => {
           if (params.persistAbandonedPartial) {

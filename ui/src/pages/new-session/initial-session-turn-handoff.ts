@@ -30,7 +30,7 @@ type InitialTurn = {
 };
 
 function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boolean>): boolean {
-  const { context, client, result, turn } = options;
+  const { context, result, turn } = options;
   const { text: message, attachments } = turn;
   const handedOffAttachments =
     result.initialRun.status === "rejected" &&
@@ -45,11 +45,6 @@ function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boo
       sessionId: typeof result.entry?.sessionId === "string" ? result.entry.sessionId : undefined,
       retryAfter,
     });
-  if (result.initialRun.status === "started") {
-    context.chatSubmissions.retain(
-      buildInitialChatSubmission(result.key, turn, client, result.initialRun.runId),
-    );
-  }
   return handedOffAttachments;
 }
 
@@ -69,15 +64,28 @@ export async function completeInitialSessionTurn(
 ) {
   const { context, client, agentId, result, instant } = options;
   const { key, initialRun } = result;
-  if (instant) {
-    await instant.waitForReady();
+  // Capture attachment display bytes before consuming the accepted draft. Lazy
+  // preview navigation must not keep sent input in the new-session cache.
+  const acceptedSubmission =
+    initialRun.status === "started"
+      ? buildInitialChatSubmission(key, options.turn, client, initialRun.runId)
+      : null;
+  if (!instant && options.isCurrent()) {
+    context.chatSubmissions.retain(acceptedSubmission);
+  }
+  const clearing =
+    initialRun.status !== "rejected"
+      ? options.clearDraft(
+          true,
+          options.isCurrent() && (!instant || instant.isCurrent()) ? undefined : false,
+        )
+      : undefined;
+  if (instant || clearing) {
+    await Promise.all([instant?.waitForReady(), clearing]);
   }
   if (!options.isCurrent() || (instant && !instant.isCurrent())) {
     // A confirmed send retires its captured draft, but never publishes a first
     // turn into a different authenticated or navigation owner.
-    if (initialRun.status !== "rejected") {
-      await options.clearDraft(true, false);
-    }
     return;
   }
   const restriction =
@@ -97,9 +105,12 @@ export async function completeInitialSessionTurn(
         releaseChatAttachmentPayloads(attachments);
       }
       options.onRejectedPrompt(initialRun.error);
+    } else if (clearing) {
+      if (instant) {
+        context.chatSubmissions.retain(acceptedSubmission);
+      }
     } else {
       const handedOffAttachments = retainInitialSessionTurn(options, retry?.promise);
-      // The confirmed URL must survive closing the tab without restoring the sent draft.
       await options.clearDraft(!handedOffAttachments);
     }
     if (!options.isCurrent() || (instant && !instant.isCurrent())) {

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { nothing } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type {
   SessionsPatchManyParams,
@@ -9,6 +8,7 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import "../../lib/toast-host.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -18,11 +18,8 @@ import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
-import {
-  createContext,
-  createGateway,
-  type TestSessionsPage,
-} from "./sessions-page.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createContext, createGateway, createPage } from "./sessions-page.test-support.ts";
 
 async function setup(childCount: number) {
   const root: GatewaySessionRow = {
@@ -102,12 +99,9 @@ async function setup(childCount: number) {
   const client = { request } as unknown as GatewayBrowserClient;
   const gateway = createGateway(client);
   const sessions = createTestSessionCapability(gateway.gateway);
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = createContext(gateway.gateway, sessions);
-  page.render = () => nothing;
+  const page = await createPage(createContext(gateway.gateway, sessions));
   const toast = document.createElement("openclaw-toast-host");
-  document.body.append(page, toast);
-  await page.updateComplete;
+  document.body.append(toast);
   await sessions.refresh();
   return {
     root,
@@ -129,19 +123,19 @@ async function setup(childCount: number) {
 }
 
 async function revealUndoAfterPartialError(fixture: Awaited<ReturnType<typeof setup>>) {
-  await fixture.toast.updateComplete;
   // A success notification must not replace a partial failure before the operator can read it.
-  expect(fixture.toast.textContent).toContain(fixture.failureMessage);
+  await waitForSolid(() => expect(fixture.toast.textContent).toContain(fixture.failureMessage));
   if (!fixture.undo()) {
     const dismiss = fixture.toast.querySelector<HTMLButtonElement>(".app-toast__dismiss");
     expect(dismiss).not.toBeNull();
     dismiss!.click();
-    await fixture.toast.updateComplete;
   }
-  expect(fixture.toast.textContent).toContain(
-    "Archived " + (fixture.rows.length - 1) + " sessions",
-  );
-  expect(fixture.undo()).not.toBeNull();
+  await waitForSolid(() => {
+    expect(fixture.toast.textContent).toContain(
+      "Archived " + (fixture.rows.length - 1) + " sessions",
+    );
+    expect(fixture.undo()).not.toBeNull();
+  });
 }
 
 describe("Sessions page confirmed tree archive outcomes", () => {

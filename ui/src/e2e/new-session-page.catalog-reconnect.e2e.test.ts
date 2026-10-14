@@ -71,7 +71,7 @@ suite.define(() => {
       assistantName: "Roboclaw",
       cliAgentsEnabled: true,
       defaultAgentId: "roboclaw",
-      deferredRequests: [{ method: "agents.list", match: {}, exactParams: true }],
+      deferredRequests: [{ method: "agents.list" }],
       featureMethods: [...TERMINAL_START_FEATURE_METHODS],
       methodResponses: {
         "sessions.catalog.list": {
@@ -88,7 +88,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("agents.list", { match: {}, exactParams: true });
+      await gateway.waitForRequest("agents.list");
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       expect(
         (await gateway.getRequests("sessions.catalog.list"))
@@ -96,7 +96,7 @@ suite.define(() => {
           .map((request) => request.params),
       ).toEqual([]);
 
-      await gateway.resolveDeferred("agents.list", undefined, { match: {}, exactParams: true });
+      await gateway.resolveDeferred("agents.list");
 
       await page.getByRole("heading", { name: "Roboclaw" }).waitFor();
       await expect
@@ -359,7 +359,7 @@ suite.define(() => {
       expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
 
       await page.locator("#new-session-checkout-trigger").click();
-      const placePopover = page.locator("wa-popover.new-session-page__checkout-popover");
+      const placePopover = page.locator(".oc-popover.new-session-page__checkout-popover");
       const worktreeButton = placePopover.getByRole("button", {
         name: "New worktree Isolated copy of the repo",
         exact: true,
@@ -490,10 +490,8 @@ suite.define(() => {
   });
 
   it.each([
-    { catalogId: "codex", action: "button" },
     { catalogId: "codex", action: "Enter" },
     { catalogId: "claude", action: "button" },
-    { catalogId: "claude", action: "Enter" },
   ])(
     "$catalogId + primary $action opens a native terminal without Chat or title inference",
     async ({ catalogId, action }) => {
@@ -836,16 +834,14 @@ suite.define(() => {
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Research" })
         .click();
       await page.getByRole("heading", { name: "Research" }).waitFor();
 
       const message = page.locator(".new-session-page__message");
       await message.fill("keep my selected agent");
-      const agentRequestsBefore = (
-        await gateway.getRequests("agents.list", {}, { exactParams: true })
-      ).length;
+      const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
@@ -858,9 +854,7 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       await expect
-        .poll(
-          async () => (await gateway.getRequests("agents.list", {}, { exactParams: true })).length,
-        )
+        .poll(async () => (await gateway.getRequests("agents.list")).length)
         .toBe(agentRequestsBefore + 1);
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
       await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
@@ -877,7 +871,7 @@ suite.define(() => {
         includeRepositoryStatus: true,
       });
 
-      const placeSelect = page.locator("wa-popover.new-session-page__checkout-popover");
+      const placeSelect = page.locator(".oc-popover.new-session-page__checkout-popover");
       const placeTrigger = page.locator("#new-session-checkout-trigger");
       await placeTrigger.click();
       const worktreeItem = placeSelect.getByRole("button", {

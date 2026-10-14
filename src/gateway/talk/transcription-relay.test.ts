@@ -163,7 +163,7 @@ describe("talk transcription gateway relay", () => {
     sttSession.close.mockImplementationOnce(() => {
       sttRequest?.onTranscript?.("final audio");
     });
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
@@ -271,7 +271,7 @@ describe("talk transcription gateway relay", () => {
         connId: "conn-1",
         audioBase64: "AQI=",
       });
-      stopTalkTranscriptionRelaySession({
+      await stopTalkTranscriptionRelaySession({
         transcriptionSessionId: session.transcriptionSessionId,
         connId: "conn-1",
       });
@@ -343,7 +343,7 @@ describe("talk transcription gateway relay", () => {
       audioBase64: "AQI=",
     });
     request?.onTranscript?.("first provider transcript");
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
@@ -365,7 +365,7 @@ describe("talk transcription gateway relay", () => {
     const sttSession = createSttSessionMock();
     const { events, session } = await createStartedRelaySession(sttSession, {});
 
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
@@ -384,7 +384,7 @@ describe("talk transcription gateway relay", () => {
       connId: "conn-1",
       audioBase64: "AQI=",
     });
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
@@ -400,6 +400,35 @@ describe("talk transcription gateway relay", () => {
     expect(sttSession.close).toHaveBeenCalledOnce();
   });
 
+  it("discards provider close-time transcripts instead of committing captured audio", async () => {
+    vi.useFakeTimers();
+    let request: RealtimeTranscriptionSessionCreateRequest | undefined;
+    const sttSession = createSttSessionMock();
+    const { events, session } = await createStartedRelaySession(sttSession, {}, (value) => {
+      request = value;
+    });
+    sttSession.close.mockImplementation(() => request?.onTranscript?.("discarded words"));
+    sendTalkTranscriptionRelayAudio({
+      transcriptionSessionId: session.transcriptionSessionId,
+      connId: "conn-1",
+      audioBase64: "AQI=",
+    });
+    try {
+      await stopTalkTranscriptionRelaySession({
+        transcriptionSessionId: session.transcriptionSessionId,
+        connId: "conn-1",
+        discard: true,
+      });
+      expect(
+        events.filter((event) => isRecord(event.payload) && event.payload.type === "transcript"),
+      ).toEqual([]);
+      expect(findPayloadByType(events, "close").reason).toBe("completed");
+      expect(sttSession.close).toHaveBeenCalledOnce();
+    } finally {
+      cleanupTalkConnection("conn-1", { warn: vi.fn() });
+    }
+  });
+
   it("preserves partial activity between provider finals while graceful draining continues", async () => {
     vi.useFakeTimers();
     let request: RealtimeTranscriptionSessionCreateRequest | undefined;
@@ -413,7 +442,7 @@ describe("talk transcription gateway relay", () => {
       connId: "conn-1",
       audioBase64: "AQI=",
     });
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
@@ -458,7 +487,7 @@ describe("talk transcription gateway relay", () => {
       connId: "conn-1",
       audioBase64: "AQI=",
     });
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
@@ -496,12 +525,12 @@ describe("talk transcription gateway relay", () => {
       connId: "conn-1",
       audioBase64: "AQI=",
     });
-    stopTalkTranscriptionRelaySession({
+    const stopping = stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
     cleanupTalkConnection("conn-1", logGateway);
-    await Promise.resolve();
+    await stopping;
 
     expect(
       events.filter((event) => isRecord(event.payload) && event.payload.type === "close"),
@@ -527,7 +556,7 @@ describe("talk transcription gateway relay", () => {
       connId: "conn-1",
       audioBase64: "AQI=",
     });
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: session.transcriptionSessionId,
       connId: "conn-1",
     });
@@ -536,6 +565,12 @@ describe("talk transcription gateway relay", () => {
 
     expect(findPayloadByType(events, "error").message).toBe("provider finalization failed");
     expect(findPayloadByType(events, "close").reason).toBe("error");
+    for (const type of ["error", "close"]) {
+      const payload = findPayloadByType(events, type);
+      expect(events.find((event) => event.payload === payload)?.opts).toEqual({
+        dropIfSlow: false,
+      });
+    }
     expect(
       events.some(
         (event) =>
@@ -543,22 +578,6 @@ describe("talk transcription gateway relay", () => {
       ),
     ).toBe(false);
     expect(sttSession.close).toHaveBeenCalledOnce();
-  });
-
-  it("keeps provider errors and terminal close events durable", async () => {
-    let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
-    const { events } = await createStartedRelaySession(createSttSessionMock(), {}, (request) => {
-      sttRequest = request;
-    });
-
-    sttRequest?.onError?.(new Error("transcription provider disconnected"));
-
-    for (const type of ["error", "close"]) {
-      const payload = findPayloadByType(events, type);
-      expect(events.find((event) => event.payload === payload)?.opts).toEqual({
-        dropIfSlow: false,
-      });
-    }
   });
 
   it("closes a backpressured owner for final transcripts while healthy owners still receive them", async () => {
@@ -656,11 +675,11 @@ describe("talk transcription gateway relay", () => {
       );
     } finally {
       slowSocket.bufferedAmount = 0;
-      stopTalkTranscriptionRelaySession({
+      await stopTalkTranscriptionRelaySession({
         transcriptionSessionId: slowSession.transcriptionSessionId,
         connId: "conn-slow",
       });
-      stopTalkTranscriptionRelaySession({
+      await stopTalkTranscriptionRelaySession({
         transcriptionSessionId: healthySession.transcriptionSessionId,
         connId: "conn-healthy",
       });
@@ -753,7 +772,7 @@ describe("talk transcription gateway relay", () => {
       audioBase64: "AQI=",
     });
     expect(unrelated.sendAudio).toHaveBeenCalledOnce();
-    stopTalkTranscriptionRelaySession({
+    await stopTalkTranscriptionRelaySession({
       transcriptionSessionId: unrelatedSession.transcriptionSessionId,
       connId: "conn-other",
     });
@@ -773,23 +792,6 @@ describe("talk transcription gateway relay", () => {
         providerConfig: { encoding: "linear16", sampleRate: 16000 },
       }),
     ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
-    expect(provider.createSession).not.toHaveBeenCalled();
-  });
-
-  it("rejects session creation when transcription expiry would exceed Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const provider = createTranscriptionProvider(createSttSessionMock());
-    const { context } = createBroadcastContext();
-
-    expect(() =>
-      createTalkTranscriptionRelaySession({
-        context,
-        connId: "conn-1",
-        provider,
-        providerConfig: {},
-      }),
-    ).toThrow("Transcription relay session expiry is outside the supported Date range");
     expect(provider.createSession).not.toHaveBeenCalled();
   });
 });

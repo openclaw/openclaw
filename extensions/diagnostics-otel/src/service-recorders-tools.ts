@@ -35,7 +35,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     "openclaw.tool.source": normalizeDiagnosticValue(evt.toolSource, "core"),
     "gen_ai.tool.name": evt.toolName,
     ...(evt.toolOwner ? { "openclaw.tool.owner": normalizeDiagnosticValue(evt.toolOwner) } : {}),
-    ...runtime.paramsSummaryAttrs(evt.paramsSummary),
+    ...(evt.paramsSummary ? { "openclaw.tool.params.kind": evt.paramsSummary.kind } : {}),
   });
   const toolTimestampMs = (evt: { sourceTimestampMs?: number; ts: number }) =>
     evt.sourceTimestampMs ?? evt.ts;
@@ -48,7 +48,11 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (!metadata.trusted && !isInternalDiagnosticEventMetadata(metadata)) {
         return;
       }
-      runtime.gcDurationHistogram.record(evt.durationMs, undefined, ROOT_CONTEXT);
+      runtime.gcDurationHistogram.record(
+        evt.durationMs,
+        { "openclaw.gc.kind": evt.kind ?? "unknown", "openclaw.gc.thread": evt.thread ?? "main" },
+        ROOT_CONTEXT,
+      );
     },
     recordGatewayEventLoopSample(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.event_loop.sample" }>,
@@ -101,7 +105,10 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (trackedSpan) {
         return trackedSpan.spanContext();
       }
-      const spanAttrs = toolExecutionBaseAttrs(evt);
+      const spanAttrs = {
+        ...toolExecutionBaseAttrs(evt),
+        ...runtime.paramsSummaryAttrs(evt.paramsSummary),
+      };
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       return runtime
         .trackTrustedSpan(
@@ -130,7 +137,10 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (!runtime.tracesEnabled) {
         return;
       }
-      const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+      const spanAttrs: Record<string, string | number | boolean> = {
+        ...attrs,
+        ...runtime.paramsSummaryAttrs(evt.paramsSummary),
+      };
       runtime.addRunAttrs(spanAttrs, evt);
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       if (evt.type === "tool.execution.error" && evt.errorCode) {
@@ -165,6 +175,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       }
       const spanAttrs: Record<string, string | number | boolean> = {
         ...toolExecutionBaseAttrs(evt),
+        ...runtime.paramsSummaryAttrs(evt.paramsSummary),
         "openclaw.outcome": "blocked",
         "openclaw.deniedReason": normalizeDiagnosticValue(evt.deniedReason, "other"),
       };

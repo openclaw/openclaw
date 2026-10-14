@@ -204,7 +204,7 @@ describe("createLazyGatewayCronState", () => {
     const lazy = createLazyGatewayCronState(createParams());
     await lazy.cron.prepareWake?.();
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
     expect(cron["start"]).not.toHaveBeenCalled();
     expect(cron["wake"]).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
   });
@@ -221,6 +221,58 @@ describe("createLazyGatewayCronState", () => {
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     expect(cron["start"]).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["run", "enqueueRun"] as const)(
+    "finishes startup recovery before admitting a manual %s",
+    async (operation) => {
+      const recoveryStarted = deferred();
+      const recoveryFinished = deferred();
+      const cron = createCronService();
+      const start = vi.fn(async () => {
+        recoveryStarted.resolve();
+        await recoveryFinished.promise;
+      });
+      cron.start = start;
+      hoisted.setState(createCronState(cron));
+      const lazy = createLazyGatewayCronState(createParams());
+
+      const run = lazy.cron[operation]("demo", "force");
+      await Promise.race([
+        recoveryStarted.promise,
+        run.then(() => {
+          throw new Error("Manual cron run was admitted before startup recovery");
+        }),
+      ]);
+      expect(cron[operation]).not.toHaveBeenCalled();
+      recoveryFinished.resolve();
+      await run;
+
+      expect(cron[operation]).toHaveBeenCalledExactlyOnceWith("demo", "force");
+      await lazy.cron.start();
+      expect(start).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["run", "enqueueRun"] as const)(
+    "keeps a stopped scheduler stopped when a manual %s arrives",
+    async (operation) => {
+      const cron = createCronService();
+      const start = vi.fn(async () => undefined);
+      const stop = vi.fn();
+      cron.start = start;
+      cron.stop = stop;
+      hoisted.setState(createCronState(cron));
+      const lazy = createLazyGatewayCronState(createParams());
+      await lazy.cron.status();
+      lazy.cron.stop();
+
+      await lazy.cron[operation]("demo", "force");
+
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(cron[operation]).toHaveBeenCalledExactlyOnceWith("demo", "force");
+    },
+  );
 
   it("does not start cron after stop wins the lazy startup race", async () => {
     const cron = createCronService();
@@ -256,13 +308,13 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps synchronous wake non-blocking before the cron service is loaded", async () => {
+  it("keeps wake non-blocking before the cron service is loaded", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
 
     const lazy = createLazyGatewayCronState(createParams());
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
 
     await vi.waitFor(() => {
       expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
@@ -407,6 +459,7 @@ describe("createLazyGatewayCronState", () => {
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {
   return {
+    storePath: "/tmp/openclaw-cron.json",
     scheduler: createTestGatewayScheduler(),
     cfg: {
       ...overrides,
@@ -454,6 +507,6 @@ function createCronService(): GatewayCronServiceContract {
     readScratch: vi.fn(async () => ({ currentRevision: 0 })),
     writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),
     getDefaultAgentId: vi.fn(() => "default"),
-    wake: vi.fn(() => ({ ok: true })),
+    wake: vi.fn(async () => ({ ok: true })),
   };
 }

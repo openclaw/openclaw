@@ -1,4 +1,6 @@
 import type { HeapSpaceInfo } from "node:v8";
+import type { GcSample } from "./gc-observer.js";
+import type { WorkerMessageMetric } from "./worker-message-metrics.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
 
 export type DiagnosticRuntimeMeasurementFields =
@@ -14,6 +16,10 @@ export type DiagnosticRuntimeMeasurementFields =
   | {
       type: "diagnostic.gc";
       durationMs: number;
+      /** Optional for existing SDK event producers; native observers always supply both. */
+      kind?: GcSample["kind"];
+      /** main or an allowlisted worker script basename (other for unknown scripts). */
+      thread?: string;
     };
 
 export type DiagnosticWorkerRequestFields = {
@@ -24,6 +30,23 @@ export type DiagnosticWorkerRequestFields = {
   queueDepth: number;
   queueWaitMs?: number;
   durationMs?: number;
+  /** Monotonic process timestamps spanning the complete request, including transport frames. */
+  timing?: Partial<
+    Record<
+      | "enqueued"
+      | "dispatched"
+      | "posted"
+      | "postFinished"
+      | "received"
+      | "inputReady"
+      | "executeStarted"
+      | "executeFinished"
+      | "serialized"
+      | "replied"
+      | "replyReceived",
+      number
+    >
+  >;
 };
 
 export type DiagnosticAsyncQueueDroppedFields = {
@@ -78,6 +101,8 @@ export type DiagnosticMemoryUsage = {
     started: number;
     retired: { reason: string; count: number }[];
   }[];
+  /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
+  workerMessages?: WorkerMessageMetric[];
 };
 
 export const DIAGNOSTIC_MEMORY_PRESSURE_METRICS = [
@@ -103,7 +128,7 @@ export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";
   family: string;
-  /** Bounded Git owner/operation; unknown for unattributed Git and none for other families. */
+  /** Bounded Git owner or SQLite session/transport; unknown for unattributed Git. */
   operation?: string;
   count: number;
   intervalMs: number;

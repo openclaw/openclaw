@@ -29,7 +29,9 @@ beforeEach(() => {
   vi.doMock("./server-cron.js", () => ({ buildGatewayCronService }));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { clearRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+  clearRuntimeConfigSnapshot();
   vi.doMock("./server-cron.js", () => ({ buildGatewayCronService }));
 });
 
@@ -48,6 +50,8 @@ function createCronState() {
 }
 
 async function createFixture() {
+  const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot({});
   const { createGatewayReloadHandlers } = await import("./server-reload-hot.js");
   const { buildGatewayReloadPlan } = await import("./config-reload-plan.js");
   const { state: previous, cron: previousCron } = createCronState();
@@ -127,6 +131,26 @@ describe("cron reload loading", { concurrent: false }, () => {
       );
       expect(fixture.previousCron.stop).toHaveBeenCalledOnce();
       expect(fixture.nextCron.start).toHaveBeenCalledOnce();
+    } finally {
+      fixture.handlers.stopRestartRetries();
+    }
+  });
+
+  it("keeps the committed runtime when the cron owner has scheduled a monitor retry", async () => {
+    const fixture = await createFixture();
+    vi.mocked(fixture.next.reconcileSystemJobs).mockResolvedValue("retry-scheduled");
+    try {
+      await expect(
+        fixture.handlers.applyHotReload(
+          { ...fixture.plan, reconcileSystemJobs: true },
+          fixture.nextConfig,
+        ),
+      ).resolves.toBe("applied");
+      expect(fixture.setState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cronState: fixture.next }),
+      );
+      expect(fixture.nextCron.start).toHaveBeenCalledOnce();
+      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
     } finally {
       fixture.handlers.stopRestartRetries();
     }

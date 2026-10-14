@@ -11,6 +11,9 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
+import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -152,7 +155,15 @@ function createHarness(
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,
     isCurrent: () => true,
-    invoke,
+    async invoke(request) {
+      if (
+        (request.authorizeDispatch && !(await request.authorizeDispatch())) ||
+        !request.isDispatchAuthorized()
+      ) {
+        return { ok: false, error: { code: "APPROVAL_AUTHORITY_CLOSED" } };
+      }
+      return invoke(request);
+    },
   };
   const warn = vi.fn();
   const rows = () =>
@@ -204,6 +215,71 @@ function createHarness(
 }
 
 describe("node workspace retain coordinator", () => {
+  it("accepts bundle status when placement metadata changes after node dispatch", async () => {
+    const bundleHash = "c".repeat(64);
+    const placements = [placement()];
+    const { coordinator } = createHarness({
+      placements,
+      bundleRetention: {
+        currentBuild: async () => ({ bundleHash, openclawVersion: "2026.8.10" }),
+        isEnvironmentOwnedNode: () => false,
+      },
+    });
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+      () => new NodeRegistry(),
+    );
+    const dispatched = createDeferredCore<string>();
+    const client = makeClient("connection-1", "node-1", [], { clientId: "node-host" });
+    vi.spyOn(client.socket, "send").mockImplementation((data: unknown) => {
+      if (typeof data !== "string") {
+        return;
+      }
+      const frame = JSON.parse(data) as { event?: string; payload?: { id: string } };
+      if (frame.event === "node.invoke.request" && frame.payload) {
+        dispatched.resolve(frame.payload.id);
+      }
+    });
+    registerNodeSession(nodeRegistry, client, { pairingGeneration: "generation-1" });
+    updateNodeRunnerInventory({
+      registry: nodeRegistry,
+      nodeId: "node-1",
+      connId: "connection-1",
+      declaration: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: node.workerHost,
+      },
+    });
+    coordinator.bindTransport(nodeWorkerSupervisorTransport);
+    const publishing = coordinator.start();
+    try {
+      const id = await dispatched.promise;
+      placements[0] = placement({ updatedAtMs: 3 });
+      expect(
+        nodeRegistry.handleInvokeResult({
+          id,
+          nodeId: "node-1",
+          connId: "connection-1",
+          ok: true,
+          payloadJSON: JSON.stringify({
+            applied: true,
+            deleted: 0,
+            hasMore: false,
+            bundleStatus: { bundleHash, status: "installed" },
+          }),
+        }),
+      ).toBe(true);
+      await publishing;
+      expect(nodeWorkerSupervisorTransport.getBundleStatus?.("node-1")).toEqual({
+        bundleHash,
+        status: { status: "installed", version: "2026.8.10" },
+      });
+    } finally {
+      await coordinator.stop();
+      nodeRegistry.unregister("connection-1");
+      await publishing;
+    }
+  });
+
   it("publishes the complete durable retain snapshot for a connected device", async () => {
     const { coordinator, invoke } = createHarness({
       environments: [
@@ -269,13 +345,9 @@ describe("node workspace retain coordinator", () => {
     await coordinator.stop();
   });
 
-  it("accepts a validated installed bundle status with the Gateway-owned version", async () => {
+  it("does not request another bundle inspection after accepting its installed status", async () => {
     const bundleHash = "b".repeat(64);
     const { coordinator, invoke, acceptBundleStatus } = createHarness({
-      currentBundleStatus: {
-        bundleHash,
-        status: { status: "installed", version: "2026.8.9" },
-      },
       environments: [
         environment({
           bootstrapReceipt: receipt(bundleHash),
@@ -299,6 +371,10 @@ describe("node workspace retain coordinator", () => {
       bundleHash,
       status: { status: "installed", version: "2026.8.9" },
     });
+    await coordinator.schedule(node.nodeId);
+    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ bundleHashes: [bundleHash] });
+    expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    expect(acceptBundleStatus).toHaveBeenCalledOnce();
     await coordinator.stop();
   });
 
@@ -323,6 +399,12 @@ describe("node workspace retain coordinator", () => {
           hasMore: false,
           bundleStatus: { bundleHash, status: "missing" },
         },
+        {
+          applied: true,
+          deleted: 0,
+          hasMore: false,
+          bundleStatus: { bundleHash, status: "installed" },
+        },
       ],
     });
 
@@ -334,6 +416,12 @@ describe("node workspace retain coordinator", () => {
     expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
       bundleHash,
       status: { status: "missing" },
+    });
+    await coordinator.schedule(node.nodeId);
+    expect(invoke.mock.calls[2]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
+    expect(acceptBundleStatus).toHaveBeenLastCalledWith(node, {
+      bundleHash,
+      status: { status: "installed", version: "2026.8.9" },
     });
     await coordinator.stop();
   });
@@ -358,52 +446,6 @@ describe("node workspace retain coordinator", () => {
 
     expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("maintenance unavailable"));
-    await coordinator.stop();
-  });
-
-  it("clears status when a newer environment becomes authoritative during cleanup", async () => {
-    const bundleHash = "b".repeat(64);
-    const environments = [
-      environment({
-        bootstrapReceipt: receipt(bundleHash),
-      }),
-    ];
-    const { coordinator, acceptBundleStatus } = createHarness({
-      environments,
-      results: [
-        {
-          applied: true,
-          deleted: 1,
-          hasMore: true,
-          bundleStatus: { bundleHash, status: "installed" },
-        },
-        {
-          applied: true,
-          deleted: 0,
-          hasMore: false,
-          bundleStatus: { bundleHash, status: "installed" },
-        },
-      ],
-      onInvoke: (index) => {
-        if (index !== 0) {
-          return;
-        }
-        environments.splice(
-          0,
-          1,
-          environment({
-            environmentId: "environment-new",
-            createdAtMs: 3,
-            bootstrapReceipt: receipt("c".repeat(64), "2026.8.10"),
-          }),
-        );
-      },
-    });
-
-    await coordinator.start();
-
-    expect(acceptBundleStatus).toHaveBeenCalledTimes(1);
-    expect(acceptBundleStatus).toHaveBeenCalledWith(node, undefined);
     await coordinator.stop();
   });
 
@@ -688,7 +730,8 @@ describe("node workspace retain coordinator", () => {
     const options = {
       placements,
       node: { ...node, connId: "connection-1" },
-      additionalManifestRefs: async () => () => [baseManifest],
+      additionalManifestRefs: async () =>
+        Object.assign(() => [baseManifest], { [Symbol.dispose]: () => {} }),
     };
     const { coordinator, invoke } = createHarness(options);
     try {
@@ -731,7 +774,9 @@ describe("node workspace retain coordinator", () => {
         additionalManifestRefs: async () => {
           entered.resolve();
           await release.promise;
-          return () => (sessionCurrent ? [baseManifest] : null);
+          return Object.assign(() => (sessionCurrent ? [baseManifest] : null), {
+            [Symbol.dispose]: () => {},
+          });
         },
       });
       const startup = coordinator.start();
@@ -774,10 +819,6 @@ describe("node workspace retain coordinator", () => {
             }),
           ],
         });
-        if (change === "current") {
-          sessionCurrent = false;
-          expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(false);
-        }
       } finally {
         release.resolve();
         await startup;

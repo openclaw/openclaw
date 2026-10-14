@@ -16,11 +16,14 @@ import { buildSystemdUnit, parseSystemdExecStart } from "../../daemon/systemd-un
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
-import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { stubNodeRuntime } from "../update-cli/update-command-runtime-recovery.test-support.js";
 
-const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } = await vi.hoisted(
+  async () => {
+    const { createCliRuntimeCapture } = await import("../test-runtime-capture.js");
+    return createCliRuntimeCapture();
+  },
+);
 const busctl = vi.hoisted(() =>
   vi.fn<typeof import("../../daemon/systemd-exec.js").execBusctlUser>(),
 );
@@ -61,7 +64,8 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime,
 }));
 
@@ -75,7 +79,19 @@ const { clearConfigCache, clearRuntimeConfigSnapshot, readConfigFileSnapshot } =
   await import("../../config/config.js");
 const { readSystemdDefinitionMutationCapability } =
   await import("../../daemon/systemd-definition-mutation.js");
-const { readSystemdServiceExecStart } = await import("../../daemon/systemd-service-files.js");
+const { readSystemdServiceExecStart, resolveSystemdServiceName, resolveSystemdUnitPath } =
+  await import("../../daemon/systemd-service-files.js");
+
+// These fixtures author a user unit; do not discover real system units on the test host.
+const readUserSystemdServiceExecStart: typeof readSystemdServiceExecStart = (env, options) =>
+  readSystemdServiceExecStart(env, {
+    ...options,
+    systemdReadTarget: {
+      scope: "user",
+      unitName: `${resolveSystemdServiceName(env)}.service`,
+      unitPath: resolveSystemdUnitPath(env),
+    },
+  });
 const { assertServiceDefinitionWritable } = await import("../../daemon/service-types.js");
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
@@ -295,10 +311,16 @@ describe("runDaemonInstall integration", () => {
       });
       const env = { ...process.env, HOME: fixture, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway" };
       serviceMock.readCommand.mockImplementation((_env, options) =>
-        readSystemdServiceExecStart(env, options),
+        readUserSystemdServiceExecStart(env, options),
       );
       serviceMock.readDefinitionMutationCapability.mockImplementation(() =>
-        readSystemdDefinitionMutationCapability(env),
+        readSystemdDefinitionMutationCapability(env, {
+          systemdReadTarget: {
+            scope: "user",
+            unitName: "openclaw-gateway.service",
+            unitPath: resolveSystemdUnitPath(env),
+          },
+        }),
       );
       const before = await snapshotConfig();
       try {
@@ -340,7 +362,7 @@ describe("runDaemonInstall integration", () => {
       }
       return readFile(...args);
     });
-    serviceMock.readCommand.mockImplementation(readSystemdServiceExecStart);
+    serviceMock.readCommand.mockImplementation(readUserSystemdServiceExecStart);
     serviceMock.isLoaded.mockRejectedValue(new Error("Failed to get unit file state"));
     const before = await snapshotConfig();
     await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
@@ -407,7 +429,7 @@ describe("runDaemonInstall integration", () => {
               environmentFiles: [[effectiveFile, false]],
             }),
     }));
-    serviceMock.readCommand.mockImplementation(readSystemdServiceExecStart);
+    serviceMock.readCommand.mockImplementation(readUserSystemdServiceExecStart);
     serviceMock.readDefinitionMutationCapability.mockImplementation((args) =>
       readSystemdDefinitionMutationCapability(args?.env ?? process.env, {
         environment: args?.environment,

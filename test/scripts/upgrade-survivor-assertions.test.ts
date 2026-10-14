@@ -269,6 +269,63 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  it.each([
+    { name: "completed informational inspection", patch: {}, succeeds: true },
+    { name: "warning", patch: { doctorLintFindings: [{ severity: "warning" }] }, succeeds: false },
+    { name: "error", patch: { doctorLintFindings: [{ severity: "error" }] }, succeeds: false },
+    { name: "missing findings", patch: { doctorLintFindings: undefined }, succeeds: false },
+    { name: "empty findings", patch: { doctorLintFindings: [] }, succeeds: false },
+    { name: "another step", patch: { name: "database migration" }, succeeds: false },
+    { name: "unclassified failure", patch: { advisory: undefined }, succeeds: false },
+    { name: "execution failure", patch: { exitCode: 13 }, succeeds: false },
+    { name: "timeout", patch: { termination: "timeout" }, succeeds: false },
+    { name: "signal", patch: { signal: "SIGTERM" }, succeeds: false },
+    { name: "killed process", patch: { killed: true }, succeeds: false },
+    { name: "truncated output", patch: { outputLimitExceeded: true }, succeeds: false },
+    {
+      name: "failure facts",
+      patch: { failureFacts: [{ code: "inspection-failed" }] },
+      succeeds: false,
+    },
+  ])(
+    "classifies a post-activation $name without changing update success",
+    ({ patch, succeeds }) => {
+      const report = {
+        status: "ok",
+        after: { version: "2026.10.3" },
+        steps: [
+          { name: "global install swap", exitCode: 0 },
+          {
+            name: "post-activation doctor inspections",
+            exitCode: 1,
+            termination: "exit",
+            signal: null,
+            killed: false,
+            outputLimitExceeded: false,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: "Deferred Doctor inspections reported 1 advisory finding after restart.",
+            },
+            doctorLintFindings: [
+              {
+                checkId: "core/doctor/command-owner",
+                severity: "info",
+                message: "Owner guidance.",
+              },
+            ],
+            ...patch,
+          },
+        ],
+        postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+      };
+      const result = runJsonAssertion("assert-successful-update-json", report, "2026.10.3");
+      expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+      if (!succeeds) {
+        expect(result.stderr).toContain("successful update contained a failed core step");
+      }
+    },
+  );
+
   describe.each(["fallback"] as const)("missing Codex (%s)", (source) => {
     const scenarioEnv = {
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-configured-plugin-migration",

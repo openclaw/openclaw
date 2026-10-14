@@ -10,7 +10,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
+import { writeGatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -42,6 +44,7 @@ describe("gateway minimal boot smoke", () => {
       label: "gateway-bootstrap-ambient-default",
       layout: "home",
       env: {
+        OPENCLAW_GATEWAY_RESTART_TRACE: "0",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_CHANNELS: "1",
@@ -61,6 +64,14 @@ describe("gateway minimal boot smoke", () => {
     state.applyEnv();
 
     try {
+      await expect(
+        writeGatewayRestartHandoff({
+          env: state.env,
+          reason: "gateway.restart",
+          restartKind: "full-process",
+          supervisorMode: "launchd",
+        }),
+      ).resolves.toMatchObject({ source: "operator-restart", supervisorMode: "launchd" });
       const [{ prepareGatewayServerBootstrap }, subagents, pluginContext] = await Promise.all([
         import("./server-startup-bootstrap.js"),
         import("../agents/subagents/registry/subagent-registry.js"),
@@ -83,6 +94,7 @@ describe("gateway minimal boot smoke", () => {
           return publishPluginContext(...args);
         });
       const log = createSubsystemLogger("gateway/bootstrap-test");
+      const sql = observeHostDataSql();
       const pendingBootstrap = prepareGatewayServerBootstrap({
         port,
         opts: {
@@ -111,6 +123,9 @@ describe("gateway minimal boot smoke", () => {
         const bootstrap = await withinTest(pendingBootstrap, signal);
         expect(publish).toHaveBeenCalled();
         expect(bootstrap.ambientEnvTriggers).toBe("suppress");
+        expect(
+          sql.queries.filter((query) => /\bfrom\s+"?gateway_restart_handoff\b/iu.test(query)),
+        ).toEqual([]);
         vi.stubEnv(
           "OPENCLAW_CONFIG_PATH",
           `/tmp/openclaw-bootstrap-missing-${process.pid}-${Date.now()}.json`,
@@ -119,6 +134,7 @@ describe("gateway minimal boot smoke", () => {
       } finally {
         releaseRecovery.resolve();
         await pendingBootstrap.catch(() => {});
+        sql.restore();
         init.mockRestore();
         publish.mockRestore();
       }

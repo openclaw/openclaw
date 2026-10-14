@@ -158,6 +158,12 @@ async function resolveAzureSpeechTtsRequest(
 }
 
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) => {
+    const config = readAzureSpeechProviderConfig(providerConfig);
+    return Boolean(
+      resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
+    );
+  };
   return {
     id: "azure-speech",
     label: "Azure Speech",
@@ -177,7 +183,10 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       const region = trimToUndefined(talkProviderConfig.region);
       const endpoint = trimToUndefined(talkProviderConfig.endpoint ?? talkProviderConfig.baseUrl);
       const baseUrl = normalizeAzureSpeechBaseUrl({
-        baseUrl: trimToUndefined(talkProviderConfig.baseUrl),
+        // Inherit the resolved route unless Talk explicitly selects another one.
+        baseUrl:
+          trimToUndefined(talkProviderConfig.baseUrl) ??
+          (!region && !endpoint ? base.baseUrl : undefined),
         endpoint,
         region: region ?? base.region,
       });
@@ -216,12 +225,9 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: config?.timeoutMs ?? req.timeoutMs,
       });
     },
-    isConfigured: ({ providerConfig }) => {
-      const config = readAzureSpeechProviderConfig(providerConfig);
-      return Boolean(
-        resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
-      );
-    },
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const params = await resolveAzureSpeechTtsRequest(req);
       const audioBuffer = await azureSpeechTTS(params);

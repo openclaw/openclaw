@@ -52,8 +52,9 @@ async function snapshotCandidateState(): Promise<unknown> {
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
-      return readUpdateDatabaseGenerations(input.paths);
+      const { readUpdatePhysicalDatabaseGenerations } =
+        await import("./update-database-generations.js");
+      return readUpdatePhysicalDatabaseGenerations(input.paths);
     }
     case "inventory": {
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({

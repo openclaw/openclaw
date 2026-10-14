@@ -27,9 +27,9 @@ import {
   tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.js";
+  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
+  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.native.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   prepareLegacyWorkspaceStateReset,
@@ -310,6 +310,13 @@ export async function agentsDeleteCommand(
     );
     let rosterCommitted = !configured;
     try {
+      if (deletion.entry.phase === "draining") {
+        // Offline recovery cannot cancel a serving process; its leases must already be gone.
+        await deletion.runWithWorker((scope, guard) =>
+          scope.execute({ type: "agentDeletion.assertNoDatabaseLeases", input: { guard } }),
+        );
+        await deletion.retire();
+      }
       await prepareAgentDeleteDatabases(cfg, agentId, agentDir, {}, deletion);
       await deletion.assertCurrentAsync();
       const commitRoster = async () =>

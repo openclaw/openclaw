@@ -3,7 +3,6 @@ import { expect, test } from "vitest";
 import {
   isPairedDeviceTokenIdentityCurrent,
   resolveNodePairingState,
-  resolvePairedDeviceTokenIdentity,
   resolveAuthenticatedDeviceTokenIdentity,
 } from "./device-pairing-identity.js";
 import type { PairedDevice } from "./device-pairing.types.js";
@@ -49,7 +48,12 @@ test("captures only the device key and token actually accepted at handshake", ()
 test("keeps original operator scopes without exporting bearer credentials or unrelated approval changes", () => {
   const device = createPairedOperator();
   const identity = expectDefined(
-    resolvePairedDeviceTokenIdentity(device, "operator"),
+    resolveAuthenticatedDeviceTokenIdentity(device, {
+      role: "operator",
+      publicKey: device.publicKey,
+      token: device.tokens!.operator!.token,
+      scopes: ["operator.admin"],
+    }),
     "operator identity",
   );
   const node = resolveNodePairingState(device);
@@ -86,7 +90,12 @@ test.each([
 ] as const)("rejects an original operator source after %s", (change) => {
   let device: PairedDevice | null = createPairedOperator();
   const identity = expectDefined(
-    resolvePairedDeviceTokenIdentity(device, "operator"),
+    resolveAuthenticatedDeviceTokenIdentity(device, {
+      role: "operator",
+      publicKey: device.publicKey,
+      token: device.tokens!.operator!.token,
+      scopes: ["operator.admin"],
+    }),
     "operator identity",
   );
   const token = expectDefined(device.tokens?.operator, "operator token");
@@ -133,7 +142,12 @@ test.each(["token scopes", "approval baseline", "missing approval baseline"] as 
   (change) => {
     const device = createPairedOperator();
     const identity = expectDefined(
-      resolvePairedDeviceTokenIdentity(device, "operator"),
+      resolveAuthenticatedDeviceTokenIdentity(device, {
+        role: "operator",
+        publicKey: device.publicKey,
+        token: device.tokens!.operator!.token,
+        scopes: ["operator.admin"],
+      }),
       "operator identity",
     );
     if (change === "token scopes") {

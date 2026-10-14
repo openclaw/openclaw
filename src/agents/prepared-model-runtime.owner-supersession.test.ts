@@ -11,6 +11,7 @@ import {
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
+  prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
   retirePreparedModelRuntimeAgent,
@@ -57,17 +58,17 @@ describe("prepared model runtime owner selection", () => {
           "UPDATE agent_deletion_journal SET operation_id = ? WHERE agent_id = ?",
         );
         replaceJournal.run("replacement", input.agentId);
-        await expect(
-          retireAgentDeleteRuntime(input.config, deletion, [input.agentDir]),
-        ).rejects.toThrow("no longer owns");
+        await expect(retireAgentDeleteRuntime(deletion, [input.agentDir])).rejects.toThrow(
+          "no longer owns",
+        );
         expect(deleted.isCurrent()).toBe(true);
         expect(sharing.isCurrent()).toBe(true);
 
         replaceJournal.run(deletion.entry.operationId, input.agentId);
         await deletion.rollback();
-        await expect(
-          retireAgentDeleteRuntime(input.config, deletion, [input.agentDir]),
-        ).rejects.toThrow("no longer owns");
+        await expect(retireAgentDeleteRuntime(deletion, [input.agentDir])).rejects.toThrow(
+          "no longer owns",
+        );
         expect(deleted.isCurrent()).toBe(true);
         expect(sharing.isCurrent()).toBe(true);
       },
@@ -139,6 +140,73 @@ describe("prepared model runtime owner selection", () => {
     } finally {
       release.resolve();
       await Promise.allSettled([first, skipped, latest]);
+    }
+  });
+
+  it("follows a config replacement while waiting for an auth publication", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    const nextConfig = { messages: { responsePrefix: "updated" } };
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const input = fixture.agentInput("default", config);
+    const { started, release } = holdNextCatalogWrite();
+    let reader: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+    let replacement: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    try {
+      mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      await started.promise;
+      reader = prepareModelRuntimeSnapshot(input);
+      const result = expect(reader).resolves.toMatchObject({ config: nextConfig });
+      replacement = refreshPreparedModelRuntimeSnapshots(nextConfig, { gatewayLifecycle: true });
+      release.resolve();
+
+      await result;
+      await replacement;
+      expect((await reader).isCurrent()).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reader, replacement]);
+    }
+  });
+
+  it("finishes config replacement after a second adopted auth mutation", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    const nextConfig = { messages: { responsePrefix: "updated" } };
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const input = fixture.agentInput("default", config);
+    const configWrite = holdNextCatalogWrite();
+    const authWrite = holdNextCatalogWrite();
+    const replacement = refreshPreparedModelRuntimeSnapshots(nextConfig, {
+      gatewayLifecycle: true,
+    });
+    const result = expect(replacement).resolves.toBeUndefined();
+    void result.catch(() => undefined);
+    let reader: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+    try {
+      await configWrite.started.promise;
+      mocks.authStorage.getAll.mockReturnValue({
+        custom: { type: "api_key", key: "first-update" },
+      });
+      mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      configWrite.release.resolve();
+      await authWrite.started.promise;
+      reader = prepareModelRuntimeSnapshot(input);
+      void reader.catch(() => undefined);
+      const credentials = { custom: { type: "api_key" as const, key: "latest-update" } };
+      mocks.authStorage.getAll.mockReturnValue(credentials);
+      mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      authWrite.release.resolve();
+
+      await result;
+      await expect(reader).resolves.toMatchObject({ config: nextConfig });
+      const snapshot = await reader;
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(snapshot.createStores().authStorage.getAll()).toEqual(credentials);
+    } finally {
+      configWrite.release.resolve();
+      authWrite.release.resolve();
+      await Promise.allSettled([reader, replacement]);
     }
   });
 

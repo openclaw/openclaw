@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildMatrixToolProgressMentionSafetyPrompt } from "../../live-transports/matrix/scenarios/scenario-runtime-prompts.js";
-import { createMockServerTestHarness, expectOk, postJson } from "./server.test-harness.js";
+import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
+import {
+  createMockServerTestHarness,
+  expectNonStreamingResponsesJson,
+  expectOk,
+  makeToolOutputWithCallId,
+  makeUserInput,
+  outputItems,
+  outputToolCall,
+  postJson,
+} from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
 
@@ -267,7 +277,8 @@ describe("background command progress", () => {
 });
 
 it("keeps Slack commentary progress open while its exec is running", async () => {
-  const command = "grep 'SLACK-QA-TOOL-A1B2C3D4' /dev/null || sleep 5";
+  const command =
+    "printf '%s' 'SLACK-QA-TOOL-A1B2C3D4' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-A1B2C3D4'";
   const prompt = `SLACK-QA-COMMENTARY-A1B2C3D4 ${command} SLACK-QA-COMMENTARY-DONE-A1B2C3D4`;
   const results: ProgressResult[] = [{ tool: "exec", args: { command }, output: RUNNING_OUTPUT }];
   expect(await requestProgress("responses", prompt, results)).toMatchObject({
@@ -292,6 +303,65 @@ it("keeps Slack commentary progress open while its exec is running", async () =>
       },
     ],
   });
+});
+
+it("selects commentary, exec, and final delivery for the actual Telegram scenario prompt", async () => {
+  const server = await startMockServer();
+  const captured = new Error("captured the scenario's provider input");
+  let prompt = "";
+  await expect(
+    runLoadedScenarioFlow("telegram-progress-tool-visibility", {
+      api: {
+        env: {
+          providerMode: "mock-openai",
+          mock: server,
+          gateway: { restartAfterStateMutation: async () => undefined },
+        },
+        fetchJson: async (url: string) => (await fetch(url)).json(),
+        transport: {
+          id: "telegram",
+          accountId: "sut",
+          reset: async () => undefined,
+          sendInbound: async (input: { text: string }) => {
+            prompt = input.text;
+            throw captured;
+          },
+        },
+      },
+    }),
+  ).rejects.toBe(captured);
+  const request = (input: unknown[]) =>
+    expectNonStreamingResponsesJson(server, {
+      model: "qa-model",
+      tools: [{ type: "function", name: "exec" }],
+      input,
+    });
+  const input = [makeUserInput(prompt)];
+  const plan = await request(input);
+  expect(outputItems(plan)).toMatchObject([
+    {
+      type: "message",
+      phase: "commentary",
+      content: [{ text: "SLACK-QA-COMMENTARY-00000000" }],
+    },
+    { type: "function_call", name: "exec" },
+  ]);
+  const call = outputToolCall(plan, "exec");
+  const final = await request([
+    ...input,
+    call,
+    makeToolOutputWithCallId(
+      String(call.call_id),
+      "SLACK-QA-OUTPUT-00000000\n\nProcess exited with code 0.",
+    ),
+  ]);
+  expect(outputItems(final)).toMatchObject([
+    {
+      type: "message",
+      phase: "final_answer",
+      content: [{ text: "SLACK-QA-COMMENTARY-DONE-00000000" }],
+    },
+  ]);
 });
 
 async function completeProgress(params: {

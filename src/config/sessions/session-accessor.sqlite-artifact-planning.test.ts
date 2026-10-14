@@ -22,7 +22,7 @@ import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import * as artifactPlanning from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
 import type { SessionEntry } from "./types.js";
 
@@ -151,7 +151,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
       }),
     );
     const nativePlanning = vi
-      .spyOn(artifactPlanning, "prepareSessionLifecycleArtifactCleanup")
+      .spyOn(artifactPlanning, "prepareSessionLifecycleArtifactCleanupForMaintenance")
       .mockRejectedValue(new Error("artifact planning ran on the calling thread"));
     const cleanup = cleanupSessionLifecycleArtifactsCore({
       storePath,

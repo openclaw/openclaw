@@ -36,8 +36,8 @@ test("rejects an actor replacement while preparing account authority", async () 
     const replacement = ensureProfileForEmail("replacement@example.test");
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const prepare = profileAuthority.prepareUserProfileSelectionAuthority;
-    vi.spyOn(profileAuthority, "prepareUserProfileSelectionAuthority").mockImplementationOnce(
+    const prepare = profileAuthority.prepareUserProfileRolePolicyAuthority;
+    vi.spyOn(profileAuthority, "prepareUserProfileRolePolicyAuthority").mockImplementationOnce(
       async (...args) => {
         const prepared = await prepare(...args);
         entered.resolve();

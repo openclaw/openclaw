@@ -1,18 +1,20 @@
 /* @vitest-environment jsdom */
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
+import "../../lib/toast-host.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createContext,
   createGateway,
-  type TestSessionsPage,
+  createPage,
+  createRenderedPage,
 } from "./sessions-page.test-support.ts";
 
 const row: GatewaySessionRow = {
@@ -44,12 +46,9 @@ async function setup() {
   const gateway = createGateway(client);
   const sessions = createTestSessionCapability(gateway.gateway);
   onTestFinished(() => sessions.dispose());
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = createContext(gateway.gateway, sessions);
-  page.render = () => nothing;
+  const page = await createPage(createContext(gateway.gateway, sessions));
   const toast = document.createElement("openclaw-toast-host");
-  document.body.append(page, toast);
-  await page.updateComplete;
+  document.body.append(toast);
   await sessions.refresh();
   const patches = () => request.mock.calls.filter(([method]) => method === "sessions.patch");
   const undo = () => toast.querySelector<HTMLButtonElement>(".app-toast__action");
@@ -62,6 +61,90 @@ afterEach(() => {
 });
 
 describe("Sessions archive outcome lifetime", () => {
+  it.each(
+    ["rename", "archive", "restore"].flatMap((action) =>
+      [false, true].map((replaced) => ({ action, replaced })),
+    ),
+  )(
+    "settles $action selection only for its session (replaced=$replaced)",
+    async ({ action, replaced }) => {
+      const original = { ...row, archived: action === "restore" };
+      const successor = { ...original, sessionId: "successor-session", label: "Replacement work" };
+      let rows = [original];
+      const started = createDeferred();
+      const pending = createDeferred<SessionPatchResult>();
+      const request = vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "sessions.list") {
+          return sessionsResult(rows, 2);
+        }
+        if (method === "sessions.patch") {
+          started.resolve();
+          return pending.promise;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const gateway = createGateway({ request } as unknown as GatewayBrowserClient);
+      const sessions = createTestSessionCapability(gateway.gateway);
+      const subscribe = vi.spyOn(sessions, "subscribeList");
+      const page = await createRenderedPage(
+        createContext(gateway.gateway, sessions),
+        sessionsResult(rows, 1),
+        "all",
+      );
+      const checkbox = () =>
+        page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${row.key}"]`)!;
+      checkbox().click();
+      await page.updateComplete;
+      const patch =
+        action === "rename" ? { label: "Renamed work" } : { archived: action === "archive" };
+      const completion = page.patchSession(row.key, patch, undefined, original.sessionId);
+      const response: SessionPatchResult = {
+        ok: true,
+        path: "",
+        key: row.key,
+        entry: {
+          sessionId: original.sessionId!,
+          ...(action === "rename"
+            ? { label: "Renamed work" }
+            : { archivedAt: action === "archive" ? 1 : undefined }),
+        },
+      };
+      try {
+        await started.promise;
+        const patches = request.mock.calls.filter(([method]) => method === "sessions.patch");
+        expect(patches).toHaveLength(1);
+        expect(patches[0]?.[1]).toMatchObject({
+          key: row.key,
+          expectedSessionId: original.sessionId,
+          ...patch,
+        });
+        if (replaced) {
+          rows = [successor];
+          await sessions.refreshList({ ...subscribe.mock.calls[0]![0], force: true });
+          await page.updateComplete;
+          expect(page.selectedSessions.size).toBe(0);
+          checkbox().click();
+          await page.updateComplete;
+          expect(page.selectedSessions.get(row.key)?.sessionId).toBe(successor.sessionId);
+        }
+        pending.resolve(response);
+        expect(await completion).toBe("completed");
+        await page.updateComplete;
+        expect(checkbox().checked).toBe(replaced);
+        expect(page.selectedSessions.get(row.key)?.sessionId).toBe(
+          replaced ? successor.sessionId : undefined,
+        );
+        if (replaced) {
+          expect(page.result?.sessions).toMatchObject([successor]);
+        }
+        expect(gateway.setSessionKey).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve(response);
+        await completion;
+      }
+    },
+  );
+
   it.each(["before confirmation", "after confirmation"])(
     "restores the captured pinned session after leaving %s",
     async (navigation) => {
@@ -73,8 +156,7 @@ describe("Sessions archive outcome lifetime", () => {
       }
       fixture.pending.resolve(result);
       await archived;
-      await fixture.toast.updateComplete;
-      expect(fixture.undo()).not.toBeNull();
+      await waitForSolid(() => expect(fixture.undo()).not.toBeNull());
       fixture.page.remove();
       fixture.undo()!.click();
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(2));
@@ -112,12 +194,12 @@ describe("Sessions archive outcome lifetime", () => {
       }
       fixture.pending.resolve(result);
       await archived;
-      await fixture.toast.updateComplete;
       if (reconnect === "after confirmation") {
-        expect(fixture.undo()).not.toBeNull();
+        await waitForSolid(() => expect(fixture.undo()).not.toBeNull());
         transition();
         fixture.undo()!.click();
       } else {
+        await fixture.toast.updateComplete;
         expect(fixture.undo()).toBeNull();
       }
       expect(fixture.patches()).toHaveLength(1);
@@ -129,7 +211,7 @@ describe("Sessions archive outcome lifetime", () => {
     const archived = fixture.page.archiveActions.archive(row);
     fixture.pending.resolve(result);
     await archived;
-    await fixture.toast.updateComplete;
+    await waitForSolid(() => expect(fixture.undo()).not.toBeNull());
     fixture.request.mockImplementation(async (method) => {
       if (method === "sessions.list") {
         return sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);

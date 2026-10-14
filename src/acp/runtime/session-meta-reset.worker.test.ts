@@ -2,9 +2,14 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionResetCommitContext } from "../../config/sessions/session-accessor.lifecycle-types.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -22,7 +27,7 @@ import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "./session-meta-reset.js";
 
-it("retains native incognito reset context only through its callback", async () => {
+it("retains incognito reset context until its memory owner closes", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", label: "incognito-reset-context" },
     async (state) => {
@@ -32,22 +37,35 @@ it("retains native incognito reset context only through its callback", async () 
         env: state.env,
       };
       await replaceSessionEntry(scope, { sessionId: "private-session", updatedAt: 1 });
-      let captured: SessionResetCommitContext | undefined;
-      const reset = await resetSessionEntryLifecycle({
+      const source = {
         agentId: scope.agentId,
-        storePath: resolveIncognitoOpenClawAgentSqlitePath(scope),
-        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-        buildNextEntry: () => ({ sessionId: "private-reset", updatedAt: 2 }),
-        async afterEntryMutation(_mutation, context) {
-          captured = context;
-          context.assertCurrent();
-          await Promise.resolve();
-          context.assertCurrent();
-        },
-      });
-      expect(reset.nextEntry.sessionId).toBe("private-reset");
-      expect(captured).toBeDefined();
-      expect(() => captured!.assertCurrent()).toThrow("claim is no longer current");
+        path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+      };
+      let captured: SessionResetCommitContext | undefined;
+      const sql = observeHostDataSql();
+      try {
+        const reset = await resetSessionEntryLifecycle({
+          agentId: scope.agentId,
+          storePath: source.path,
+          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          buildNextEntry: () => ({ sessionId: "private-reset", updatedAt: 2 }),
+          async afterEntryMutation(_mutation, context) {
+            captured = context;
+            context.assertCurrent();
+            await Promise.resolve();
+            context.assertCurrent();
+          },
+        });
+        expect(reset.nextEntry.sessionId).toBe("private-reset");
+        expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "private-reset", updatedAt: 2 });
+        expect(captured?.source).toEqual(source);
+        expect(() => captured!.assertCurrent()).not.toThrow();
+        memorySessionActorOwners.closeDatabase(source);
+        expect(() => captured!.assertCurrent()).toThrow("Incognito session actor owner is closed");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
     },
   );
 });
@@ -64,6 +82,7 @@ const META: SessionAcpMeta = {
 async function fixture(state: OpenClawTestState) {
   const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = { agentId: "main", sessionKey: "agent:main:acp:reset", env: state.env };
   const source = {
     agentId: "main",
@@ -165,11 +184,7 @@ it.each([
             });
           } finally {
             sql.restore();
-            // Preparation is observable too, but only executions count toward the SQL budget.
-            expect(
-              sql.calls.slice(1).reduce((count, call) => count + call.mock.calls.length, 0),
-            ).toBe(native ? 2 : 0);
-            expect(sql.queries.every((query) => query.includes('from "session_nodes"'))).toBe(true);
+            expect(sql.queries).toEqual([]);
           }
         });
         try {
@@ -201,7 +216,7 @@ it.each([
   },
 );
 
-it.each(["foreign-lifecycle", "pinned-lifecycle", "authority"] as const)(
+it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authority"] as const)(
   "refuses reset metadata when %s changes while the shared worker request is pending",
   async (replacement) => {
     await withOpenClawTestState(
@@ -243,6 +258,8 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "authority"] as const)(
           );
           if (replacement === "authority") {
             live = false;
+          } else if (replacement === "in-process-writer") {
+            await replaceSessionEntry(f.scope, { ...f.entry, activeWriterRunId: "successor" });
           } else {
             if (replacement === "pinned-lifecycle") {
               native.db.exec("BEGIN");
@@ -283,8 +300,16 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "authority"] as const)(
             );
           }
           expect(f.read(f.entry)).toBeUndefined();
-          expect(f.read(replacement === "authority" ? f.previous : successor)).toEqual(
-            replacement === "authority" ? META : successorMeta,
+          expect(
+            f.read(
+              replacement === "authority" || replacement === "in-process-writer"
+                ? f.previous
+                : successor,
+            ),
+          ).toEqual(
+            replacement === "authority" || replacement === "in-process-writer"
+              ? META
+              : successorMeta,
           );
         } finally {
           if (native.db.isTransaction) {

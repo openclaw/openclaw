@@ -15,7 +15,9 @@ import {
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { AgentDatabaseDeletionRefusedError } from "./agent-deletion-journal.js";
 import type {
   OpenClawAgentDatabaseRegistrationCommit,
   OpenClawAgentDatabaseRegistrationObserver,
@@ -107,7 +109,7 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
         "validationPort" in facts &&
         facts.validationPort instanceof MessagePort
       ) {
-        facts.validationPort.postMessage({ deferUnverifiedIntegrity: false }, []);
+        facts.validationPort.postMessage({}, []);
       }
       edge.request(...args);
     },
@@ -189,11 +191,15 @@ function retireFailedReply(
   const completion = createDeferredCore<unknown>();
   const reject = vi.fn((error: unknown) => completion.resolve(error));
   const settleNative = vi.fn();
+  const slotCustody = new SqliteWorkerSlotCustody();
+  const custody = slotCustody.createRequest();
+  custody.activate();
+  custody.accept();
   const job: Job = {
+    custody,
     observation: { started() {}, completed() {} },
     request,
     bytes: 0,
-    nativeDispatched: true,
     operationAdmission: {
       admission: {
         get port(): MessagePort {
@@ -219,6 +225,7 @@ function retireFailedReply(
   };
   const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
     Parameters<typeof failSqliteWorkerSlot>[0] = {
+    custody: slotCustody,
     actors: new Set<Actor>(),
     current: job,
     queue: [],
@@ -234,8 +241,12 @@ function retireFailedReply(
         finish: settleSqliteWorkerJob,
       });
     },
-    finish: edge.forbidden,
-    dispatch: edge.forbidden,
+    finish(target, error, _value, settlement) {
+      expect(target).toBe(job);
+      settleNative(settlement);
+      reject(error);
+    },
+    dispatch() {},
   });
   return { retired, completion, reject, settleNative };
 }
@@ -308,6 +319,7 @@ it("settles eager native factory creation synchronously", async () => {
 it.each([
   "direct refusal",
   "native and report failure",
+  "late deletion refusal",
   "cleanup failure",
   "ordinary closed",
 ] as const)(
@@ -320,10 +332,12 @@ it.each([
     const nativeError =
       outcome === "ordinary closed"
         ? new SqliteWorkerError("Independent native opening failed", "closed")
-        : new SqliteCoordinatorError(
-            "Independent native opening failed",
-            new Error("Native fault"),
-          );
+        : outcome === "late deletion refusal"
+          ? new AgentDatabaseDeletionRefusedError("Deletion fence changed after native open")
+          : new SqliteCoordinatorError(
+              "Independent native opening failed",
+              new Error("Native fault"),
+            );
     const cleanupError = new SqliteCoordinatorError(
       "Independent native cleanup failed",
       new Error("Cleanup fault"),
@@ -353,7 +367,7 @@ it.each([
       }
       registration?.starting?.();
       registration?.committed?.(receipt);
-      if (outcome === "native and report failure") {
+      if (outcome === "native and report failure" || outcome === "late deletion refusal") {
         throw nativeError;
       }
       nativeOpened = true;
@@ -672,14 +686,8 @@ describe("committed agent registration across failed native opening", () => {
         [{ stage: "open", facts: input }],
       ]);
       expect(edge.open).not.toHaveBeenCalled();
-      const { retired, completion, reject, settleNative } = retireFailedReply(
-        reply,
-        opening,
-        refused,
-      );
-      expect(reject).not.toHaveBeenCalled();
-      expect(settleNative).not.toHaveBeenCalled();
-      retired.resolve();
+      const { completion, reject, settleNative } = retireFailedReply(reply, opening, refused);
+      expect(reject).toHaveBeenCalledExactlyOnceWith(refused);
       expect(await completion.promise).toBe(refused);
       expect(settleNative).toHaveBeenCalledExactlyOnceWith({ kind: "completed" });
     } finally {

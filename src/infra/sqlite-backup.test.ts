@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -15,6 +16,9 @@ describe("node SQLite backup completion", () => {
     const root = dirs.make("sqlite-backup-completion-");
     const target = path.join(root, "backup.sqlite");
     const owner = path.join(root, "sqlite-backup.mjs");
+    for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
+      await fs.copyFile(new URL(`../state/${schema}`, import.meta.url), path.join(root, schema));
+    }
     // Loader/cache I/O would supply the unrelated callback this regression must exclude.
     await build({
       entryPoints: [fileURLToPath(new URL("./sqlite-backup.ts", import.meta.url))],

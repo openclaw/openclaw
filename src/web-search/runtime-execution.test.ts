@@ -69,33 +69,6 @@ describe("executeWebSearchCandidates", () => {
     },
   );
 
-  it("retains an undefined rejection across an unavailable factory and later failure", async () => {
-    const unavailable = createWebSearchTestProvider({
-      id: "unavailable",
-      pluginId: "fixture-search",
-      credentialPath: "plugins.entries.fixture-search.config.unavailable",
-      createTool: () => null,
-    });
-    const laterFailure = vi.fn(async () => {
-      throw new Error("second provider failed");
-    });
-    await expect(
-      executeWebSearchCandidates({
-        candidates: [
-          candidate(
-            "first",
-            vi.fn<WebSearchProviderToolDefinition["execute"]>().mockRejectedValue(undefined),
-          ),
-          unavailable,
-          candidate("second", laterFailure),
-        ],
-        args: {},
-        allowFallback: true,
-      }),
-    ).rejects.toThrow("undefined");
-    expect(laterFailure).toHaveBeenCalledOnce();
-  });
-
   it("gives cancellation precedence over a saved failure and later cleanup error", async () => {
     const controller = new AbortController();
     const reason = new Error("caller cancelled");

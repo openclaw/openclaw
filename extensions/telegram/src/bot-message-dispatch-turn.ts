@@ -50,6 +50,7 @@ const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
 export async function runTelegramDispatchTurn(turn: Turn) {
   const { context } = turn;
+  const hasRepliedRef = { value: false };
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
   // Quiet drafts do not disable explicit /verbose diagnostics; only configured opt-outs do.
   const toolProgressEnabled =
@@ -152,6 +153,10 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
+            hasRepliedRef,
+            onPreparedAgentRunStart: ({ runId }) => {
+              turn.transcriptMirrorRunId = runId;
+            },
             ...(context.ctxPayload.CommandSource === "native"
               ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
               : {}),
@@ -257,6 +262,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   })
               : () => false,
             onQueuedFollowupAdmitted: () => {
+              hasRepliedRef.value = false;
               beginDraftQueuedFollowup(turn);
               turn.previewLifecycle.reset();
               turn.finalDispatchClaimed = false;

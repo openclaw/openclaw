@@ -21,7 +21,7 @@ export type SessionColdExternalization = {
 };
 
 export type SessionColdMutationResult = {
-  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
+  transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   archivedTranscripts: number;
   externalizedTranscripts: number;
   restored: boolean;

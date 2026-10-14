@@ -4,6 +4,7 @@ import {
   SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
   type SystemRunExecutionContext,
 } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -18,7 +19,7 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
-  countObsoleteGeneratedExecApprovals,
+  countObsoleteGeneratedExecApprovalRules,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
   hasNodeCommandAllowAlwaysMarker,
@@ -42,6 +43,7 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
+import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
@@ -128,10 +130,7 @@ function hasNodeAllowAlwaysCommandApproval(params: {
   nodeCoverage?: NodeAllowAlwaysCoverage;
 }): boolean {
   const normalizedCommand = params.commandText.trim();
-  if (!normalizedCommand) {
-    return false;
-  }
-  if (params.segments.length === 0) {
+  if (!normalizedCommand || params.segments.length === 0) {
     return false;
   }
   if (
@@ -335,6 +334,7 @@ export function buildNodeSystemRunInvoke(params: {
 }
 
 export async function dispatchNodeSystemRun(params: {
+  source?: SessionSourceAssertion;
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
   invoke: Record<string, unknown>;
@@ -342,12 +342,15 @@ export async function dispatchNodeSystemRun(params: {
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
   params.request.signal?.throwIfAborted();
-  const result = await invokeNodeSystemRun({
-    invokeWaitMs: params.target.invokeWaitMs,
-    invoke: params.invoke,
-    scopes: params.scopes,
-    signal: params.request.signal,
-  });
+  const result = await runWithAgentToolSourceExecutionScope(params.source, () =>
+    invokeNodeSystemRun({
+      source: params.source,
+      invokeWaitMs: params.target.invokeWaitMs,
+      invoke: params.invoke,
+      scopes: params.scopes,
+      signal: params.request.signal,
+    }),
+  );
   if (!result.ok) {
     return formatNodeInvokeFailureToolResult({
       failure: result.failure,
@@ -507,43 +510,40 @@ export async function analyzeNodeApprovalRequirement(params: {
     analysisOk
   ) {
     try {
-      const approvalsSnapshot = await callGatewayTool<{ file: string }>(
-        "exec.approvals.node.get",
-        { timeoutMs: 10_000 },
-        { nodeId: params.target.nodeId },
-      );
-      const approvalsFile =
-        approvalsSnapshot && typeof approvalsSnapshot === "object"
-          ? approvalsSnapshot.file
-          : undefined;
-      if (approvalsFile && typeof approvalsFile === "object") {
+      const snapshotRules = params.prepared.plan.policySnapshot?.allowlistRules;
+      let allowlist = snapshotRules ? [...snapshotRules] : undefined;
+      // Shipped v2026.7.1 prepare responses omit the agent-scoped snapshot.
+      if (!allowlist) {
+        const snapshot = await callGatewayTool<{ file?: ExecApprovalsFile }>(
+          "exec.approvals.node.get",
+          { timeoutMs: 10_000 },
+          { nodeId: params.target.nodeId },
+        );
+        if (snapshot?.file && typeof snapshot.file === "object") {
+          allowlist = resolveExecApprovalsFromFile({
+            file: snapshot.file,
+            agentId: params.prepared.agentId,
+          }).allowlist;
+        }
+      }
+      if (allowlist) {
         nodeApprovalsFileKnown = true;
-        const resolved = resolveExecApprovalsFromFile({
-          file: approvalsFile as ExecApprovalsFile,
-          agentId: params.prepared.agentId,
-          overrides: { security: "full" },
-        });
-        obsoleteGeneratedApprovalCount = countObsoleteGeneratedExecApprovals(resolved.file);
+        obsoleteGeneratedApprovalCount = countObsoleteGeneratedExecApprovalRules(allowlist);
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         // POSIX node transport wraps commands, so mirror node policy by
         // accepting either the prepared wrapper or its semantic inner command.
         const allowlistEvals = await Promise.all(
           bindingCommandEvals.map(async (entry) => {
-            const allowlistEval = await evaluateCommand(
-              entry.command,
-              entry.cwd,
-              resolved.allowlist,
-            );
+            const allowlistEval = await evaluateCommand(entry.command, entry.cwd, allowlist);
             return {
-              command: entry.command,
               allowlistEligible:
                 !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
               exactDurableApprovalSatisfied: hasExactCommandDurableExecApproval({
-                allowlist: resolved.allowlist,
+                allowlist,
                 commandText: entry.command,
               }),
               nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
-                allowlist: resolved.allowlist,
+                allowlist,
                 commandText: params.prepared.rawCommand,
                 segments: entry.allowlistEval.segments,
                 cwd: entry.cwd,
@@ -556,7 +556,7 @@ export async function analyzeNodeApprovalRequirement(params: {
               durableApprovalSatisfied: hasDurableExecApproval({
                 analysisOk: allowlistEval.analysisOk,
                 segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-                allowlist: resolved.allowlist,
+                allowlist,
                 commandText: entry.command,
               }),
             };
@@ -594,7 +594,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     obsoleteGeneratedApprovalCount > 0
   ) {
     params.request.warnings.push(
-      `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive on this node because they are not tied to a working directory. Run "openclaw doctor --fix" on the node, then rerun the workflow and choose "Always allow here".`,
+      `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "rule is" : "rules are"} inactive for this agent on the node because they are not tied to a working directory. Run "openclaw doctor --fix" on the node, then rerun the workflow and choose "Always allow here".`,
     );
   }
   const autoReviewEligibility = resolveNodeAutoApprovalEligibility({

@@ -25,6 +25,7 @@ import {
   FakeChild,
   renderSteps,
   stubHealthyGateway,
+  canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
 import { createUpdateRun, finishUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
@@ -290,6 +291,44 @@ describe("update candidate Doctor lint", () => {
     );
   });
 
+  it.each([0, 3])(
+    "shows a passing lint with budget-deferred inspections as advisory after %i checks",
+    async (checksRun) => {
+      lintReport = {
+        ok: true,
+        checksRun,
+        findings: [],
+        warnings: [
+          {
+            checkId: "core/doctor/agent-scopes",
+            source: "doctor",
+            severity: "warning",
+            errorCode: "update-inspection-deferred",
+            requirement: "update-validation-budget",
+            message: "Agent scopes deferred until after activation.",
+            fixHint: "Run `openclaw doctor --fix` after activation.",
+          },
+        ],
+      };
+      stubHealthyGateway();
+      const result = await validateUpdateCandidateCanary(canaryStateOptions());
+      expect(result.status).toBe("ok");
+      const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
+      expect(step).toMatchObject({
+        exitCode: 0,
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: `Doctor deferred 1 inspection until after activation (${checksRun} ran). Run \`openclaw doctor --fix\` after the update.`,
+        },
+      });
+      expect(step.failureFacts).toBeUndefined();
+      const printed = renderSteps([step]);
+      expect(printed).toMatch(/! candidate-doctor-lint/u);
+      expect(printed).not.toContain("✓");
+      expect(printed).toContain("Doctor deferred 1 inspection");
+    },
+  );
+
   it.each([
     { name: "signal", exitCode: null, signal: "SIGTERM", outputLimitExceeded: false },
     { name: "output limit after exit zero", exitCode: 0, signal: null, outputLimitExceeded: true },
@@ -393,7 +432,8 @@ describe("update candidate Doctor lint", () => {
     const options = { ...canaryStateOptions(3_000), env, onStep };
     const result = await validateUpdateCandidateCanary(options);
     expect(result).toMatchObject({ status: "error", phase: "lint" });
-    expect(result.steps.at(-1)).toMatchObject({
+    const failed = canaryOutcomeStep(result.steps);
+    expect(failed).toMatchObject({
       failureFacts: Array.from({ length: 5 }, (_, index) => ({
         check: `config.invalid.${index}`,
         code: "doctor-failed",
@@ -401,9 +441,9 @@ describe("update candidate Doctor lint", () => {
         message: expect.stringContaining("Invalid server"),
       })),
     });
-    expect(onStep).toHaveBeenLastCalledWith(result.steps.at(-1));
-    expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
-    const findings = result.steps.at(-1)?.doctorLintFindings;
+    expect(onStep).toHaveBeenCalledWith(failed);
+    expect(failed?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
+    const findings = failed?.doctorLintFindings;
     expect(findings).toHaveLength(48);
     expect(findings?.map((finding) => finding.checkId)).toEqual([
       ...Array.from({ length: 40 }, (_, index) => `optional.warning.${index}`),

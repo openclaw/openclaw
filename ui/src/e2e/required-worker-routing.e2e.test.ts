@@ -36,7 +36,12 @@ suite.define(() => {
       const models =
         route === "before"
           ? hostModels
-          : projectSessionModelCatalog({ agentId: "main", sessionKey }, hostModels, config);
+          : projectSessionModelCatalog(
+              { agentId: "main", sessionKey },
+              hostModels,
+              config,
+              undefined,
+            );
       const gateway = await installMockGateway(page, {
         sessionKey,
         agentModel: "openai/worker-model",

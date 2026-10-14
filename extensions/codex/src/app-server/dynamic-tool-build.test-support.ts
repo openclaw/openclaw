@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
@@ -106,6 +112,8 @@ export async function buildDynamicToolsForTest(
   if (!sandboxSessionKey) {
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
+  const config = params.config ?? {};
+  setRuntimeConfigSnapshot(config, config);
   return buildDynamicTools({
     params,
     resolvedWorkspace: workspaceDir,
@@ -171,16 +179,32 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
   };
 }
 
+export async function setupDynamicToolBuildFixture(): Promise<string> {
+  hoisted.loadNodeExecAvailability.mockResolvedValue({
+    cacheKey: "eligible",
+    isAvailable: () => true,
+  });
+  hoisted.normalizeAgentRuntimeTools.mockClear();
+  hoisted.resolveWebSearchToolPolicy.mockClear();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
+  setRuntimeConfigSnapshot({});
+  return tempDir;
+}
+
 export async function cleanupDynamicToolBuildFixture(
   tempDir: string,
   hostCapabilityClosers: Array<() => void>,
 ): Promise<void> {
-  for (const close of hostCapabilityClosers.splice(0)) {
-    close();
+  try {
+    for (const close of hostCapabilityClosers.splice(0)) {
+      close();
+    }
+    vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    vi.unstubAllEnvs();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  } finally {
+    clearRuntimeConfigSnapshot();
   }
-  vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  vi.unstubAllEnvs();
-  await fs.rm(tempDir, { recursive: true, force: true });
 }

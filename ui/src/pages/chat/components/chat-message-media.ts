@@ -32,8 +32,12 @@ export type ArtifactDownloadResolver = (
 
 export type ImageRenderOptions = {
   galleryImages?: readonly ImageBlock[];
-  galleryVideos?: (item: AttachmentItem) => { index: number; items: readonly AttachmentItem[] };
+  galleryVideos?: (item: AttachmentItem) => {
+    index: number;
+    items: readonly (AttachmentItem & { messageId?: string })[];
+  };
   sessionKey?: string;
+  messageId?: string;
   agentId?: string;
   policyKey?: string;
   canonicalMessageKey?: string;
@@ -639,6 +643,8 @@ export function projectMessageMedia(
         url: mediaPath,
         fileName,
         sizeBytes,
+        width,
+        height,
         ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
       };
       if (appendImageBlock(images, projected) && !positionedSources.has(mediaPath)) {

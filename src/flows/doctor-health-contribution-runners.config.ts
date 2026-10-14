@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import nodePath from "node:path";
+import { note as showDoctorNote } from "../../packages/terminal-core/src/note.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
@@ -11,6 +12,7 @@ import {
   recordUpdateDoctorConfigWriteRefusal,
   runUpdateDoctorIncludeWrite,
 } from "../infra/update-doctor-result.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
@@ -64,8 +66,11 @@ export async function runWriteConfigHealth(
   const { recordDoctorHealthWarnings } = await import("./doctor-health-contribution.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
+  const providerRenames = ctx.configResult.providerRenames ?? [];
+  const providerRenamePending = ctx.prompter.shouldRepair && providerRenames.length > 0;
   const configResultWritePending =
-    ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
+    (ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true) ||
+    providerRenamePending;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (resolveIsConfigReadOnly(ctx.env ?? process.env)) {
@@ -78,14 +83,62 @@ export async function runWriteConfigHealth(
       return false;
     }
   }
+  if (shouldWriteConfig && shouldSkipLegacyUpdateDoctorConfigWrite(ctx.env ?? process.env)) {
+    ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
+    return false;
+  }
+  if (providerRenamePending) {
+    // Static imports initialize session/runtime owners during config-only reads with no rename.
+    const { maybeRepairCodexSessionRoutes } =
+      await import("../commands/doctor/shared/codex-route-session-repair.js");
+    const { maybeRepairProviderRenameCronJobs } =
+      await import("../commands/doctor/shared/provider-rename-state.js");
+    const { applyProviderRenames } = await import("../commands/doctor/shared/provider-rename.js");
+    const renamedCron = await maybeRepairProviderRenameCronJobs({
+      renames: providerRenames,
+      env: ctx.env,
+      shouldRepair: true,
+    });
+    noteDoctorRepairResult(renamedCron, showDoctorNote);
+    const renamedSessions = await maybeRepairCodexSessionRoutes({
+      cfg: ctx.cfg,
+      providerRenames,
+      providerRenameOnly: true,
+      env: ctx.env,
+      shouldRepair: true,
+    });
+    noteDoctorRepairResult(renamedSessions, showDoctorNote);
+    if (renamedCron.warnings.length > 0 || renamedSessions.warnings.length > 0) {
+      throw new Error(
+        "Provider references could not be fully repaired. Config was preserved; rerun openclaw doctor --fix.",
+      );
+    }
+    const migration = applyProviderRenames(ctx.cfg, providerRenames);
+    ctx.cfg = migration.config;
+    if (migration.changes.length > 0) {
+      ctx.configResult.pendingChangePanels = [
+        ...(ctx.configResult.pendingChangePanels ?? []),
+        migration.changes.join("\n"),
+      ];
+    }
+  }
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+    const { readDeferredPluginMigrationsAsync } =
+      await import("../infra/deferred-plugin-migrations.js");
+    const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
+      env: ctx.env ?? process.env,
+    });
     const { restoreDoctorConfigEnvRefs } =
       await import("../commands/doctor/shared/config-flow-steps.js");
     const { prepareDoctorConfigWriteStage } =
       await import("../commands/doctor/shared/roster-include-write.js");
     let stageSnapshot = configResultWritePending
-      ? await readConfigFileSnapshot({ observe: false, skipPluginValidation: true })
+      ? await readConfigFileSnapshot({
+          observe: false,
+          skipPluginValidation: true,
+          deferredPluginMigrations,
+        })
       : undefined;
     let stage = stageSnapshot
       ? prepareDoctorConfigWriteStage({
@@ -103,15 +156,14 @@ export async function runWriteConfigHealth(
     if (stage) {
       ctx.configResult.skipWizardMetadataForIncludeWrite = true;
     }
-    if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
+    if (
+      ctx.configResult.skipWizardMetadataForIncludeWrite !== true &&
+      !resolveUpdateRehearsalRoot(ctx.env ?? process.env)
+    ) {
       ctx.cfg = applyWizardMetadata(ctx.cfg, {
         command: "doctor",
         mode: resolveDoctorMode(ctx.cfg),
       });
-    }
-    if (shouldSkipLegacyUpdateDoctorConfigWrite(ctx.env ?? process.env)) {
-      ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
-      return false;
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
@@ -173,6 +225,7 @@ export async function runWriteConfigHealth(
         const savedStage = await readConfigFileSnapshot({
           observe: false,
           skipPluginValidation: true,
+          deferredPluginMigrations,
         });
         if (
           savedStage.path !== ctx.configResult.confirmedConfigSource?.path ||
@@ -217,7 +270,11 @@ export async function runWriteConfigHealth(
       );
       const authority = getUpdateDoctorConfigWriteAuthority(ctx.configPath);
       const includeSnapshot = authority
-        ? await readConfigFileSnapshot({ skipPluginValidation: updateDoctorRun, observe: false })
+        ? await readConfigFileSnapshot({
+            skipPluginValidation: updateDoctorRun,
+            observe: false,
+            deferredPluginMigrations,
+          })
         : undefined;
       const resolveIncludeBoundary = (
         snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
@@ -282,6 +339,7 @@ export async function runWriteConfigHealth(
           },
           afterWrite: { mode: "auto" },
           writeOptions: {
+            deferredPluginMigrations,
             assertCurrent,
             ...(installedPluginIdRecovery?.size
               ? {
@@ -466,9 +524,10 @@ export async function runWriteConfigHealth(
         pending: getDeferredPluginMigrationConfigFacts(committed.nextConfig) ?? [],
       }),
     );
-    if (ctx.configResult.shouldWriteConfig === true) {
+    if (ctx.configResult.shouldWriteConfig === true || providerRenamePending) {
       ctx.configResultWriteCommitted = true;
     }
+    delete ctx.configResult.providerRenames;
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);
     const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
@@ -541,7 +600,8 @@ export async function runInitialConfigWriteHealth(ctx: DoctorHealthFlowContext):
   if (
     ctx.configResult.shouldWriteConfig !== true &&
     !ctx.configResult.modelBillingRouteWarnings?.length &&
-    ctx.configResult.modelRetirementRepairRan !== true
+    ctx.configResult.modelRetirementRepairRan !== true &&
+    !ctx.configResult.providerRenames?.length
   ) {
     return;
   }
@@ -641,9 +701,15 @@ function isDirectoryPath(path: string): boolean {
 
 export async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
+  const { readDeferredPluginMigrationsAsync } =
+    await import("../infra/deferred-plugin-migrations.js");
+  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
+    env: ctx.env ?? process.env,
+  });
   const finalSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
     preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+    deferredPluginMigrations,
   });
   if (finalSnapshot.exists && !finalSnapshot.valid) {
     ctx.runtime.error("Invalid config:");

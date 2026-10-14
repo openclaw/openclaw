@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
-  type SqliteCommitReceipt,
   type SqliteCommittedFact,
 } from "../../infra/sqlite-commit-receipt.js";
 import {
@@ -18,6 +17,7 @@ import {
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
 import { advanceSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import { isSessionTranscriptTerminalModel } from "../../sessions/transcript-terminal-model.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -25,23 +25,11 @@ import {
   readPreparedSessionEntryPublicationSource,
   preparedSharingChanges,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
-import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
-
-/** Context postimage; exact anchor membership still belongs to the native projection reader. */
-export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
-  sessionId: string;
-  sessionKey: string;
-  leafEventId: string | null;
-  indexedSeq: number | null;
-  activeMessageCount: number | null;
-  needsRebuild: number | null;
-};
-export type SessionTranscriptAuthorityReceipt = SqliteCommitReceipt<
+import { prepareSessionActorTranscriptAuthority } from "./session-actor-transaction.js";
+import type {
   SessionTranscriptAuthority,
-  SessionEntryPublicationSource
->;
+  SessionTranscriptAuthorityReceipt,
+} from "./session-transcript-authority.types.js";
 
 const staged = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityStaged"),
@@ -139,7 +127,7 @@ export function publishSessionTranscriptAuthority(
 ): void {
   publishTranscriptFact(database, context.sessionKey, {
     kind: "postimage",
-    value: Object.freeze(context),
+    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, context)),
   });
 }
 
@@ -158,6 +146,26 @@ export function readStagedSessionTranscriptAuthority(database: { db: DatabaseSyn
     (receipt) => typeof receipt.source.identity === "string",
   );
   return transferable.length ? transferable : undefined;
+}
+
+/** A following entry write consumes the transcript owner's staged watermark. */
+export function readStagedSessionTranscriptUpdatedAt(
+  database: { db: DatabaseSync },
+  sessionId: string,
+): number | undefined {
+  let updatedAt: number | undefined;
+  for (const receipt of readStagedSessionTranscriptAuthority(database) ?? []) {
+    for (const fact of receipt.facts.values()) {
+      if (
+        fact.kind === "postimage" &&
+        fact.value.sessionId === sessionId &&
+        fact.value.updatedAt !== null
+      ) {
+        updatedAt = Math.max(updatedAt ?? 0, fact.value.updatedAt);
+      }
+    }
+  }
+  return updatedAt;
 }
 
 export function parseSessionTranscriptAuthorityReceipts(
@@ -181,8 +189,15 @@ export function publishUnchangedSessionTranscriptReceipts(
   ) {
     throw new Error("Transcript materialization changed its content authority receipt");
   }
+  publishCommittedSessionTranscriptReceipts(receipts);
+}
+
+/** The native settlement owner publishes these while it still holds the writer FIFO. */
+export function publishCommittedSessionTranscriptReceipts(
+  receipts: readonly SessionTranscriptAuthorityReceipt[] | undefined,
+): void {
   sessionChanges.emitBatch(
-    receipts.flatMap((receipt) =>
+    (receipts ?? []).flatMap((receipt) =>
       receiptChanges(receipt, undefined, receipt.source.canonicalPath ?? receipt.source.filename),
     ),
   );
@@ -226,7 +241,13 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.generation !== null && typeof row.generation !== "string") ||
       (row.leafEventId !== null && typeof row.leafEventId !== "string") ||
       ![row.rawSeq, row.updatedAt, row.indexedSeq, row.activeMessageCount].every(nullableNumber) ||
-      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1)
+      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
+      (row.lastMessagePreview !== undefined &&
+        row.lastMessagePreview !== null &&
+        typeof row.lastMessagePreview !== "string") ||
+      (row.terminalModel !== undefined &&
+        row.terminalModel !== null &&
+        !isSessionTranscriptTerminalModel(row.terminalModel))
     ) {
       return false;
     }
@@ -332,91 +353,6 @@ export function retainSessionTranscriptWorkerPublication(params: {
       }
       receipts = [];
       return changes;
-    },
-  };
-}
-
-/**
- * A destructive commit cannot be undone by restoring bytes while a consumer awaits.
- * This latch only refuses; final acceptance still joins the owner FIFO and validates
- * exact anchors with its native mutation witness, including pending worker writes.
- */
-export function retainSessionTranscriptContextGeneration(
-  params: { agentId?: string; sessionKey: string; sessionId: string; storePath?: string },
-  version: SessionTranscriptContextVersion | undefined,
-  databaseIdentity?: string,
-) {
-  let revoked = false;
-  const release = sessionChanges.subscribeFacts((change) => {
-    const source = readPreparedSessionEntryPublicationSource(change);
-    if (databaseIdentity && source.identity && source.identity !== databaseIdentity) {
-      return;
-    }
-    if ("all" in change) {
-      if (
-        source.identity === undefined &&
-        typeof change.scope !== "string" &&
-        change.scope.storePath &&
-        params.storePath &&
-        change.scope.storePath !== params.storePath
-      ) {
-        return;
-      }
-      if (
-        typeof change.scope !== "string" &&
-        change.scope.agentId &&
-        params.agentId &&
-        change.scope.agentId !== params.agentId
-      ) {
-        return;
-      }
-      if (
-        change.factsInvalidated ||
-        change.scope === "stores" ||
-        (typeof change.scope !== "string" && change.scope.topology)
-      ) {
-        revoked = true;
-      }
-      return;
-    }
-    if (
-      change.sessionKey !== params.sessionKey ||
-      (change.agentId && params.agentId && change.agentId !== params.agentId) ||
-      (source.identity === undefined &&
-        change.storePath &&
-        params.storePath &&
-        change.storePath !== params.storePath)
-    ) {
-      return;
-    }
-    if (
-      change.factsInvalidated === true ||
-      change.facts?.kind === "removed" ||
-      ((change.facts?.kind === "entry" || change.facts?.kind === "replacement") &&
-        change.facts.lifecycleChanged) ||
-      (change.facts?.kind === "entry" && change.facts.sessionId !== params.sessionId)
-    ) {
-      revoked = true;
-    }
-    const fact = readPreparedSessionTranscriptChange(change);
-    if (fact?.kind === "unknown" || fact?.kind === "absent") {
-      revoked = true;
-    }
-    if (
-      fact?.kind === "postimage" &&
-      fact.value.sessionId === params.sessionId &&
-      version &&
-      fact.value.generation !== version.generation
-    ) {
-      revoked = true;
-    }
-  });
-  return {
-    release,
-    assertCurrent() {
-      if (revoked) {
-        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
-      }
     },
   };
 }

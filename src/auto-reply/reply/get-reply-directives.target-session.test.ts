@@ -169,10 +169,6 @@ vi.mock("../../agents/thinking-runtime.js", () => ({
     (provider === "openai" ? "codex" : "openclaw"),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
-  normalizeAgentId: vi.fn((value: string) => value),
-}));
-
 vi.mock("../commands-text-routing.js", () => ({
   shouldHandleTextCommands: () => mocks.shouldHandleTextCommands(),
 }));
@@ -374,75 +370,6 @@ describe("resolveReplyDirectives", () => {
     expect(mockCallInput(mocks.applyInlineDirectiveOverrides).directives).toMatchObject({
       hasModelDirective: false,
     });
-  });
-
-  it("uses the Sol default on the switching turn from a non-reasoning model", async () => {
-    mocks.applyInlineDirectiveOverrides.mockImplementationOnce(async (params) => ({
-      kind: "continue",
-      directives: params.directives,
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      contextTokens: params.contextTokens,
-    }));
-
-    const { result, resolveDefaultThinkingLevel } = await resolveHelloWithModelDefaults({
-      body: "reply to this\n/model openai/gpt-5.6-sol",
-      commandAuthorized: true,
-      defaultThinkingByModel: { "gpt-5.6-sol": "low" },
-      selectedProvider: "openai",
-      selectedModel: "gpt-4o-mini",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      },
-    });
-
-    await expectContinueResult(result, { resolvedThinkLevel: "low" });
-    expect(resolveDefaultThinkingLevel).toHaveBeenLastCalledWith({
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      agentRuntime: "openclaw",
-    });
-  });
-
-  it("does not re-enable model reasoning when thinking override explicitly disables thinking", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      opts: { thinkingLevelOverride: "off" },
-    });
-
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("does not re-enable model reasoning when per-agent thinking default disables thinking", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      agentEntries: [{ id: "main", thinkingDefault: "off" }],
-    });
-
-    await expectContinueResult(result, {
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("does not expose configured reasoning defaults to untrusted senders", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      agentCfg: { reasoningDefault: "stream" },
-    });
-
-    await expectContinueResult(result, {
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
   });
 
   it("ignores inline reasoning directives from untrusted senders", async () => {

@@ -221,7 +221,7 @@ suite.define(() => {
           status: run.status,
           updatedAtMs: run.updatedAtMs,
         });
-        const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0).";
+        const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0); 3 warnings need attention.";
         await runView.getByText(headline, { exact: true }).first().waitFor();
         await runView.getByText("Gateway downtime: 1s.", { exact: false }).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);

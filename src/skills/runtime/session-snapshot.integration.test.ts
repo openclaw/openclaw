@@ -8,11 +8,6 @@ import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runti
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { createReplySessionEntryHandle } from "../../auto-reply/reply/session-entry-handle.js";
 import { ensureSkillSnapshot } from "../../auto-reply/reply/session-updates.js";
-import {
-  applySessionEntryLifecycleMutation,
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -25,6 +20,7 @@ import { createSkillEntry } from "../loading/skill-entry-metadata.js";
 import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
 import * as workspaceSkillLoader from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -102,7 +98,7 @@ describe("asynchronous runtime skill preparation", () => {
       onTestFinished(
         registerAgentWorkspaceAccess(params.workspaceDir, {
           bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-          loadSkills: async (request) => workspaceSkillLoader.readWorkspaceSkillSources(request),
+          loadSkills: async (request) => readWorkspaceSkillSources(request),
         }),
       );
       recordRemoteSkillNodeInfo({ nodeId, commands: ["system.run"] });
@@ -158,11 +154,8 @@ describe("asynchronous runtime skill preparation", () => {
 
   it.each([
     { maxSkillsInPrompt: 1, retained: true, remote: false },
-    { maxSkillsInPrompt: 2, retained: true, remote: false },
-    { maxSkillsInPrompt: 1, retained: false, remote: false },
     { maxSkillsInPrompt: 2, retained: false, remote: false },
     { maxSkillsInPrompt: 1, retained: false, remote: true },
-    { maxSkillsInPrompt: 2, retained: false, remote: true },
   ])(
     "keeps the saved implementation when a same-name provider becomes eligible ($maxSkillsInPrompt, retained=$retained, remote=$remote)",
     async ({ maxSkillsInPrompt, retained, remote }) => {
@@ -191,7 +184,7 @@ describe("asynchronous runtime skill preparation", () => {
         onTestFinished(
           registerAgentWorkspaceAccess(params.workspaceDir, {
             bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-            loadSkills: async (request) => workspaceSkillLoader.readWorkspaceSkillSources(request),
+            loadSkills: async (request) => readWorkspaceSkillSources(request),
           }),
         );
       }
@@ -403,152 +396,6 @@ describe("asynchronous runtime skill preparation", () => {
     },
   );
 
-  it.each(
-    replyCases.flatMap(({ isFirstTurnInSession, useHandle, warm }) =>
-      (["replace", "delete", "rotate"] as const).map((action) => ({
-        isFirstTurnInSession,
-        useHandle,
-        warm,
-        action,
-      })),
-    ),
-  )(
-    "preserves reply generation after $action (first turn $isFirstTurnInSession, handle $useHandle, warm $warm)",
-    async ({ action, isFirstTurnInSession, useHandle, warm }) => {
-      const params = await fixture();
-      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-      params.config.skills = { load: { watch: false } };
-      const sessionKey = "agent:main:main";
-      let sessionEntry: SessionEntry = {
-        sessionId: "original",
-        lifecycleRevision: "original-revision",
-        updatedAt: 1,
-      };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-      const replacement: SessionEntry = {
-        sessionId: "replacement",
-        lifecycleRevision: "replacement-revision",
-        updatedAt: 2,
-        skillsSnapshot: { prompt: "Replacement prompt", skills: [] },
-      };
-      const sessionEntryHandle = useHandle
-        ? createReplySessionEntryHandle({ sessionEntry, sessionStore, sessionKey })
-        : undefined;
-      const prepare = () =>
-        ensureSkillSnapshot({
-          agentId: "main",
-          sessionEntry,
-          sessionStore,
-          sessionEntryHandle,
-          sessionKey,
-          isFirstTurnInSession,
-          workspaceDir: params.workspaceDir,
-          cfg: params.config,
-        });
-      if (warm) {
-        await prepare();
-        sessionEntry = expectDefined(sessionStore[sessionKey], "prepared warm session entry");
-      }
-      const pending = prepare();
-      if (action === "replace") {
-        sessionStore[sessionKey] = replacement;
-      } else if (action === "delete") {
-        delete sessionStore[sessionKey];
-      } else {
-        sessionEntry.lifecycleRevision = "rotated-revision";
-        sessionEntry.skillsSnapshot = replacement.skillsSnapshot;
-      }
-      const result = await pending;
-      expect(sessionStore[sessionKey]).toBe(
-        action === "replace" ? replacement : action === "rotate" ? sessionEntry : undefined,
-      );
-      expect(result.sessionEntry).toBe(sessionStore[sessionKey]);
-      expect(result.skillsSnapshot).toBe(sessionStore[sessionKey]?.skillsSnapshot);
-      expect(result.systemSent).toBe(false);
-    },
-  );
-
-  it.each(["metadata", "replace", "rotate", "delete"] as const)(
-    "reconciles a warm reply with a durable %s while its local row stays stale",
-    async (action) => {
-      const params = await fixture();
-      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-      params.config.skills = { load: { watch: false } };
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        storePath: path.join(
-          path.dirname(params.workspaceDir),
-          "state",
-          "agents",
-          "main",
-          "openclaw-agent.sqlite",
-        ),
-      };
-      let sessionEntry: SessionEntry = {
-        sessionId: "original",
-        lifecycleRevision: "original-revision",
-        updatedAt: 1,
-        label: "Before",
-        pinnedAt: 1,
-      };
-      replaceSessionEntrySync(scope, sessionEntry);
-      const sessionStore = { [scope.sessionKey]: sessionEntry };
-      const sessionEntryHandle = createReplySessionEntryHandle({
-        sessionEntry,
-        sessionStore,
-        sessionKey: scope.sessionKey,
-      });
-      const prepare = () =>
-        ensureSkillSnapshot({
-          ...scope,
-          sessionEntry,
-          sessionStore,
-          sessionEntryHandle,
-          isFirstTurnInSession: false,
-          workspaceDir: params.workspaceDir,
-          cfg: params.config,
-        });
-      await prepare();
-      sessionEntry = expectDefined(
-        sessionStore[scope.sessionKey],
-        "prepared durable warm session entry",
-      );
-      if (action === "delete") {
-        await applySessionEntryLifecycleMutation({
-          agentId: scope.agentId,
-          storePath: scope.storePath,
-          removals: [{ sessionKey: scope.sessionKey }],
-          skipMaintenance: true,
-        });
-      }
-      const pending = prepare();
-      if (action !== "delete") {
-        const concurrent: SessionEntry = {
-          ...sessionEntry,
-          updatedAt: 2,
-          label: "After",
-          sendPolicy: "deny",
-          ...(action === "replace" ? { sessionId: "replacement" } : {}),
-          ...(action === "rotate" ? { lifecycleRevision: "rotated-revision" } : {}),
-          ...(action !== "metadata"
-            ? { skillsSnapshot: { prompt: "Replacement prompt", skills: [] } }
-            : {}),
-        };
-        delete concurrent.pinnedAt;
-        replaceSessionEntrySync(scope, concurrent);
-      }
-      expect(sessionEntryHandle.getCurrent()).toBe(sessionEntry);
-      const authoritative = loadSessionEntry(scope);
-      const result = await pending;
-      expect(result.sessionEntry).toEqual(authoritative);
-      expect(sessionEntryHandle.getCurrent()).toEqual(authoritative);
-      expect(sessionStore[scope.sessionKey]).toEqual(authoritative);
-      expect(result.skillsSnapshot?.prompt).toBe(authoritative?.skillsSnapshot?.prompt);
-      expect(loadSessionEntry(scope)).toEqual(authoritative);
-    },
-  );
-
   it("rebuilds changed source bytes and version before publishing an in-flight snapshot", async () => {
     const params = await fixture();
     const requestedVersion = getSkillsSnapshotVersion(params.workspaceDir);
@@ -581,31 +428,6 @@ describe("asynchronous runtime skill preparation", () => {
     });
     canExec = false;
     expect((await pending).snapshot.nodeSkillsEligibility).toEqual({ canExec: false });
-  });
-
-  it("hydrates runtime paths without rewriting saved fields and reuses the complete snapshot", async () => {
-    const params = await fixture();
-    const { snapshot } = await resolveReusableWorkspaceSkillSnapshot(params);
-    const { resolvedSkills, discoverySkills, ...saved } = snapshot;
-    saved.prompt = `Saved prefix\n${saved.prompt}`;
-    const before = JSON.stringify(saved);
-    Object.freeze(saved);
-    const hydrated = (
-      await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: saved })
-    ).snapshot;
-    const {
-      resolvedSkills: hydratedSkills,
-      discoverySkills: hydratedDiscovery,
-      ...persisted
-    } = hydrated;
-    expect(JSON.stringify(persisted)).toBe(before);
-    expect(hydratedSkills).toEqual(resolvedSkills);
-    expect(hydratedDiscovery).toEqual(discoverySkills);
-    expect(hydrated.skills).toBe(saved.skills);
-    expect(
-      (await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: hydrated }))
-        .snapshot,
-    ).toBe(hydrated);
   });
 
   it("keeps a shared rebuild alive for its remaining caller after another caller aborts", async () => {

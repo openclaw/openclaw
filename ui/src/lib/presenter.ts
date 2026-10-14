@@ -50,7 +50,7 @@ export function formatCronState(job: CronJob) {
   return `${status} · next ${next} · last ${last}`;
 }
 
-export function formatCronSchedule(job: CronJob) {
+export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);

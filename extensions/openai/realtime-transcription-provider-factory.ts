@@ -14,6 +14,7 @@ import {
   createOpenAIRealtimeClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
+  resolveOpenAIRealtimeRequestHeaders,
 } from "./realtime-provider-shared.js";
 
 type RealtimeEvent = {
@@ -93,6 +94,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
     defaultModel: OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
@@ -102,6 +104,16 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           cfg,
           profileTypes: ["api_key"],
         }),
+      ),
+    isConfiguredAsync: async ({ cfg, providerConfig }) =>
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        process.env.OPENAI_API_KEY?.trim() ||
+        (await runtime.isProviderAuthProfileConfiguredAsync({
+          provider: "openai",
+          cfg,
+          profileTypes: ["api_key"],
+        })),
       ),
     createSession: (req) => {
       const normalized = normalizeProviderConfig(req.providerConfig);
@@ -371,18 +383,11 @@ export function buildOpenAIRealtimeTranscriptionProvider(
               }
             }
           }
-          return (
-            runtime.resolveProviderRequestHeaders({
-              provider: "openai",
-              baseUrl: OPENAI_REALTIME_TRANSCRIPTION_URL,
-              capability: "audio",
-              transport: "websocket",
-              defaultHeaders: {
-                Authorization: `Bearer ${bearer}`,
-              },
-            }) ?? {
-              Authorization: `Bearer ${bearer}`,
-            }
+          return resolveOpenAIRealtimeRequestHeaders(
+            runtime,
+            OPENAI_REALTIME_TRANSCRIPTION_URL,
+            { Authorization: `Bearer ${bearer}` },
+            "websocket",
           );
         },
         connectTimeoutMs: 10_000,

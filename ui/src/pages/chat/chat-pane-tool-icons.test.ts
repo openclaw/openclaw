@@ -3,14 +3,14 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
-import { ChatPane } from "./chat-pane-render.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
 it("loads tool ownership for accepted history absent from the capped session list", async () => {
-  const controllers = vi.spyOn(ChatPane.prototype, "addController");
+  const controllers = vi.spyOn(ChatPaneRuntime.prototype, "addController");
   const client = new GatewayBrowserClient({ url: "ws://chat-pane-tool-icons.test" });
   const request = vi.spyOn(client, "request").mockRejectedValue(new Error("optional metadata"));
   const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });

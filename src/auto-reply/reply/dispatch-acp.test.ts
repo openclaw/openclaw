@@ -3,7 +3,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import type { AcpElicitationHandler } from "@openclaw/acp-core/runtime/types";
 import { detectMime } from "@openclaw/media-core/mime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { createTestChannelIngressOwner } from "../../../test/helpers/channel-admission-evidence.js";
@@ -19,6 +19,10 @@ import { createHostChannelInboundEventContextBuilder } from "../../channels/inbo
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -596,21 +600,26 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(serialized).not.toContain("adapter-private-marker");
   });
 
-  it("does not transfer completion ownership to an asynchronous acknowledgement", async () => {
-    await runDispatch({
-      bodyForAgent: "audit this turn",
-      runId: "caller-run",
-      onAgentRunStart: () => Promise.resolve("reply-dispatch"),
-    });
+  it.each(["legacy", "prepared"] as const)(
+    "does not transfer completion ownership to an asynchronous %s acknowledgement",
+    async (contract) => {
+      await runDispatch({
+        bodyForAgent: "audit this turn",
+        runId: "caller-run",
+        ...(contract === "legacy"
+          ? { onAgentRunStart: () => Promise.resolve("reply-dispatch") }
+          : { onPreparedAgentRunStart: () => Promise.resolve("reply-dispatch") }),
+      });
 
-    const expected = expect.objectContaining({
-      runId: "caller-run",
-      auditOnly: false,
-      completionSource: undefined,
-    });
-    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
-    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
-  });
+      const expected = expect.objectContaining({
+        runId: "caller-run",
+        auditOnly: false,
+        completionSource: undefined,
+      });
+      expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(expected);
+      expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(expected);
+    },
+  );
 
   it("reports uncertain question input when ACP notice delivery fails", async () => {
     routeMocks.routeReply.mockRejectedValueOnce(new Error("synthetic notice delivery failure"));
@@ -876,10 +885,10 @@ describe("tryDispatchAcpReplyCore", () => {
       await nextEventLoopTurn();
       expect(settled).toBe(false);
       expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
-      expect(delivered).toEqual([{ text: prefix }]);
+      expect(delivered).toEqual([{ text: prefix, textMode: "delta" }]);
       deliveryGate.resolve();
       await dispatch;
-      expect(delivered).toEqual([{ text: prefix }]);
+      expect(delivered).toEqual([{ text: prefix, textMode: "delta" }]);
       expectTranscript({ finalText: prefix });
     } finally {
       finishTurn.resolve();
@@ -898,7 +907,17 @@ describe("tryDispatchAcpReplyCore", () => {
         sessionKey,
         storePath: path.join(state.sessionsDir("codex-acp"), "sessions.json"),
       };
+      const cfg = createAcpTestConfig({ session: { store: target.storePath } });
+      setRuntimeConfigSnapshot(cfg);
+      onTestFinished(() => clearRuntimeConfigSnapshot());
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      managerMocks.resolveSessionAsync.mockResolvedValueOnce({
+        kind: "ready",
+        sessionKey,
+        agentId: target.agentId,
+        entry: { sessionId: target.sessionId, updatedAt: 1 },
+        meta: createAcpSessionMeta(),
+      });
       const text = "Completed output awaiting transcript persistence.";
       mockVisibleTextTurn(text);
       const controller = new AbortController();
@@ -925,15 +944,16 @@ describe("tryDispatchAcpReplyCore", () => {
       await runDispatch({
         bodyForAgent: "Cancel while saving this turn.",
         runId: "acp-cancel-during-transcript",
-        cfg: createAcpTestConfig({ session: { store: target.storePath } }),
+        cfg,
         abortSignal: controller.signal,
         userTurnTranscriptRecorder: recorder,
         prepareAssistantTranscriptMessage: (message) => {
           preparedMessages.push(structuredClone(message));
           return message;
         },
-        onAgentRunStart: (_runId, _meta, run) => {
-          dispatchedRun = run;
+        onPreparedAgentRunStart: ({ options, transcriptStart }) => {
+          expect(transcriptStart).toMatchObject(target);
+          dispatchedRun = options;
           return "reply-dispatch";
         },
       });
@@ -1389,6 +1409,42 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply, 0).text).toContain(
       "acpx session id: acpx-work",
     );
+  });
+
+  it("keeps a free-text [[tts:<prose>]] reply visible in the Telegram voice caption", async () => {
+    ttsCapabilityMocks.captionedFinalText = true;
+    const text = "Yes—I understand you clearly now.";
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      text,
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+      spokenText: text,
+      ttsSupplement: { spokenText: text },
+    } as MockTtsReply);
+    mockVisibleTextTurn(`[[tts:${text}]]`);
+    const attempted: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        attempted.push(payload);
+        return { visibleReplySent: true };
+      },
+    });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      cfg: liveConfig({ auto: "always", mode: "final" }),
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(attempted).toHaveLength(1);
+    expect(attempted[0]).toMatchObject({
+      text,
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    });
   });
 
   it.each([

@@ -10,6 +10,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { RequiredSessionPlacementAdmission } from "../../agents/session-placement-admission.types.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type {
   WorkerDesktopApp,
   WorkerMachineOption,
@@ -22,7 +23,7 @@ import type { WorkerPlacementAuthorization } from "./placement-authorization.js"
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
-} from "./placement-move-intent.js";
+} from "./placement-move-intent.types.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,
@@ -58,6 +59,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
+  startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   environmentId: string;
   providerId: string;
   profileId: string;
@@ -211,7 +213,7 @@ export type WorkerPlacementDispatchRequest = WorkerSessionPlacementDispatchIdent
 export type WorkerPlacementDispatchAdmission = <T>(
   request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
   run: (signal?: AbortSignal, assertSessionCurrent?: () => void) => Promise<T>,
-  authorize?: () => void,
+  authorize?: SessionSourceAssertion,
   signal?: AbortSignal,
 ) => Promise<T>;
 

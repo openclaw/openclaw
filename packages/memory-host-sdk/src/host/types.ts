@@ -1,5 +1,6 @@
 // Public memory host contracts shared by runtime, builtin search, and package consumers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "./openclaw-runtime-config.js";
 import type { MemorySearchDeadlineControlOptions } from "./search-deadline-control.js";
 export type MemorySource = "memory" | "sessions";
 
@@ -35,6 +36,29 @@ export type MemorySearchResult = {
   citation?: string;
   provenance?: MemoryEntryProvenance;
 };
+
+/** CLI search contract shared by the Gateway adapter and the owning memory plugin. */
+export type MemoryCliSearchParams = {
+  manager: MemorySearchManager;
+  cfg: OpenClawConfig;
+  agentId: string;
+  query: string;
+  maxResults?: number;
+  minScore?: number;
+  assertCurrent?: () => void;
+};
+
+export type MemoryCliSearchResult = {
+  results: MemorySearchResult[];
+  stale?: true;
+  warning?: string;
+  action?: string;
+};
+
+export type MemoryCliSearchOutcome =
+  | MemoryCliSearchResult
+  | { agentId: string; status: "disabled" }
+  | { agentId: string; status: "failed"; error: string };
 
 /** Automatic prompt injection is reserved for content with authoritative trusted provenance. */
 export function isMemoryOriginEligibleForAutomaticInjection(
@@ -413,11 +437,25 @@ export interface MemorySearchManager {
     limit?: number;
   }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
+  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. */
   status(): MemoryProviderStatus;
+  /** Set includeCounts to false for query-path facts without database diagnostics. */
+  statusAsync?(options?: { includeCounts?: boolean }): Promise<MemoryProviderStatus>;
   sync?(params?: MemorySyncParams): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;
+}
+
+/** Preserve synchronous third-party managers while built-in status reads run in their worker. */
+export async function readMemorySearchManagerStatus<Status>(
+  manager: {
+    status(): Status;
+    statusAsync?(options?: { includeCounts?: boolean }): Promise<Status>;
+  },
+  options?: { includeCounts?: boolean },
+): Promise<Status> {
+  return manager.statusAsync ? manager.statusAsync(options) : manager.status();
 }

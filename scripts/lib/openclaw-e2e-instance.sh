@@ -358,7 +358,7 @@ openclaw_e2e_gateway_log_port_from_text() {
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
   local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
-  local ready_log_pattern='\[gateway\] ready'
+  local ready_log_pattern='\[gateway\] (ready|http server listening)'
   # Published baselines logged their listener before the modern ready marker existed.
   if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
     ready_log_pattern='\[gateway\] (ready|listening on)'

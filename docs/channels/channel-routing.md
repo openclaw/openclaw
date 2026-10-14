@@ -8,7 +8,7 @@ title: "Channel routing"
 # Channels & routing
 
 OpenClaw routes replies **back to the channel where a message came from**. The
-model does not choose a channel; routing is deterministic and controlled by the
+model does not choose a channel; routing follows fixed rules controlled by the
 host configuration. Under the default DM scope, direct messages from every
 channel converge on the agent's [main session](/concepts/main-session).
 
@@ -32,6 +32,10 @@ Plugin send receipts that report failure, suppression, or dry run leave the
 conversation's stored route and delivery transcript unchanged. Confirmed partial
 sends can establish a route, but requested content is not mirrored as fully
 delivered.
+
+Conversation recency tracks inbound initialization, observed routes, and address changes. Session-only
+bookkeeping, such as usage or delivery-custody updates, preserves the existing
+conversation association and does not refresh its `lastSeenAt` timestamp.
 
 ## Session key shapes (examples)
 

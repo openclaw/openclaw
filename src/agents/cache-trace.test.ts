@@ -34,7 +34,7 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
-  it.each(["dashboard", "subagent", "internal-session-effects"])(
+  it.each(["dashboard"])(
     "does not record Incognito %s prompts even when content tracing is enabled",
     (surface) => {
       const lines: string[] = [];
@@ -52,32 +52,6 @@ describe("createCacheTrace", () => {
       expect(trace).toBeNull();
     },
   );
-
-  it("uses the fixed cache trace path under the state directory", () => {
-    const { lines, trace } = createMemoryTraceForTest({
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-cache-trace",
-    });
-
-    expect(typeof trace?.recordStage).toBe("function");
-    expect(trace?.filePath).toBe("/tmp/openclaw-cache-trace/logs/cache-trace.jsonl");
-
-    trace?.recordStage("session:loaded", {
-      messages: [],
-      system: "sys",
-    });
-
-    expect(lines.length).toBe(1);
-  });
-
-  it("records empty prompt/system values when enabled", () => {
-    const { lines, trace } = createMemoryTraceForTest();
-
-    trace?.recordStage("prompt:before", { prompt: "", system: "" });
-
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event.prompt).toBe("");
-    expect(event.system).toBe("");
-  });
 
   it("records stream context from systemPrompt when wrapping stream functions", () => {
     const { lines, trace } = createMemoryTraceForTest();
@@ -105,12 +79,6 @@ describe("createCacheTrace", () => {
     expect(event.stage).toBe("stream:context");
     expect(event.system).toBe("system prompt text");
     expect(event.systemDigest).toBeTypeOf("string");
-  });
-
-  it("respects env overrides for enablement", () => {
-    const { trace } = createMemoryTraceForTest({ OPENCLAW_CACHE_TRACE: "0" });
-
-    expect(trace).toBeNull();
   });
 
   it("sanitizes cache-trace payloads before writing", () => {

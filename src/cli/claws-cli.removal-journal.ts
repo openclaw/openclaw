@@ -6,13 +6,15 @@ import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-bindi
 import {
   clawRemovalJournalRequestSchema,
   clawRemovalJournalResultSchema,
+  serializeClawRemovalJournal,
   type ClawRemovalJournalGateway,
 } from "../claws/removal-journal-contract.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
 export const clawRemovalJournalGateway: ClawRemovalJournalGateway = async (input, authority) => {
+  const config = await captureRuntimeConfigAsyncReader()();
   authority.assertCurrent();
   const agentId = input.kind === "begin" ? input.entry.agentId : input.journal.agentId;
   const operationId = input.kind === "begin" ? input.operationId : input.journal.operationId;
@@ -20,14 +22,12 @@ export const clawRemovalJournalGateway: ClawRemovalJournalGateway = async (input
     phase: input.kind,
     agentId,
     operationId,
-    binding: resolveClawMonitorCleanupBinding(
-      resolveCronJobsStorePathFromConfig(getRuntimeConfig()),
-    ),
+    binding: resolveClawMonitorCleanupBinding(resolveCronJobsStorePathFromConfig(config)),
     lease: authority.identity,
     sourceIdentity: authority.sourceIdentity,
     expectedInstallDigest: input.expectedInstallDigest,
     expectedJournalDigest: digestClawValue(
-      input.kind === "begin" ? input.expectedJournal : input.journal,
+      serializeClawRemovalJournal(input.kind === "begin" ? input.expectedJournal : input.journal),
     ),
     configDigest: input.configDigest,
   });
@@ -63,5 +63,5 @@ export const clawRemovalJournalGateway: ClawRemovalJournalGateway = async (input
       "Claw journal outcome is unknown: Gateway returned a different deletion operation; inspect claws status before retrying.",
     );
   }
-  return ok(result.journal);
+  return ok(result.journal ? { ...result.journal, phase: "retiring" } : null);
 };

@@ -1,5 +1,5 @@
-import { afterEach, expect, test, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import {
   patchSessionEntryCore,
@@ -12,6 +12,7 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.na
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
@@ -112,6 +113,7 @@ test.each([
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const storePath = resolveStorePath(undefined, { agentId: "research" });
     const sessionId = `aggregate-${sessionKey}`;
     await replaceSessionEntry(
@@ -184,6 +186,21 @@ test.each([
 );
 
 test("a hidden-foreign role cannot discover sessions through search, batch previews, or exact resolve", async () => {
+  const cfg: OpenClawConfig = {
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "none" },
+            agents: "*",
+            scopes: ["operator.read", "operator.write"],
+          },
+        },
+      },
+    },
+  };
+  setRuntimeConfigSnapshot(cfg);
   const ownerId = ensureProfileForEmail("role-viewer@example.com").id;
   const foreignKey = "agent:main:foreign-role-read";
   const ownKey = "agent:main:own-role-read";
@@ -210,22 +227,10 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       storePath,
     });
   }
-  const cfg: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "guest",
-        definitions: {
-          guest: {
-            sessions: { others: "none" },
-            agents: "*",
-            scopes: ["operator.read", "operator.write"],
-          },
-        },
-      },
-    },
-  };
   const client = identifiedClient(ownerId);
   const options = { client, context: { getRuntimeConfig: () => cfg } };
+  const profiles = await prepareUserProfileCatalog();
+  onTestFinished(profiles.release);
 
   const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
     "sessions.search",
@@ -261,6 +266,19 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
 test.each(["research", "ops"] as const)(
   "searches an explicit global row using its selected owner for %s visibility",
   async (viewer) => {
+    const cfg: OpenClawConfig = {
+      session: { scope: "global" },
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      gateway: {
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const profiles = {
       ops: ensureProfileForEmail("search-ops@example.test").id,
       research: ensureProfileForEmail("search-research@example.test").id,
@@ -285,18 +303,8 @@ test.each(["research", "ops"] as const)(
         contents: ["global owner search needle"],
       });
     }
-    const cfg: OpenClawConfig = {
-      session: { scope: "global" },
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      gateway: {
-        roles: {
-          default: "reader",
-          definitions: {
-            reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
-          },
-        },
-      },
-    };
+    const catalog = await prepareUserProfileCatalog();
+    onTestFinished(catalog.release);
     const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
       "sessions.search",
       { query: "global owner search needle", sessionKeys: ["global"], agentId: "research" },
@@ -313,6 +321,7 @@ test.each(["research", "ops"] as const)(
 );
 
 test("sessions.describe preserves caller roles and sessions.get hides foreign drafts", async () => {
+  setRuntimeConfigSnapshot({});
   const sessionKey = "agent:main:foreign-draft-describe";
   const sessionId = "session-foreign-draft-describe";
   const profileId = (name: string) => ensureProfileForEmail(`${name}@example.com`).id;

@@ -60,12 +60,11 @@ function buildCompactionSummarizationInstructions(
       : instructions?.identifierPolicy === "custom"
         ? instructions.identifierInstructions?.trim() || IDENTIFIER_PRESERVATION_INSTRUCTIONS
         : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
-  if (!custom) {
-    return identifierPreservation;
-  }
-  return identifierPreservation
-    ? `${identifierPreservation}\n\nAdditional focus:\n${custom}`
-    : `Additional focus:\n${custom}`;
+  return (
+    [identifierPreservation, custom && `Additional focus:\n${custom}`]
+      .filter(Boolean)
+      .join("\n\n") || undefined
+  );
 }
 
 /**

@@ -4,6 +4,7 @@ import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.j
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -11,7 +12,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliTimeoutError,
-  hasProviderRequestSizeCeiling,
+  hasLocalWorkerTaskTimeout,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -281,6 +282,34 @@ describe("failover-error", () => {
     expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
   });
 
+  it.each([undefined, "429 raw provider detail. Retry in 221ms."])(
+    "preserves provider text when enriching exhaustion (rawError=%s)",
+    (rawError) => {
+      const message = "429 rate limit exceeded. Retry in 221ms.";
+      const cause = new Error("provider request failed");
+      const original = new FailoverError(message, {
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+        rawError,
+        cause,
+      });
+      const enriched = coerceToFailoverError(original, { rateLimitRetriesExhausted: 9 });
+      expect(enriched?.message).toContain("9 automatic retries");
+      expect(describeFailoverError(enriched)).toMatchObject({
+        rawError: rawError ?? message,
+        status: 429,
+        code: "rate_limit_exceeded",
+        reason: "rate_limit",
+        rateLimitRetriesExhausted: 9,
+      });
+      expect(enriched?.cause).toBe(cause);
+      expect(original.message).toBe(message);
+      expect(original.rawError).toBe(rawError);
+      expect(original.rateLimitRetriesExhausted).toBeUndefined();
+    },
+  );
+
   it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
     const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const facts = {
@@ -450,13 +479,107 @@ describe("failover diagnostic isolation", () => {
       expect(coerceToFailoverError(candidate)).toBeNull();
       expect(isTimeoutError(candidate)).toBe(false);
       expect(diagnosticErrorFailureKind(candidate)).toBeUndefined();
-      expect(hasProviderRequestSizeCeiling(candidate)).toBe(false);
       expect(isLikelyContextOverflowError(formatErrorMessage(candidate))).toBe(false);
       expect(formatErrorMessage(candidate)).not.toContain(diagnostic);
     }
-    expect(
-      hasProviderRequestSizeCeiling(new AggregateError([{ error }], "Plugin execution failed")),
-    ).toBe(false);
+  });
+
+  describe("hasLocalWorkerTaskTimeout", () => {
+    it("returns true through a cause wrapper", () => {
+      const wrapped = new Error("preparation failed", {
+        cause: new WorkerTaskError("worker task timed out", "timeout"),
+      });
+      expect(hasLocalWorkerTaskTimeout(wrapped)).toBe(true);
+    });
+
+    it("returns true through an aggregate wrapper", () => {
+      const aggregate = new AggregateError(
+        [new WorkerTaskError("worker task timed out", "timeout")],
+        "run failed",
+      );
+      expect(hasLocalWorkerTaskTimeout(aggregate)).toBe(true);
+    });
+
+    it.each([
+      ["failed", new WorkerTaskError("worker task timed out", "failed")],
+      ["overloaded", new WorkerTaskError("worker task capacity reached", "overloaded")],
+      ["unavailable", new WorkerTaskError("worker task closed", "unavailable")],
+    ])("returns false for local worker code %s", (_code, error) => {
+      expect(hasLocalWorkerTaskTimeout(error)).toBe(false);
+    });
+
+    it("returns false when an HTTP fact exists anywhere in the graph", () => {
+      const providerTimeoutWithLocalCause = Object.assign(
+        new Error("worker task timed out", {
+          cause: new WorkerTaskError("worker task timed out", "timeout"),
+        }),
+        { status: 408 },
+      );
+      expect(hasLocalWorkerTaskTimeout(providerTimeoutWithLocalCause)).toBe(false);
+      expect(
+        hasLocalWorkerTaskTimeout(
+          Object.assign(new WorkerTaskError("timed out", "timeout"), { status: 504 }),
+        ),
+      ).toBe(false);
+    });
+
+    it("returns false for a plain provider timeout and non-matching values", () => {
+      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
+      expect(hasLocalWorkerTaskTimeout(timeoutErr)).toBe(false);
+      expect(hasLocalWorkerTaskTimeout(new Error("worker task timed out"))).toBe(false);
+      expect(hasLocalWorkerTaskTimeout(null)).toBe(false);
+      expect(hasLocalWorkerTaskTimeout(undefined)).toBe(false);
+    });
+  });
+
+  describe("local worker task timeout attribution", () => {
+    it("keeps a local worker-task deadline on the configured fallback chain", () => {
+      // A local worker deadline is runtime infrastructure, not a provider
+      // timeout. It must NOT become coordination (a later candidate rebuilds its
+      // own context and can recover), and it must not fabricate a provider HTTP
+      // status from its timeout reason.
+      const timeout = new WorkerTaskError("worker task timed out", "timeout");
+      expect(isNonProviderRuntimeCoordinationError(timeout)).toBe(false);
+      const resolution = resolveModelFallbackError(timeout);
+      expect(resolution.kind).toBe("failover");
+      if (resolution.kind === "failover") {
+        expect(resolution.error.reason).toBe("timeout");
+        expect(resolution.error.status).toBeUndefined();
+      }
+    });
+
+    it("keeps the chain advancing through wrappers and aggregates", () => {
+      const timeout = new WorkerTaskError("worker task timed out", "timeout");
+      for (const error of [
+        new Error("preparation failed", { cause: timeout }),
+        new AggregateError([timeout], "run failed"),
+      ]) {
+        // Whatever the classification shape (a non-classifying wrapper message
+        // can surface as unknown), it must never become coordination: only
+        // coordination stops the fallback chain (model-fallback-attempt.ts:281).
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(false);
+        expect(resolveModelFallbackError(error).kind).not.toBe("coordination");
+      }
+    });
+
+    it("does not suppress provider failover for non-timeout worker failures", () => {
+      const failure = new WorkerTaskError("worker task timed out", "failed");
+      expect(isNonProviderRuntimeCoordinationError(failure)).toBe(false);
+      expect(resolveModelFallbackError(failure).kind).not.toBe("coordination");
+    });
+
+    it("keeps provider attribution when an HTTP timeout fact is present", () => {
+      const providerTimeoutWithLocalCause = Object.assign(
+        new Error("worker task timed out", {
+          cause: new WorkerTaskError("worker task timed out", "timeout"),
+        }),
+        { status: 408 },
+      );
+      expect(isNonProviderRuntimeCoordinationError(providerTimeoutWithLocalCause)).toBe(false);
+      const resolution = resolveModelFallbackError(providerTimeoutWithLocalCause);
+      expect(resolution.kind).toBe("failover");
+      expect(resolution.kind === "failover" ? resolution.error.reason : undefined).toBe("timeout");
+    });
   });
 });
 
@@ -579,21 +702,4 @@ describe("isNonProviderRuntimeCoordinationError", () => {
 it("does not treat an AbortError matching transport timeout wording as a signal timeout", () => {
   const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
   expect(isSignalTimeoutReason(err)).toBe(false);
-});
-
-describe("hasProviderRequestSizeCeiling", () => {
-  it("finds the recorded ceiling through nested error and aggregate wrappers", () => {
-    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
-      reason: "context_overflow",
-      rawError: "413 Request too large on tokens per minute (TPM): Limit 8000, Requested 8098",
-    });
-    expect(
-      hasProviderRequestSizeCeiling(
-        new AggregateError(
-          [new Error("unrelated"), { error: { cause: ceiling } }],
-          "agent run failed",
-        ),
-      ),
-    ).toBe(true);
-  });
 });

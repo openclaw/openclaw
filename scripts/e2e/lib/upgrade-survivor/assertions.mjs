@@ -1800,7 +1800,19 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
           step?.exitCode === 0 ||
           (step?.name === "openclaw doctor" &&
             step.exitCode === 86 &&
-            step.advisory?.kind === "package-post-install-doctor"),
+            step.advisory?.kind === "package-post-install-doctor") ||
+          // Doctor lint exits 1 for selected INFO findings after verified activation.
+          (step?.name === "post-activation doctor inspections" &&
+            step.exitCode === 1 &&
+            step.advisory?.kind === "recoverable-maintenance" &&
+            step.termination === "exit" &&
+            !step.signal &&
+            !step.killed &&
+            !step.outputLimitExceeded &&
+            !step.failureFacts?.length &&
+            Array.isArray(step.doctorLintFindings) &&
+            step.doctorLintFindings.length > 0 &&
+            step.doctorLintFindings.every((finding) => finding?.severity === "info")),
       ),
     "successful update contained a failed core step",
   );

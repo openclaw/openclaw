@@ -6,7 +6,7 @@ import {
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
@@ -155,6 +155,47 @@ describe("cli session history", () => {
     ]);
     expect({ localMessage, importedMessage }).toEqual(before);
   });
+
+  it.each(
+    ["", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n`].flatMap((driftContext) =>
+      [
+        "messages occurred outside this Claude session",
+        "messages recorded in this chat since your last reply here (possibly already in this session)",
+        "earlier messages in this chat",
+      ].map((description) => ({ driftContext, description })),
+    ),
+  )(
+    "dedupes $description context before optional drift context: $driftContext",
+    ({ driftContext, description }) => {
+      const prompt = "What token did I give the other model?";
+      const localMessage = user(prompt, 1_000, { id: "local-return", senderIsOwner: true });
+      const note = `[OpenClaw: 2 ${description} from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]`;
+      const importedMessage = user(
+        `${note}\n\n${driftContext}${prompt}`,
+        1_001,
+        cliMeta("native-return"),
+      );
+      const before = structuredClone({ localMessage, importedMessage });
+      expect(
+        mergeImportedChatHistoryMessages({
+          localMessages: [localMessage],
+          importedMessages: [importedMessage],
+        }),
+      ).toEqual([
+        {
+          ...localMessage,
+          __openclaw: { ...localMessage["__openclaw"], ...importedMessage["__openclaw"] },
+        },
+      ]);
+      expect({ localMessage, importedMessage }).toEqual(before);
+      expect(
+        mergeImportedChatHistoryMessages({
+          localMessages: [],
+          importedMessages: [importedMessage],
+        }),
+      ).toEqual([importedMessage]);
+    },
+  );
 
   it("keeps ordinary matches after an unsuccessful stripped lookup", () => {
     const timestamp = 1_000;
@@ -424,7 +465,7 @@ describe("cli session history", () => {
   it("deduplicates a local redacted copy against an imported full copy", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const secretText = "key is sk-abcdef1234567890xyz";
-      const localMessage = redactTranscriptMessage({
+      const localMessage = sanitizeTranscriptMessage({
         role: "user",
         content: secretText,
       } as AgentMessage);
@@ -474,26 +515,39 @@ describe("cli session history", () => {
     expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("exact-id");
   });
 
-  it("keeps drift-note order after an edited exact identity", () => {
-    const laterNote = CLAUDE_RESUME_DRIFT_NOTES[1];
-    const earlierLocal = { role: "user", content: "Original ask", timestamp: 1_000 };
-    const exactMeta = cliMeta("exact-user");
-    const exactLocal = user("Edited ask", 1_001, exactMeta);
-    const laterImport = user(`${laterNote}\n\nOriginal ask`, 1_003, {
-      ...exactMeta,
-      externalId: "later-user",
-    });
+  it.each(["edited", "unchanged"])(
+    "keeps drift-note order after an %s exact identity",
+    (change) => {
+      const laterNote = CLAUDE_RESUME_DRIFT_NOTES[1];
+      const earlierLocal = { role: "user", content: "Original ask", timestamp: 1_000 };
+      const exactMeta = cliMeta("exact-user");
+      const exactLocal = user(
+        change === "edited" ? "Edited ask" : "Original ask",
+        1_001,
+        exactMeta,
+      );
+      const laterImport = user(`${laterNote}\n\nOriginal ask`, 1_003, {
+        ...exactMeta,
+        externalId: "later-user",
+      });
 
-    const merged = mergeImportedChatHistoryMessages({
-      localMessages: [earlierLocal, exactLocal],
-      importedMessages: [
-        user(`${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nOriginal ask`, 1_002, exactMeta),
-        laterImport,
-      ],
-    });
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [earlierLocal, exactLocal],
+        importedMessages: [
+          user(
+            change === "edited"
+              ? `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nOriginal ask`
+              : "Original ask",
+            1_002,
+            exactMeta,
+          ),
+          laterImport,
+        ],
+      });
 
-    expect(merged).toEqual([earlierLocal, exactLocal, laterImport]);
-  });
+      expect(merged).toEqual([earlierLocal, exactLocal, laterImport]);
+    },
+  );
 
   it("keeps drift-note order after an exact image turn", () => {
     const laterNote = CLAUDE_RESUME_DRIFT_NOTES[1];
@@ -533,7 +587,7 @@ describe("cli session history", () => {
     ]);
   });
 
-  it("does not surface a secret present only in imported history after merge", async () => {
+  it("preserves source text present only in imported history after merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const importedSecret = "sk-abcdef1234567890xyz";
       await fs.writeFile(
@@ -553,7 +607,7 @@ describe("cli session history", () => {
       ]);
 
       expect(messages).toHaveLength(2);
-      expect(JSON.stringify(messages)).not.toContain(importedSecret);
+      expect(JSON.stringify(messages)).toContain(importedSecret);
     });
   });
 

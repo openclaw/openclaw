@@ -95,10 +95,26 @@ async function ciState(review) {
     return "pending";
   }
   const jobs = [];
-  for (let page = 1; ; page += 1) {
-    const result = await api.request(
-      `${root}/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
-    );
+  // GitHub can persistently fail a large job page while smaller pages of the same
+  // range succeed. Larger sizes skip server-error retries, which would spend the
+  // request deadline, and request that range again at half size. The smallest
+  // size keeps the normal retry and recovery path.
+  for (let perPage = 100, page = 1; ; page += 1) {
+    let result;
+    try {
+      result = await api.request(
+        `${root}/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=${perPage}&page=${page}`,
+        { retryServerErrors: perPage === 25 },
+      );
+    } catch (error) {
+      if (perPage === 25 || !(error?.status >= 500)) {
+        throw error;
+      }
+      perPage /= 2;
+      // Page `page` starts at the same offset as page `2 * page - 1` at half size.
+      page = 2 * page - 2;
+      continue;
+    }
     if (!Array.isArray(result.jobs) || !Number.isSafeInteger(result.total_count)) {
       throw new Error("CI returned an invalid job list.");
     }

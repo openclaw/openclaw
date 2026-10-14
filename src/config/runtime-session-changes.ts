@@ -11,6 +11,7 @@ function projectionConfig({
   diagnostics: _diagnostics,
   update: _update,
   telemetry: _telemetry,
+  plugins: _plugins,
   channels,
   ui,
   gateway,
@@ -22,6 +23,7 @@ function projectionConfig({
   const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
   const { realtime, ...talkConfig } = talk ?? {};
   const { model: _realtimeModel, ...realtimeConfig } = realtime ?? {};
+  // Plugin-derived rows follow completed catalog publications, not config reloads.
   // Channel transport settings do not affect resident rows. Keep their catalog
   // inputs, including activation that can admit bundled plugin capabilities.
   return {

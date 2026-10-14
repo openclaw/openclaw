@@ -1,5 +1,11 @@
 import { vi } from "vitest";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -37,4 +43,14 @@ export function observeSessionRowBackfill(
     }
   });
   return completed.promise.finally(() => spy.mockRestore());
+}
+
+/** Emulate a session last written by a build without durable transcript-row facts. */
+export function clearStoredSessionRowTranscriptForTest(scope: SessionTranscriptReadScope) {
+  const options = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
+  openOpenClawAgentDatabase(options)
+    .db.prepare(
+      "UPDATE session_windows SET row_transcript_json = NULL, row_transcript_updated_at = NULL WHERE session_id = ?",
+    )
+    .run(scope.sessionId);
 }

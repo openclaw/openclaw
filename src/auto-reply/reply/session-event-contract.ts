@@ -51,6 +51,10 @@ export type SessionEventTarget = {
   sessionKey?: string;
 };
 
+export type SessionEventSourcePolicy = Readonly<
+  Pick<SessionEventTarget, "toolsAllow" | "settings">
+>;
+
 /** Producer callbacks stay bound to the queued occurrence, not a later dispatcher. */
 export type SessionEventExecution = {
   /** Original command custody survives process eviction and deferred reply execution. */

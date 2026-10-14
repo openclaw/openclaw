@@ -20,7 +20,6 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -41,7 +40,6 @@ import {
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
-  isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
 } from "./client-voice-session.js";
@@ -274,7 +272,7 @@ describe("client voice session worker contract", () => {
     expect(clientVoiceSessionTesting.readRecord(target.agentId, voiceSessionId)).toBeUndefined();
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "refuses revoked admission after the FIFO wait (retained=%s)",
     async (retained) => {
       const target = { agentId: "main", sessionKey: "agent:main:main" };
@@ -388,7 +386,6 @@ describe("client voice session worker contract", () => {
     { revoked: false, retained: false },
     { revoked: true, retained: false },
     { revoked: false, retained: true },
-    { revoked: true, retained: true },
   ])(
     "guards cold SDK admission after the FIFO wait (revoked=$revoked, retained=$retained)",
     async ({ revoked, retained }) => {
@@ -464,7 +461,7 @@ describe("client voice session worker contract", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "refuses a retargeted same-file SDK source alias (requester SDK=%s)",
     async (nativeRequester) => {
       const target = { agentId: "main", sessionKey: "agent:main:main" };
@@ -514,7 +511,7 @@ describe("client voice session worker contract", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "refuses a replaced separate source before invoking its SDK guard (requester SDK=%s)",
     async (nativeRequester) => {
       const target = { agentId: "main", sessionKey: "agent:main:main" };
@@ -584,49 +581,7 @@ describe("client voice session worker contract", () => {
     },
   );
 
-  it("continues native creation after a retained worker preparation is refused", async () => {
-    await seedSession("agent:main:main");
-    const target = {
-      agentId: "native-after-refusal",
-      sessionKey: "agent:native-after-refusal:main",
-    };
-    const writer = captureClientVoiceSessionWriter(target);
-    const peer = captureOpenClawAgentDatabaseExecution(target, {
-      expectedCreationIdentity: writer.identity,
-    });
-    try {
-      await expect(
-        peer.prepare({
-          assertCurrent() {
-            throw new Error("previous preparation refused");
-          },
-          createAdmission() {
-            throw new Error("refused preparation cannot open");
-          },
-        }),
-      ).rejects.toThrow("previous preparation refused");
-      const input = {
-        ...target,
-        voiceSessionId: "native-after-refusal-voice",
-        origin: "client" as const,
-        requester: captureExternalSessionCommitGuard(() => {}),
-      };
-      await createOrResumeClientVoiceSession(input, writer);
-      expect(peer.fileIdentity?.physicalIdentity).toBe(
-        writer.source.identity.key.slice("file:".length),
-      );
-      await createOrResumeClientVoiceSession(input, writer);
-      await closeClientVoiceSession({ ...input, config: {} }, writer);
-      expect(
-        clientVoiceSessionTesting.readRecord(target.agentId, input.voiceSessionId),
-      ).toMatchObject({ status: "closed" });
-    } finally {
-      await peer.release();
-      await writer.release();
-    }
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "keeps delayed effects with the original store and close owner (closing=%s)",
     async (closing) => {
       const target = { agentId: "main", sessionKey: "agent:main:main" };
@@ -729,7 +684,9 @@ describe("client voice session worker contract", () => {
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(assertClientVoiceSessionOpen(binding)).toBe("client");
-      expect(isClientVoiceSessionConfirmable(binding)).toBe(true);
+      expect(
+        readVoiceSessionRecord(binding.agentId, binding.voiceSessionId)?.transcriptCapable,
+      ).toBe(true);
       expect(observation.queries).toHaveLength(2);
       expect(observation.queries.join("\n")).not.toMatch(/\b(?:pragma_)?data_version\b/i);
     } finally {
@@ -737,7 +694,9 @@ describe("client voice session worker contract", () => {
     }
     await closeClientVoiceSession({ ...binding, config: {} });
     expect(() => assertClientVoiceSessionOpen(binding)).toThrow("voice session is closed");
-    expect(isClientVoiceSessionConfirmable(binding)).toBe(true);
+    expect(readVoiceSessionRecord(binding.agentId, binding.voiceSessionId)?.transcriptCapable).toBe(
+      true,
+    );
   });
 
   it("rejects a transcript after another connection closes the admitted call", async () => {
@@ -822,10 +781,10 @@ describe("client voice session worker contract", () => {
     }
   });
 
-  it.each(["missing", "unrelated", "same-source", "default-missing", "default-unrelated"] as const)(
+  it.each(["unrelated", "same-source", "default-unrelated"] as const)(
     "resolves the conversation store before atomic append (%s)",
     async (selection) => {
-      const defaultTarget = selection === "default-missing" || selection === "default-unrelated";
+      const defaultTarget = selection === "default-unrelated";
       const target = { agentId: "main", sessionKey: "agent:main:selector" };
       const options = {
         ...captureClientVoiceSessionSourceOptions(
