@@ -427,7 +427,7 @@ suite.define(() => {
         expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
         await gateway.waitForRequest("chat.startup");
 
-        // The Inbox is the sole update surface; the badge carries the attention.
+        // The Inbox badge carries dismissible attention; the menu keeps release availability.
         const inboxBadge = page.locator(".sidebar-issues-button__count");
         await inboxBadge.waitFor();
         expect(
@@ -456,7 +456,13 @@ suite.define(() => {
         await inboxBadge.waitFor({ state: "detached" });
 
         await page.locator(".sidebar-identity-card").click();
-        await page.getByText("Update available", { exact: true }).waitFor();
+        await page
+          .getByRole("menuitem", { name: "Updates. Update available", exact: true })
+          .waitFor();
+        await page
+          .locator(".sidebar-identity-menu__update-badge")
+          .getByText("Available", { exact: true })
+          .waitFor();
         await page.keyboard.press("Escape");
 
         await page.reload();
