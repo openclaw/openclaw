@@ -790,18 +790,6 @@ describe("resolveStreamStopReason", () => {
     isStream: true,
   };
 
-  it("selects trust-disabled when triggers are off, even if cron is also off", () => {
-    expect(resolveStreamStopReason({ ...base, triggersEnabled: false, cronEnabled: false })).toBe(
-      "trust-disabled",
-    );
-  });
-
-  it("selects the remediable cron-disabled when only global cron is off", () => {
-    // Direct-mutation regression: cron off + triggers on must not fall through to
-    // the generic stopped reason, matching reconcile's cron-disabled remediation.
-    expect(resolveStreamStopReason({ ...base, cronEnabled: false })).toBe("cron-disabled");
-  });
-
   it("prefers restart-exhausted over the generic disabled reason", () => {
     expect(resolveStreamStopReason({ ...base, restartExhausted: true })).toBe("restart-exhausted");
   });

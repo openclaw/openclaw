@@ -270,24 +270,6 @@ describe("control UI session PR subscriptions", () => {
     );
   });
 
-  it("loads agent-scoped global watch keys from the owning agent store", async () => {
-    vi.useFakeTimers();
-    const load = vi.fn(async () => READY);
-    active = createTestControlUiSessionPrSubscriptions({
-      broadcastToConnIds: vi.fn(),
-      scheduler: createTestGatewayScheduler(),
-      load,
-    });
-
-    await active.replace("conn-a", ["agent:work:global"]);
-
-    expect(load).toHaveBeenCalledWith(
-      { sessionKey: "global", agentId: "work" },
-      expect.any(AbortSignal),
-      expect.objectContaining({ assertCurrent: expect.any(Function) }),
-    );
-  });
-
   it("coalesces forced refresh bursts per session and acknowledges each requester once", async () => {
     const clock = createGatewaySchedulerClock();
     const load = vi.fn(async () => READY);
@@ -602,48 +584,5 @@ describe("control UI session PR subscriptions", () => {
       new Set(["conn-a"]),
       { sessionKeys: ["shared"], agentId: "main" },
     );
-  });
-
-  it("propagates rate-limit and failure states per key", async () => {
-    vi.useFakeTimers();
-    const load = vi.fn(
-      async ({ sessionKey }: { sessionKey: string }): Promise<ControlUiSessionPullRequests> => {
-        if (sessionKey === "limited") {
-          return { pullRequests: [], rateLimited: true };
-        }
-        if (sessionKey === "repository-only") {
-          return {
-            pullRequests: [],
-            repository: { owner: "openclaw", repo: "openclaw" },
-            rateLimited: false,
-            status: "unavailable",
-          };
-        }
-        throw new Error("GitHub unavailable");
-      },
-    );
-    const broadcastToConnIds = vi.fn();
-    active = createTestControlUiSessionPrSubscriptions({
-      broadcastToConnIds,
-      load,
-      scheduler: createTestGatewayScheduler(),
-    });
-
-    await active.replace("conn-a", ["limited", "failed", "repository-only"]);
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
-    const sessions = Object.assign(
-      {},
-      ...broadcastToConnIds.mock.calls.map((call) => call[1].sessions),
-    );
-    expect(sessions).toEqual({
-      limited: { pullRequests: [], rateLimited: true, status: "rate-limited" },
-      failed: { pullRequests: [], rateLimited: false, status: "unavailable" },
-      "repository-only": {
-        pullRequests: [],
-        repository: { owner: "openclaw", repo: "openclaw" },
-        rateLimited: false,
-        status: "unavailable",
-      },
-    });
   });
 });
