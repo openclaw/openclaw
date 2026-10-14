@@ -362,7 +362,7 @@ private fun RenderMarkdownDisclosure(
         )
         Text(
           text = summary,
-          style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
+          style = inlineStyles.baseCallout.copy(fontWeight = FontWeight.SemiBold),
           color = textColor,
         )
       }
@@ -544,7 +544,7 @@ private fun RenderTableBlock(
           val anchor = rememberChatReaderAnchor()
           Text(
             text = cell,
-            style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
+            style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontStyle = inlineStyles.baseCallout.fontStyle) else inlineStyles.baseCallout,
             color = textColor,
             onTextLayout = anchor?.onTextLayout ?: {},
             modifier =

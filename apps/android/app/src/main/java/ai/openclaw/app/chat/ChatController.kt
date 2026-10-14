@@ -548,6 +548,8 @@ class ChatController internal constructor(
 
   private val _streamingAssistantText = MutableStateFlow<String?>(null)
   val streamingAssistantText: StateFlow<String?> = _streamingAssistantText.asStateFlow()
+  private val _streamingAssistantPhase = MutableStateFlow<String?>(null)
+  val streamingAssistantPhase: StateFlow<String?> = _streamingAssistantPhase.asStateFlow()
   private var streamingAssistantOwner: ChatRunOwner? = null
 
   private val turnToolCallsById = ConcurrentHashMap<Pair<ChatRunOwner?, String>, ChatPendingToolCall>()
@@ -6272,7 +6274,7 @@ class ChatController internal constructor(
           if (!isPending) return
           val text = parseAssistantDeltaText(payload)
           if (text != null) {
-            updateStreamingAssistantText(runId, text)
+            updateStreamingAssistantText(runId, text, payload["message"].asObjectOrNull()?.let(::parseChatAssistantPhase))
           }
         }
 
@@ -6686,7 +6688,7 @@ class ChatController internal constructor(
       "assistant" -> {
         val text = data?.get("text")?.asStringOrNull()
         if (text != null) {
-          updateStreamingAssistantText(runId, text)
+          updateStreamingAssistantText(runId, text, parseChatAssistantPhase(data))
         }
       }
 
@@ -6874,8 +6876,10 @@ class ChatController internal constructor(
   private fun updateStreamingAssistantText(
     runId: String?,
     text: String,
+    phase: String? = null,
   ) {
     synchronized(gatewayScopeApplyLock) {
+      _streamingAssistantPhase.value = phase
       streamingAssistantOwner = liveRunOwner(runId)
       _streamingAssistantText.value = text
     }
@@ -6890,6 +6894,7 @@ class ChatController internal constructor(
       if (runId != null && retiringOwner == null) return
       if (runId == null || streamingAssistantOwner == retiringOwner) {
         streamingAssistantOwner = null
+        _streamingAssistantPhase.value = null
         _streamingAssistantText.value = null
       }
       if (runId == null) {

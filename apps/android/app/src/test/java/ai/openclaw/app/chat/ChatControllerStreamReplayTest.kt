@@ -21,6 +21,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -175,6 +176,33 @@ class ChatControllerStreamReplayTest {
       historyGate.cancel()
     }
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun streamingPhaseTracksCommentaryFinalAndUnlabelledReplacements() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("run"))
+        for (phase in listOf("commentary", "final_answer", null)) {
+          val data =
+            buildJsonObject {
+              put("text", "Live text")
+              if (phase != null) put("phase", phase)
+            }
+          controller.handleGatewayEvent(
+            "agent",
+            buildJsonObject {
+              put("sessionKey", owner.sessionKey)
+              put("runId", "run")
+              put("stream", "assistant")
+              put("data", data)
+            }.toString(),
+          )
+          assertEquals("Live text", controller.streamingAssistantText.value)
+          assertEquals(phase, controller.streamingAssistantPhase.value)
+        }
+      }
+    }
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)

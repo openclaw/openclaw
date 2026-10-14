@@ -395,6 +395,7 @@ internal fun ChatScreen(
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
+  val streamingAssistantPhase by viewModel.chatStreamingAssistantPhase.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatToolActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
@@ -988,6 +989,7 @@ internal fun ChatScreen(
     pendingToolCalls = pendingToolCalls,
     questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
     streamingAssistantText = streamingAssistantText,
+    streamingAssistantPhase = streamingAssistantPhase,
     healthOk = healthOk,
     gatewayOffline = gatewayOffline,
     outboxItems = currentSessionOutboxItems,
@@ -1747,6 +1749,7 @@ private fun ChatMessageList(
   pendingToolCalls: List<ChatPendingToolCall>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
+  streamingAssistantPhase: String? = null,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   outboxItems: List<ChatOutboxItem>,
@@ -1805,12 +1808,13 @@ private fun ChatMessageList(
   val presentedTools = remember(toolBridge, history.toolScope, pendingToolCalls) { toolBridge.update(history.toolScope, pendingToolCalls) }
   var expandedWorkKeys by remember(sessionKey) { mutableStateOf(emptySet<String>()) }
   val timeline =
-    remember(history, turnRecap, expandedWorkKeys, activeRunCount, activeRunId, presentedTools, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(history, turnRecap, expandedWorkKeys, activeRunCount, activeRunId, presentedTools, questions, streamingAssistantText, streamingAssistantPhase, outboxItems, recoveryOutboxItems) {
       history
         .buildTimeline(
           pendingRunCount = activeRunCount,
           pendingToolCalls = presentedTools,
           streamingAssistantText = streamingAssistantText,
+          streamingAssistantPhase = streamingAssistantPhase,
           outboxItems = outboxItems,
           recoveryOutboxItems = recoveryOutboxItems,
           questions = questions,
@@ -1878,6 +1882,7 @@ private fun ChatMessageList(
                           entryId = item.message.entryId,
                           role = item.message.role,
                           phase = item.message.phase,
+                          isCommentary = item.isCommentary,
                           live = false,
                           content = visibleContent(item.message).filter { it.toolActivity == null },
                           timestampMs = item.message.timestampMs,
@@ -1976,6 +1981,8 @@ private fun ChatMessageList(
                         entryId = null,
                         role = "assistant",
                         live = true,
+                        phase = item.phase,
+                        isCommentary = item.phase != "final_answer",
                         content = listOf(ChatMessageContent(text = item.text)),
                         timestampMs = null,
                         onReplyMessage = onReplyMessage,
@@ -2212,6 +2219,7 @@ internal fun ChatBubble(
   senderLabel: String? = null,
   metadata: List<Pair<String, String>> = emptyList(),
   phase: String? = null,
+  isCommentary: Boolean = phase == "commentary",
   reactions: List<ChatReactionSummary> = emptyList(),
   reactionViewerId: String? = null,
   onReact: ((String, String, Boolean) -> Unit)? = null,
@@ -2342,7 +2350,7 @@ internal fun ChatBubble(
                   bodyStyle =
                     ClawTheme.type.body.copy(
                       fontWeight = FontWeight.Normal,
-                      fontStyle = if (normalizedRole == "assistant" && phase == "commentary") FontStyle.Italic else FontStyle.Normal,
+                      fontStyle = if (normalizedRole == "assistant" && isCommentary) FontStyle.Italic else FontStyle.Normal,
                     ),
                 )
               }

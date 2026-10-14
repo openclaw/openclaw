@@ -374,7 +374,7 @@ class ChatCompletedWorkLayoutTest {
       command.assertIsDisplayed()
       composeRule.onNodeWithText(FINAL).assertIsDisplayed()
       // Exercise history parsing, timeline projection, bubble styling, and Markdown together.
-      for ((text, expected) in listOf(EARLIER to FontStyle.Italic, MIXED to FontStyle.Normal, FINAL to FontStyle.Normal)) {
+      for ((text, expected) in listOf(EARLIER to FontStyle.Italic, MIXED to FontStyle.Italic, FINAL to FontStyle.Normal)) {
         val layouts = mutableListOf<TextLayoutResult>()
         composeRule
           .onNodeWithText(text, useUnmergedTree = true)
