@@ -447,7 +447,7 @@ at $0.30 per million tokens. See
     | Kimi Coding| `kimi/`          | Kimi Coding endpoint           | `KIMI_API_KEY`      |
     | Web search | N/A              | Same as Moonshot API region    | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
 
-    - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.6`.
+    - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY` with `POST /tools/search`, defaulting to `https://api.moonshot.ai/v1`. It returns structured results without a chat model; `plugins.entries.moonshot.config.webSearch.model` is deprecated and ignored. See [Kimi search](/tools/kimi-search).
     - Override pricing and context metadata in `models.providers` if needed.
     - If Moonshot publishes different context limits for a model, adjust `contextWindow` accordingly.
 
