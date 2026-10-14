@@ -167,6 +167,7 @@ Core ACP baseline:
       "kiro",
       "openclaw",
       "opencode",
+      "pool",
       "qwen",
     ],
     stream: {

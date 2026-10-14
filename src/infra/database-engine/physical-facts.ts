@@ -7,12 +7,19 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
 import { assertEngineStoreExecutionAllowed } from "./admission-scope.js";
+import type { StoreSchema } from "./contract.js";
 import {
   assertPostgresCatalog,
-  postgresCatalogQuery,
   readPostgresCatalog,
   type PostgresCatalogFact,
 } from "./postgres-catalog.js";
+import {
+  admitPostgresCapabilities,
+  readPostgresSchema,
+  recordPostgresSchema,
+  verifyPostgresSchema,
+  type PostgresCapabilities,
+} from "./postgres-schema.js";
 
 export type PostgresPhysicalFacts = {
   engine: "postgres";
@@ -21,6 +28,7 @@ export type PostgresPhysicalFacts = {
   namespace: string;
   storeId: string;
   version: number;
+  capabilities: PostgresCapabilities;
   catalog: readonly PostgresCatalogFact[];
 };
 const recovery =
@@ -44,6 +52,16 @@ const admissionKey: SqliteDatabaseAdmissionKey<PostgresPhysicalFacts> = {
       typeof value.storeId === "string" &&
       "version" in value &&
       typeof value.version === "number" &&
+      "capabilities" in value &&
+      value.capabilities !== null &&
+      typeof value.capabilities === "object" &&
+      "serverMajor" in value.capabilities &&
+      typeof value.capabilities.serverMajor === "number" &&
+      value.capabilities.serverMajor >= 16 &&
+      "serverEncoding" in value.capabilities &&
+      value.capabilities.serverEncoding === "UTF8" &&
+      "clientEncoding" in value.capabilities &&
+      value.capabilities.clientEncoding === "UTF8" &&
       "catalog" in value
     ) {
       return {
@@ -53,6 +71,11 @@ const admissionKey: SqliteDatabaseAdmissionKey<PostgresPhysicalFacts> = {
         namespace: value.namespace,
         storeId: value.storeId,
         version: value.version,
+        capabilities: {
+          serverMajor: value.capabilities.serverMajor,
+          serverEncoding: "UTF8",
+          clientEncoding: "UTF8",
+        },
         catalog: readPostgresCatalog(value.catalog),
       };
     }
@@ -73,6 +96,8 @@ export function admitPostgresPhysicalFacts(params: {
   store: string;
   version: number;
   expected?: readonly PostgresCatalogFact[];
+  schema?: StoreSchema;
+  recordSchema?: boolean;
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
@@ -86,29 +111,25 @@ export function admitPostgresPhysicalFacts(params: {
     }
     return retained;
   }
-  const namespace = `"${params.namespace.replaceAll('"', '""')}"`;
-  let result: ReturnType<PostgresSqlConnection["query"]>;
   assertEngineStoreExecutionAllowed();
+  const capabilities = admitPostgresCapabilities(params.db);
+  let snapshot;
   try {
-    result = params.db.query(
-      `WITH captured AS (${postgresCatalogQuery(params.namespace, true)})
-    SELECT catalog::text, meta.version, meta.store_id FROM captured
-    CROSS JOIN ${namespace}.openclaw_schema_meta meta WHERE meta.store = ?`,
-      [params.store],
-    );
+    snapshot = readPostgresSchema(params.db, params.namespace, params.store);
   } catch (error) {
     throw new Error(`Cannot read PostgreSQL catalog or metadata. ${recovery}`, { cause: error });
   }
-  const row = result.rows.length === 1 ? result.rows[0] : undefined;
-  if (
-    !row ||
-    row.version !== params.version ||
-    row.store_id !== params.storeId ||
-    typeof row.catalog !== "string"
-  ) {
+  const { metadata: row, catalog } = snapshot;
+  if (row.version !== params.version || row.store_id !== params.storeId) {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
   }
-  const catalog = readPostgresCatalog(JSON.parse(row.catalog));
+  if (params.schema) {
+    if (params.recordSchema) {
+      recordPostgresSchema(params.db, params.namespace, params.schema, snapshot);
+    } else {
+      verifyPostgresSchema(params.db, params.namespace, params.schema, snapshot);
+    }
+  }
   if (params.expected) {
     assertPostgresCatalog(
       catalog.filter(
@@ -124,6 +145,7 @@ export function admitPostgresPhysicalFacts(params: {
     namespace: params.namespace,
     storeId: row.store_id,
     version: row.version,
+    capabilities,
     catalog,
   };
   publishSqliteDatabaseAdmission(params.db, admissionKey, facts);

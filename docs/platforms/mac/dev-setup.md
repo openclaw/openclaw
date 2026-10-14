@@ -294,6 +294,14 @@ state; named-profile preferences use a fresh domain and are also discarded with
 the runner.
 If process cleanup cannot be verified or Keychain deletion fails, the launcher
 fails and retains its files for inspection.
+The release-only bundled recovery app-host lane keeps the disposable account’s
+canonical home so the real CLI can manage its unique named-profile service. Its
+state and preferences use that profile. The app host and Security commands share
+the account’s user Keychain domain, selecting the launcher-owned empty-password
+Keychain file; temporary files also remain launcher-owned. Cleanup removes
+the profile state only after the service and its observed process group retire.
+Unverified retirement retains both the profile state and temporary resources.
+
 CI environment markers only catch accidental invocation; they do not enforce
 isolation or make an operator desktop safe.
 

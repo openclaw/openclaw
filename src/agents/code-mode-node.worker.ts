@@ -399,13 +399,18 @@ function failed(
 async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeResult> {
   let output: CodeModeOutputSource = EMPTY_CODE_MODE_OUTPUT;
   let consumed = channel?.consumeInput;
+  const consume = () => {
+    const receipt = consumed;
+    consumed = undefined;
+    receipt?.();
+  };
   const config = input.config;
   const startedAt = performance.now();
   const progress = new CodeModeNodeProgress(input.progress);
   try {
     const current =
       input.kind === "exec"
-        ? createCell(input, prepareSource(input.source), startedAt, progress, consumed)
+        ? createCell(input, prepareSource(input.source), startedAt, progress, consume)
         : cell;
     if (!current) {
       throw new Error("code mode continuation is no longer available");
@@ -421,12 +426,9 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       current.pendingRequests = input.pendingRequests ?? [];
       current.canceledRequestIds = [];
       settle(current, input.settledRequests);
-    } else {
-      consumed = undefined;
     }
     for (;;) {
-      consumed?.();
-      consumed = undefined;
+      consume();
       const admissionError = current.admissionError ?? evaluate(current, drainScript);
       if (admissionError !== undefined && typeof admissionError !== "string") {
         throw new Error("invalid code mode admission error");
@@ -466,8 +468,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
         // SAFETY: The task-bound host sends the shared typed continuation protocol.
         const command = response.input as CodeModeWorkerContinuation;
         if (command.kind === "checkpoint") {
-          consumed();
-          consumed = undefined;
+          consume();
           return {
             status: "waiting",
             ...boundary,
@@ -549,24 +550,30 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       ),
       timeout ? progress.output() : output,
     );
+  } finally {
+    // Rejected source and failed settlement still release the task's input custody.
+    consume();
   }
 }
 
-serveWorkerTasks(async (input, channel): Promise<NodeResult> => {
-  if (
-    !isRecord(input) ||
-    !isRecord(input.config) ||
-    (input.kind !== "exec" && input.kind !== "resume")
-  ) {
-    return failed("invalid_input", "invalid code mode worker input");
-  }
-  // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
-  const result = await run(input as NodeInput, channel);
-  if (cell?.networkContentObserved) {
-    result.networkContentObserved = true;
-  }
-  if (result.status !== "waiting") {
-    cell = undefined;
-  }
-  return result;
-});
+serveWorkerTasks(
+  async (input, channel): Promise<NodeResult> => {
+    if (
+      !isRecord(input) ||
+      !isRecord(input.config) ||
+      (input.kind !== "exec" && input.kind !== "resume")
+    ) {
+      return failed("invalid_input", "invalid code mode worker input");
+    }
+    // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
+    const result = await run(input as NodeInput, channel);
+    if (cell?.networkContentObserved) {
+      result.networkContentObserved = true;
+    }
+    if (result.status !== "waiting") {
+      cell = undefined;
+    }
+    return result;
+  },
+  { idleGc: false },
+);

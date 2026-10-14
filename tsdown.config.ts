@@ -22,6 +22,7 @@ import {
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
 import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
+import { isRecord } from "./scripts/lib/record-shared.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
@@ -406,7 +407,9 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "vitest",
     // Selected plugin distributions install platform optionals beside bundled JavaScript.
     ...bundledPluginBuildEntries.flatMap(({ packageJson }) =>
-      Object.keys(packageJson?.optionalDependencies ?? {}),
+      isRecord(packageJson) && isRecord(packageJson.optionalDependencies)
+        ? Object.keys(packageJson.optionalDependencies)
+        : [],
     ),
   ],
 });
@@ -648,9 +651,13 @@ const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries(
   bundledPluginBuildInventory,
 ).filter(({ isolated }) => !isolated);
 const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) => {
+  const openclaw =
+    isRecord(plugin.packageJson) && isRecord(plugin.packageJson.openclaw)
+      ? plugin.packageJson.openclaw
+      : undefined;
   const sourceEntries = plugin.sourceEntries.filter(
     (source) =>
-      source === plugin.packageJson?.openclaw?.setupEntry ||
+      source === openclaw?.setupEntry ||
       plugin.catalogSourceEntries.includes(source) ||
       /^\.\/setup-api\.[cm]?[jt]s$/u.test(source),
   );
@@ -658,13 +665,15 @@ const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) =
     return [];
   }
   const entries = [{ id: plugin.id, sourceEntries }];
+  const extensions = openclaw?.extensions;
+  if (
+    extensions !== undefined &&
+    (!Array.isArray(extensions) || extensions.some((entry) => typeof entry !== "string"))
+  ) {
+    throw new Error(`Plugin ${plugin.id} extensions must be an array of strings`);
+  }
   const runtime = listBundledPluginEntrySources([
-    {
-      id: plugin.id,
-      sourceEntries: plugin.packageJson?.openclaw?.extensions?.length
-        ? plugin.packageJson.openclaw.extensions
-        : ["./index.ts"],
-    },
+    { id: plugin.id, sourceEntries: extensions?.length ? extensions : ["./index.ts"] },
   ]);
   const runtimeSources = new Set(Object.values(runtime).map((source) => fs.realpathSync(source)));
   for (const [name, source] of Object.entries(listBundledPluginEntrySources(entries))) {

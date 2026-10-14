@@ -157,6 +157,9 @@ export async function admitFollowupTurn(params: {
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
   });
   if (admission.status === "skipped") {
+    if (admission.error) {
+      params.queued.run.internalEventExecution?.onFailed?.(admission.error);
+    }
     if (admission.reason !== "active-run") {
       return { kind: "skipped", reason: admission.reason };
     }
