@@ -718,7 +718,8 @@ When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
 normal idle timeout. Node Code Mode likewise retains at most one completed
 Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Warm task workers still collect released payloads in place; critical
+match. Code Mode relies on V8's normal garbage collection rather than inspector
+collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
 

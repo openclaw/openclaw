@@ -267,6 +267,7 @@ export function prepareSessionRowSelection(
     now,
     modelCatalog,
     entries,
+    configuredAgentIds: selected.configuredAgentIds,
     involvementKeys: selected.involvementKeys,
     candidateKeys(identities: Iterable<string>) {
       return new Set(
@@ -322,7 +323,7 @@ export async function prepareSessionSearchIdentityNames(
   });
   const scope = projection.state.scope(opts);
   const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
-  for (const [key] of prepared.entries) {
+  for (const [key] of prepared.entries("all")) {
     const agentId = prepared.getTarget(key)?.agentId;
     if (agentId) {
       agentIds.add(agentId);
@@ -386,20 +387,18 @@ export function prepareProjectedSessionList(params: {
     projectActiveRun: context
       ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
       : undefined,
-    entryFilter: (key, entry) => {
-      const row = getTarget(key);
+    entryFilter: (key, entry, row) => {
+      const storeKey = row.storeKey ?? key;
       let visible = params.visibility?.get(entry);
       if (visible === undefined) {
-        visible = Boolean(
-          row &&
-          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-        );
+        visible =
+          client === undefined || (presentation.sharing.entryFilter?.(storeKey, entry) ?? true);
         params.visibility?.set(entry, visible);
       }
       return (
         visible &&
-        (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
-        (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
+        (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
+        (!opts.activeOnly || Boolean(active(storeKey, entry, row.agentId)?.active))
       );
     },
   };

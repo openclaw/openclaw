@@ -83,7 +83,7 @@ export type VoiceRealtimeSession = {
     userId: string,
     recordingInput?: DiscordRealtimeRecordingInput,
   ) => VoiceRealtimeSpeakerTurn;
-  close: () => void | Promise<void>;
+  close: (disposition?: "abort" | "text-fallback") => void | Promise<void>;
   connect: () => Promise<void>;
   canReceiveDuringPlayback: () => boolean;
 };
@@ -130,7 +130,7 @@ export type VoiceSessionEntry = {
   realtimeLifecycle: VoiceRealtimeLifecycle;
   transcripts?: DiscordVoiceTranscriptCapture;
   receiveRecovery: VoiceReceiveRecoveryState;
-  stop: (reason?: string) => void | Promise<void>;
+  stop: (reason?: string, disposition?: "abort" | "text-fallback") => void | Promise<void>;
 };
 
 export function logVoiceVerbose(message: string): void {

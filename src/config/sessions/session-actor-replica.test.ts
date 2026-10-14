@@ -411,8 +411,8 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
       throw new Error("Replica fixture requires a durable target");
     }
     retainSessionActorEntryFacts(
-      { ...snapshot.target, database: snapshot.target.database },
-      { entry: snapshot.entry, snapshots: [] },
+      snapshot.target.database,
+      [{ sessionKey: snapshot.target.sessionKey, facts: { entry: snapshot.entry, snapshots: [] } }],
       "partial-entry-reader",
     );
     expect(fixture.replica.read()).toEqual(snapshot);
@@ -569,8 +569,8 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     expect(replica.read()).toBeUndefined();
     expect(readSessionActorEntryFacts(target)).toBeUndefined();
     retainSessionActorEntryFacts(
-      target,
-      { entry: load().entry, snapshots: "full" },
+      target.database,
+      [{ sessionKey: target.sessionKey, facts: { entry: load().entry, snapshots: "full" } }],
       "cold-entry-reader",
     );
 
@@ -728,15 +728,30 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       "Saved instructions",
     );
     replica.invalidate();
+    const retainedEntry = { ...before.entry!, skillsSnapshot: undefined };
     retainSessionActorEntryFacts(
-      entryTarget,
-      {
-        entry: { ...before.entry!, skillsSnapshot: undefined },
-        snapshots: [],
-        projection,
-      },
+      entryTarget.database,
+      [
+        {
+          sessionKey: entryTarget.sessionKey,
+          facts: {
+            entry: retainedEntry,
+            snapshots: [],
+            projection,
+          },
+        },
+      ],
       "row-facts-reader",
     );
+    retainedEntry.label = "Reader edit after retention";
+    projection.hasBoard = true;
+    const retained = readSessionActorEntryFacts(entryTarget)!;
+    expect(retained.entry?.label).toBeUndefined();
+    expect(retained.projection?.hasBoard).toBe(false);
+    retained.entry!.label = "Caller edit after reading";
+    retained.projection!.hasBoard = true;
+    expect(readSessionActorEntryFacts(entryTarget)?.entry?.label).toBeUndefined();
+    expect(readSessionActorEntryFacts(entryTarget)?.projection?.hasBoard).toBe(false);
     expect(readSessionActorEntryFacts(entryTarget, ["skillsSnapshot"])?.snapshots).toEqual([]);
     expect((await readSessionEntryReadOnlyInWorker(scope))?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",

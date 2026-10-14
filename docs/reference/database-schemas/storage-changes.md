@@ -2415,6 +2415,16 @@ SQLite. A lookup or receipt at a newer revision marks the published set incomple
 but keeps other devices' bindings; only a full list replaces the set.
 Historical inspection snapshots never publish live node authority.
 
+The pairing owner stores its monotonically increasing publication revision in
+`config_machine_state` under `devicePairing.revision`. Each paired-device write
+increments that row in the same transaction and carries the returned revision in
+its commit receipt. Pending-only and bootstrap writes leave it unchanged. An
+absent revision row means revision zero until the first paired-device write;
+existing databases need no schema migration. Exact lookups read only the keyed
+device and this revision in one statement, without loading pending requests or
+hashing all paired records. Full lists retain their complete snapshot, and connection authorization
+still looks up the device after awaited pairing work.
+
 Pairing, approval, role-token, bootstrap, and node-surface mutations execute in
 the shared-state writer. Each synchronous transaction reads the authoritative
 rows and obtains current host policy or connection admission before mutation and
