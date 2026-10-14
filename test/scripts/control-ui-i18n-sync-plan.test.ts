@@ -99,7 +99,9 @@ describe("createControlUiLocaleSyncPlan", () => {
       .split("\n")
       .map((line) => JSON.parse(line));
     expect(
-      records.flatMap((record) => [record.segment_id, ...(record.segment_ids ?? [])]).sort(),
+      records
+        .flatMap((record) => [record.segment_id, ...(record.segment_ids ?? [])])
+        .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["example.new", "example.verified"]);
     expect(records.find((record) => record.segment_id === "example.new")).toMatchObject({
       source_path: "extensions/example/browser/i18n/locales/en.ts",

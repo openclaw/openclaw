@@ -110,7 +110,9 @@ describe("plugin Control UI locale discovery", () => {
     const fixture = createPluginFixture();
     fs.unlinkSync(fixture.translatedPath);
     fs.symlinkSync(path.join(fixture.root, "outside.json"), fixture.translatedPath);
-    await expect(loadControlUiPluginCatalogs(fixture.root)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(loadControlUiPluginCatalogs(fixture.root)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it.each(["entry", "source", "translations"])(
