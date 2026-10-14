@@ -208,16 +208,11 @@ export class SessionLineageController {
   reset(preserveOperatorContext: boolean): void {
     // A list/filter generation does not retire a still-owned descriptor read.
     // The capability's ledger, route and connection decide that lease's lifetime.
-    if (
-      this.binding &&
-      this.bindingIsCurrent(this.binding) &&
-      (this.binding.target.key === "global" || preserveOperatorContext)
-    ) {
-      if (this.binding.target.key === "global") {
-        this.publish(this.binding, this.binding.observation?.row ?? null);
-      } else {
+    if (this.binding && this.bindingIsCurrent(this.binding)) {
+      if (this.binding.target.key !== "global") {
         this.retireWalk();
       }
+      this.publish(this.binding, this.binding.observation?.row ?? null);
       return;
     }
     this.retire();

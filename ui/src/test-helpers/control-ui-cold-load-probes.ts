@@ -1,12 +1,9 @@
-import type {
-  ColdLoadProbeInput,
-  createColdLoadFrameProbe,
-} from "./control-ui-cold-load-probe-init.ts";
+import type * as ProbeInit from "./control-ui-cold-load-probe-init.ts";
 
 /** Serialized after the mock Gateway, before application modules execute. */
 export function installColdLoadProbes(
-  input: ColdLoadProbeInput,
-  createFrameProbe: typeof createColdLoadFrameProbe,
+  input: ProbeInit.ColdLoadProbeInput,
+  createFrameProbe: typeof ProbeInit.createColdLoadFrameProbe,
 ) {
   Reflect.set(Error, "stackTraceLimit", 40);
   const updates = new Map<string, { count: number; ms: number }>();
@@ -319,6 +316,7 @@ export function installColdLoadProbes(
   };
   let solidSidebarOwner: SolidSidebarProbeOwner | undefined;
   const sidebarLifecycleOriginals = new Map<SidebarLifecycle, () => void>();
+  const sidebarPasses: Array<{ method: SidebarLifecycle; kind: string; atMs: number }> = [];
   const sidebarLifecycle = new Map<string, Map<SidebarLifecycle, { count: number; ms: number }>>();
   const sidebarOwnerStacks = new Map<string, number>();
   const sidebarRegistration = {
@@ -601,6 +599,7 @@ export function installColdLoadProbes(
               return original.call(this);
             } finally {
               if (connected) {
+                sidebarPasses.push({ method, kind: liveKind, atMs: started - liveStartedAt });
                 const group = sidebarLifecycle.get(liveKind) ?? new Map();
                 const stats = group.get(method) ?? { count: 0, ms: 0 };
                 stats.count++;
@@ -697,6 +696,7 @@ export function installColdLoadProbes(
         solidSidebar: solidSidebarOwner
           ? {
               measurement: "owner-invalidations-and-projection-lifecycle-passes",
+              passes: sidebarPasses,
               lifecycle: Object.fromEntries(
                 [...sidebarLifecycle].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
               ),
