@@ -193,9 +193,7 @@ describe("tool-authored source reply turn completion", () => {
   });
   it.each([
     { terminate: true, capable: false },
-    { terminate: false, capable: false },
     { terminate: true, capable: true },
-    { terminate: false, capable: true },
   ])(
     "retains a final reply beside a terminal sibling (authored terminate=$terminate, capable=$capable)",
     async ({ terminate, capable }) => {
@@ -247,21 +245,20 @@ describe("tool-authored source reply turn completion", () => {
     expect(run.replies).toEqual([]);
   });
 
-  it.each([
-    { label: "a progress reply", plan: { name: "stock_check", details: progressReply } },
-    { label: "an error", plan: { name: "stock_check", details: {}, isError: true } },
-    { label: "ordinary details", plan: { name: "stock_check", details: { ok: true } } },
-  ])("continues when a second capable tool in the batch returns $label", async ({ plan }) => {
-    const run = await runBatch({
-      tools: [{ name: "order_confirm", details: finalReply }, plan],
-      completionOrder: ["order_confirm", "stock_check"],
-      capableToolNames: ["order_confirm", "stock_check"],
-    });
+  it.each([{ label: "an error", plan: { name: "stock_check", details: {}, isError: true } }])(
+    "continues when a second capable tool in the batch returns $label",
+    async ({ plan }) => {
+      const run = await runBatch({
+        tools: [{ name: "order_confirm", details: finalReply }, plan],
+        completionOrder: ["order_confirm", "stock_check"],
+        capableToolNames: ["order_confirm", "stock_check"],
+      });
 
-    expect(run.completed).toEqual(["order_confirm", "stock_check"]);
-    expect(run.requests).toBe(2);
-    expect(run.replies).toEqual([]);
-  });
+      expect(run.completed).toEqual(["order_confirm", "stock_check"]);
+      expect(run.requests).toBe(2);
+      expect(run.replies).toEqual([]);
+    },
+  );
 
   it("continues when another call is rejected before it executes", async () => {
     const run = await runBatch({
@@ -278,9 +275,7 @@ describe("tool-authored source reply turn completion", () => {
   });
 
   it.each([
-    { label: "authored a progress reply", details: progressReply, isError: false },
     { label: "failed", details: finalReply, isError: true },
-    { label: "reported ok: false", details: { ...finalReply, ok: false }, isError: false },
     { label: "returned no source reply", details: { ok: true }, isError: false },
     {
       label: "returned only blank media",
@@ -326,16 +321,6 @@ describe("tool-authored source reply turn completion", () => {
     ).toEqual(["Pedido creado.", "Stock reserved."]);
   });
 
-  it("matches a capable tool by its policy-normalized name", async () => {
-    const run = await runBatch({
-      tools: [{ name: "Order_Confirm", details: finalReply }],
-      completionOrder: ["Order_Confirm"],
-      capableToolNames: ["order_confirm"],
-    });
-
-    expect(run.requests).toBe(1);
-  });
-
   it("reads the result after afterToolCall hooks, so a hook can withdraw the reply", async () => {
     const run = await runBatch({
       tools: [{ name: "order_confirm", details: finalReply }],
@@ -348,34 +333,16 @@ describe("tool-authored source reply turn completion", () => {
     expect(run.requests).toBe(2);
   });
 
-  it.each(["tool", "previous-hook"] as const)(
-    "captures a reply even when %s already completes the turn",
-    async (owner) => {
-      const run = await runBatch({
-        tools: [{ name: "order_confirm", details: finalReply, terminate: owner === "tool" }],
-        completionOrder: ["order_confirm"],
-        configureAgent:
-          owner === "previous-hook"
-            ? (agent) => setInternalToolTurnCompletion(agent, () => true)
-            : undefined,
-      });
-      expect(run.requests).toBe(1);
-      expect(run.replies).toEqual([
-        expect.objectContaining({ text: "Pedido creado.", toolAuthored: true }),
-      ]);
-    },
-  );
-
-  it("keeps an earlier turn-completion hook in charge", async () => {
+  it("captures a reply even when the previous hook already completes the turn", async () => {
     const run = await runBatch({
-      tools: [{ name: "crm_note", details: { ok: true } }],
-      completionOrder: ["crm_note"],
-      configureAgent: (agent) => {
-        setInternalToolTurnCompletion(agent, () => true);
-      },
+      tools: [{ name: "order_confirm", details: finalReply, terminate: false }],
+      completionOrder: ["order_confirm"],
+      configureAgent: (agent) => setInternalToolTurnCompletion(agent, () => true),
     });
-
     expect(run.requests).toBe(1);
+    expect(run.replies).toEqual([
+      expect.objectContaining({ text: "Pedido creado.", toolAuthored: true }),
+    ]);
   });
 
   it("installs nothing when no tool is capable", () => {

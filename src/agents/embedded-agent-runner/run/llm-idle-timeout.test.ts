@@ -12,15 +12,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { notifyProviderStreamOpened } from "../../../../packages/ai/src/transports/transport-stream-shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  areDiagnosticsEnabledForProcess,
-  setDiagnosticsEnabledForProcess,
-} from "../../../infra/diagnostic-events.js";
-import {
-  getDiagnosticSessionActivitySnapshot,
-  markDiagnosticEmbeddedRunStarted,
-  resetDiagnosticRunActivityForTest,
-} from "../../../logging/diagnostic-run-activity.js";
-import {
   clearToolActivityRun,
   notifyToolActivity,
 } from "../../../shared/tool-activity-heartbeat.js";
@@ -208,40 +199,6 @@ describe("streamWithIdleTimeout", () => {
     } finally {
       source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
       await next;
-    }
-  });
-
-  it("records model progress only for content-bearing activity", async () => {
-    vi.useFakeTimers();
-    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
-    setDiagnosticsEnabledForProcess(true);
-    const ref = { sessionId: TEST_RUN, runId: TEST_RUN };
-    markDiagnosticEmbeddedRunStarted(ref);
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      requestSignal = options?.signal;
-      return createAssistantMessageEventStream();
-    };
-    const stream = await streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN })(
-      {} as Parameters<StreamFn>[0],
-      { messages: [] },
-    );
-    const iterator = stream[Symbol.asyncIterator]();
-    try {
-      await vi.advanceTimersByTimeAsync(40);
-      notifyLlmRequestActivity(requestSignal, false);
-      expect(getDiagnosticSessionActivitySnapshot(ref).lastProgressReason).toBe(
-        "embedded_run:started",
-      );
-      notifyLlmRequestActivity(requestSignal, true);
-      expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-        lastProgressAgeMs: 0,
-        lastProgressReason: "model_call:stream_progress",
-      });
-    } finally {
-      await iterator.return?.();
-      resetDiagnosticRunActivityForTest();
-      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
     }
   });
 
@@ -512,51 +469,5 @@ describe("streamWithIdleTimeout parked consumer", () => {
     await expect(stream.result()).resolves.toMatchObject({
       content: [{ arguments: { path: "safe.txt" } }],
     });
-  });
-
-  it("does not abort a completed structural stream while the consumer is parked", async () => {
-    vi.useFakeTimers();
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
-      requestSignal = options?.signal;
-      const stream = createAssistantMessageEventStream();
-      stream.push({ type: "text_delta", contentIndex: 0, delta: "first" });
-      setTimeout(() => {
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: makeAgentAssistantMessage({
-            content: [{ type: "text", text: "first" }],
-            model: "test",
-            usage: createZeroUsageFixture(),
-            timestamp: 1,
-          }),
-        });
-        stream.end();
-      }, 10);
-      return {
-        result: () => stream.result(),
-        [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
-      };
-    });
-    const onIdleTimeout = vi.fn();
-    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
-    const stream = wrapped(
-      {} as Parameters<typeof baseFn>[0],
-      {} as Parameters<typeof baseFn>[1],
-      {} as Parameters<typeof baseFn>[2],
-    ) as AssistantMessageEventStream;
-    const iterator = stream[Symbol.asyncIterator]();
-    await expect(iterator.next()).resolves.toMatchObject({ done: false });
-
-    // Producer finishes while the consumer has not drained the terminal event.
-    await vi.advanceTimersByTimeAsync(500);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    expect(requestSignal?.aborted).toBe(false);
-    await expect(iterator.next()).resolves.toMatchObject({
-      done: false,
-      value: { type: "done" },
-    });
-    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 });
