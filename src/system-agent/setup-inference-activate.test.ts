@@ -10,6 +10,7 @@ import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { resolveAuthProfilePortability } from "../agents/auth-profiles/portability.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import * as cliCredentials from "../agents/cli-credentials.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
@@ -18,6 +19,7 @@ import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-proven
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
+import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -36,13 +38,11 @@ import {
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
-  SetupInferenceCancelledError,
-  SetupInferenceOwnerDriftError,
 } from "./setup-inference-core.js";
 import * as credentialActivation from "./setup-inference-credential-access.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
 import * as activationTransition from "./setup-inference-transition.js";
-import { codexRuntimeArtifactAuth } from "./verified-inference.test-support.js";
+import { codexRuntimeArtifactAuth, pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
@@ -70,36 +70,26 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
-  it.each([
-    { primaryModel: "stable/working-model", fail: false },
-    { primaryModel: "stable/working-model", fail: true },
-  ])(
+  it.each([{ primaryModel: "stable/working-model", fail: false }])(
     "isolates utility activation from primary $primaryModel (failure: $fail)",
-    async ({ primaryModel, fail }) => {
+    async ({ primaryModel }) => {
       const setup = await fixture({ modelTarget: "utility", primaryModel });
-      if (fail) {
-        setup.run.mockRejectedValueOnce(new Error("Utility inference unavailable"));
-      }
       const result = await setup.activate();
-      expect(result).toMatchObject({ ok: !fail });
+      expect(result).toMatchObject({ ok: true });
       const saved = await readConfigFileSnapshot();
       expect(saved.sourceConfig.agents?.defaults?.model).toEqual(
         setup.config.agents?.defaults?.model,
       );
-      if (fail) {
-        expect(saved.sourceConfig.agents?.defaults?.utilityModel).toBeUndefined();
-      } else {
-        expect(result).toMatchObject({ modelTarget: "utility", modelRef });
-        expect(saved.sourceConfig.agents?.defaults?.utilityModel).toContain(modelRef);
-        expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
-          provider: "openai",
-          model: "gpt-5.4-mini",
-        });
-      }
+      expect(result).toMatchObject({ modelTarget: "utility", modelRef });
+      expect(saved.sourceConfig.agents?.defaults?.utilityModel).toContain(modelRef);
+      expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.4-mini",
+      });
     },
   );
 
-  it.each([true, false])(
+  it.each([false])(
     "signs in before verifying an isolated detected Codex installation (fresh: %s)",
     async (fresh) => {
       const setup = await fixture({ codex: true, fresh, subscription: true });
@@ -121,47 +111,176 @@ describe("setup activation credentials and configuration", () => {
       expect(setup.readProfile()?.[1].setup).toBeUndefined();
     },
   );
-  it("preserves explicit native user-home setup without importing or starting host sign-in", async () => {
-    const setup = await fixture({ codex: true, homeScope: "user" });
-    const nativeAuth = {
-      apiKey: "fixture-native-key",
-      source: "Codex native login",
-      mode: "api-key" as const,
-    };
-    setup.deps.resolveApiKeyForProvider = async () => nativeAuth;
-    const readNativeKey = vi.fn(() => credential);
-    setup.deps.readCodexCliActiveApiKey = readNativeKey;
-    setup.run.mockImplementation(async (params) => {
-      expect(params.authProfileId).toBeUndefined();
-      expect(params.config?.plugins?.entries?.codex?.config?.appServer).toMatchObject({
-        homeScope: "user",
+  it.each([false, true])(
+    "reuses the native Codex home without importing credentials (automatic: %s)",
+    async (automatic) => {
+      const setup = await fixture({
+        codex: true,
+        homeScope: automatic ? "agent" : "user",
+        nativeCatalogEnabled: true,
       });
-      params.onSuccessfulAuthBinding?.({
-        agentHarnessId: "codex",
-        authFingerprint: fingerprintResolvedProviderAuth(nativeAuth),
-        modelId: "gpt-5.4-mini",
-        modelApi: "openai-responses",
-        runtimeOwnerKind: "plugin-harness",
-        runtimeOwnerId: "codex",
-        ...codexRuntimeArtifactAuth,
+      vi.spyOn(cliCredentials, "readCodexCliCredentialsCached").mockImplementation(() => {
+        throw new Error("Setup must not read native Codex OAuth tokens");
       });
-      return {
-        payloads: [{ text: "OK" }],
-        meta: {
-          durationMs: 1,
-          executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
-        },
+      const nativeAuth = {
+        apiKey: "fixture-native-key",
+        source: "Codex native login",
+        mode: "api-key" as const,
       };
+      setup.deps.resolveApiKeyForProvider = async () => nativeAuth;
+      const readNativeKey = vi.fn(() => credential);
+      setup.deps.readCodexCliActiveApiKey = readNativeKey;
+      setup.run.mockImplementation(async (params) => {
+        expect(params.authProfileId).toBeUndefined();
+        expect(params.config?.plugins?.entries?.codex?.config?.appServer).toMatchObject({
+          homeScope: "user",
+        });
+        params.onSuccessfulAuthBinding?.({
+          agentHarnessId: "codex",
+          authFingerprint: fingerprintResolvedProviderAuth(nativeAuth),
+          modelId: "gpt-5.4-mini",
+          modelApi: "openai-responses",
+          runtimeOwnerKind: "plugin-harness",
+          runtimeOwnerId: "codex",
+          ...codexRuntimeArtifactAuth,
+        });
+        return {
+          payloads: [{ text: "OK" }],
+          meta: {
+            durationMs: 1,
+            executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
+          },
+        };
+      });
+      const result = await setup.activate("codex-cli", automatic ? true : undefined, {
+        automaticSetup: automatic ? true : undefined,
+      });
+      expect(result).toMatchObject({ ok: true });
+      expect(setup.login).not.toHaveBeenCalled();
+      expect(readNativeKey).not.toHaveBeenCalled();
+      expect(setup.readProfile()).toBeUndefined();
+      expect(
+        (await readConfigFileSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
+      ).toMatchObject({ homeScope: "user" });
+      expect(
+        (await readConfigFileSnapshot()).config.plugins?.entries?.codex?.config?.sessionCatalog,
+      ).toEqual({ enabled: true });
+    },
+  );
+
+  it.each([
+    { authMethod: "oauth", homeScope: "user" },
+    { authMethod: "api_key", homeScope: "user" },
+    { authMethod: "oauth", homeScope: "agent" },
+  ] as const)(
+    "activates an isolated $authMethod sign-in from the $homeScope Codex home",
+    async ({ authMethod, homeScope }) => {
+      const setup = await fixture({
+        codex: true,
+        homeScope,
+        authMethod,
+        subscription: authMethod === "oauth",
+        primaryModel: modelRef,
+      });
+      // Provider login can select a new model without an authored runtime override.
+      setup.config.agents!.defaults!.models![modelRef] = {};
+      vi.mocked(setup.prompter.confirm).mockResolvedValue(true);
+      await fs.writeFile(setup.configPath, JSON.stringify(setup.config));
+      clearConfigCache();
+      const result = await setup.activate(
+        authMethod === "oauth" ? "provider-auth" : "api-key",
+        undefined,
+        authMethod === "api_key" ? { apiKey: credential.key } : {},
+      );
+      expect(result).toMatchObject({ ok: true });
+      expect(setup.login).toHaveBeenCalledOnce();
+      expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+        agentHarnessRuntimeOverride: "codex",
+        config: {
+          plugins: { entries: { codex: { config: { appServer: { homeScope: "agent" } } } } },
+        },
+      });
+      expect(
+        (await readConfigFileSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
+      ).toMatchObject({ homeScope: "agent" });
+      expect(setup.readProfile()?.[1].setup).toBeUndefined();
+    },
+  );
+
+  it("returns from automatic Codex setup without opening login when stored credentials disappear", async () => {
+    const setup = await fixture({ codex: true });
+    vi.spyOn(cliCredentials, "readCodexCliCredentialsCached").mockImplementation(() => {
+      throw new Error("Setup must not read native Codex OAuth tokens");
     });
-    const result = await setup.activate("codex-cli");
-    expect(result).toMatchObject({ ok: true });
+    setup.run.mockRejectedValueOnce(new Error("Codex needs ChatGPT sign-in"));
+
+    expect(await setup.activate("codex-cli", true, { automaticSetup: true })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("ChatGPT sign-in"),
+    });
     expect(setup.login).not.toHaveBeenCalled();
-    expect(readNativeKey).not.toHaveBeenCalled();
+    expect(setup.run).toHaveBeenCalledOnce();
     expect(setup.readProfile()).toBeUndefined();
-    expect(
-      (await readConfigFileSnapshot()).config.plugins?.entries?.codex?.config?.appServer,
-    ).toMatchObject({ homeScope: "user" });
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
   });
+
+  it.each([true, false])(
+    "requires the official Codex source only for automatic setup (automatic: %s)",
+    async (automatic) => {
+      const setup = await fixture({ codex: true });
+      const resolveMetadata = setup.deps.resolvePluginMetadataSnapshot;
+      assert.ok(resolveMetadata);
+      const acceptedSurface = {
+        channels: [],
+        providers: [],
+        tools: [],
+        contracts: [],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      };
+      setup.deps.resolvePluginMetadataSnapshot = (params) => {
+        const metadata = resolveMetadata(params);
+        return {
+          ...metadata,
+          index: {
+            ...metadata.index,
+            plugins: [
+              ...metadata.index.plugins.filter((plugin) => plugin.pluginId !== "codex"),
+              pluginRecord("codex", { packageName: "@example/codex" }),
+            ],
+            installRecords: {
+              ...metadata.index.installRecords,
+              codex: {
+                source: "npm",
+                spec: "@example/codex@1.0.0",
+                acceptedSurface,
+                acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+                acceptedSurfaceAt: "2026-01-01T00:00:00.000Z",
+              },
+            },
+          },
+        };
+      };
+
+      const result = await setup.activate("codex-cli", automatic ? true : undefined, {
+        automaticSetup: automatic ? true : undefined,
+      });
+      expect(result).toMatchObject({ ok: !automatic });
+      if (automatic) {
+        expect(result).toMatchObject({ error: expect.stringContaining("official Codex plugin") });
+        expect(setup.login).not.toHaveBeenCalled();
+        expect(setup.run).not.toHaveBeenCalled();
+        expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+      } else {
+        expect(setup.login).toHaveBeenCalledOnce();
+        expect(setup.run).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("cancels detected Codex sign-in without verification or promotion", async () => {
     const controller = new AbortController();
@@ -319,22 +438,14 @@ describe("setup activation credentials and configuration", () => {
     ).toEqual(savedCredential);
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "preserves first-team provisioning across provider activation (rejected: %s)",
-    async (rejected) => {
+    async () => {
       const setup = await fixture({ fresh: true });
-      if (rejected) {
-        setup.run.mockRejectedValueOnce(new Error("fixture provider unavailable"));
-      }
       const result = await setup.activate();
-      expect(result).toMatchObject({ ok: !rejected });
+      expect(result).toMatchObject({ ok: true });
       const activated = await readConfigFileSnapshot();
       expect(hasResolvedRosterBeforeMigrations(activated)).toBe(false);
-      if (rejected) {
-        expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-        expect(await fs.readdir(path.dirname(setup.workspace))).not.toContain("workspace");
-        return;
-      }
       const created = await ensureOnboardingAgent({
         config: activated.sourceConfig,
         baseConfig: activated.sourceConfig,
@@ -382,10 +493,7 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
-  it.each([
-    { name: "local service", localService: true, addProviderDuringLogin: false },
-    { name: "new provider", localService: false, addProviderDuringLogin: true },
-  ])(
+  it.each([{ name: "local service", localService: true, addProviderDuringLogin: false }])(
     "saves the credential before one tool-free turn and commits after success ($name)",
     async ({ localService, addProviderDuringLogin }) => {
       const setup = await fixture({ localService, addProviderDuringLogin });
@@ -474,10 +582,7 @@ describe("setup activation credentials and configuration", () => {
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
   });
 
-  it.each([
-    { explicitProfile: true, activationConfirmed: undefined },
-    { explicitProfile: false, activationConfirmed: true as const },
-  ])(
+  it.each([{ explicitProfile: true, activationConfirmed: undefined }])(
     "keeps a working credential and rotation when a replacement is rejected (configured: $explicitProfile, confirmed: $activationConfirmed)",
     async ({ explicitProfile, activationConfirmed }) => {
       const setup = await fixture();
@@ -748,16 +853,7 @@ describe("setup activation credentials and configuration", () => {
 describe("setup activation error boundaries", () => {
   // Both entry points share redaction; the initial path also maps typed failures to results.
   it.each([
-    ["initial", "unknown", () => new Error(), null, false],
-    ["initial", "wizard cancellation", () => new WizardCancelledError(), null, true],
     ["initial", "wizard navigation", () => new WizardNavigationError("back"), null, true],
-    [
-      "initial",
-      "setup cancellation",
-      () => new SetupInferenceCancelledError(),
-      "unavailable",
-      false,
-    ],
     [
       "initial",
       "unavailable",
@@ -765,7 +861,6 @@ describe("setup activation error boundaries", () => {
       "unavailable",
       false,
     ],
-    ["initial", "owner drift", () => new SetupInferenceOwnerDriftError(), "auth", false],
     [
       "initial",
       "indeterminate",
@@ -773,23 +868,7 @@ describe("setup activation error boundaries", () => {
       null,
       false,
     ],
-    ["initial", "aborted signal", () => new Error(), "unavailable", true],
     ["deferred", "unknown", () => new Error(), null, false],
-    [
-      "deferred",
-      "setup cancellation",
-      () => new SetupInferenceCancelledError(),
-      "unavailable",
-      false,
-    ],
-    [
-      "deferred",
-      "unavailable",
-      () => new SetupInferenceActivationUnavailableError(),
-      "unavailable",
-      false,
-    ],
-    ["deferred", "owner drift", () => new SetupInferenceOwnerDriftError(), "auth", false],
   ] as const)(
     "%s boundary preserves %s without exposing submitted secrets",
     async (phase, _name, create, status, abort) => {

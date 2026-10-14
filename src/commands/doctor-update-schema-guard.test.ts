@@ -116,6 +116,29 @@ async function legacyAgentFixture(postCore: boolean) {
   };
 }
 
+it("rehearses shared-only schema changes before the shipped package rollback is discarded", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = await legacyAgentFixture(false);
+    const pathname = resolveOpenClawStateSqlitePath();
+    const database = new DatabaseSync(pathname);
+    try {
+      database.exec(`PRAGMA user_version = 15;
+        DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
+    } finally {
+      database.close();
+    }
+    const schemas = await prepareDoctorDatabasePreflight({ scope: "state" });
+    expect(schemas.pendingMigrations).toContainEqual(
+      expect.objectContaining({ kind: "state", path: pathname, foundVersion: 15 }),
+    );
+    const before = fs.readFileSync(pathname);
+    expect(await guardUpdateDoctorSchemaUpgrade({ schemas })).toMatchObject({
+      updateSchemaRehearsal: { runId: f.runId, updaterVersion: "2026.9.2" },
+    });
+    expect(fs.readFileSync(pathname)).toEqual(before);
+  });
+});
+
 const runtime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
 async function withDoctorMaintenance(
@@ -230,7 +253,7 @@ it("retains a verified canonical backup before permitting the normal schema migr
           });
           expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
           expect(verify).toHaveBeenCalledTimes(1);
-          const identity = fs.statSync(f.pathname);
+          const identity = fs.statSync(f.pathname, { bigint: true });
           expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
             expect.objectContaining({
               role: "agent",

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -86,6 +86,9 @@ describe("transcript search Escape", () => {
       "search control",
     );
     target.focus();
+    const tooltip = expectDefined(target.closest("openclaw-tooltip"), "search tooltip");
+    await tooltip.updateComplete;
+    expect(tooltip.hasAttribute("open")).toBe(true);
     // Its focused tooltip owns the first Escape, before search receives it.
     target.dispatchEvent(escape());
     await Promise.resolve();

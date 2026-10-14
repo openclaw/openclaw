@@ -389,6 +389,36 @@ describe("signal transport compatibility", () => {
     expect(result.config.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
   });
 
+  it.each(["sync", "async"] as const)(
+    "reserves the canonical root port while cleaning nested default legacy fields (%s)",
+    async (mode) => {
+      const transport = { kind: "managed-native", httpPort: 8080 };
+      const cfg = signalConfig({
+        account: "+15555550123",
+        transport,
+        accounts: {
+          default: { account: "+15555550123", httpPort: 8181 },
+          work: { account: "+15555550124", autoStart: true },
+        },
+      });
+      const result =
+        mode === "sync"
+          ? normalizeCompatibilityConfig({ cfg })
+          : await migrateLegacySignalTransportConfig({ cfg });
+
+      expect(result.warnings).toBeUndefined();
+      expect(result.config.channels?.signal?.transport).toEqual(transport);
+      expect(result.config.channels?.signal?.accounts?.default).not.toHaveProperty("httpPort");
+      expect(result.config.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
+      expect(resolveSignalAccount({ cfg: result.config, accountId: "default" }).baseUrl).toBe(
+        "http://127.0.0.1:8080",
+      );
+      expect(resolveSignalAccount({ cfg: result.config, accountId: "work" }).baseUrl).toBe(
+        "http://127.0.0.1:8081",
+      );
+    },
+  );
+
   it("keeps attachment suppression account-owned for external transports", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({

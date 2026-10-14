@@ -81,7 +81,7 @@ export function listTranscriptArchivesFromDatabase(
     .filter((row) => logicalAgentId === undefined || row.agentId === logicalAgentId);
 }
 
-export function hasTranscriptArchiveInDatabase(
+function hasTranscriptArchiveInDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "agentId">,
   target: Pick<TranscriptArchiveReadPlan, "logicalAgentId" | "sessionId" | "sessionKey">,
 ): boolean {

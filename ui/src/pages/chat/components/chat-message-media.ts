@@ -639,6 +639,8 @@ export function projectMessageMedia(
         url: mediaPath,
         fileName,
         sizeBytes,
+        width,
+        height,
         ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
       };
       if (appendImageBlock(images, projected) && !positionedSources.has(mediaPath)) {

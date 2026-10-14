@@ -11,7 +11,9 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
-const callbackListener = vi.hoisted((): { port?: number } => ({}));
+const callbackListener = vi.hoisted(
+  (): { port?: number; servers: import("node:http").Server[] } => ({ servers: [] }),
+);
 
 vi.mock("node:http", async (importOriginal) => {
   const http = await importOriginal<typeof import("node:http")>();
@@ -36,8 +38,11 @@ vi.mock("node:http", async (importOriginal) => {
   }
   return {
     ...http,
-    createServer: (...args: ConstructorParameters<typeof CallbackServer>) =>
-      new CallbackServer(...args),
+    createServer: (...args: ConstructorParameters<typeof CallbackServer>) => {
+      const server = new CallbackServer(...args);
+      callbackListener.servers.push(server);
+      return server;
+    },
   };
 });
 
@@ -50,12 +55,13 @@ afterEach(async () => {
   }
   await Promise.all(pending.map(({ settled }) => settled));
   callbackListener.port = undefined;
+  callbackListener.servers.length = 0;
 });
 
 function startCallback(
   params: Omit<
     Parameters<typeof providerAuthRuntime.waitForLocalOAuthCallback>[0],
-    "signal" | "onProgress" | "port" | "redirectUri"
+    "signal" | "port" | "redirectUri"
   >,
   controller = new AbortController(),
 ) {
@@ -65,11 +71,12 @@ function startCallback(
     port: 61040,
     redirectUri: "http://127.0.0.1:61040/callback",
     signal: controller.signal,
-    onProgress: () => {
+    onProgress: (message) => {
       if (callbackListener.port === undefined) {
         throw new Error("Callback readiness requires a bound listener");
       }
       resolve(callbackListener.port);
+      params.onProgress?.(message);
     },
   });
   callbacks.push({ controller, settled: callback.then(() => undefined, reject) });
@@ -212,6 +219,23 @@ describe("plugin-sdk provider-auth-runtime", () => {
     controller.abort();
 
     await expect(callback).rejects.toThrow("OAuth callback cancelled");
+  });
+
+  it("closes the localhost listener when progress reporting throws", async () => {
+    const failure = new Error("Progress reporter failed");
+    const { callback } = startCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      callbackPath: "/callback",
+      successTitle: "OAuth complete",
+      onProgress: () => {
+        throw failure;
+      },
+    });
+
+    await expect(callback).rejects.toBe(failure);
+    expect(callbackListener.servers).toHaveLength(1);
+    expect(callbackListener.servers[0]?.listening).toBe(false);
   });
 
   it("binds the redirect host when the public hostname option is omitted", async () => {

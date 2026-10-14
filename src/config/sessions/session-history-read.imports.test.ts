@@ -54,6 +54,8 @@ it("keeps lazy readers independent of unrelated runtime barrels", () => {
         "src/config/sessions/session-accessor.sqlite-read.ts",
         "src/config/sessions/session-accessor.sqlite-exact-read.ts",
         "packages/ai/src/transports.ts",
+        "packages/ai/src/internal/default-runtime.ts",
+        "packages/gateway-protocol/src/schema/users.ts",
       ],
     ),
   ).toEqual([]);

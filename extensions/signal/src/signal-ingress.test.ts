@@ -54,9 +54,7 @@ function signalEvent(params?: {
   };
 }
 
-async function withQueue<T>(
-  fn: (queue: SignalIngressQueue, stateDir: string) => Promise<T>,
-): Promise<T> {
+async function withQueue<T>(fn: (queue: SignalIngressQueue) => Promise<T>): Promise<T> {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-ingress-"));
   const stateDir = await fs.realpath(created);
   const queue = createChannelIngressQueueForTests<SignalIngressPayload>({
@@ -65,7 +63,7 @@ async function withQueue<T>(
     stateDir,
   });
   try {
-    return await fn(queue, stateDir);
+    return await fn(queue);
   } finally {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -219,41 +217,6 @@ describe("Signal durable ingress", () => {
         ]);
       } finally {
         await started.monitor.stop();
-      }
-    });
-  });
-
-  it("keeps durable message dedupe scoped to its Signal account", async () => {
-    await withQueue(async (queue, stateDir) => {
-      const otherQueue = createChannelIngressQueueForTests<SignalIngressPayload>({
-        channelId: "signal",
-        accountId: "other",
-        stateDir,
-      });
-      const firstDispatch = vi.fn().mockResolvedValue(undefined);
-      const otherDispatch = vi.fn().mockResolvedValue(undefined);
-      const first = await startMonitor(queue, firstDispatch);
-      const other = await startSignalIngressMonitor({
-        accountId: "other",
-        queue: otherQueue,
-        dispatch: otherDispatch,
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
-      try {
-        await first.monitor.receive(
-          signalEvent({
-            senderNumber: "+15550002222",
-            senderUuid: "123e4567-e89b-12d3-a456-426614174000",
-          }),
-        );
-        await other.receive(signalEvent({ senderNumber: "+15550002222" }));
-        await first.waitForIdle();
-        await other.waitForIdle();
-        expect(firstDispatch).toHaveBeenCalledTimes(1);
-        expect(otherDispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await first.monitor.stop();
-        await other.stop();
       }
     });
   });

@@ -147,7 +147,6 @@ export function createSessionTranscriptTurnKernel(
             ...appendOptions,
             ...append.workerPreparation,
             message,
-            messageAlreadyRedacted: options.atomicGroup === true || options.workerPrepared === true,
             ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
             ...((append.config ?? options.config)
               ? { config: append.config ?? options.config }
@@ -182,6 +181,8 @@ export function createSessionTranscriptTurnKernel(
             : "Session initialization requires a new transcript turn in the same transaction.",
         );
       }
+
+      options.assertCurrent?.();
 
       // Later explicit parents can abandon earlier rows. Capture every cursor
       // from the final active projection before this atomic transaction commits.

@@ -459,7 +459,7 @@ describe("package lifecycle ownership", () => {
       monotonicNow = 20 * 60_000 + 3;
       await refused;
       expect(runScript).not.toHaveBeenCalled();
-      await expect(fs.access(lock)).resolves.toBeUndefined();
+      await fs.access(lock);
     } finally {
       monotonicNow = Number.MAX_SAFE_INTEGER;
       await Promise.allSettled([waiting]);
@@ -756,7 +756,7 @@ describe("package lifecycle ownership", () => {
     );
     expect(runScript).toHaveBeenCalledTimes(2);
     expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
-    await expect(fs.access(lock)).resolves.toBeUndefined();
+    await fs.access(lock);
   });
 
   it("keeps settled script failure ordinary when marker restoration alone fails", async () => {

@@ -8,6 +8,7 @@ import {
 } from "@openclaw/worker-runtime/lifecycle";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -66,7 +67,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       retainedTransport: true,
       nativeSource,
       nativeResource,
-      decodeResourceError: decodeSqliteSnapshotStagingError,
+      databaseAccess: "read-only",
+      decodeResourceError: (payload) =>
+        // SAFETY: The paired staging worker emits the SQLite codec in this opaque envelope.
+        decodeSqliteSnapshotStagingError(payload as OpenClawStateWorkerErrorPayload | undefined),
     },
   );
   const directories = new Map<string, SqliteSnapshotStagingDirectory>();

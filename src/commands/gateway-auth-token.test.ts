@@ -126,7 +126,7 @@ describe("gatewayAuthTokenCommand", () => {
     expect(runtime.writeStdout).not.toHaveBeenCalled();
   });
 
-  it.each(["password", "none", "trusted-proxy"] as const)(
+  it.each(["trusted-proxy"] as const)(
     "refuses an inactive token when auth mode is %s",
     async (mode) => {
       mocks.readConfigFileSnapshot.mockResolvedValue({

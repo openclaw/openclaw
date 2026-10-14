@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   ComputerActResult,
@@ -12,6 +12,7 @@ import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contrac
 import { sleep } from "../../utils/sleep.js";
 import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { readNodePermissionError } from "../node-permission-error.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
@@ -103,14 +104,6 @@ export function createComputerTool(options?: {
     availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
-  const replaceParameterSchema = (actions: readonly ComputerUseV2ActionName[]) => {
-    const next = createComputerToolSchema(actions, targetScope);
-    for (const key of Object.keys(parameterSchema)) {
-      Reflect.deleteProperty(parameterSchema, key);
-    }
-    Object.assign(parameterSchema, next);
-  };
-
   // Serialize execute() per tool instance. This runtime can dispatch parallel
   // tool calls (some providers enable it by default), but desktop input and the
   // shared target/frame/button state must apply in model order, not completion
@@ -133,7 +126,10 @@ export function createComputerTool(options?: {
     transport: options?.transport,
     gatewayStatus: options?.pairedNodeComputerUse?.gateway,
     onCapabilitiesChanged: (capabilities) => {
-      replaceParameterSchema(availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS));
+      tool.parameters = createComputerToolSchema(
+        availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
+        targetScope,
+      );
       tool.description = buildComputerToolDescription(capabilities, targetScope);
     },
     registerRunCleanup: options?.registerRunCleanup,
@@ -322,6 +318,7 @@ export function createComputerTool(options?: {
           session.setTarget(resolved.target);
           signal?.throwIfAborted();
           // Input landed; a failed follow-up observation should not fail the action.
+          const permissionMissing = readNodePermissionError(err);
           return textResult(
             `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
             {
@@ -329,6 +326,7 @@ export function createComputerTool(options?: {
               action,
               screenIndex: resolved.target.screenIndex,
               result: actResult,
+              ...(permissionMissing ? { permissionMissing } : {}),
             },
           );
         }

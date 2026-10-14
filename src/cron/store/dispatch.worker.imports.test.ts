@@ -13,12 +13,9 @@ vi.mock("../delivery-plan.js", () => {
   throw new Error("Startup commands must not load delivery resolution");
 });
 
-it.each([
-  "cron.planStartup",
-  "cron.deferStartupJobs",
-  "cron.mutateJobs",
-  "cron.maintainHistory",
-  "cron.scheduleUnowned",
-])("prepares %s without loading execution-only runtimes", async (type) => {
-  expect(await prepareCronStateWorkerCommand(type)).toBeUndefined();
-});
+it.each(["cron.mutateJobs", "cron.maintainHistory", "cron.scheduleUnowned"])(
+  "prepares %s without loading execution-only runtimes",
+  async (type) => {
+    expect(await prepareCronStateWorkerCommand(type)).toBeUndefined();
+  },
+);

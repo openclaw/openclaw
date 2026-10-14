@@ -24,6 +24,7 @@ import {
 } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { markClawPackageIndependentlyOwned } from "../../state/claw-package-adoption.js";
 import {
@@ -43,6 +44,8 @@ import {
 } from "./clawhub-store.js";
 import type { ClawHubSkillFileState } from "./skill-tree-digest.js";
 import type { ClawHubSkillRef } from "./workspace-types.js";
+
+const log = createSubsystemLogger("skills");
 
 export type Logger = {
   info?: (message: string) => void;
@@ -496,6 +499,14 @@ export async function performClawHubSkillInstall(
         },
         verification,
       });
+      try {
+        const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+        await refreshSkillsDiscovery({ workspaceDir: params.workspaceDir, config: params.config });
+      } catch (error) {
+        log.warn(
+          `Skill metadata saved, but discovery refresh failed: ${formatErrorMessage(error)}`,
+        );
+      }
       if (!params.clawManaged) {
         await markClawPackageIndependentlyOwned({
           kind: "skill",

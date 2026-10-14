@@ -73,11 +73,18 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
     : null;
 }
 
+// A dated id is a concrete release of its undated route, as the Responses transport reconciles it.
+const OPENAI_RELEASE_DATE_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+
 export function isResponseModelEquivalent(params: ProviderResponseModelEquivalenceContext) {
+  if (params.provider.trim().toLowerCase() !== OPENAI_PROVIDER_ID) {
+    return false;
+  }
+  const responseRoute = params.responseModelId.replace(OPENAI_RELEASE_DATE_SUFFIX, "");
   return (
-    params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID &&
-    params.requestedModelId === OPENAI_GPT_56_MODEL_ID &&
-    params.responseModelId === OPENAI_GPT_56_SOL_MODEL_ID
+    responseRoute === params.requestedModelId ||
+    (params.requestedModelId === OPENAI_GPT_56_MODEL_ID &&
+      responseRoute === OPENAI_GPT_56_SOL_MODEL_ID)
   );
 }
 

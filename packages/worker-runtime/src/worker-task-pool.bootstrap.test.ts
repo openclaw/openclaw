@@ -173,6 +173,18 @@ it.each(["error", "exit", "constructor"] as const)(
   },
 );
 
+it("preserves the native worker cause for runtime diagnostics", async () => {
+  const { pool, onCreated } = createPool();
+  const failure = Object.assign(new Error("synthetic heap exhausted"), {
+    code: "ERR_WORKER_OUT_OF_MEMORY",
+  });
+  onCreated((worker) => queueMicrotask(() => worker.emit("error", failure)));
+  await expect(pool.run("input", {})).rejects.toMatchObject({
+    code: "unavailable",
+    cause: failure,
+  });
+});
+
 it("keeps a healthy sibling serving the backlog without repeatedly replacing the failed boot", async () => {
   const { pool, workers, attempts } = createPool({ maxWorkers: 2 });
   const healthy = pool.run("healthy", {});

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderChatSessionSharing } from "../pages/chat/components/chat-session-sharing.ts";
@@ -54,6 +55,8 @@ describe("searchable session people", () => {
       }),
       root,
     );
+    root.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    flush();
     const search = root.querySelector<HTMLInputElement>('input[type="search"]');
     expect(search).not.toBeNull();
     search!.value = "Person 0100";

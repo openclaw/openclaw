@@ -109,8 +109,8 @@ function ChatVideoPlayerContent(
     media = element;
     syncSource();
   };
-  const adoptPendingSource = () => {
-    if (!media || !sourceController.applyPendingSource(media)) {
+  const adoptPendingSource = (currentMedia: HTMLVideoElement) => {
+    if (!sourceController.applyPendingSource(currentMedia)) {
       return false;
     }
     publish();
@@ -206,31 +206,32 @@ function ChatVideoPlayerContent(
             preload={props.preview ? "auto" : "metadata"}
             style={dimensions()}
             ref={setMedia}
-            onLoadedData={() => media && setFrameReady(true)}
-            onPlaying={() => media && setFrameReady(true)}
-            onEmptied={() => media && setFrameReady(false)}
-            onLoadedMetadata={() => {
-              if (media) {
-                sourceController.handleLoadedMetadata(media);
-                props.onMediaLoaded?.();
-              }
+            onLoadedData={() => setFrameReady(true)}
+            onPlaying={() => setFrameReady(true)}
+            onEmptied={() => setFrameReady(false)}
+            onLoadedMetadata={(event) => {
+              sourceController.handleLoadedMetadata(event.currentTarget);
+              props.onMediaLoaded?.();
             }}
-            onEnded={() => {
-              if (media && sourceController.handleEnded(media)) {
+            onEnded={(event) => {
+              if (sourceController.handleEnded(event.currentTarget)) {
                 publish();
               }
             }}
-            onPlay={adoptPendingSource}
-            onSeeking={() => {
-              if (!adoptPendingSource() && media?.error && sourceController.handleError(media)) {
+            onPlay={(event) => adoptPendingSource(event.currentTarget)}
+            onSeeking={(event) => {
+              const currentMedia = event.currentTarget;
+              if (
+                !adoptPendingSource(currentMedia) &&
+                currentMedia.error &&
+                sourceController.handleError(currentMedia)
+              ) {
                 publish();
               }
             }}
-            onError={() => {
-              if (media) {
-                sourceController.handleError(media);
-                publish();
-              }
+            onError={(event) => {
+              sourceController.handleError(event.currentTarget);
+              publish();
             }}
           />
         </div>

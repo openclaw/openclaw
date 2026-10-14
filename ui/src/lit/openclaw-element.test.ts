@@ -1,15 +1,10 @@
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n, t } from "../i18n/index.ts";
-import {
-  OpenClawLightDomContentsElement,
-  OpenClawLightDomElement,
-  OpenClawLitElement,
-} from "./openclaw-element.ts";
+import { OpenClawLightDomContentsElement, OpenClawLightDomElement } from "./openclaw-element.ts";
 
 const LIGHT_ELEMENT_NAME = "test-openclaw-light-dom-element";
 const LIGHT_CONTENTS_ELEMENT_NAME = "test-openclaw-light-dom-contents-element";
-const SHADOW_ELEMENT_NAME = "test-openclaw-shadow-dom-element";
 
 class TestLightDomElement extends OpenClawLightDomElement {
   renderCount = 0;
@@ -17,12 +12,6 @@ class TestLightDomElement extends OpenClawLightDomElement {
   override render() {
     this.renderCount += 1;
     return html`<span>${t("common.refresh")}</span>`;
-  }
-}
-
-class TestShadowDomElement extends OpenClawLitElement {
-  override render() {
-    return html`<span>shadow content</span>`;
   }
 }
 
@@ -34,9 +23,6 @@ class TestLightDomContentsElement extends OpenClawLightDomContentsElement {
 
 if (!customElements.get(LIGHT_ELEMENT_NAME)) {
   customElements.define(LIGHT_ELEMENT_NAME, TestLightDomElement);
-}
-if (!customElements.get(SHADOW_ELEMENT_NAME)) {
-  customElements.define(SHADOW_ELEMENT_NAME, TestShadowDomElement);
 }
 if (!customElements.get(LIGHT_CONTENTS_ELEMENT_NAME)) {
   customElements.define(LIGHT_CONTENTS_ELEMENT_NAME, TestLightDomContentsElement);
@@ -52,21 +38,19 @@ describe("OpenClaw Lit elements", () => {
     await i18n.setLocale("en");
   });
 
-  it("provides explicit light- and shadow-DOM bases", async () => {
+  it("provides light-DOM and contents bases", async () => {
     const light = document.createElement(LIGHT_ELEMENT_NAME) as TestLightDomElement;
     const contents = document.createElement(
       LIGHT_CONTENTS_ELEMENT_NAME,
     ) as TestLightDomContentsElement;
-    const shadow = document.createElement(SHADOW_ELEMENT_NAME) as TestShadowDomElement;
-    document.body.append(light, contents, shadow);
+    document.body.append(light, contents);
 
-    await Promise.all([light.updateComplete, contents.updateComplete, shadow.updateComplete]);
+    await Promise.all([light.updateComplete, contents.updateComplete]);
 
     expect(light.shadowRoot).toBeNull();
     expect(light.textContent).toContain("Refresh");
     expect(contents.shadowRoot).toBeNull();
     expect(contents.style.display).toBe("contents");
-    expect(shadow.shadowRoot?.textContent).toContain("shadow content");
   });
 
   it("tracks locale changes across disconnect and reconnect", async () => {

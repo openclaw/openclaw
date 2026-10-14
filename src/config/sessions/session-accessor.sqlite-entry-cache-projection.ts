@@ -43,7 +43,9 @@ export function loadSessionEntrySnapshot(
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
+      selectSessionEntryRows(database, projection)
+        .select(["current_session_id", "updated_at"])
+        .orderBy("session_key"),
     )) {
       keys.push(row.session_key);
       const entry = parseSessionEntryJson(row, projection);
@@ -94,9 +96,22 @@ export function readSessionEntrySideMetadata(
   };
 }
 
+export function projectSessionEntryCacheMetadata(
+  entry: SessionEntry,
+  sideMetadata: SessionEntrySideMetadata,
+): SessionEntry {
+  const projected = { ...entry, ...sideMetadata };
+  for (const field of ["owner", "participants", "participantCount"] as const) {
+    if (sideMetadata[field] === undefined) {
+      delete projected[field];
+    }
+  }
+  return freezeJsonSnapshot(projected);
+}
+
 export function projectSessionEntryCacheUpdate(
   entryJson: string,
-  sideMetadata: SessionEntrySideMetadata | undefined,
+  sideMetadata: SessionEntrySideMetadata,
   snapshotEntry?: SessionEntry,
   snapshots?: readonly SessionEntrySnapshot[],
 ): SessionEntry | undefined {
@@ -122,5 +137,5 @@ export function projectSessionEntryCacheUpdate(
           });
     Object.assign(parsedEntry, cold);
   }
-  return parsedEntry ? freezeJsonSnapshot({ ...parsedEntry, ...sideMetadata }) : undefined;
+  return parsedEntry ? projectSessionEntryCacheMetadata(parsedEntry, sideMetadata) : undefined;
 }

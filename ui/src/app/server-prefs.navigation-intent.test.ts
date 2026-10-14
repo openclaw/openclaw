@@ -7,7 +7,7 @@ import { createProfilePrefsServer } from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 const scope = "ws://navigation";
-const pinsKey = "ui.sidebarEntries";
+const pinsKey = "ui.railShortcuts";
 const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope;
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -36,7 +36,7 @@ it.each(["a", "b"])(
     });
     await vi.dynamicImportSettled();
     expect(JSON.parse(localStorage.getItem(pendingKey + ":profile:a") ?? "null")).toMatchObject({
-      sidebarEntries: ["route:plugins"],
+      railShortcuts: ["route:plugins"],
     });
     expect(localStorage.getItem(pendingKey)).toBeNull();
     const reconnected = backend.connect(reconnectedId);
@@ -210,9 +210,9 @@ it.each(["users.prefs.get", "users.prefs.set"])(
     localStorage.setItem(
       pendingKey + ":profile:a",
       JSON.stringify({
-        sidebarEntries: initial,
-        sidebarEntriesBase: initial,
-        sidebarEntriesOrder: true,
+        railShortcuts: initial,
+        railShortcutsBase: initial,
+        railShortcutsOrder: true,
       }),
     );
     reply.resolve(heldResult);

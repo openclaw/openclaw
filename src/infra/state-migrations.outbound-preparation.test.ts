@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -91,6 +95,7 @@ beforeEach(async () => {
     channels: { matrix: { enabled: true } },
   };
   await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
+  setRuntimeConfigSnapshot(cfg);
   resetGlobalHookRunner();
 });
 
@@ -100,6 +105,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   resetPluginLoaderTestStateForTest();
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 

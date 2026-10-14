@@ -1,6 +1,7 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -22,7 +23,7 @@ export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 const log = createSubsystemLogger("sessions/upstream-links");
 
-/** @deprecated Use upsertSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await upsertSessionUpstreamLinkAsync. Retained during stable deprecation. */
 export function upsertSessionUpstreamLink(
   input: SessionUpstreamLinkInput,
   options: OpenClawStateDatabaseOptions & {
@@ -31,6 +32,12 @@ export function upsertSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): boolean {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.upsertSessionUpstreamLink",
+    replacement: "await upsertSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   const now = options.now ?? Date.now();
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
@@ -46,7 +53,7 @@ export function upsertSessionUpstreamLink(
   }
 }
 
-/** @deprecated Use deleteSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await deleteSessionUpstreamLinkAsync. Retained during stable deprecation. */
 export function deleteSessionUpstreamLink(
   sessionKey: string,
   agentId: string,
@@ -55,6 +62,12 @@ export function deleteSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): "deleted" | "absent" | "changed" | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.deleteSessionUpstreamLink",
+    replacement: "await deleteSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();

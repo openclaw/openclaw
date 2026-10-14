@@ -3,6 +3,7 @@ import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
@@ -18,7 +19,6 @@ import {
 } from "../session-request-agent.js";
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -290,21 +290,22 @@ function startPendingSessionChange(pending: PendingSessionChange, leading?: Sess
   if (pending.work) {
     return;
   }
-  pending.work = Promise.resolve()
-    .then(async () => {
-      if (leading) {
-        await publishSessionChange(pending.context, leading);
+  // The sidecar drain owns publication after the emitting request has completed.
+  pending.work = runOutsideAsyncWorkScope(async () => {
+    await Promise.resolve();
+    if (leading) {
+      await publishSessionChange(pending.context, leading);
+    }
+    while (pending.due) {
+      const next = pending.latest;
+      if (next) {
+        pending.latest = undefined;
+        await publishSessionChange(pending.context, next);
+      } else {
+        break;
       }
-      while (pending.due) {
-        const next = pending.latest;
-        if (next) {
-          pending.latest = undefined;
-          await publishSessionChange(pending.context, next);
-        } else {
-          break;
-        }
-      }
-    })
+    }
+  })
     .catch((error: unknown) => {
       log.warn("Session change publication failed", { error: formatErrorMessageWithCode(error) });
     })
@@ -382,7 +383,6 @@ export function emitSessionsChanged(
     bumpGatewayAccessRevision();
   }
   if (!catalogOnly) {
-    invalidateSessionSharingSnapshot(payload.sessionKey);
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
     void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }

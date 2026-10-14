@@ -1,13 +1,9 @@
 import {
   getSessionActorStorageBinding,
-  captureSessionActorStorageOwner,
+  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import {
-  captureIncognitoSessionBinding,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
 import { captureOperatorToolGatewayContinuationContext } from "../gateway/server-plugin-in-process-dispatch.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -82,10 +78,9 @@ export function captureAgentHarnessCompletionCustody(
     return Promise.resolve(undefined);
   }
   const root = retainGatewayRootWorkAdmissionContinuationScope();
-  const selected = getSessionActorStorageBinding({});
-  if (selected && isIncognitoSessionKey(scope.requesterSessionKey)) {
-    return context.trackExecution(async () => {
-      let handedOff = false;
+  if (isIncognitoSessionKey(scope.requesterSessionKey)) {
+    let handedOff = false;
+    const work = context.trackExecution(async () => {
       let acquired: SessionActorStorageBinding | undefined;
       const releaseRequester = () => {
         if (acquired) {
@@ -98,29 +93,18 @@ export function captureAgentHarnessCompletionCustody(
         }
       };
       try {
-        let memory: SessionActorStorageBinding | undefined =
-          selected.actor.target.sessionKey === scope.requesterSessionKey ? selected : undefined;
-        if (!memory) {
-          const captured = captureSessionActorStorageOwner({
+        const memory = (acquired = await acquireSessionActorStorage(
+          {
             sessionKey: scope.requesterSessionKey,
             agentId: scope.requesterAgentId,
-          });
-          if (!captured?.owner) {
-            return undefined;
-          }
-          const actor = await captured.owner.acquireExisting(scope.requesterSessionKey, {
-            assertCurrent: () => captured.authority.assertCurrent(),
-            assertReadable: () => captured.authority.assertCurrent(),
-          });
-          if (!actor) {
-            return undefined;
-          }
-          memory = acquired = {
-            actor,
-            authority: captured.authority,
-            agentId: captured.agentId,
-            path: captured.path,
-          };
+          },
+          {
+            lifetime: { assertCurrent() {}, assertReadable() {} },
+            authority: { assertCurrent() {}, authorize() {} },
+          },
+        ));
+        if (!memory) {
+          return undefined;
         }
         const requester = memory;
         const custody = await runWithSessionActorStorage(requester, () =>
@@ -140,8 +124,12 @@ export function captureAgentHarnessCompletionCustody(
       } finally {
         if (!handedOff) {
           releaseRequester();
-          root?.release();
         }
+      }
+    });
+    return work.finally(() => {
+      if (!handedOff) {
+        root?.release();
       }
     });
   }
@@ -157,37 +145,47 @@ export function captureAgentHarnessCompletionCustody(
         scope.requesterAgentId,
         async (isCurrent) => {
           selectedRequester = isCurrent !== undefined;
-          const readCurrent = captureRequesterSessionEntryCurrent(
+          const requesterCurrent = await captureRequesterSessionEntryCurrent(
             scope.requesterSessionKey,
             scope.requesterAgentId,
           );
-          const entry = readCurrent();
-          const expected = {
-            sessionId: entry?.sessionId,
-            lifecycleRevision: entry?.lifecycleRevision,
-          };
-          if (isCurrent && !entry) {
-            return;
-          }
-          const custody = await captureAgentHarnessCompletionCustodyOwner(
-            scope,
-            () => {
-              const current = readCurrent();
-              if (
-                current?.sessionId !== expected.sessionId ||
-                current?.lifecycleRevision !== expected.lifecycleRevision
-              ) {
-                throw new Error("Harness completion requester lifecycle was replaced");
+          const { readCurrent } = requesterCurrent;
+          try {
+            const entry = readCurrent();
+            const expected = {
+              sessionId: entry?.sessionId,
+              lifecycleRevision: entry?.lifecycleRevision,
+            };
+            if (isCurrent && !entry) {
+              return;
+            }
+            const custody = await captureAgentHarnessCompletionCustodyOwner(
+              scope,
+              () => {
+                const current = readCurrent();
+                if (
+                  current?.sessionId !== expected.sessionId ||
+                  current?.lifecycleRevision !== expected.lifecycleRevision
+                ) {
+                  throw new Error("Harness completion requester lifecycle was replaced");
+                }
+              },
+              () => {
+                requesterCurrent.release();
+                released.resolve();
+              },
+              root,
+            );
+            if (custody) {
+              handedOff = true;
+              ready.resolve(custody);
+              if (selectedRequester) {
+                await released.promise;
               }
-            },
-            () => released.resolve(),
-            root,
-          );
-          if (custody) {
-            handedOff = true;
-            ready.resolve(custody);
-            if (selectedRequester) {
-              await released.promise;
+            }
+          } finally {
+            if (!handedOff) {
+              requesterCurrent.release();
             }
           }
         },
@@ -227,13 +225,8 @@ async function captureAgentHarnessCompletionCustodyOwner(
     agentId: scope.requesterAgentId,
   };
   const memory = getSessionActorStorageBinding(requesterTarget);
-  const requesterBinding = memory ? undefined : captureIncognitoSessionBinding(requesterTarget);
   const runInRequester = <T>(run: () => T): T =>
-    memory
-      ? runWithSessionActorStorage(memory, run)
-      : requesterBinding
-        ? withIncognitoSessionBinding(requesterBinding, run)
-        : run();
+    memory ? runWithSessionActorStorage(memory, run) : run();
   const resolver = getGatewayContextResolver(scope);
   const capture = () =>
     captureOperatorToolGatewayContinuationContext({

@@ -431,30 +431,21 @@ describe("ApprovalsPage", () => {
 
   it("renders the standing-grant ledger and revokes through the gateway", async () => {
     const history = vi.fn().mockResolvedValue({ items: [] });
-    const grant = {
-      grantId: "grant-1",
-      agentId: "main",
-      cronJobId: "job-1",
-      cronJobName: "Nightly backup",
-      command: "id -un",
-      cwd: null,
-      createdAtMs: 1_000,
-      expiresAtMs: null,
-      revokedAtMs: null,
-      revokedBy: null,
-      lastUsedAtMs: null,
-      useCount: 3,
-    };
+    const pendingRefresh = createDeferred<ExecApprovalGrantsListResult>();
+    let grantReads = 0;
+    const grant = { ...standingGrant("Nightly backup"), useCount: 3 };
     const request = vi.fn((method: string, params?: unknown) => {
       if (method === "exec.approval.grants.list") {
-        return Promise.resolve({ grants: [grant] });
+        return ++grantReads === 1 ? Promise.resolve({ grants: [grant] }) : pendingRefresh.promise;
       }
       if (method === "exec.approval.grants.revoke") {
         return Promise.resolve({ outcome: "revoked", params });
       }
       return history(method, params) as Promise<unknown>;
     });
-    const { page } = createPage(request as unknown as GatewayBrowserClient["request"]);
+    const { page, emitGatewayEvent } = createPage(
+      request as unknown as GatewayBrowserClient["request"],
+    );
 
     await waitForSolid(() =>
       expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Nightly backup"),
@@ -464,6 +455,9 @@ describe("ApprovalsPage", () => {
     expect(ledger?.textContent).toContain("Nightly backup");
     expect(ledger?.textContent).toContain("id -un");
     expect(ledger?.textContent).toContain("Until revoked");
+
+    emitGatewayEvent("exec.approval.resolved", { id: "another-approval", decision: "deny" });
+    await waitForSolid(() => expect(grantReads).toBe(2));
 
     const revoke = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Revoke"),
@@ -477,5 +471,11 @@ describe("ApprovalsPage", () => {
 
     expect(request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
     expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");
+
+    pendingRefresh.resolve({ grants: [grant] });
+    await pendingRefresh.promise;
+    flush();
+    expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");
+    expect(page.querySelector(".standing-grants-table button")).toBeNull();
   });
 });

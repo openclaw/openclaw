@@ -36,7 +36,7 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatAttachmentInputs } from "./components/chat-attachment-inputs.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
   ChatComposerPersistence,
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,

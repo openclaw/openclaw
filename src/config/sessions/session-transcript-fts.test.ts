@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -122,6 +123,7 @@ it("preserves exact 64-bit identities, duplicates and cold rows through deletion
 function projectionFixture() {
   const db = openNodeSqliteDatabase(":memory:");
   db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+  admitSqliteSchema(db);
   db.exec("BEGIN");
   for (const id of ["target", "sibling"]) {
     db.prepare(
@@ -289,11 +291,9 @@ describe("exact session transcript FTS ownership", () => {
           db.exec("BEGIN");
           const result = deletePreparedSessionTranscriptProjectionChunkInTransaction(db, {
             sessionId: "target",
-            claimId,
             maxRowsPerTable: 2,
           });
           more = result.hasMore;
-          expect(result.owned).toBe(true);
           db.exec("COMMIT");
           expectMapped(
             db,
@@ -301,14 +301,11 @@ describe("exact session transcript FTS ownership", () => {
           );
         }
         db.exec("BEGIN");
-        expect(
-          appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
-            sessionId: "target",
-            claimId,
-            activeRows: claimId === -1 ? [] : plan.activeRows,
-            ftsRows: claimId === -1 ? plan.ftsRows.slice(0, 1) : plan.ftsRows,
-          }),
-        ).toBe(true);
+        appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
+          sessionId: "target",
+          activeRows: claimId === -1 ? [] : plan.activeRows,
+          ftsRows: claimId === -1 ? plan.ftsRows.slice(0, 1) : plan.ftsRows,
+        });
         if (claimId === -2) {
           expect(finalizePreparedSessionTranscriptProjectionInTransaction(db, plan, claimId)).toBe(
             true,

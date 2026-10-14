@@ -261,6 +261,10 @@ The public proxy shell uses a URL fingerprint of its HTML and security headers.
 Browsers can cache that exact version for repeated widget mounts; changing the
 shell or its policy changes the URL. Unversioned or mismatched requests remain
 uncached. This cache contains no widget documents, credentials, or view tickets.
+The Gateway reuses up to 64 public shell URLs by their complete normalized policy,
+avoiding repeated shell rendering and hashing when boards share that policy.
+Current widget grants still determine the policy on every read; policy changes
+select a different URL, and Gateway process replacement retires the URL cache.
 
 The shared loader fetches board HTML while the sandbox proxy starts, then
 delivers it only after that exact proxy reports ready. Dashboard widgets keep a
@@ -427,7 +431,8 @@ while a single background refresh runs under the Gateway's execution owner.
 The first read still awaits GitHub. At most 32 concurrent callers can prepare
 or await reads, and at most 32 transports can remain in flight.
 The shared transport caches only validated projections under its captured
-credential scope. This internal cache write is not delivery to a widget.
+credential scope and request filters, across sessions using that identity.
+This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
 own live authority before delivery. Removing one caller does not invalidate
 another authorized caller's result. Failed refreshes log sanitized guidance and

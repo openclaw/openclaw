@@ -13,6 +13,7 @@ import {
   deleteCronJobRowInDatabase,
   loadedCronStoreFromRows,
   loadCronRows,
+  projectCronJobThroughStorageCodec,
   replaceCronRows,
   upsertCronJobRow,
   updateCronRuntimeRows,
@@ -92,7 +93,7 @@ export function prepareCronStoreChanges(
 }
 
 /** Both save modes fence only the definitions this mutation intends to change. */
-export function assertCronStoreChangesCurrent(
+function assertCronStoreChangesCurrent(
   prepared: PreparedCronStoreChanges,
   currentById: ReadonlyMap<string, CronStoredJob>,
   resolvedStorePath: string,
@@ -169,7 +170,13 @@ export function saveCronStoreChangesInDatabase(
     );
     if (hasCanonicalCronDeliveryMode(persisted.delivery)) {
       replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [persisted] });
-      currentById.set(jobId, persisted);
+      const postimage = projectCronJobThroughStorageCodec(persisted);
+      if (persisted.runtimeAuthorityRecoveryRequired === true) {
+        postimage.runtimeAuthorityRecoveryRequired = true;
+      } else if (persisted.runtimeAuthority) {
+        postimage.runtimeAuthority = persisted.runtimeAuthority;
+      }
+      currentById.set(jobId, postimage);
     }
   }
   hooks?.hooks.afterWrite?.(db, hooks.receiptSchema);

@@ -14,6 +14,7 @@ import { sendXReply, XPartialReplyError, type XVisibleWorkSession } from "./repl
 import { getXRuntime } from "./runtime.js";
 import { XBudgetExceededError } from "./spend.js";
 import { normalizeXReplyTarget } from "./target.js";
+import { openXWorkOrigins } from "./work-origin.js";
 
 function rethrowReplyAuthorizationError(cause: unknown): never {
   if (cause instanceof XAllowlistChangedError) {
@@ -45,6 +46,7 @@ export async function sendXDelivery(params: {
   senderTier?: XSenderTier;
   visibleWorkSessions?: XVisibleWorkSession[];
   assertDirectAdapterHandoff?: () => void;
+  sessionKey?: string | null;
 }) {
   if (params.mediaUrl || params.mediaUrls?.length) {
     throw new PlatformMessageNotDispatchedError(
@@ -64,6 +66,9 @@ export async function sendXDelivery(params: {
   }
   const readConfig = createRuntimeConfigReader(params.cfg);
   const runtime = getXRuntime();
+  const origin = params.sessionKey
+    ? await openXWorkOrigins(runtime).lookup(params.sessionKey)
+    : undefined;
   const assertHandoff = () => {
     try {
       params.signal?.throwIfAborted();
@@ -85,7 +90,7 @@ export async function sendXDelivery(params: {
   let api: XApiClient;
   let mention: XPost;
   try {
-    account = resolveXAccount(params.cfg, params.accountId);
+    account = resolveXAccount(params.cfg, params.accountId ?? origin?.accountId);
     api = await getXApi(account.accountId, params.cfg);
     assertHandoff();
     const resolvedMention =
@@ -96,6 +101,7 @@ export async function sendXDelivery(params: {
           post: replyToId,
           userId: account.userId,
           signal: params.signal,
+          allowQuote: !origin || replyToId === origin.postId,
         })
       )?.post;
     if (!resolvedMention) {
@@ -105,6 +111,16 @@ export async function sendXDelivery(params: {
       );
     }
     mention = resolvedMention;
+    if (
+      origin &&
+      (origin.accountId !== account.accountId ||
+        (replyToId !== origin.postId && mention.conversation_id !== origin.conversationId))
+    ) {
+      throw new PlatformMessageNotDispatchedError(
+        `This X work session may reply only to its origin post (${origin.postUrl}) or a bot mention in that conversation.`,
+        { cause: undefined, retryable: false },
+      );
+    }
   } catch (cause) {
     if (cause instanceof PlatformMessageNotDispatchedError) {
       throw cause;

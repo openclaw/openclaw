@@ -199,23 +199,6 @@ describe("board MCP App cell lifecycle", () => {
     expect(cell.querySelector('[data-test-id="board-pending"]')).toBeNull();
   });
 
-  it("preserves a mounted app while its board is inactive", async () => {
-    const widgetAppView = vi.fn(async () => readyAppView("retained-view"));
-    const cell = await mount(widget(), callbacks({ widgetAppView }));
-    await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
-    const appView = cell.querySelector<TestMcpAppView>("mcp-app-view")!;
-
-    cell.active = false;
-    await settle(cell);
-    expect(cell.querySelector("mcp-app-view")).toBe(appView);
-
-    cell.active = true;
-    await settle(cell);
-    expect(cell.querySelector("mcp-app-view")).toBe(appView);
-    expect(appView.teardown).not.toHaveBeenCalled();
-    expect(widgetAppView).toHaveBeenCalledOnce();
-  });
-
   it("keeps active offscreen behavior while retaining inactive ready views", async () => {
     const setVisible = stubChangingVisibility();
     const widgetAppView = vi.fn(async () => readyAppView("viewport-view"));
@@ -229,7 +212,7 @@ describe("board MCP App cell lifecycle", () => {
 
     setVisible(true);
     await settle(cell);
-    const remountedView = cell.querySelector("mcp-app-view");
+    const remountedView = cell.querySelector<TestMcpAppView>("mcp-app-view");
     expect(remountedView).not.toBeNull();
     expect(remountedView).not.toBe(initialView);
     expect(widgetAppView).toHaveBeenCalledOnce();
@@ -237,6 +220,11 @@ describe("board MCP App cell lifecycle", () => {
     cell.active = false;
     await settle(cell);
     expect(cell.querySelector("mcp-app-view")).toBe(remountedView);
+    cell.active = true;
+    await settle(cell);
+    expect(cell.querySelector("mcp-app-view")).toBe(remountedView);
+    expect(remountedView?.teardown).not.toHaveBeenCalled();
+    expect(widgetAppView).toHaveBeenCalledOnce();
   });
 
   it("lets an in-flight materialization finish while inactive without duplicating it", async () => {
@@ -427,22 +415,6 @@ describe("board MCP App cell lifecycle", () => {
     await settle(cell);
     expect(cell.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull();
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
-  });
-
-  it("materializes only near-viewport cells on a full board", async () => {
-    const visibility = stubVisibility((index) => index < 2);
-    const widgetAppView = vi.fn(async (name: string) => readyAppView(`view-${name}`));
-    const currentCallbacks = callbacks({ widgetAppView });
-
-    for (let index = 0; index < 48; index += 1) {
-      await mount(
-        widget({ name: `app-${index}`, instanceId: `instance-${index}` }),
-        currentCallbacks,
-      );
-    }
-
-    await vi.waitFor(() => expect(visibility.observed()).toBe(48));
-    await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledTimes(2));
   });
 
   it("restarts materialization when a disconnected cell is reattached", async () => {

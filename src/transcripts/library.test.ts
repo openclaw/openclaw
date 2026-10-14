@@ -19,6 +19,7 @@ import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
+import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -411,7 +412,9 @@ describe("transcript library SQLite reads", () => {
           .updateTable("meeting_transcript_summaries")
           .set({
             markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
-            ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
+            ...(notesKind === "markdown-only"
+              ? { summary_json: null, ...deriveMeetingTranscriptSummaryColumns(null) }
+              : {}),
           })
           .where("session_id", "=", target.sessionId)
           .where("session_started_at", "=", target.startedAt),

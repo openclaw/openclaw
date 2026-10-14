@@ -1,6 +1,20 @@
+import { statSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
-import { FsSafeError } from "../infra/fs-safe.js";
+import { FsSafeError, type ReadResult } from "../infra/fs-safe.js";
+
+const identityStat = statSync(new URL(import.meta.url));
+
+function identityReadResult(content: string): ReadResult {
+  const buffer = Buffer.from(content);
+  return {
+    buffer,
+    containment: "best-effort",
+    realPath: "/tmp/work/IDENTITY.md",
+    exactIdentity: { dev: 1n, ino: 1n },
+    stat: identityStat,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
@@ -11,14 +25,14 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveAgentDir: vi.fn(),
-  rootRead: vi.fn(),
+  rootRead: vi.fn<() => Promise<ReadResult>>(),
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
   recordAgentProvenance: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
-  resolveSharedAuthStoreOwnership: vi.fn(),
+  prepareSharedAuthStoreOwnership: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
@@ -66,8 +80,9 @@ vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
 }));
 
-vi.mock("./auth-profiles/path-resolve.js", () => ({
-  resolveSharedAuthStoreOwnership: mocks.resolveSharedAuthStoreOwnership,
+vi.mock("./auth-profiles/path-resolve.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/path-resolve.js")>()),
+  prepareSharedAuthStoreOwnership: mocks.prepareSharedAuthStoreOwnership,
 }));
 
 vi.mock("./workspace.js", async (importOriginal) => {
@@ -110,14 +125,14 @@ describe("createAgent", () => {
       ownerAgentId: "researcher",
       warnings: [],
     });
-    mocks.resolveSharedAuthStoreOwnership.mockReturnValue({ location: "state-db" });
+    mocks.prepareSharedAuthStoreOwnership.mockResolvedValue({ location: "state-db" });
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/default-researcher");
     mocks.resolveAgentDir.mockReturnValue("/tmp/agent-researcher");
     mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
       dir,
       bootstrapPending: true,
     }));
-    mocks.rootRead.mockResolvedValue({ buffer: Buffer.from("") });
+    mocks.rootRead.mockResolvedValue(identityReadResult(""));
     mocks.rootWrite.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
     mocks.parseBindingSpecs.mockReturnValue({ bindings: [], errors: [] });
@@ -202,7 +217,7 @@ describe("createAgent", () => {
 
   it("rejects main while its agent database still owns shared auth", async () => {
     mocks.config = { agents: { entries: { robby: { id: "robby" } } } };
-    mocks.resolveSharedAuthStoreOwnership.mockReturnValueOnce({ location: "legacy-main" });
+    mocks.prepareSharedAuthStoreOwnership.mockResolvedValueOnce({ location: "legacy-main" });
 
     await expect(createAgent({ name: "main" })).resolves.toMatchObject({
       status: "error",
@@ -229,7 +244,7 @@ describe("createAgent", () => {
       status: "created",
       agentId: "main",
     });
-    expect(mocks.resolveSharedAuthStoreOwnership).toHaveBeenCalledOnce();
+    expect(mocks.prepareSharedAuthStoreOwnership).toHaveBeenCalledOnce();
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
   });
 
@@ -459,7 +474,7 @@ describe("createAgent", () => {
       beforePersistentApply.mockImplementation(() => {
         throw closed;
       });
-      return { buffer: Buffer.from("# Identity\n") };
+      return identityReadResult("# Identity\n");
     });
     const prepareConfigCommit = vi.fn();
 

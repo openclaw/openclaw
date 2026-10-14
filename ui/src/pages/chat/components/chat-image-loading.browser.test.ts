@@ -139,7 +139,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     ["narrow pane", 1200, 800, 180, 128, 128 / 1.5, "user", true],
     ["panorama", 1200, 80, 500, 400, 400 / 15, "assistant", true],
     ["tiny tall image", 80, 1600, 500, 160, 360, "user", true],
-    ["unknown dimensions", 800, 1600, 500, 180, 360, "assistant", false],
+    ["unknown dimensions", 800, 1600, 500, 400, 400 / 1.5, "assistant", false],
   ] as const)(
     "keeps %s geometry through fetch, decode, and cache reuse",
     async (name, width, height, pane, expectedWidth, expectedHeight, role, sized) => {
@@ -185,17 +185,10 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       response.resolve(svgResponse(width, height));
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const image = container.querySelector("img")!;
-      if (sized) {
-        expect(geometry(container)).toEqual(before);
-      }
+      expect(geometry(container)).toEqual(before);
       await image.decode();
       const decoded = geometry(container);
-      if (sized) {
-        expect(decoded).toEqual(before);
-      } else {
-        expect(decoded.width).toBe(expectedWidth);
-        expect(decoded.height).toBe(expectedHeight);
-      }
+      expect(decoded).toEqual(before);
       expect(frame(container)).toBe(originalFrame);
       draw();
       expect(container.querySelector("img")).toBe(image);
@@ -399,7 +392,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frames[1]!.getBoundingClientRect().top).toBeGreaterThan(
         frames[0]!.getBoundingClientRect().bottom,
       );
-      for (const [index, expectedWidth] of [160, 84, 160, 160, 160].entries()) {
+      const messageColumn = container.querySelector<HTMLElement>(".chat-group-messages")!;
+      const fallbackWidth = Math.min(400, messageColumn.clientWidth - 52);
+      for (const [index, expectedWidth] of [160, 84, 160, fallbackWidth, fallbackWidth].entries()) {
         const element = frames[index]!;
         await page.getByAltText(images[index]!.alt, { exact: true }).hover();
         for (const animation of element.getAnimations({ subtree: true })) {

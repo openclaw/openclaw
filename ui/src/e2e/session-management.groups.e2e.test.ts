@@ -169,7 +169,7 @@ suite.define(() => {
       const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
       localStorage.setItem(
         key,
-        JSON.stringify({ ...stored, sidebarEntries: ["session:agent:main:release"] }),
+        JSON.stringify({ ...stored, railShortcuts: ["session:agent:main:release"] }),
       );
     }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const gateway = await installMockGateway(page, {
@@ -439,7 +439,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       await page.getByRole("button", { name: "Filters" }).click();
-      await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+      await page.locator(".sessions-filter-popover:popover-open").waitFor();
       await page.locator(".session-groupby__select").selectOption("category");
       await page.getByRole("button", { name: "New group" }).click();
       const field = page.locator("openclaw-modal-dialog input");

@@ -25,6 +25,7 @@ import {
   listAvailableManifestContractValues,
   loadManifestContractSnapshot,
 } from "../../plugins/manifest-contract-eligibility.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { resolveUserPath } from "../../utils.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -35,6 +36,7 @@ import {
 } from "../sandbox-media-paths.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { normalizeWorkspaceDir } from "../workspace-dir.js";
+import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 import {
   ToolInputError,
   readNumberParam,
@@ -135,6 +137,11 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     return false;
   }
   if (provider?.isConfigured) {
+    warnPluginSdkDeprecation({
+      family: "provider-sync-configuration",
+      method: "media provider isConfigured",
+      replacement: "isConfiguredAsync",
+    });
     return provider.isConfigured({
       cfg: params.cfg,
       agentDir: params.agentDir,
@@ -509,6 +516,7 @@ export async function loadMediaToolReferences<T>(params: {
   maxBytes: number;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
+  workspaceReadiness?: AgentWorkspaceReadiness;
   mapMedia: (media: LoadedToolReferenceMedia) => T;
   mapRemote?: (url: string) => T;
 }): Promise<LoadedMediaToolReference<T>[]> {
@@ -528,6 +536,16 @@ export async function loadMediaToolReferences<T>(params: {
     if (params.sandbox && reference.isHttpUrl) {
       const label = params.toolName === "image_generate" ? "" : `${params.expectedKind} `;
       throw new ToolInputError(`Sandboxed ${params.toolName} does not allow remote ${label}URLs.`);
+    }
+    const workspaceReadiness =
+      !reference.isHttpUrl && !reference.isDataUrl && !reference.isMediaStoreUrl
+        ? params.workspaceReadiness
+        : undefined;
+    if (workspaceReadiness) {
+      workspaceReadiness.assertCurrent();
+      await workspaceReadiness.waitUntilReady();
+      params.signal?.throwIfAborted();
+      workspaceReadiness.assertCurrent();
     }
     const resolvedInput = !params.sandbox && input.startsWith("~") ? resolveUserPath(input) : input;
     if (reference.isHttpUrl && params.mapRemote) {
@@ -556,6 +574,7 @@ export async function loadMediaToolReferences<T>(params: {
     } else {
       const { loadWebMedia } = await import("../../media/web-media.js");
       params.signal?.throwIfAborted();
+      workspaceReadiness?.assertCurrent();
       const timeout =
         params.toolName === "music_generate" && !params.sandbox
           ? buildTimeoutAbortSignal({

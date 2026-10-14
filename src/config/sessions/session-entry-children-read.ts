@@ -1,32 +1,44 @@
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { readSessionChildEntriesInDatabase } from "./session-accessor.sqlite-entry-read.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryReadScope, SessionEntrySummary } from "./session-accessor.types.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { captureSessionEntryReadScope } from "./session-entry-read-request.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 
 /** Lists direct child rows without cloning or rebuilding the complete session store. */
-export function listSessionChildEntriesReadOnly(
+export async function listSessionChildEntriesReadOnly(
   scope: SessionEntryReadScope,
-): SessionEntrySummary[] {
-  const memory = getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
+  parentSessionKeys: readonly string[] = [scope.sessionKey],
+): Promise<SessionEntrySummary[]> {
+  const memory = captureMemoryExactSessionReader(scope);
   if (memory) {
-    return memory.actor
-      .storage!.readCurrent(
-        { type: "session.entries.read", input: { projection: scope.projection } },
-        memory.authority,
-      )
-      .filter(
-        ({ sessionKey, entry }) =>
-          sessionKey !== scope.sessionKey &&
-          (entry.parentSessionKey === scope.sessionKey || entry.spawnedBy === scope.sessionKey),
-      )
-      .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
+    return memory.children(parentSessionKeys, scope.projection);
   }
-  const resolved = resolveSqliteScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    assertCanonicalSqliteSessionKeysCurrent(database);
-    return readSessionChildEntriesInDatabase(database, resolved.sessionKey, scope.projection);
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value : [];
+  const captured = captureSessionEntryReadScope(scope);
+  const storePath =
+    captured.scope.storePath ??
+    (captured.agentId &&
+      resolveOpenClawAgentSqlitePath({ agentId: captured.agentId, env: captured.env }));
+  if (!storePath) {
+    throw new Error("Cannot resolve SQLite session scope without an agent id");
+  }
+  return withSessionStoreReaderInWorker(
+    { agentId: captured.agentId, storePath, env: captured.env },
+    async ({ reader, database, continuation, logicalAgentId }) => {
+      const result = await reader.readExactEntries({
+        selection: {
+          kind: "children",
+          parentSessionKeys: parentSessionKeys.map((key) =>
+            resolveSqliteSessionKey(key, logicalAgentId),
+          ),
+        },
+        projection: scope.projection === "list" ? "list" : "full",
+        snapshotFields: typeof scope.projection === "object" ? scope.projection : undefined,
+        env: database.env,
+        continuation,
+      });
+      return result.entries;
+    },
+    { backing: true, dataOnly: true },
+  );
 }

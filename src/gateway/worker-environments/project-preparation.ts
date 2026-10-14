@@ -1,11 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { resolveEnvironmentRecipe, type EnvironmentRecipe } from "./environment-recipe.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
 import {
   createProjectSetupScript,
@@ -25,18 +27,52 @@ type ProjectPreparation = NonNullable<
 >;
 type PreparationResult = Awaited<ReturnType<ProjectPreparation["prepare"]>>;
 
-export async function readWorkerProjectSetupRecipe(
+const RecipePreparation = z.object({
+  source: z.enum(["devcontainer", "script", "detected", "none"]),
+  ignoredPropertiesNote: z.string().optional(),
+  note: z.string().optional(),
+  phaseDurationsMs: z
+    .object({
+      onCreate: z.number().int().nonnegative().optional(),
+      updateContent: z.number().int().nonnegative().optional(),
+      detectedInstall: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+  failure: z
+    .object({
+      reason: z.string(),
+      outputTail: z
+        .string()
+        .refine((text) => Buffer.byteLength(text) <= 16384)
+        .optional(),
+    })
+    .optional(),
+});
+
+export async function readWorkerProjectEnvironmentRecipe(
   project: WorkerLocalProjectSnapshot,
   signal?: AbortSignal,
-): Promise<string | undefined> {
-  const tree = await requireGit(
-    project.root,
-    ["ls-tree", "-z", project.baseCommit, "--", ".openclaw/worktree-setup.sh"],
-    { signal, timeoutMs: 30_000 },
-  );
-  return /^100755 blob ([a-f0-9]{40}(?:[a-f0-9]{24})?)\t\.openclaw\/worktree-setup\.sh\0$/u.exec(
-    tree,
-  )?.[1];
+): Promise<EnvironmentRecipe> {
+  return resolveEnvironmentRecipe(async (file) => {
+    const tree = await requireGit(project.root, ["ls-tree", "-z", project.baseCommit, "--", file], {
+      signal,
+      timeoutMs: 30_000,
+    });
+    const entry = /^(100644|100755) blob ([a-f0-9]{40}(?:[a-f0-9]{24})?)\t[^\0]+\0$/u.exec(tree);
+    if (!entry?.[2]) {
+      return undefined;
+    }
+    const blob = entry[2];
+    const content =
+      file.endsWith("devcontainer.json") || file === "package.json"
+        ? await requireGit(project.root, ["cat-file", "blob", blob], { signal, timeoutMs: 30_000 })
+        : undefined;
+    return {
+      blob,
+      executable: entry[1] === "100755",
+      ...(content !== undefined ? { content } : {}),
+    };
+  });
 }
 
 export function readWorkerProjectSnapshot(value: unknown): WorkerProjectSnapshot | undefined {
@@ -77,6 +113,7 @@ export function createWorkerProjectPreparation(params: {
     demandAtMs: number;
     setupRecipe?: string;
     runSetupScript?: boolean;
+    recipe?: EnvironmentRecipe;
   };
   setupAuthorized?: boolean;
   revalidateRepositorySource?: (signal: AbortSignal) => Promise<void>;
@@ -166,6 +203,7 @@ export function createWorkerProjectPreparation(params: {
     cacheKey: preparation.cacheKey,
     setupRecipe: preparation.setupRecipe,
     runSetupScript: preparation.runSetupScript,
+    recipe: preparation.recipe,
   };
   const sourceInput = {
     namespace: params.namespace,
@@ -296,6 +334,14 @@ export function createWorkerProjectPreparation(params: {
           ? {
               preparedWorkspace: readPreparedWorkspace(installed.preparedWorkspace),
               captureRequired: true,
+              ...(isRecord(installed.preparedWorkspace) &&
+              installed.preparedWorkspace.recipePreparation
+                ? {
+                    recipePreparation: RecipePreparation.parse(
+                      installed.preparedWorkspace.recipePreparation,
+                    ),
+                  }
+                : {}),
             }
           : {}),
       };
@@ -340,8 +386,26 @@ export function createWorkerProjectPreparation(params: {
       ),
     );
     requireCurrent();
+    if (!isRecord(prepared)) {
+      throw new Error("Prepared project returned invalid setup status");
+    }
+    const recipePreparation = RecipePreparation.parse(prepared.recipePreparation);
+    await transport.recordRecipePreparation?.(recipePreparation);
+    requireCurrent();
+    if (typeof prepared.setupFailure === "string") {
+      throw new Error(
+        `${prepared.setupFailure}${recipePreparation.failure?.outputTail ? `: ${recipePreparation.failure.outputTail}` : ""}`,
+      );
+    }
     preparedWorkspace = readPreparedWorkspace(prepared);
-    return { ...result, preparedWorkspace, captureRequired: true };
+    return {
+      ...result,
+      preparedWorkspace,
+      recipePreparation,
+      ...(typeof prepared.captureSkipped === "string"
+        ? { captureSkipped: prepared.captureSkipped }
+        : { captureRequired: true as const }),
+    };
   };
   return {
     getPreparedWorkspace: () => preparedWorkspace,

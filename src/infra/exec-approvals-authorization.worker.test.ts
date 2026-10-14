@@ -2,6 +2,7 @@ import path from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { commitExecAuthorizationsInWorker } from "./exec-approvals-authorization.worker.js";
@@ -115,6 +116,7 @@ it("commits accepted usage once and preserves the agent deletion fence", () => {
       "INSERT INTO agent_deletion_journal(agent_id,operation_id,agent_dir,workspace_dir,sessions_dir,created_at) VALUES('deleted','deletion','/agent','/workspace','/sessions',1)",
     )
     .run();
+  publishAgentDeletionJournalStatus(database.db, "deleted", "pending");
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
   const outcomes = commitExecAuthorizationsInWorker(
     {

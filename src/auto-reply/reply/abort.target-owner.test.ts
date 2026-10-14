@@ -22,14 +22,17 @@ import {
   getSubagentRunByChildSessionKey,
   releaseSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../../config/config.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryCurrentCheckInternal } from "../../config/sessions/session-entry-current-check.js";
 import {
   publishSystemEventStoreConfig,
   resolvePhysicalSessionStorePath,
@@ -40,6 +43,7 @@ import {
   type ExecRequestIdentity,
   type ExecRequestOwner,
 } from "../../infra/exec-request-context.js";
+import { captureSessionEntryCurrentCheckAsync } from "../../plugin-sdk/session-binding-runtime.js";
 import {
   getConversationSession,
   normalizeSessionDeliveryState,
@@ -72,12 +76,14 @@ afterEach(() => {
   clearFollowupQueue(sessionKey);
   clearFollowupDrainCallback(sessionKey);
   testing.resetReplyRunRegistry();
+  clearRuntimeConfigSnapshot();
 });
 
 async function setupStop(createEntry = true) {
   const root = await dirs.make("case");
   const storePath = path.join(root, "sessions.json");
   const cfg = { session: { store: storePath }, commands: { allowFrom: { "*": ["*"] } } };
+  setRuntimeConfigSnapshot(cfg);
   const entry = { sessionId: "session-a", updatedAt: Date.now() };
   await replaceSessionEntry(
     { storePath, sessionKey: createEntry ? sessionKey : "agent:main:other" },
@@ -289,6 +295,10 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             { storePath: state.storePath, sessionKey: childKey },
             { sessionId: childSessionId, updatedAt: Date.now() },
           );
+          const childEntry = expectDefined(
+            loadSessionEntry({ storePath: state.storePath, sessionKey: childKey }),
+            "selected child session",
+          );
           publishSystemEventStoreConfig(state.cfg);
           const controllerStorePath = resolvePhysicalSessionStorePath(
             { sessionKey, agentId: "main" },
@@ -298,6 +308,10 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             runId: childRunId,
             childSessionKey: childKey,
             childAgentId: "main",
+            childSessionIdentity: {
+              sessionId: childEntry.sessionId,
+              lifecycleRevision: childEntry.lifecycleRevision,
+            },
             requesterSessionKey: sessionKey,
             requesterAgentId: "main",
             requesterDisplayKey: sessionKey,
@@ -333,11 +347,24 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
               true,
             ));
         expect(ordinaryCommand.cancellationRequested).not.toBe(true);
+        let staleCurrent: NonNullable<
+          HandleCommandsParams["opts"]
+        >["isCommandTargetCurrent"] = () => false;
+        if (phase === "running") {
+          const current = await captureSessionEntryCurrentCheckAsync({
+            agentId: "main",
+            storePath: state.storePath,
+            sessionKey,
+          });
+          staleCurrent = Object.assign(async () => false, {
+            sessionSource: current.source,
+          });
+        }
         await expect(
           pathKind === "fast"
-            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: () => false })
+            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: staleCurrent })
             : handleStopCommand(
-                { ...state.params, opts: { isCommandTargetCurrent: () => false } },
+                { ...state.params, opts: { isCommandTargetCurrent: staleCurrent } },
                 true,
               ),
         ).rejects.toThrow("selected session changed");
@@ -751,20 +778,10 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     operation.complete();
   });
 
-  it.each(["session", "writer", "prepared writer"] as const)(
+  it.each(["session", "writer"] as const)(
     "skips stale abort bookkeeping after waiting for a replacement %s",
     async (replacement) => {
       const state = await setupStop();
-      if (replacement === "prepared writer") {
-        const current = await captureSessionEntryCurrentCheckInternal({
-          agentId: "main",
-          storePath: state.storePath,
-          sessionKey,
-          matchGeneration: false,
-        });
-        state.isCommandTargetCurrent = current.isCurrent;
-        state.params.opts = { isCommandTargetCurrent: current.isCurrent };
-      }
       const entered = createDeferred();
       const release = createDeferred();
       const nextOwner =

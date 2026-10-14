@@ -11,6 +11,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
+import { personalCredentialPublication } from "./user-model-account-authority.js";
 import {
   connectUserModelAccount,
   clearUserProfileAuthLink,
@@ -65,19 +66,25 @@ function accountWrite<Input extends { profileId: string }, Output>(
   ) => {
     const database = open();
     const facts = { kind: "model-account-links", profileId: input.profileId };
-    return write(input, { ...stateOptions(), database }, (stage) => {
-      const roles = (input.authorityProfileIds ?? []).map((profileId) => {
-        const profile = selectResolvedUserProfileById(database.db, profileId);
-        if (!profile || profile.id !== profileId || profile.merged_into) {
-          throw new ModelAccountConnectAuthorityError();
+    return personalCredentialPublication.capture(database.db, () =>
+      write(input, { ...stateOptions(), database }, (stage) => {
+        const roles = (input.authorityProfileIds ?? []).map((profileId) => {
+          const profile = selectResolvedUserProfileById(database.db, profileId);
+          if (!profile || profile.id !== profileId || profile.merged_into) {
+            throw new ModelAccountConnectAuthorityError();
+          }
+          return { profileId, role: profile.role ?? null };
+        });
+        requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
+        if (stage === "commit") {
+          deferSqliteWorkerCommitReceipt(database.db, {
+            ...facts,
+            personalCredentials: personalCredentialPublication.capture(database.db, () => {})
+              .receipt,
+          });
         }
-        return { profileId, role: profile.role ?? null };
-      });
-      requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
-      if (stage === "commit") {
-        deferSqliteWorkerCommitReceipt(database.db, facts);
-      }
-    });
+      }),
+    ).result;
   };
 }
 

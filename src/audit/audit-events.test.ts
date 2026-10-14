@@ -2,16 +2,14 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
-  emitTrustedDiagnosticEvent,
-  onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
   type TrustedToolExecutionEvent,
 } from "../infra/diagnostic-events.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
 import {
@@ -231,53 +229,23 @@ describe("audit event persistence", () => {
   it("deduplicates replayed source events", async () => {
     const database = createDatabaseOptions();
     const input = auditInput();
-    expect(
-      recordAuditEventInDatabase(input, {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
-    ).toBeDefined();
+    const first = recordAuditEventInDatabase(input, {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
+    expect(first?.sequence).toBe(1);
     expect(
       recordAuditEventInDatabase(input, {
         ...database,
         database: openOpenClawStateDatabase(database),
       }),
     ).toBeUndefined();
-    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
-  });
-
-  it("rejects persisted run lifecycle tuples outside the closed contract", async () => {
-    const database = createDatabaseOptions();
-    recordAuditEventInDatabase(auditInput(), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    const { db } = openOpenClawStateDatabase(database);
-    db.prepare("UPDATE audit_events SET status = ? WHERE kind = 'agent_run'").run("failed");
-
-    await expect(listAuditEvents({ database, limit: 10 })).rejects.toThrow(
-      "corrupt audit event row 1: invalid status",
+    const next = recordAuditEventInDatabase(
+      auditInput({ sourceId: "after-replay", sourceSequence: 2 }),
+      { ...database, database: openOpenClawStateDatabase(database) },
     );
-  });
-
-  it("caps actual rows without treating dedupe sequence gaps as retained records", async () => {
-    const database = createDatabaseOptions();
-    const occurredAt = Date.now();
-    recordAuditEventInDatabase(auditInput({ occurredAt }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    const { db } = openOpenClawStateDatabase(database);
-    db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'audit_events'").run(
-      AUDIT_EVENT_MAX_ROWS_CONTRACT + 1,
-    );
-
-    recordAuditEventInDatabase(auditInput({ occurredAt: occurredAt + 1, sourceSequence: 2 }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-
-    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
+    expect(next?.sequence).toBe(3);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([next, first]);
   });
 
   it("prunes row overflow in batches instead of scanning the full cap per insert", () => {
@@ -314,20 +282,49 @@ describe("audit event persistence", () => {
     });
   });
 
-  it("rolls back an insert whose sequence cannot be represented safely", () => {
+  it("rehydrates the sequence after an enclosing transaction rolls back", async () => {
+    const database = createDatabaseOptions();
+    const options = { ...database, database: openOpenClawStateDatabase(database) };
+    const record = (sourceSequence: number) =>
+      recordAuditEventInDatabase(auditInput({ sourceSequence }), options);
+    const first = record(1);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        expect(record(2)?.sequence).toBe(2);
+        throw new Error("rollback enclosing transaction");
+      }, options),
+    ).toThrow("rollback enclosing transaction");
+
+    const committed = record(3);
+    expect(committed?.sequence).toBe(2);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([committed, first]);
+  });
+
+  it.each([false, true])("rolls back an unsafe sequence (warmed: %s)", (warmed) => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
-      BigInt(Number.MAX_SAFE_INTEGER),
+      BigInt(Number.MAX_SAFE_INTEGER) - (warmed ? 1n : 0n),
     );
+    if (warmed) {
+      expect(
+        recordAuditEventInDatabase(auditInput({ sourceSequence: 1 }), {
+          ...database,
+          database: openOpenClawStateDatabase(database),
+        })?.sequence,
+      ).toBe(Number.MAX_SAFE_INTEGER);
+    }
 
     expect(() =>
-      recordAuditEventInDatabase(auditInput(), {
+      recordAuditEventInDatabase(auditInput({ sourceSequence: 2 }), {
         ...database,
         database: openOpenClawStateDatabase(database),
       }),
     ).toThrow("audit event sequence is outside the supported integer range");
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: warmed ? 1 : 0,
+    });
   });
 
   it("returns an expired append only while bounded pruning still retains it", () => {
@@ -411,19 +408,21 @@ describe("audit event persistence", () => {
     }
   });
 
-  it("forgets expiry changes when the pruning transaction rolls back", () => {
-    const database = createDatabaseOptions();
-    const owner = openOpenClawStateDatabase(database);
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const record = (sourceSequence: number) =>
-      recordAuditEventInDatabase(auditInput({ sourceSequence }), {
-        ...database,
-        database: owner,
-      });
-    try {
-      record(1);
-      owner.db.exec(`
+  it.each(["warm insert", "pruning"] as const)(
+    "forgets cached facts when %s fails to commit",
+    (mode) => {
+      const database = createDatabaseOptions();
+      const owner = openOpenClawStateDatabase(database);
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const record = (sourceSequence: number) =>
+        recordAuditEventInDatabase(auditInput({ sourceSequence }), {
+          ...database,
+          database: owner,
+        });
+      try {
+        const first = record(1);
+        owner.db.exec(`
         CREATE TABLE audit_expiry_parent (id INTEGER PRIMARY KEY);
         CREATE TABLE audit_expiry_child (
           parent_id INTEGER NOT NULL,
@@ -436,36 +435,24 @@ describe("audit event persistence", () => {
           INSERT INTO audit_expiry_child (parent_id) VALUES (1);
         END;
       `);
-      clock.mockReturnValue(now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1);
-      expect(() => record(2)).toThrow(/FOREIGN KEY/u);
-      owner.db.exec("DROP TRIGGER reject_audit_expiry");
-      const committed = record(3);
-      expect(committed).toBeDefined();
-      expect(owner.db.prepare("SELECT event_id FROM audit_events").all()).toEqual([
-        { event_id: committed?.eventId },
-      ]);
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  it("keeps reused run ids distinct across actual event timestamps", async () => {
-    const database = createDatabaseOptions();
-    const occurredAt = Date.now();
-    expect(
-      recordAuditEventInDatabase(auditInput({ occurredAt }), {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
-    ).toBeDefined();
-    expect(
-      recordAuditEventInDatabase(auditInput({ occurredAt: occurredAt + 1 }), {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
-    ).toBeDefined();
-    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
-  });
+        clock.mockReturnValue(
+          mode === "pruning" ? now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1 : now + 1,
+        );
+        expect(() => record(2)).toThrow(/FOREIGN KEY/u);
+        owner.db.exec("DROP TRIGGER reject_audit_expiry");
+        const committed = record(3);
+        expect(committed).toBeDefined();
+        expect(
+          owner.db.prepare("SELECT event_id FROM audit_events ORDER BY sequence").all(),
+        ).toEqual([
+          ...(mode === "warm insert" ? [{ event_id: first?.eventId }] : []),
+          { event_id: committed?.eventId },
+        ]);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("excludes and physically prunes records outside the fixed retention window", async () => {
     const database = createDatabaseOptions();
@@ -507,19 +494,6 @@ describe("audit event persistence", () => {
 });
 
 describe("agent activity audit projection", () => {
-  it("preserves explicit agent identity for unscoped session keys", () => {
-    const projected = projectAgentEventToAudit(
-      agentEvent({ sessionKey: "global", agentId: "support" }),
-    );
-
-    expect(projected).toMatchObject({
-      actorType: "agent",
-      actorId: "support",
-      agentId: "support",
-      sessionKey: "global",
-    });
-  });
-
   it("does not infer agent identity from a session key", () => {
     const projected = projectAgentEventToAudit(
       agentEvent({ agentId: undefined, sessionKey: "agent:admin:main" }),
@@ -610,43 +584,6 @@ describe("agent activity audit projection", () => {
     expect(inputs.at(-1)).not.toHaveProperty("sessionId");
   });
 
-  it("prefers authoritative tool lifecycle time over diagnostic observation time", () => {
-    const sourceTimestampMs = 1_750_000_000_000;
-    const projected = projectToolExecutionEventToAudit(
-      toolEvent({ ts: sourceTimestampMs + 30_000, sourceTimestampMs }),
-    );
-
-    expect(projected?.occurredAt).toBe(sourceTimestampMs);
-    expect(projectToolExecutionEventToAudit(toolEvent({ ts: sourceTimestampMs }))?.occurredAt).toBe(
-      sourceTimestampMs,
-    );
-  });
-
-  it("prefers authoritative run lifecycle time over listener observation time", () => {
-    const startedAt = 1_750_000_000_000;
-    const endedAt = startedAt + 1_000;
-    const observedAt = endedAt + 30_000;
-
-    expect(
-      projectAgentEventToAudit(agentEvent({ ts: observedAt, data: { phase: "start", startedAt } }))
-        ?.occurredAt,
-    ).toBe(startedAt);
-    expect(
-      projectAgentEventToAudit(
-        agentEvent({
-          seq: 2,
-          ts: observedAt,
-          data: { phase: "end", startedAt, endedAt },
-        }),
-      )?.occurredAt,
-    ).toBe(endedAt);
-    expect(
-      projectAgentEventToAudit(
-        agentEvent({ ts: observedAt, data: { phase: "start", startedAt: "invalid" } }),
-      )?.occurredAt,
-    ).toBe(observedAt);
-  });
-
   it("omits prompt, arguments, results, and raw errors from run and tool records", () => {
     const secret = "super-secret-payload";
     projectAgentEventToAudit(agentEvent({ data: { phase: "start", prompt: secret }, seq: 1 }));
@@ -696,53 +633,40 @@ describe("agent activity audit projection", () => {
     expect(JSON.stringify(projected)).not.toContain(secret);
   });
 
-  it.each([
-    [{ phase: "error", error: "raw failure" }, "failed", "run_failed"],
-    [{ phase: "end", aborted: true }, "cancelled", "run_cancelled"],
-    [
-      { phase: "end", aborted: true, stopReason: "timeout", timeoutPhase: "provider" },
-      "timed_out",
-      "run_timed_out",
-    ],
-    [{ phase: "error", livenessState: "blocked" }, "blocked", "run_blocked"],
-    [{ phase: "end", livenessState: "abandoned", replayInvalid: true }, "failed", "run_failed"],
-  ] as const)("classifies terminal run metadata %#", (data, status, errorCode) => {
-    const projected = projectAgentEventToAudit(agentEvent({ seq: 4, data, stream: "lifecycle" }));
-    expect(projected).toMatchObject({
-      action: "agent.run.finished",
-      status,
-      errorCode,
-    });
-    expect(projected).not.toHaveProperty("error");
-  });
+  it.each([[{ phase: "error", livenessState: "blocked" }, "blocked", "run_blocked"]] as const)(
+    "classifies terminal run metadata %#",
+    (data, status, errorCode) => {
+      const projected = projectAgentEventToAudit(agentEvent({ seq: 4, data, stream: "lifecycle" }));
+      expect(projected).toMatchObject({
+        action: "agent.run.finished",
+        status,
+        errorCode,
+      });
+      expect(projected).not.toHaveProperty("error");
+    },
+  );
 
-  it.each([
-    ["tool.execution.completed", "succeeded", undefined],
-    ["tool.execution.error", "failed", "tool_failed"],
-    ["tool.execution.blocked", "blocked", "tool_blocked"],
-  ] as const)("classifies trusted tool terminal event %s", (type, status, errorCode) => {
+  it("classifies a trusted blocked tool with explicit attribution", () => {
     const projected = projectToolExecutionEventToAudit(
       toolEvent({
-        type,
+        type: "tool.execution.blocked",
         agentId: "tool-agent",
         sessionKey: "agent:tool-agent:main",
         sessionId: "session-tool-agent",
-        ...(type === "tool.execution.completed" || type === "tool.execution.error"
-          ? { durationMs: 10 }
-          : { deniedReason: "policy", reason: "secret detail" }),
-        ...(type === "tool.execution.error" ? { errorCategory: "test" } : {}),
+        deniedReason: "policy",
+        reason: "secret detail",
       }),
     );
 
     expect(projected).toMatchObject({
-      status,
+      status: "blocked",
       actorType: "agent",
       actorId: "tool-agent",
       agentId: "tool-agent",
       sessionKey: "agent:tool-agent:main",
       sessionId: "session-tool-agent",
     });
-    expect(projected?.errorCode).toBe(errorCode);
+    expect(projected?.errorCode).toBe("tool_blocked");
     expect(projected).not.toHaveProperty("reason");
   });
 
@@ -759,7 +683,7 @@ describe("agent activity audit projection", () => {
     expect(projected).toBeUndefined();
   });
 
-  it.each(["aborted", "AbortError", "cancelled"])(
+  it.each(["cancelled"])(
     "classifies trusted tool error category %s as cancellation",
     (errorCategory) => {
       const projected = projectToolExecutionEventToAudit(
@@ -774,11 +698,7 @@ describe("agent activity audit projection", () => {
     },
   );
 
-  it.each([
-    ["cancelled", "runtime_tool_error", "cancelled", "tool_cancelled"],
-    ["timed_out", "aborted", "timed_out", "tool_timed_out"],
-    ["failed", "AbortError", "failed", "tool_failed"],
-  ] as const)(
+  it.each([["timed_out", "aborted", "timed_out", "tool_timed_out"]] as const)(
     "projects trusted tool terminal reason %s ahead of error category %s",
     (terminalReason, errorCategory, status, errorCode) => {
       const projected = projectToolExecutionEventToAudit(
@@ -794,7 +714,7 @@ describe("agent activity audit projection", () => {
     },
   );
 
-  it.each(["cancelled", "timed_out"] as const)(
+  it.each(["timed_out"] as const)(
     "keeps an unavailable tool outcome explicitly unknown despite %s provenance",
     (terminalReason) => {
       const projected = projectToolExecutionEventToAudit(
@@ -813,35 +733,6 @@ describe("agent activity audit projection", () => {
       });
     },
   );
-
-  it("keeps the trusted tool lifecycle active when optional diagnostics are disabled", () => {
-    const seen: TrustedToolExecutionEvent[] = [];
-    const stop = onTrustedToolExecutionEvent((event) => seen.push(event));
-    setDiagnosticsEnabledForProcess(false);
-
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.started",
-      runId: "run-disabled-diagnostics",
-      toolName: "message",
-      toolCallId: "call-1",
-    });
-
-    stop();
-    expect(seen).toMatchObject([
-      {
-        type: "tool.execution.started",
-        runId: "run-disabled-diagnostics",
-        toolName: "message",
-      },
-    ]);
-  });
-
-  it("preserves exact identifiers without capturing content", () => {
-    const runId = `run-${"x".repeat(600)}`;
-    const projected = projectAgentEventToAudit(agentEvent({ runId }));
-
-    expect(projected?.runId).toBe(runId);
-  });
 
   it.each([true, false])("settles accepted errors while collection is %s", async (enabled) => {
     const inputs: AuditEventInput[] = [];

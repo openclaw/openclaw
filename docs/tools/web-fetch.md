@@ -88,6 +88,12 @@ reads and writes. A positive value limits reuse by the current request's TTL;
 cached entries still expire at their original deadline. Provider-side caching,
 such as Firecrawl's `maxAgeMs`, is configured separately.
 
+Response decoding honors a byte-order mark first, then the HTTP `Content-Type`
+charset, then an XML declaration or HTML charset metadata. Without a supported
+charset, it falls back to UTF-8. ASCII-compatible documents that declare UTF-16
+in their XML or HTML metadata are decoded as UTF-8 instead; correctly declared
+legacy encodings such as Windows-1252 remain supported.
+
 ## Progress updates
 
 `web_fetch` emits a public progress line only when the fetch is still pending

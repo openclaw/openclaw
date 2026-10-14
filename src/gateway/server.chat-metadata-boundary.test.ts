@@ -101,7 +101,7 @@ async function writeGatewayConfig(
   }
 }
 
-test("chat.metadata preserves deferred admission while isolating projection and owner publication failures", async () => {
+test("metadata RPCs isolate missing owners and preserve deferred admission and publication failures", async () => {
   const ws = requireGateway().ws;
   const publicationEvents = await import("../agents/prepared-model-runtime.publication-events.js");
   const initial = await rpcReq(ws, "chat.metadata", { agentId: "main" });
@@ -111,21 +111,17 @@ test("chat.metadata preserves deferred admission while isolating projection and 
   // its prepared owner exists, reproducing the stale publication announcement that wedged UI.
   await writeGatewayConfig(CHAT_METADATA_MISSING_OWNER_CONFIG, { clearRuntimeSnapshot: true });
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "published" });
-  let unavailable: Awaited<ReturnType<typeof rpcReq>> | undefined;
-  await vi.waitFor(
-    async () => {
-      unavailable = await rpcReq(ws, "chat.metadata", { agentId: "main" });
-      expect(unavailable.ok).toBe(false);
-    },
-    { interval: 1, timeout: 2_000 },
-  );
-  expect(unavailable).toMatchObject({
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      message: expect.stringContaining("prepared chat metadata owner is unavailable"),
-    },
-  });
+  for (const method of ["chat.metadata", "models.list"] as const) {
+    const result = await rpcReq<{ models?: Array<{ id?: string; provider?: string }> }>(
+      ws,
+      method,
+      { agentId: "main" },
+    );
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(result.payload?.models).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "gpt-boundary", provider: "openai" })]),
+    );
+  }
 
   await writeGatewayConfig(CHAT_METADATA_BOUNDARY_CONFIG, { clearRuntimeSnapshot: true });
   const recovered = await rpcReq<{

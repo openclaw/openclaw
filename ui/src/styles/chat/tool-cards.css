@@ -916,12 +916,12 @@
   .chat-tool-card__preview:hover,
   .chat-tool-card__preview:focus-within,
   .chat-tool-card__preview[data-widget-actions-above],
-  .chat-tool-card__widget-actions[open]
+  .chat-tool-card__widget-actions [aria-expanded="true"]
 ) {
   content-visibility: visible;
 }
 
-.chat-tool-card__widget-actions::part(menu) {
+.chat-tool-card__widget-actions-panel {
   min-width: 164px;
   max-width: 208px;
   padding: var(--menu-padding);
@@ -957,7 +957,7 @@
 
 .chat-tool-card__preview:hover [data-widget-actions],
 .chat-tool-card__preview:focus-within [data-widget-actions],
-[data-widget-actions]:has(.chat-tool-card__widget-actions[open]) {
+[data-widget-actions]:has(.chat-tool-card__widget-actions [aria-expanded="true"]) {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1291,4 +1291,35 @@ openclaw-chat-tool-output {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--mono);
+}
+.chat-permission-card {
+  margin: 8px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+
+.chat-permission-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-permission-card__heading svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--accent);
+}
+
+.chat-permission-card p {
+  margin: 8px 0 12px;
+  color: var(--muted);
+}
+
+.chat-permission-card .btn {
+  max-width: 100%;
+  white-space: normal;
+  text-align: start;
 }

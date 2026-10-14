@@ -57,7 +57,7 @@ it.each(["auto", "off"] as const)(
       const restored = path.join(directory, "restored.sqlite");
       await publishVerifiedSqliteFile({
         sourcePath: paths[1]!,
-        sourceIdentity: await fs.stat(paths[1]!),
+        sourceIdentity: await fs.stat(paths[1]!, { bigint: true }),
         targetPath: restored,
         expectedContent: {
           sha256: createHash("sha256").update(bytes).digest("hex"),

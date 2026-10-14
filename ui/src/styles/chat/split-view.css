@@ -10,7 +10,6 @@
   .chat-pane__header
   :is(
     .chat-pane__nav-toggle,
-    .chat-pane__incognito,
     openclaw-session-owner-chip,
     .chat-pane__participants,
     .chat-pane__presence,
@@ -209,7 +208,50 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-pane__incognito > span {
+  display: inline-flex;
+}
+
+.chat-pane__incognito-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px dashed var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chat-pane__incognito-notice p {
+  margin: 0;
+}
+
+.chat-pane__incognito-limits {
   color: var(--muted);
+}
+
+.chat-pane__incognito-notice-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.chat-pane__incognito-notice-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .chat-pane__incognito svg,
@@ -578,18 +620,10 @@
   height: 15px;
 }
 
-/* A full split header measures 793px including insets, so secondary controls
-   shed through 800px of container content; restoration then has 8px+ slack.
-   The close action survives at the 320px pane floor. */
+/* The labelled actions stay available as split panes narrow; only secondary
+   identity and navigation details yield space to the session title. */
 @container (max-width: 800px) {
-  /* Scoped to the actions row so this hide outranks the 0,2,0 icon-button
-     styling rule above; a bare class here silently loses that cascade. */
-  .chat-pane__actions .chat-pane__split-down,
-  .chat-pane__actions .chat-pane__split-right,
-  .chat-pane__header.chat-pane__header--closable .chat-side-panel-toggle,
-  .chat-pane__header.chat-pane__header--closable .chat-pane__sharing-menu,
   .chat-pane__header.chat-pane__header--closable .chat-pane__nav-toggle,
-  .chat-pane__header.chat-pane__header--closable .chat-pane__palette-open,
   .chat-pane__header.chat-pane__header--closable .chat-pane__participants,
   .chat-pane__header.chat-pane__header--closable openclaw-session-owner-chip {
     display: none;
@@ -597,6 +631,15 @@
 }
 
 @container (max-width: 480px) {
+  .chat-pane__header-leading:has(.chat-pane__incognito) {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  .chat-pane__header-leading:has(.chat-pane__incognito) .chat-pane__crumbs {
+    flex-basis: 100%;
+  }
+
   .chat-pane__presence {
     display: none;
   }

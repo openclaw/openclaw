@@ -234,7 +234,11 @@ suite.define(() => {
         expect(await gateway.getRequests("models.list")).toHaveLength(reads + 1);
         await root.locator("#new-session-where-trigger").click();
         await expect
-          .poll(() => root.getByRole("button", { name: "sample-cloud", exact: true }).isDisabled())
+          .poll(() =>
+            root
+              .getByRole("button", { name: "sample-cloud Unavailable", exact: true })
+              .isDisabled(),
+          )
           .toBe(true);
         const selectionWrites = (await gateway.getRequests("users.prefs.set")).length;
         await gateway.resolveDeferred("models.list", {

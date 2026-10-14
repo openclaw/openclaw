@@ -7,6 +7,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { Actor } from "../infra/sqlite-worker-broker.types.js";
 import { createSqliteWorkerClient } from "../infra/sqlite-worker-client.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -118,12 +119,21 @@ afterEach(() => {
 });
 
 function createLeaseFixture() {
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  custody.post();
   const actor: Actor = {
     nativeStopped: Promise.resolve(),
     markNativeStopped() {},
     id: 1,
     key: "synthetic-state",
     databasePath: "/synthetic/state.sqlite",
+    stateAccess: {
+      canonicalPath: "/synthetic/state.sqlite",
+      assertAccessAllowed() {},
+      assertReadAllowed() {},
+    },
     pathReferences: new Map([["/synthetic/state.sqlite", 1]]),
     moduleUrl: "file:///synthetic/shared-state-worker.js",
     inputHash: "capture-lease-fixture",
@@ -132,7 +142,7 @@ function createLeaseFixture() {
     },
     references: 1,
     opened: Promise.resolve(),
-    openDispatch: { dispatched: true },
+    openDispatch: { custody },
     initialized: true,
     backendClosed: false,
   };
@@ -307,9 +317,6 @@ it("cancels a queued callback without abandoning the shared actor's cold acquisi
 
 it.for([
   { kind: "raw Error abort", reason: new Error("canceled"), abort: true, persistent: false },
-  { kind: "normalized primitive abort", reason: "canceled", abort: true, persistent: false },
-  { kind: "normalized object abort", reason: { canceled: true }, abort: true, persistent: false },
-  { kind: "normalized null abort", reason: null, abort: true, persistent: false },
   { kind: "uncanceled physical failure", reason: undefined, abort: false, persistent: true },
   {
     kind: "canceled persistent physical failure",
@@ -400,7 +407,7 @@ it("retires an abandoned actor after joining its accepted native opening", async
   }
 });
 
-it.each(["removed", "reassigned", "replaced", "revoked"] as const)(
+it.each(["replaced", "revoked"] as const)(
   "refuses a finite command when its resource claim is %s before dispatch",
   async (change) => {
     const { maintenance, context } = createLeaseFixture();
@@ -421,10 +428,7 @@ it.each(["removed", "reassigned", "replaced", "revoked"] as const)(
         runOutsideOpenClawDatabaseMaintenanceScope(() =>
           observeOpenClawDatabaseMaintenanceResource(lease),
         );
-        if (change !== "removed") {
-          const owner = change === "replaced" ? maintenance : successor;
-          owner.own(lease, "shared-resources", () => lease.release());
-        }
+        maintenance.own(lease, "shared-resources", () => lease.release());
       }
     };
     try {

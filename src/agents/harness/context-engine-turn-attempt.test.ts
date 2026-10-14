@@ -2,6 +2,10 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -26,7 +30,14 @@ import {
   enqueueContextEngineTurnIntent,
 } from "./context-engine-turn-outbox.kernel.worker.js";
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-turn-range-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-context-turn-range-",
+);
 
 async function seedTurnSession(
   target: Parameters<typeof patchSessionEntryCore>[0] & { sessionId: string },
@@ -178,6 +189,7 @@ async function createAcceptedTurnFixture(
 
 describe("accepted context-engine turn finalization", () => {
   it("commits a running turn once after confirming a persisted steer", async () => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "steered-turn",

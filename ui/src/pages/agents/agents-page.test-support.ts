@@ -22,6 +22,8 @@ const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
   "config.patch",
   "config.set",
   "agents.update",
+  "cron.list",
+  "cron.status",
 ]);
 
 export type TestAgentsPage = AgentFilesState & {

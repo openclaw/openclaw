@@ -4,9 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
@@ -126,17 +132,23 @@ async function withTranscript(
   options: { agentId?: string; sessionKey?: string } = {},
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "openclaw-context-report-"));
+  setRuntimeConfigSnapshot({});
+  const agentId = options.agentId ?? "default";
+  const target = {
+    agentId,
+    sessionId: "session",
+    sessionKey: options.sessionKey ?? `agent:${agentId}:main`,
+    storePath: join(dir, "sessions.json"),
+  };
+  const incognito = isIncognitoSessionKey(target.sessionKey);
+  const storePath = resolveSessionStorePathForScope(target);
   try {
-    const agentId = options.agentId ?? "default";
-    const target = {
-      agentId,
-      sessionId: "session",
-      sessionKey: options.sessionKey ?? `agent:${agentId}:main`,
-      storePath: join(dir, "sessions.json"),
-    };
     await persistSessionTranscriptTurn(
-      { ...target, storePath: resolveSessionStorePathForScope(target) },
+      { ...target, storePath },
       {
+        initialSessionEntry: incognito
+          ? { sessionId: target.sessionId, updatedAt: 1, incognito: true }
+          : undefined,
         messages: messages.map((message, index) => ({
           eventId: `record-${index + 1}`,
           message,
@@ -147,8 +159,12 @@ async function withTranscript(
     );
     await run(target);
   } finally {
+    if (incognito) {
+      memorySessionActorOwners.closeDatabase({ agentId, path: storePath });
+    }
     closeOpenClawAgentDatabasesForTest();
     await rm(dir, { recursive: true, force: true });
+    clearRuntimeConfigSnapshot();
   }
 }
 

@@ -1,4 +1,4 @@
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -14,7 +14,7 @@ import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 
-/** Read comparison evidence only; recovered custody is claimed by the current host owner. */
+/** Worker-only comparison evidence; recovered custody is claimed by the current host owner. */
 export function readPendingInputSourceInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
   input: PendingInputSourceRead,

@@ -1,7 +1,7 @@
 import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   type ChannelApprovalCapabilityHandlerContext,
   type ExpiredApprovalView,
   type PendingApprovalView,
@@ -195,7 +195,7 @@ async function updateMessage(
   }
 }
 
-export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   SlackPendingDelivery,
   { to: string; threadTs?: string; teamId?: string },
   SlackPendingApproval,
@@ -213,7 +213,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
           })
         : false;
     },
-    shouldHandle: (params) => {
+    shouldHandle: async (params) => {
       const resolved = resolveHandlerContext(params);
       if (!resolved) {
         return false;

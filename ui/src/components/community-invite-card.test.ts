@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderCommunityInviteCard } from "./community-invite-card.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { COMMUNITY_INVITE_KEY } from "./community-invite-state.ts";
+import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 const onDismiss = vi.fn<() => void>();
 let container: HTMLDivElement;
@@ -13,10 +15,14 @@ beforeEach(() => {
   container = document.createElement("div");
   onDismiss.mockReset();
   document.body.append(container);
-  render(renderCommunityInviteCard(onDismiss, "dark"), container);
+  mountSolid(() => createComponent(SidebarCommunityInvite, { onDismiss, mode: "dark" }), {
+    container,
+  });
+  flush();
 });
 
 afterEach(() => {
+  cleanupSolid();
   container.remove();
   localStorage.clear();
   vi.restoreAllMocks();

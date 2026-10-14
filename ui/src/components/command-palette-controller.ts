@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
-import { hasOperatorAdminAccess } from "../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../app/operator-access.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
@@ -15,7 +15,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   HumanMentionMenu,
   type HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.ts";
+} from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   PluginIconController,
@@ -286,7 +286,13 @@ export class PaletteController {
     this.publish();
   }
 
-  private readonly handleInputRef = (element: Element | undefined) => {
+  private readonly handleInputRef = (
+    element: Element | undefined,
+    previous?: HTMLTextAreaElement,
+  ) => {
+    if (previous && previous !== this.inputElement) {
+      return;
+    }
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
     this.inputElement?.addEventListener("focus", this.adoptInitialInput);
@@ -421,7 +427,9 @@ export class PaletteController {
       client,
       agentId,
       agents: () => context.agents?.ensureList?.() ?? Promise.resolve(null),
-      methodAvailable: (method) => Boolean(isGatewayMethodAdvertised(snapshot, method)),
+      methodAvailable: (method) =>
+        hasOperatorReadAccess(snapshot.hello?.auth ?? null) &&
+        Boolean(isGatewayMethodAdvertised(snapshot, method)),
     }).then((items) => {
       if (
         this.catalogLoad?.promise === promise &&

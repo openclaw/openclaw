@@ -227,25 +227,26 @@ describe("attemptServerEndpointCompaction", () => {
     { source: "user message", systemPrompt: "system", userText: "token NORTH-SECRET-17" },
     // xAI has no instructions field, so its compact input carries the system prompt.
     { source: "system prompt", systemPrompt: "session NORTH-SECRET-17", userText: "remember" },
-  ])("skips the paid endpoint call when its $source would need redaction", async (testCase) => {
-    const warn = vi.spyOn(log, "warn").mockClear();
-    const session = createSession(model, undefined, testCase.userText);
-    const before = structuredClone(session.sessionManager.getBranch());
-    const onUsage = vi.fn();
-    const { result } = attempt({
-      sessionManager: session.sessionManager,
-      context: { systemPrompt: testCase.systemPrompt, messages: session.messages },
-      config: redactSecrets,
-      onUsage,
-    });
+  ])(
+    "compacts source text verbatim when its $source contains a configured pattern",
+    async (testCase) => {
+      const warn = vi.spyOn(log, "warn").mockClear();
+      const session = createSession(model, undefined, testCase.userText);
+      const onUsage = vi.fn();
+      requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(model));
+      const { result } = attempt({
+        sessionManager: session.sessionManager,
+        context: { systemPrompt: testCase.systemPrompt, messages: session.messages },
+        config: redactSecrets,
+        onUsage,
+      });
 
-    await expect(result).resolves.toBeUndefined();
-    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
-    expect(onUsage).not.toHaveBeenCalled();
-    expect(session.sessionManager.getBranch()).toEqual(before);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`its ${testCase.source} would`));
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("NORTH-SECRET");
-  });
+      await expect(result).resolves.toBeDefined();
+      expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
+      expect(onUsage).toHaveBeenCalledOnce();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("compacts through instructions when only the OpenAI system prompt holds a secret", async () => {
     const session = createSession(openAIModel);
@@ -264,10 +265,9 @@ describe("attemptServerEndpointCompaction", () => {
     expect(onCompactionCommitted).toHaveBeenCalledOnce();
   });
 
-  it("warns and keeps the transcript when a returned window needs redaction", async () => {
+  it("preserves secret-shaped source text in returned compaction windows", async () => {
     const warn = vi.spyOn(log, "warn").mockClear();
     const session = createSession();
-    const before = structuredClone(session.sessionManager.getBranch());
     const response = createCompactionResponse();
     response.output[0] = {
       type: "message",
@@ -285,15 +285,15 @@ describe("attemptServerEndpointCompaction", () => {
       onCompactionCommitted,
     });
 
-    await expect(result).resolves.toBeUndefined();
+    await expect(result).resolves.toBeDefined();
     expect(onUsage).toHaveBeenCalledWith({
       input_tokens: 1_000,
       output_tokens: 200,
       dropped_message_count: 1,
     });
-    expect(session.sessionManager.getBranch()).toEqual(before);
-    expect(onCompactionCommitted).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("requires transcript redaction"));
+    expect(JSON.stringify(session.sessionManager.getBranch())).toContain("NORTH-SECRET-17");
+    expect(onCompactionCommitted).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it.each([model, openAIModel])(

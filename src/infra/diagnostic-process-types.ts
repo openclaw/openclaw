@@ -24,6 +24,23 @@ export type DiagnosticWorkerRequestFields = {
   queueDepth: number;
   queueWaitMs?: number;
   durationMs?: number;
+  /** Monotonic process timestamps spanning the complete request, including transport frames. */
+  timing?: Partial<
+    Record<
+      | "enqueued"
+      | "dispatched"
+      | "posted"
+      | "postFinished"
+      | "received"
+      | "inputReady"
+      | "executeStarted"
+      | "executeFinished"
+      | "serialized"
+      | "replied"
+      | "replyReceived",
+      number
+    >
+  >;
 };
 
 export type DiagnosticAsyncQueueDroppedFields = {
@@ -103,7 +120,7 @@ export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";
   family: string;
-  /** Bounded Git owner/operation; unknown for unattributed Git and none for other families. */
+  /** Bounded Git owner or SQLite session/transport; unknown for unattributed Git. */
   operation?: string;
   count: number;
   intervalMs: number;

@@ -10,10 +10,12 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 
 const log = createSubsystemLogger("agents/worktrees");
+const operation: GitProcessOperation = "worktree.maintenance";
 const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 const PACK_BATCH_BYTES = 512 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
@@ -43,6 +45,7 @@ async function repairWorktreeObjects(
       throw new Error("Worktree object repair exceeded its five-minute budget");
     }
     return {
+      operation,
       signal: params.signal,
       beforeRun: () => {
         params.signal?.throwIfAborted();
@@ -163,6 +166,7 @@ async function maintainWorktreePacks(
     params.commitGuard?.();
   };
   const options = {
+    operation,
     signal: params.signal,
     beforeRun: assertCurrent,
     killProcessTree: true,
@@ -185,14 +189,6 @@ async function maintainWorktreePacks(
           throw error;
         });
         assertCurrent();
-        const indexes = packs.filter((name) => /^pack-[a-f0-9]+\.idx$/.test(name));
-        if (indexes.length > 0) {
-          // Reusing a stale MIDX fails before discovery when it names a removed pack.
-          await requireGit(repoRoot, ["multi-pack-index", "write", "--stdin-packs"], {
-            ...options,
-            input: `${indexes.join("\n")}\n`,
-          });
-        }
         await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
         await consolidatePacks(repoRoot, packDirectory, packs, options);
       }, params.signal),
@@ -257,9 +253,6 @@ async function consolidatePacks(
   options: NonNullable<Parameters<typeof requireGit>[2]>,
 ) {
   const present = new Set(names);
-  if (names.filter((name) => /^pack-[a-f0-9]+\.pack$/.test(name)).length < 16) {
-    return;
-  }
   const packs = [];
   for (const name of names) {
     if (!/^pack-[a-f0-9]+\.pack$/.test(name)) {
@@ -278,9 +271,28 @@ async function consolidatePacks(
     packs.push({ name, size: stat.size, promisor: present.has(`${stem}.promisor`) });
   }
   packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
-  let consolidated = false;
   for (const promisor of [true, false]) {
-    const candidates = packs.filter((pack) => pack.promisor === promisor);
+    let candidates = packs.filter((pack) => pack.promisor === promisor);
+    if (candidates.length > 1) {
+      // Retire duplicate transfers before applying the rewrite budget. Never let
+      // ordinary copies displace promises, or a large redundant pack block convergence.
+      await requireGit(
+        repoRoot,
+        [
+          "multi-pack-index",
+          "write",
+          "--stdin-packs",
+          `--preferred-pack=${candidates.at(-1)!.name}`,
+        ],
+        {
+          ...options,
+          input: `${candidates.map((pack) => pack.name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+        },
+      );
+      await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
+      const remaining = new Set(await fs.readdir(directory));
+      candidates = candidates.filter((pack) => remaining.has(pack.name));
+    }
     if (candidates.length < 16) {
       continue;
     }
@@ -325,10 +337,6 @@ async function consolidatePacks(
       },
     );
     await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
-    consolidated = true;
-  }
-  if (!consolidated) {
-    return;
   }
   const remaining = (await fs.readdir(directory)).filter((name) =>
     /^pack-[a-f0-9]+\.idx$/.test(name),
@@ -384,6 +392,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
               repoRoot,
               ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
               {
+                operation,
                 killProcessTree: true,
                 lowerPriority: true,
                 signal: params.signal,

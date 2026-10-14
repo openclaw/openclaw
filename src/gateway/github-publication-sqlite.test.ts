@@ -8,7 +8,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
 import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
-import { deferGitHubPublicationRequests } from "./github-publication-store.js";
+import { deferGitHubPublicationRequestsFixture } from "./github-publication-store.test-support.js";
 import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
@@ -106,7 +106,7 @@ describe("publication SQLite materialization", () => {
       );
       try {
         expect(() =>
-          deferGitHubPublicationRequests(["first", "second", "first", "absent"]),
+          deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]),
         ).toThrow("late defer failure");
         expect(readRows()).toEqual(before);
         expect(observer).not.toHaveBeenCalled();
@@ -119,7 +119,7 @@ describe("publication SQLite materialization", () => {
         sql.startsWith('update "github_publication_requests"') ? "defer" : null,
       );
       try {
-        deferGitHubPublicationRequests(["first", "second", "first", "absent"]);
+        deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]);
         expect(readRows()).toEqual(
           before.map((row) =>
             Object.assign({}, row, {

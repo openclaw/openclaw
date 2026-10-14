@@ -44,6 +44,12 @@ function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   return { job, group };
 }
 
+it("selects the forced-cron process owner through its runtime-worker descriptor", () => {
+  expect(resolveChangedNodeTestTargets(["src/cron/service/run-queue.ts"])).toContain(
+    "src/cli/gateway-cli/run-loop.forced-cron.process.test.ts",
+  );
+});
+
 it("keeps the aggressive fixed smoke within two Node rows", () => {
   let smoke: string[] = [];
   resolveChangedNodeTestTargets(["src/infra/new-unlisted-module.ts"], {

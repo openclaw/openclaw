@@ -4,7 +4,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergeAuthProfileStores, mergePersistedAuthProfileState } from "./persisted.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
-import { readAuthProfileJsonCellText, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { readAuthProfileJsonCellText } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import {

@@ -8,7 +8,10 @@ import type {
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import type { ReplyDeliveryObserver } from "../../../agents/reply-completion.js";
+import type {
+  ReplyDeliveryFactsObserver,
+  ReplyDeliveryObserver,
+} from "../../../agents/reply-completion.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { ChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../../config/sessions.js";
@@ -95,10 +98,12 @@ export class FollowupRunDeferredError extends Error {
 // Leaf contracts only: get-reply.types.ts imports this module.
 type FollowupRunObservers = Pick<
   GetReplyOptions,
-  "onAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
+  "onAgentRunStart" | "onPreparedAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
 > & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
   onDeliberateSilentTerminalReply?: () => void;
 };
 

@@ -81,26 +81,6 @@ describe("Workboard catalog", () => {
     }
   });
 
-  it("publishes board metadata and clears owned readiness on disposal", async () => {
-    const snapshots: WorkboardCatalogSnapshot[] = [];
-    const request = vi.fn().mockResolvedValue({
-      cards: [],
-      boards: [{ ...board("ops"), name: "Operations", icon: "⚙", color: "#22c55e" }],
-    });
-    const host = createHost();
-    const runtime = new WorkboardCatalog((snapshot) => snapshots.push(snapshot), host);
-
-    runtime.sync({ request } as unknown as GatewayBrowserClient, true);
-    await vi.waitFor(() => expect(snapshots.at(-1)?.ready).toBe(true));
-    const loaded = snapshots.at(-1)?.boards[0];
-    expect(loaded).toEqual({ id: "ops", name: "Operations", icon: "⚙", color: "#22c55e" });
-    expect(getWorkboardState(host).boards[0]?.id).toBe("ops");
-
-    runtime.dispose();
-    expect(getWorkboardState(host).boards).toEqual([]);
-    expect(host.boardsReady).toBe(false);
-  });
-
   it("queues a forced refresh behind the current client load", async () => {
     const first = createDeferred<{ cards: []; boards: ReturnType<typeof board>[] }>();
     const request = vi

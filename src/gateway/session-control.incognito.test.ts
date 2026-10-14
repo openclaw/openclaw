@@ -1,21 +1,23 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-entry.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import * as sessionMetadataWrites from "../config/sessions/session-metadata-write.async.js";
 import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
-import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as chatSend from "./server-methods/chat-send-handler.js";
@@ -41,10 +43,11 @@ import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
+const authority = { assertCurrent() {}, authorize() {} };
+const lifetime = { assertCurrent() {}, assertReadable() {} };
 const cfg = { agents: { entries: { main: {} } } };
 let client: GatewayClient;
-let actor: IncognitoAgentDatabaseExecution;
+let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
 const context = {
   getRuntimeConfig: () => cfg,
@@ -59,20 +62,47 @@ const context = {
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: dirs.make("incognito-controls-") };
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-  actor = await openIncognitoTestActor(env, authority);
+  location = {
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+  };
   const profile = ensureProfileForEmail("private-control@example.test");
   client = {
     ...sharingPolicyClient({ user: profile.id, scopes: ["operator.admin"] }),
     connId: "private-control",
   };
 });
-beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR));
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot(cfg);
+});
+afterEach(clearRuntimeConfigSnapshot);
 afterAll(async () => {
   await flushPendingSessionsChangedEvents();
-  await actor?.close();
+  memorySessionActorOwners.closeDatabase(location);
   await closeOpenClawAgentDatabasesAsync();
   vi.unstubAllEnvs();
 });
+
+async function seed(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+  transcriptEvents?: readonly unknown[];
+}) {
+  const created = await withSessionActorStorage(
+    { agentId: "main", sessionKey: params.sessionKey, storePath: location.path, env },
+    { create: true, authority, lifetime },
+    ({ actor }) =>
+      actor.storage.mutate(
+        {
+          type: "session.entry.create",
+          input: { entry: params.entry, transcriptEvents: params.transcriptEvents },
+        },
+        authority,
+      ),
+  );
+  expect(created?.kind).toBe("committed");
+}
 
 async function invoke(
   handlers: GatewayRequestHandlers,
@@ -93,10 +123,10 @@ async function invoke(
   return respond;
 }
 
-it("returns the actor Goal receipt on retry and serves suggestion mutations without host SQL", async () => {
+it("returns the unbound memory Goal receipt on retry and serves suggestion mutations without host SQL", async () => {
   const sessionKey = "agent:main:dashboard:incognito-controls";
   const sessionId = "controls";
-  await actor.sessions.create(authority, {
+  await seed({
     sessionKey,
     entry: {
       sessionId,
@@ -104,6 +134,7 @@ it("returns the actor Goal receipt on retry and serves suggestion mutations with
       incognito: true,
       lifecycleRevision: "first",
       visibility: "suggest",
+      label: "Keep this label",
       goal: {
         schemaVersion: 1,
         id: "goal",
@@ -120,81 +151,109 @@ it("returns the actor Goal receipt on retry and serves suggestion mutations with
   await initializeSessionReadContext(context);
   const host = observeHostDataSql();
   try {
-    await withIncognitoSessionActor(actor, async () => {
-      const request = {
-        sessionKey,
-        agentId: "main",
-        sessionId,
-        goalId: "goal",
-        action: "edit",
-        objective: "After",
-        operationId: "edit-once",
-        issuedAtMs: Date.now(),
-      };
-      const first = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
-      expect(first).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ goal: expect.objectContaining({ objective: "After" }) }),
-        undefined,
-      );
-      const replay = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
-      expect(replay).toHaveBeenCalledWith(
-        true,
-        { ...(first.mock.calls[0]![1] as object), replayed: true },
-        undefined,
-      );
-      // The captured physical source must survive an ambient root change before dispatch.
-      vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("incognito-controls-other-root-"));
-      let added: Awaited<ReturnType<typeof invoke>>;
-      try {
-        added = await invoke(sessionSuggestionHandlers, "session.suggestions.add", {
-          sessionKey,
-          text: "Check this",
-        });
-      } finally {
-        vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-      }
-      expect(added).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ suggestion: expect.objectContaining({ text: "Check this" }) }),
-      );
-      const suggestion = (added.mock.calls[0]![1] as { suggestion: { id: string } }).suggestion;
-      const listed = await invoke(sessionSuggestionHandlers, "session.suggestions.list", {
-        sessionKey,
-      });
-      expect(listed).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ suggestions: [expect.objectContaining({ id: suggestion.id })] }),
-      );
-      const dismissed = await invoke(sessionSuggestionHandlers, "session.suggestions.resolve", {
-        sessionKey,
-        id: suggestion.id,
-        resolution: "dismiss",
-      });
-      expect(dismissed).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ suggestion: expect.objectContaining({ state: "dismissed" }) }),
-      );
+    const request = {
+      sessionKey,
+      agentId: "main",
+      sessionId,
+      goalId: "goal",
+      action: "edit",
+      objective: "After",
+      operationId: "edit-once",
+      issuedAtMs: Date.now(),
+    };
+    const first = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
+    expect(first).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ goal: expect.objectContaining({ objective: "After" }) }),
+      undefined,
+    );
+    const replay = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
+    expect(replay).toHaveBeenCalledWith(
+      true,
+      { ...(first.mock.calls[0]![1] as object), replayed: true },
+      undefined,
+    );
+    expect(
+      memorySessionActorOwners.read(location)?.readSession(sessionKey, authority)?.entry,
+    ).toMatchObject({
+      label: "Keep this label",
+      goal: { objective: "After", status: "paused" },
     });
+    const otherRoot = dirs.make("incognito-controls-other-root-");
+    const addSuggestion = sessionMetadataWrites.addSessionSuggestionInWorker;
+    const addSpy = vi
+      .spyOn(sessionMetadataWrites, "addSessionSuggestionInWorker")
+      .mockImplementationOnce(async (...args) => {
+        // The unbound request already captured its source before this writer boundary.
+        vi.stubEnv("OPENCLAW_STATE_DIR", otherRoot);
+        try {
+          return await addSuggestion(...args);
+        } finally {
+          vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+        }
+      });
+    let added: Awaited<ReturnType<typeof invoke>>;
+    try {
+      added = await invoke(sessionSuggestionHandlers, "session.suggestions.add", {
+        sessionKey,
+        text: "Check this",
+      });
+      expect(addSpy).toHaveBeenCalledOnce();
+    } finally {
+      addSpy.mockRestore();
+    }
+    expect(
+      memorySessionActorOwners.read({
+        agentId: "main",
+        path: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: "main",
+          env: { OPENCLAW_STATE_DIR: otherRoot },
+        }),
+      }),
+    ).toBeUndefined();
+    expect(added).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ suggestion: expect.objectContaining({ text: "Check this" }) }),
+    );
+    const suggestion = (added.mock.calls[0]![1] as { suggestion: { id: string } }).suggestion;
+    const listed = await invoke(sessionSuggestionHandlers, "session.suggestions.list", {
+      sessionKey,
+    });
+    expect(listed).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ suggestions: [expect.objectContaining({ id: suggestion.id })] }),
+    );
+    const dismissed = await invoke(sessionSuggestionHandlers, "session.suggestions.resolve", {
+      sessionKey,
+      id: suggestion.id,
+      resolution: "dismiss",
+    });
+    expect(dismissed).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ suggestion: expect.objectContaining({ state: "dismissed" }) }),
+    );
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();
   }
 });
 
-it("retains an actor Side chat source while writing its separate durable destination and refuses replacement", async () => {
+it("retains an unbound memory Side chat source for durable writes and refuses a closed transport", async () => {
   const sessionKey = "agent:main:dashboard:incognito-side-chat";
   const sessionId = "side-chat-source";
   const entry = { sessionId, updatedAt: 1, lifecycleRevision: "first", incognito: true as const };
-  await actor.sessions.create(authority, { sessionKey, entry });
-  await actor.sessions.transcript(authority, {
-    type: "session.message.append",
-    input: {
-      sessionKey,
-      sessionId,
-      fence: {},
-      message: { role: "user", content: "Original private context", timestamp: 1 },
-    },
+  await seed({
+    sessionKey,
+    entry,
+    transcriptEvents: [
+      { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
+      {
+        type: "message",
+        id: "private-context",
+        parentId: null,
+        message: { role: "user", content: "Original private context", timestamp: 1 },
+      },
+    ],
   });
   const destination = { agentId: "main", sessionKey: "agent:main:companion-destination" };
   await upsertSessionEntryCore(destination, {
@@ -215,9 +274,13 @@ it("retains an actor Side chat source while writing its separate durable destina
         await resume.promise;
       }
       request.assertSourceCurrent?.();
-      await patchSessionEntryCore(destination, () => ({ label: "After" }), {
-        workerGuard: { source: request.assertSourceCurrent },
-      });
+      await patchSessionEntryCore(
+        destination,
+        () => ({ label: pause ? "Unexpected write" : "After" }),
+        {
+          workerGuard: { source: request.assertSourceCurrent },
+        },
+      );
       return "Answer";
     },
   );
@@ -232,48 +295,45 @@ it("retains an actor Side chat source while writing its separate durable destina
   });
   context.sessionCompanion = companion;
   try {
-    await withIncognitoSessionActor(actor, async () => {
-      const first = await invoke(sessionCompanionHandlers, "sessions.companion.ask", {
-        sessionKey,
-        question: "Summarize",
-      });
-      expect(first.mock.calls).toEqual([[true, { answer: "Answer", ts: 10 }]]);
-      pause = true;
-      const pending = invoke(sessionCompanionHandlers, "sessions.companion.ask", {
-        sessionKey,
-        question: "Again",
-      });
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Side chat returned before model execution",
-        );
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey, storePath: actor.path },
-          { ...entry, lifecycleRevision: "replacement" },
-        );
-      } finally {
-        resume.resolve();
-      }
-      const rejected = await pending;
-      expect(rejected).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
+    const first = await invoke(sessionCompanionHandlers, "sessions.companion.ask", {
+      sessionKey,
+      question: "Summarize",
     });
+    expect(first.mock.calls).toEqual([[true, { answer: "Answer", ts: 10 }]]);
+    pause = true;
+    const pending = invoke(sessionCompanionHandlers, "sessions.companion.ask", {
+      sessionKey,
+      question: "Again",
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Side chat returned before model execution",
+      );
+      memorySessionActorOwners.closeSession(location, sessionKey);
+      client.invalidated = true;
+    } finally {
+      resume.resolve();
+    }
+    const rejected = await pending;
+    expect(rejected).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
     expect(loadSessionEntry(destination)?.label).toBe("After");
   } finally {
     resume.resolve();
     companion.dispose();
     context.sessionCompanion = undefined;
+    client.invalidated = false;
   }
 });
 
-it("attaches actor skill pins for the next turn and refuses a detached revision", async () => {
+it("attaches unbound memory skill pins for the next turn and refuses a detached revision", async () => {
   const sessionKey = "agent:main:dashboard:incognito-skills";
-  await actor.sessions.create(authority, {
+  await seed({
     sessionKey,
     entry: { sessionId: "skills", updatedAt: 1, incognito: true },
   });
@@ -290,52 +350,50 @@ it("attaches actor skill pins for the next turn and refuses a detached revision"
     ],
   ]);
   const entry = (saved.mock.calls[0]![1] as { entry: { skillId: string; revision: string } }).entry;
-  await withIncognitoSessionActor(actor, async () => {
-    const attached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
-      sessionKey,
-      skillId: entry.skillId,
-      action: "attach",
-    });
-    expect(attached).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        sessionActivation: "next-turn",
-        selections: [expect.objectContaining({ skillId: entry.skillId, revision: entry.revision })],
-      }),
-      undefined,
-    );
-    const listed = await invoke(skillsLibraryHandlers, "skills.library.list", { sessionKey });
-    expect(listed).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        session: expect.objectContaining({
-          selections: [expect.objectContaining({ skillId: entry.skillId })],
-        }),
-      }),
-      undefined,
-    );
-    const detached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
-      sessionKey,
-      skillId: entry.skillId,
-      action: "detach",
-    });
-    expect(detached.mock.calls).toEqual([
-      [true, expect.objectContaining({ selections: [] }), undefined],
-    ]);
-    const denied = await invoke(skillsLibraryHandlers, "skills.library.read", {
-      sessionKey,
-      skillId: entry.skillId,
-      revision: entry.revision,
-    });
-    expect(denied).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ details: { code: "SKILL_LIBRARY_FORBIDDEN" } }),
-    );
+  const attached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
+    sessionKey,
+    skillId: entry.skillId,
+    action: "attach",
   });
+  expect(attached).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      sessionActivation: "next-turn",
+      selections: [expect.objectContaining({ skillId: entry.skillId, revision: entry.revision })],
+    }),
+    undefined,
+  );
+  const listed = await invoke(skillsLibraryHandlers, "skills.library.list", { sessionKey });
+  expect(listed).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      session: expect.objectContaining({
+        selections: [expect.objectContaining({ skillId: entry.skillId })],
+      }),
+    }),
+    undefined,
+  );
+  const detached = await invoke(skillsLibraryHandlers, "skills.library.activate", {
+    sessionKey,
+    skillId: entry.skillId,
+    action: "detach",
+  });
+  expect(detached.mock.calls).toEqual([
+    [true, expect.objectContaining({ selections: [] }), undefined],
+  ]);
+  const denied = await invoke(skillsLibraryHandlers, "skills.library.read", {
+    sessionKey,
+    skillId: entry.skillId,
+    revision: entry.revision,
+  });
+  expect(denied).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ details: { code: "SKILL_LIBRARY_FORBIDDEN" } }),
+  );
 });
 
-it("restores a refused actor task suggestion and retains accepted chat authority after its ACK", async () => {
+it("restores a refused unbound memory task suggestion and retains accepted chat authority after its ACK", async () => {
   const sessionKey = "agent:main:dashboard:incognito-task-rollback";
   const entry = {
     sessionId: "task-rollback",
@@ -343,10 +401,7 @@ it("restores a refused actor task suggestion and retains accepted chat authority
     lifecycleRevision: "first",
     incognito: true as const,
   };
-  await actor.sessions.create(authority, { sessionKey, entry });
-  const originalActors = captureOpenClawAgentDatabaseExecution
-    .listIncognito(env)
-    .map((owner) => owner.identity.incarnation);
+  await seed({ sessionKey, entry });
   let refuse = true;
   let acceptedAuthority: SessionMutationAuthorization | undefined;
   const delivery = vi.spyOn(chatSend, "handleChatSend").mockImplementation(async (options) => {
@@ -384,65 +439,51 @@ it("restores a refused actor task suggestion and retains accepted chat authority
   const deletion = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
   const host = observeHostDataSql();
   try {
-    await withIncognitoSessionActor(actor, async () => {
-      const created = await invoke(taskSuggestionsHandlers, "taskSuggestions.create", {
-        title: "Follow up",
-        prompt: "Continue the synthetic task",
-        tldr: "Synthetic task",
-        cwd: process.cwd(),
-        sessionKey,
-        agentId: "main",
-      });
-      expect(created.mock.calls).toEqual([
-        [true, expect.objectContaining({ taskId: expect.any(String) }), undefined],
-      ]);
-      const taskId = (created.mock.calls[0]![1] as { taskId: string }).taskId;
-      const rejected = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
-        taskId,
-        mode: "session",
-      });
-      expect(rejected.mock.calls).toEqual([
-        [
-          false,
-          undefined,
-          expect.objectContaining({ message: "delivery refused before admission" }),
-        ],
-      ]);
-      const restored = await invoke(taskSuggestionsHandlers, "taskSuggestions.list", {
-        sessionKey,
-      });
-      expect(restored.mock.calls).toEqual([
-        [true, { suggestions: [expect.objectContaining({ id: taskId })] }, undefined],
-      ]);
-      expect((await actor.sessions.read(authority, { sessionKey })).entry?.sessionId).toBe(
-        entry.sessionId,
-      );
-      expect(deletion).not.toHaveBeenCalled();
-      refuse = false;
-      const accepted = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
-        taskId,
-        mode: "session",
-      });
-      expect(accepted.mock.calls).toEqual([[true, { taskId, key: sessionKey }, undefined]]);
-      assert(acceptedAuthority);
-      // Detached chat work prepares this same authority after the task RPC has acknowledged.
-      const forwarded = await prepareSessionSourceAuthority(acceptedAuthority.assertCurrent);
-      try {
-        forwarded.assertCurrent();
-      } finally {
-        await forwarded.release?.();
-      }
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey, storePath: actor.path },
-        { ...entry, lifecycleRevision: "replacement" },
-      );
-      expect(() => acceptedAuthority!.assertCurrent()).toThrow();
-      expect(
-        captureOpenClawAgentDatabaseExecution
-          .listIncognito(env)
-          .map((owner) => owner.identity.incarnation),
-      ).toEqual(originalActors);
+    const created = await invoke(taskSuggestionsHandlers, "taskSuggestions.create", {
+      title: "Follow up",
+      prompt: "Continue the synthetic task",
+      tldr: "Synthetic task",
+      cwd: process.cwd(),
+      sessionKey,
+      agentId: "main",
     });
+    expect(created.mock.calls).toEqual([
+      [true, expect.objectContaining({ taskId: expect.any(String) }), undefined],
+    ]);
+    const taskId = (created.mock.calls[0]![1] as { taskId: string }).taskId;
+    const rejected = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
+      taskId,
+      mode: "session",
+    });
+    expect(rejected.mock.calls).toEqual([
+      [false, undefined, expect.objectContaining({ message: "delivery refused before admission" })],
+    ]);
+    const restored = await invoke(taskSuggestionsHandlers, "taskSuggestions.list", {
+      sessionKey,
+    });
+    expect(restored.mock.calls).toEqual([
+      [true, { suggestions: [expect.objectContaining({ id: taskId })] }, undefined],
+    ]);
+    expect(
+      memorySessionActorOwners.read(location)?.readSession(sessionKey, authority)?.entry?.sessionId,
+    ).toBe(entry.sessionId);
+    expect(deletion).not.toHaveBeenCalled();
+    refuse = false;
+    const accepted = await invoke(taskSuggestionsHandlers, "taskSuggestions.accept", {
+      taskId,
+      mode: "session",
+    });
+    expect(accepted.mock.calls).toEqual([[true, { taskId, key: sessionKey }, undefined]]);
+    assert(acceptedAuthority);
+    // Detached chat work prepares this same authority after the task RPC has acknowledged.
+    const forwarded = await prepareSessionSourceAuthority(acceptedAuthority.assertCurrent);
+    try {
+      forwarded.assertCurrent();
+    } finally {
+      await forwarded.release?.();
+    }
+    memorySessionActorOwners.closeSession(location, sessionKey);
+    expect(() => acceptedAuthority!.assertCurrent()).toThrow();
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();

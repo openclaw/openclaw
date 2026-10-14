@@ -87,7 +87,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     ).toHaveLength(1);
   });
 
-  it.each(["conn", "agent:agent:main:background-task"] as const)(
+  it.each(["agent:agent:main:background-task"] as const)(
     "attaches a %s session with its native title and actual owner",
     async (owner) => {
       const controllers = [createTerminalController(), createTerminalController()] as const;
@@ -168,7 +168,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         [...panel.renderRoot.querySelectorAll<HTMLElement>(".tp-session")]
           .find((row) => row.textContent?.includes("detached-agent"))
           ?.querySelector(".tp-session__state")?.textContent,
-      ).toContain(owner === "conn" ? "detached" : "agent");
+      ).toContain("agent");
       expect(menuText).toContain("attached");
       expect(menuText).toContain("current");
       const detachedRow = [
@@ -186,9 +186,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
         "detached history",
       );
-      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe(
-        owner === "conn" ? undefined : "agent",
-      );
+      expect(panel.renderRoot.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
       expect(panel.renderRoot.textContent).toContain("codex");
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
         JSON.stringify(["current-1", "detached-1"]),

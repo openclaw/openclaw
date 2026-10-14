@@ -144,6 +144,16 @@ suite.define(() => {
             methodResponses: {
               [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
               "progressCard.get": { card: null },
+              "cron.list": {
+                jobs: [],
+                total: 0,
+                limit: 200,
+                offset: 0,
+                hasMore: false,
+                nextOffset: null,
+                snapshotRevision: "footer-inventory",
+              },
+              "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
               [checksMethod]: {
                 owner: "example",
                 repo: "demo",
@@ -216,14 +226,22 @@ suite.define(() => {
           await waitForChatScrollIdle(page);
           await capture("01-pr-and-error");
 
-          // Details must keep PR actions outside the notice/input footer.
+          // Details clips overflowing rows; its scrollport must stay above the notice.
+          const detailsBottom = await page
+            .getByRole("dialog", { name: "Details", exact: true })
+            .evaluate((element) => element.getBoundingClientRect().bottom);
+          const noticeTop = await page
+            .locator(".chat-error")
+            .evaluate((element) => element.getBoundingClientRect().top);
+          expect(detailsBottom).toBeLessThanOrEqual(noticeTop);
+          // Bring the action into view through Details without moving the transcript reader.
+          await pullRequest.locator(".chat-pr__link").click({ trial: true });
           const overlap = await pullRequest.evaluate((element) => {
             const row = element.getBoundingClientRect();
             const notice = document.querySelector(".chat-error")!.getBoundingClientRect();
             return Math.max(0, Math.min(row.bottom, notice.bottom) - Math.max(row.top, notice.top));
           });
           expect(overlap).toBe(0);
-          await pullRequest.locator(".chat-pr__link").click({ trial: true });
           expect(await readerAnchor()).toEqual(beforeNotice);
 
           if (!touch) {
@@ -255,6 +273,7 @@ suite.define(() => {
           await gateway.waitForRequest(checksMethod);
           const menu = page.locator(".chat-pr__checks-menu");
           await menu.waitFor({ state: "visible" });
+          await menu.locator('input[name="autoFix"]:enabled').waitFor({ state: "visible" });
           const menuBounds = (await menu.boundingBox())!;
           const contextBounds = (await page.locator(".chat-footer__context").boundingBox())!;
           expect(menuBounds.y).toBeLessThan(contextBounds.y);

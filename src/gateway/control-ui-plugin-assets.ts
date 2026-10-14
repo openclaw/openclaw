@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   PluginControlUiActivation,
   PluginControlUiDiagnostic,
@@ -7,10 +8,12 @@ import type {
   PluginsControlUiCatalog,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readPluginControlUiAssets,
   type PluginControlUiAsset,
 } from "../plugins/control-ui-assets.js";
+import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { loadPluginManifest, type PluginManifestControlUi } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -37,6 +40,8 @@ import {
 } from "./http-request-authority.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+
+const log = createSubsystemLogger("gateway/control-ui");
 
 const MAX_CONTROL_UI_PLUGINS = 64;
 const MAX_CONTROL_UI_CATALOG_BYTES = 64 * 1024 * 1024;
@@ -143,6 +148,12 @@ async function snapshotBrowserBuild(
   const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
     record.rootDir,
     declaration,
+    {
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+        origin: record.origin,
+        rootDir: record.rootDir,
+      }),
+    },
   );
   const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
   for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
@@ -198,10 +209,21 @@ async function refreshBrowserCatalog(
       if (reloadManifest) {
         // Explicit UI reload owns a fresh metadata read without replacing the
         // backend's process-stable manifest, imports, or registration authority.
+        const rootDir = record.rootDir;
+        if (!rootDir) {
+          throw new Error("plugin is no longer active");
+        }
+        const rejectManifestHardlinks = shouldRejectHardlinkedPluginFiles({
+          origin: record.origin,
+          rootDir,
+        });
         const loaded = withPluginCache(createPluginCache(), () =>
-          loadPluginManifest(record.rootDir!, true, record.rootDir),
+          loadPluginManifest(rootDir, rejectManifestHardlinks, rootDir),
         );
-        if (!loaded.ok || loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
+        if (!loaded.ok) {
+          throw new Error(loaded.error);
+        }
+        if (loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
           throw new Error("active plugin browser declaration is missing or invalid");
         }
         declaration = loaded.manifest.controlUi;
@@ -238,7 +260,10 @@ async function refreshBrowserCatalog(
       state.revisions.set(revisionKey, build);
       state.build = build;
       delete state.diagnostic;
-    } catch {
+    } catch (error) {
+      log.warn(
+        `Browser assets unavailable for plugin ${record.id}: ${formatErrorMessage(error, { includeCode: true })}`,
+      );
       state.diagnostic = {
         pluginId: record.id,
         message: "Control UI assets could not be loaded. Build the plugin and reload its UI.",

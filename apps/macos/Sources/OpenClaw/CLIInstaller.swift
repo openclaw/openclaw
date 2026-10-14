@@ -571,6 +571,22 @@ enum CLIInstaller {
         -> ManagedCLIUpdateOutcome
     {
         let executable = self.managedExecutableLocation()
+        // A CLI update may have advanced the runtime after the app selected its receipt.
+        // Reconcile at the update owner; an unreadable version keeps the existing repair path.
+        if !repair,
+           case let .ready(_, installedVersion) = await self.managedStatus(
+               expectedVersion: nil, installedCLI: installedCLI, usesBundledRuntime: false),
+           CLIInstallPrompter.isManagedUpgrade(found: targetVersion, required: installedVersion)
+        {
+            do { try await checkCurrent?() } catch {
+                return .failure(
+                    message: String(localized: "Gateway update failed."),
+                    details: error.localizedDescription)
+            }
+            await statusHandler(String(
+                format: String(localized: "OpenClaw Gateway %@ is installed."), installedVersion))
+            return .success(fromVersion: installedVersion, toVersion: installedVersion)
+        }
         await statusHandler(repair
             ? String(localized: "Repairing the OpenClaw Gateway update…")
             : String(format: String(localized: "Updating the OpenClaw Gateway to %@…"), targetVersion))
@@ -619,6 +635,22 @@ enum CLIInstaller {
         let reportedStatus = summary?.status
         guard response.success, reportedStatus != "error", reportedStatus != "warning" else {
             let reason = summary?.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Another updater can win between the version probe and CLI dispatch.
+            // The CLI's downgrade refusal preserves that newer installation; verify it
+            // rather than retrying the obsolete receipt or granting downgrade consent.
+            if !repair, reason == "downgrade-confirmation-required",
+               case let .ready(_, installedVersion) = await self.managedStatus(
+                   expectedVersion: nil, installedCLI: installedCLI, usesBundledRuntime: false),
+               CLIInstallPrompter.isManagedUpgrade(found: targetVersion, required: installedVersion)
+            {
+                do { try await checkCurrent?() } catch {
+                    return .failure(
+                        message: String(localized: "Gateway update failed."), details: error.localizedDescription)
+                }
+                await statusHandler(String(
+                    format: String(localized: "OpenClaw Gateway %@ is installed."), installedVersion))
+                return .success(fromVersion: summary?.before?.version, toVersion: installedVersion)
+            }
             let failedStep = summary?.steps?.last(where: { ($0.exitCode ?? 0) != 0 })
             let message = if reportedStatus == "warning" {
                 String(localized: "Gateway update needs attention.")
@@ -637,10 +669,12 @@ enum CLIInstaller {
         }
 
         let managedStatus = await self.managedStatus(
-            expectedVersion: targetVersion,
+            expectedVersion: nil,
             installedCLI: installedCLI,
             usesBundledRuntime: false)
-        guard case let .ready(_, installedVersion) = managedStatus else {
+        guard case let .ready(_, installedVersion) = managedStatus,
+              self.satisfiesUpdateTarget(installedVersion: installedVersion, targetVersion: targetVersion)
+        else {
             let message = String(localized: "Gateway update finished, but verification failed.")
             await statusHandler(message)
             return .failure(message: message, details: managedStatus.message)
@@ -653,6 +687,11 @@ enum CLIInstaller {
         return .success(
             fromVersion: summary?.before?.version,
             toVersion: installedVersion)
+    }
+
+    static func satisfiesUpdateTarget(installedVersion: String, targetVersion: String) -> Bool {
+        Semver.satisfiesExpectedGatewayVersion(installed: installedVersion, expected: targetVersion) ||
+            CLIInstallPrompter.isManagedUpgrade(found: targetVersion, required: installedVersion)
     }
 
     static func automaticInstallTarget(appVersion: String?, isDebug: Bool) -> InstallTarget? {

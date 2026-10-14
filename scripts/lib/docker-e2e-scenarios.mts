@@ -304,6 +304,12 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     weight: 3,
   }),
+  npmLane("muse-runtime", {
+    needsPackage: true,
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
   serviceLane("codex-media-path", {
     prepublishPluginPackages: ["@openclaw/codex"],
     resources: ["npm"],

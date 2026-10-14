@@ -79,6 +79,14 @@ The four Copilot exports and their earlier deprecation entries were removed in
 [`f2de06b38de710854aacd19218327358445816c8`](https://github.com/openclaw/openclaw/commit/f2de06b38de710854aacd19218327358445816c8);
 third-party plugins must own their provider-specific token exchange and caching.
 
+### Tool argument redaction
+
+`sanitizeToolArgs` was removed from `openclaw/plugin-sdk/agent-harness-runtime`
+on October 11, 2026, as part of the maintainer-approved removal of automatic
+tool argument and result masking. Remove its import and pass arguments unchanged.
+There is no replacement or compatibility masking path. Logging and diagnostic
+redaction helpers remain available.
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from
@@ -282,9 +290,9 @@ timeline for current status.
     `resolveDefaultThinkingLevel(ctx)`.
 
     **New**: a single `resolveThinkingProfile(ctx)` that returns a
-    `ProviderThinkingProfile` with the canonical `id`, optional `label`, and a
-    ranked level list. OpenClaw downgrades stale stored values by profile rank
-    automatically.
+    `ProviderThinkingProfile` with the standard `id`, optional `label`, and a
+    ranked level list. OpenClaw clamps unsupported requests by profile rank
+    during execution, preserving the stored preference across model switches.
 
     The context includes `provider`, `modelId`, optional merged `reasoning`,
     and optional merged model `compat` facts. Provider plugins can use those
@@ -471,7 +479,7 @@ timeline for current status.
   </Accordion>
 
   <Accordion title="OpenClawSchemaType alias -> OpenClawConfig">
-    The `OpenClawSchemaType` root-SDK alias was removed. Use the canonical
+    The `OpenClawSchemaType` root-SDK alias was removed. Use the primary
     `OpenClawConfig` name.
 
     ```typescript

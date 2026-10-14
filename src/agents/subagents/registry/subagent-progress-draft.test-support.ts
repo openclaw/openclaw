@@ -34,6 +34,8 @@ export function useSubagentProgressCohort(fixture: { readonly stateDir: string }
       await registerSubagentRun({
         runId: id,
         childSessionKey: childKey(id),
+        childAgentId: "main",
+        sessionEntry: { sessionId: `${id}-session` },
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterDisplayKey: requesterKey,

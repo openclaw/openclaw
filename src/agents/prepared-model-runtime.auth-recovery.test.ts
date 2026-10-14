@@ -44,6 +44,7 @@ import {
 } from "../plugins/runtime/generation-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import { PreparedModelRuntimeAuthPublicationOwner } from "./prepared-model-runtime-auth-publication.js";
 import {
@@ -120,6 +121,7 @@ async function listModels(config: OpenClawConfig) {
         makeContextParams({ loadGatewayModelCatalogSnapshot: loader }),
       ),
       getRuntimeConfig: getConfig,
+      getCommittedRuntimeConfig: getConfig,
     },
     respond,
   });
@@ -128,7 +130,7 @@ async function listModels(config: OpenClawConfig) {
 
 describe("configured plugin generation recovery", () => {
   it.each([true])(
-    "retains exact thinking policy across a stale mark (borrowed Gateway registry=%s)",
+    "retains exact thinking policy until registry replacement (borrowed Gateway registry=%s)",
     async (borrowed) => {
       const provider = "stale-policy-fixture";
       const entry = { provider, id: "reasoner", name: "Reasoner", reasoning: true };
@@ -209,7 +211,7 @@ describe("configured plugin generation recovery", () => {
           // Committing the Gateway successor, not staling the catalog, closes the lender.
           gateway.publish(ambient);
           expect(isPluginRegistryRetired(registry)).toBe(true);
-          expect(readThinking()?.defaultLevel).toBe("high");
+          expect(readThinking).toThrow(PluginInstanceUnavailableError);
           await disposePluginRegistryInstances(registry);
         }
       } finally {
@@ -545,6 +547,7 @@ describe("prepared model auth publication", () => {
       version: 1,
       profiles: { "test:primary": { type: "token", provider: "test", token: "synthetic-token" } },
     };
+    prepareSharedAuthStoreOwnershipForNative(fixture.state.env);
     snapshots.setRuntimeAuthProfileStoreSnapshot(store, agentDir);
     const initial = await publishPreparedModelRuntimeSnapshot(input);
     const events = vi.fn();

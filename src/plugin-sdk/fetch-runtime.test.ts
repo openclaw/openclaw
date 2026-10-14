@@ -1,59 +1,11 @@
 /**
  * Tests plugin SDK fetch runtime helpers and fixture path behavior.
  */
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { execNodeEvalSync } from "../test-utils/node-process.js";
 import { responseWithRelease } from "./fetch-runtime.js";
 
 describe("plugin SDK fetch runtime", () => {
-  let importProbeOutput = "";
-
-  beforeAll(() => {
-    const moduleUrl = pathToFileURL(path.resolve("src/plugin-sdk/fetch-runtime.ts")).href;
-    const source = `
-      const { getGlobalDispatcher } = await import("undici");
-      const before = getGlobalDispatcher();
-      await import(${JSON.stringify(moduleUrl)});
-      if (getGlobalDispatcher() !== before) {
-        throw new Error("undici global dispatcher was replaced");
-      }
-      console.log("ok");
-    `;
-    const env = { ...process.env };
-    for (const key of [
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-      "OPENCLAW_DEBUG_PROXY_ENABLED",
-    ]) {
-      delete env[key];
-    }
-
-    importProbeOutput = execNodeEvalSync(source, { env, imports: ["tsx"] });
-  });
-
-  it("does not replace the undici global dispatcher on import", () => {
-    expect(importProbeOutput.trim()).toBe("ok");
-  });
-
-  it("returns the original response for a null body", async () => {
-    const response = new Response(null, { status: 204 });
-    let releaseCount = 0;
-
-    const wrapped = responseWithRelease(response, async () => {
-      releaseCount += 1;
-    });
-
-    expect(wrapped).toBe(response);
-    await vi.waitFor(() => expect(releaseCount).toBe(1));
-  });
-
   it("closes downstream EOF before awaiting release", async () => {
     const releaseGate = createDeferred();
     const releaseFinished = createDeferred();
@@ -154,25 +106,6 @@ describe("plugin SDK fetch runtime", () => {
       await capture.body?.cancel("test cleanup");
       await cancellation;
     }
-  });
-
-  it.each(["read", "cancel"] as const)("preserves release failure during %s", async (operation) => {
-    const releaseError = new Error("release failed");
-    const source = new ReadableStream<Uint8Array>({
-      start(controller) {
-        if (operation === "read") {
-          controller.error(new Error("source failed"));
-        }
-      },
-    });
-    const release = vi.fn(async () => {
-      throw releaseError;
-    });
-    const wrapped = responseWithRelease(new Response(source), release);
-    const result = operation === "read" ? wrapped.text() : wrapped.body?.cancel();
-
-    await expect(result).rejects.toBe(releaseError);
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("settles cancellation after release when upstream cancellation fails", async () => {

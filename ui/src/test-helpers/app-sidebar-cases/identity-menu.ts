@@ -7,7 +7,7 @@ import {
   resolveUpdateAttentionDismissal,
 } from "../../components/sidebar-attention-dismissals.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar footer identity menu", () => {
   it("opens Profile from the Owner header without a self user", async () => {
@@ -15,19 +15,20 @@ describe("AppSidebar footer identity menu", () => {
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
       createSessions("main", ["agent:main:main"]),
     );
-    sidebar.onNavigate = vi.fn();
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
     sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
-    const header = menu?.querySelector<HTMLElement>('wa-dropdown-item[value="command:profile"]');
+    const header = menu?.querySelector<HTMLElement>('[data-value="command:profile"]');
     expect(header?.querySelector(".sidebar-identity-menu__name")?.textContent?.trim()).toBe(
       "Owner",
     );
     expect(header?.querySelector('[data-viewer-id="owner"]')?.textContent).toContain("O");
-    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: header }, bubbles: true }));
+    header?.click();
     await sidebar.updateComplete;
-    expect(sidebar.onNavigate).toHaveBeenCalledWith("profile", {
+    expect(onNavigate).toHaveBeenCalledWith("profile", {
       hash: "#settings-profile-identity",
     });
   });
@@ -161,9 +162,13 @@ describe("AppSidebar footer identity menu", () => {
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
     expect(identity?.getAttribute("aria-expanded")).toBe("true");
     expect(
-      [...(menu?.children ?? [])]
-        .filter((element) => element.localName === "wa-dropdown-item")
-        .map((element) => element.getAttribute("value")),
+      [...(menu?.querySelectorAll<HTMLElement>('[role^="menuitem"][data-value]') ?? [])]
+        .filter(
+          (element) =>
+            element.closest('[role="menu"]') === menu &&
+            !element.closest(".sidebar-identity-menu__footer"),
+        )
+        .map((element) => element.getAttribute("data-value")),
     ).toEqual([
       "command:profile",
       "command:settings",
@@ -197,7 +202,7 @@ describe("AppSidebar footer identity menu", () => {
     );
     expect(
       menu
-        ?.querySelector('wa-dropdown-item[value="command:settings"] .session-menu__shortcut')
+        ?.querySelector('[data-value="command:settings"] .session-menu__shortcut')
         ?.textContent?.replace(/\s+/gu, "")
         .trim(),
     ).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
@@ -217,8 +222,8 @@ describe("AppSidebar footer identity menu", () => {
     await (helpRow as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)?.updateComplete;
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
     expect(
-      [...(helpRow?.querySelectorAll('wa-dropdown-item[slot="submenu"] a[href]') ?? [])].map(
-        (link) => link.getAttribute("href"),
+      [...(helpRow?.parentElement?.querySelectorAll('[role="menu"] a[href]') ?? [])].map((link) =>
+        link.getAttribute("href"),
       ),
     ).toEqual([
       "https://docs.openclaw.ai",
@@ -227,9 +232,8 @@ describe("AppSidebar footer identity menu", () => {
       "https://docs.openclaw.ai/releases",
     ]);
 
-    menu?.querySelector<HTMLElement>('wa-dropdown-item[value="command:profile"]')?.focus();
+    menu?.querySelector<HTMLElement>('[data-value="command:profile"]')?.focus();
     menu?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    menu?.dispatchEvent(new CustomEvent("wa-after-hide"));
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-menu")).toBeNull();
     expect(document.activeElement).toBe(identity);
@@ -237,12 +241,8 @@ describe("AppSidebar footer identity menu", () => {
     identity?.click();
     await sidebar.updateComplete;
     const reopened = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
-    const profile = reopened?.querySelector<HTMLElement>(
-      'wa-dropdown-item[value="command:profile"]',
-    );
-    reopened?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: profile }, bubbles: true }),
-    );
+    const profile = reopened?.querySelector<HTMLElement>('[data-value="command:profile"]');
+    profile?.click();
     await sidebar.updateComplete;
     expect(onNavigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
     expect(sidebar.querySelector(".sidebar-identity-menu")).toBeNull();
@@ -265,46 +265,45 @@ describe("AppSidebar footer identity menu", () => {
       await sidebar.updateComplete;
 
       const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
-      const items = Array.from(menu?.children ?? []).filter(
-        (item): item is HTMLElement & { active: boolean } =>
-          item instanceof HTMLElement &&
-          item.localName === "wa-dropdown-item" &&
-          !item.hasAttribute("disabled"),
+      const items = [
+        ...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"][data-value]') ?? []),
+      ].filter(
+        (item) =>
+          item.closest('[role="menu"]') === menu &&
+          !item.hasAttribute("disabled") &&
+          !item.closest(".sidebar-identity-menu__footer"),
       );
       const lastItem = items.at(-1);
       const theme = menu?.querySelector<HTMLButtonElement>(".theme-mode-toggle");
-      const build = document.createElement("a");
-      build.href = "#build";
-      menu?.querySelector(".sidebar-mode-switch")?.insertAdjacentElement("beforebegin", build);
-
-      const arrow = (target: HTMLElement | undefined, key: "ArrowDown" | "ArrowUp") => {
+      const build = menu?.querySelector<HTMLAnchorElement>(".sidebar-footer-build");
+      const arrow = async (
+        target: HTMLElement | null | undefined,
+        key: "ArrowDown" | "ArrowUp",
+      ) => {
         target?.dispatchEvent(
           new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
         );
+        await sidebar.updateComplete;
       };
-      items.forEach((item) => (item.active = item === lastItem));
       lastItem?.focus();
-      arrow(lastItem, "ArrowDown");
-      expect(document.activeElement).toBe(build);
-      arrow(build, "ArrowDown");
+      await arrow(lastItem, "ArrowDown");
+      if (build) {
+        expect(document.activeElement).toBe(build);
+        await arrow(build, "ArrowDown");
+      }
       expect(document.activeElement).toBe(theme);
-      arrow(theme ?? undefined, "ArrowUp");
-      expect(document.activeElement).toBe(build);
-      arrow(build, "ArrowUp");
+      await arrow(theme, "ArrowUp");
+      if (build) {
+        expect(document.activeElement).toBe(build);
+        await arrow(build, "ArrowUp");
+      }
       expect(document.activeElement).toBe(lastItem);
-      expect(lastItem?.active).toBe(true);
-
-      build.remove();
-      arrow(lastItem, "ArrowDown");
-      expect(document.activeElement).toBe(theme);
-      arrow(theme ?? undefined, "ArrowUp");
-      expect(document.activeElement).toBe(lastItem);
+      expect(lastItem?.getAttribute("data-highlighted")).not.toBeNull();
 
       items[0]?.focus();
-      items.forEach((item) => (item.active = item === items[0]));
-      arrow(items[0], "ArrowUp");
+      await arrow(items[0], "ArrowUp");
       expect(document.activeElement).toBe(theme);
-      arrow(theme ?? undefined, "ArrowDown");
+      await arrow(theme, "ArrowDown");
       expect(document.activeElement).toBe(items[0]);
     },
   );

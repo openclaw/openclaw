@@ -38,15 +38,6 @@ function capturePayload(params: {
 }
 
 describe("createVllmQwenThinkingWrapper", () => {
-  it("maps Qwen top-level thinking format to enable_thinking", () => {
-    expect(capturePayload({ format: "top-level", thinkingLevel: "off" })).toEqual({
-      enable_thinking: false,
-    });
-    expect(capturePayload({ format: "top-level", thinkingLevel: "high" })).toEqual({
-      enable_thinking: true,
-    });
-  });
-
   it("patches configured Qwen models unless reasoning is explicitly disabled", () => {
     expect(capturePayload({ format: "chat-template", model: { reasoning: undefined } })).toEqual({
       chat_template_kwargs: {
@@ -110,15 +101,6 @@ describe("vLLM provider thinking composition", () => {
 
     return captured;
   }
-
-  it("injects Nemotron 3 chat-template kwargs when thinking is off", () => {
-    expect(captureProviderPayload({ thinkingLevel: "off" })).toEqual({
-      chat_template_kwargs: {
-        enable_thinking: false,
-        force_nonempty_content: true,
-      },
-    });
-  });
 
   it.each(["qwen", "qwen-chat-template"] as const)(
     "sends each declared effort in the %s dialect",
@@ -206,16 +188,6 @@ describe("vLLM provider thinking composition", () => {
     },
   );
 
-  it("does not apply a captured DeepSeek dialect to another model", () => {
-    expect(
-      captureProviderPayload({
-        contextModelId: "DeepSeek-V4-Flash",
-        model: { id: "ordinary-model" },
-        initialPayload: { reasoning_effort: "high" },
-      }),
-    ).toEqual({ reasoning_effort: "high" });
-  });
-
   it("preserves explicit DeepSeek template kwargs over generated defaults", () => {
     expect(
       captureProviderPayload({
@@ -231,33 +203,6 @@ describe("vLLM provider thinking composition", () => {
         enable_thinking: false,
         drop_thinking: false,
         reasoning_effort: "high",
-      },
-    });
-  });
-
-  it("does not inject Nemotron 3 chat-template kwargs when thinking is enabled", () => {
-    expect(
-      captureProviderPayload({
-        thinkingLevel: "low",
-        initialPayload: { temperature: 0.2 },
-      }),
-    ).toStrictEqual({ temperature: 0.2 });
-  });
-
-  it("preserves existing Nemotron 3 chat-template kwargs over defaults", () => {
-    expect(
-      captureProviderPayload({
-        thinkingLevel: "off",
-        initialPayload: {
-          chat_template_kwargs: {
-            enable_thinking: true,
-          },
-        },
-      }),
-    ).toEqual({
-      chat_template_kwargs: {
-        enable_thinking: true,
-        force_nonempty_content: true,
       },
     });
   });

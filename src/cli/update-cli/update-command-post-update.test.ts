@@ -856,10 +856,18 @@ describe("successful update finalization ordering", () => {
       ready: true,
     },
     {
-      owner: "worker from a shipped updater",
+      owner: "unadopted worker from a shipped updater",
       candidateRuntime: true,
       marker: false,
       runs: false,
+      ready: true,
+    },
+    {
+      owner: "adopted worker from a shipped updater",
+      candidateRuntime: true,
+      adoptedFinalization: true as const,
+      marker: false,
+      runs: true,
       ready: true,
     },
     {
@@ -871,11 +879,11 @@ describe("successful update finalization ordering", () => {
     },
   ])(
     "runs deferred Doctor inspections after the restart for the $owner",
-    async ({ candidateRuntime, marker, runs, ready }) => {
+    async ({ candidateRuntime, adoptedFinalization, marker, runs, ready }) => {
       const root = tempDirs.make("post-activation-inspections-");
       const lintLog = path.join(root, "lint.json");
       const findings = [
-        ...(!candidateRuntime
+        ...(!candidateRuntime || adoptedFinalization
           ? [
               {
                 checkId: "core/doctor/runtime-tool-schemas",
@@ -900,14 +908,14 @@ process.exitCode = 1;
       );
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
       if (marker) {
-        vi.stubEnv("OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS", "1");
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS", "reported-checks");
       }
       const plugins = { ...successfulPluginUpdate, changed: false };
       mocks.updatePlugins.mockResolvedValue(plugins);
       mocks.completePluginUpdate.mockImplementation(async ({ beforeDoctor }) => {
         await beforeDoctor?.();
         expect(process.env.OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS).toBe(
-          runs ? "1" : "0",
+          runs ? "reported-checks" : "0",
         );
         return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
       });
@@ -930,6 +938,11 @@ process.exitCode = 1;
         cwd: root,
         durationMs: 1,
         exitCode: 0,
+        deferredInspectionCheckIds: [
+          "core/doctor/hooks-model",
+          "core/doctor/runtime-tool-schemas",
+          "core/doctor/provider-catalog-projection",
+        ],
       };
       const initialSteps = [doctorStep];
 
@@ -944,7 +957,7 @@ process.exitCode = 1;
           result: { status: "ok", mode: "npm", root, steps: initialSteps, durationMs: 1 },
           packageUpdateNodeRunner: process.execPath,
         },
-        { candidateRuntime },
+        { candidateRuntime, adoptedFinalization },
       );
 
       expect(events).toEqual(["restart"]);
@@ -977,7 +990,7 @@ process.exitCode = 1;
       doctor.parseOptions(lint.argv.slice(1));
       const options = doctor.opts();
       expect(options.severityMin).toBe("info");
-      expect(options.only).toHaveLength(12);
+      expect(options.only).toHaveLength(3);
       expect(options.only).toEqual(
         expect.arrayContaining([
           "core/doctor/hooks-model",
@@ -994,11 +1007,14 @@ process.exitCode = 1;
         expect.objectContaining({
           name: "post-activation doctor inspections",
           exitCode: 1,
-          ...(!candidateRuntime
+          ...(!candidateRuntime || adoptedFinalization
             ? { warnings: ["core/doctor/runtime-tool-schemas: Plugin drift."] }
             : {}),
           doctorLintFindings: findings,
-          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+          advisory: {
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining("openclaw doctor --lint --all --severity-min info"),
+          },
         }),
       ]);
       expect(mocks.printResult.mock.lastCall?.[0].status).toBe("ok");

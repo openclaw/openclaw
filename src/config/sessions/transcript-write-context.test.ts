@@ -4,6 +4,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
@@ -35,6 +36,7 @@ async function withWriteTarget(
   await withOpenClawTestState(
     { label: "owned-transcript-commit", scenario: "minimal" },
     async (state) => {
+      setRuntimeConfigSnapshot({});
       await run(
         {
           agentId: "main",

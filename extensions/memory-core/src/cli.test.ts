@@ -9,6 +9,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -58,6 +62,7 @@ async function seedCliBackfillTranscript(
   days: string[],
   metadata: Partial<Parameters<typeof upsertSessionEntry>[0]["entry"]> = {},
 ): Promise<void> {
+  setRuntimeConfigSnapshot(getRuntimeConfig());
   const agentId = "main";
   const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
   const storePath = path.join(sessionsDir, "sessions.json");
@@ -91,8 +96,15 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOrigina
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
-  getRuntimeConfig,
   resolveDefaultAgentId,
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => {
+    const cfg = getRuntimeConfig();
+    setRuntimeConfigSnapshot(cfg);
+    return cfg;
+  },
 }));
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
@@ -126,6 +138,7 @@ beforeEach(() => {
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   process.exitCode = 0;
@@ -451,13 +464,6 @@ describe("memory cli", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
     await fs.mkdir(workspaceDir, { recursive: true });
-    await seedCliBackfillTranscript("drain", ["2026-01-01", "2026-01-02", "2026-01-03"]);
-    await seedCliBackfillTranscript("excluded", ["2026-01-04"], {
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "discord", to: "channel:admission-fixture" },
-        origin: { provider: "discord", to: "channel:admission-fixture" },
-      }),
-    });
     getRuntimeConfig.mockReturnValue({
       plugins: {
         entries: {
@@ -466,6 +472,13 @@ describe("memory cli", () => {
           },
         },
       },
+    });
+    await seedCliBackfillTranscript("drain", ["2026-01-01", "2026-01-02", "2026-01-03"]);
+    await seedCliBackfillTranscript("excluded", ["2026-01-04"], {
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:admission-fixture" },
+        origin: { provider: "discord", to: "channel:admission-fixture" },
+      }),
     });
 
     mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close: vi.fn() });
@@ -629,8 +642,6 @@ describe("memory cli", () => {
 
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
-
-    expect(getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
 
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expectLogged(log, "Vector store: ready");
@@ -1326,8 +1337,6 @@ describe("memory cli", () => {
 
     const writeJson = spyRuntimeJson(defaultRuntime);
     await runMemoryCli(["search", "hidden codeword", "--agent", "main", "--json"]);
-
-    expect(getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
 
     expect(firstWrittenJsonArg(writeJson)).toEqual({
       results: [],

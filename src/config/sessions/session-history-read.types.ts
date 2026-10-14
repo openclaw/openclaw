@@ -27,6 +27,7 @@ export type SessionPreviewItem = {
 export type SessionBranchSummarySnapshot = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
   appendSafe?: boolean;
+  source?: { sessionId: string; databaseIdentity: string };
 };
 
 export type SessionBranchSummaryReadResult =
@@ -64,6 +65,8 @@ export type PreparedSessionTranscriptHydration =
       kind: "bounded";
       snapshot: SessionTranscriptBoundedActiveContext;
       transcript?: SessionTranscriptAnchorFacts;
+      /** Byte and sequence facts for the actor's bounded context residency. */
+      residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
     };
 
 export type SessionPendingInputReceipt =

@@ -51,6 +51,7 @@ export function createSessionRowRefresh(
   let exactPreparations = 0;
   let exactPreparationsIdle: Deferred | undefined;
   let selectionPreparation: Promise<void> | undefined;
+  const runtimeOwnershipRetries = new Set<string>();
   // Admission and the background drain must share each pending database acquisition.
   let refreshing: Promise<void> | undefined;
   function releaseExactRead(id: string, read: ExactRowPreparation) {
@@ -183,7 +184,16 @@ export function createSessionRowRefresh(
       },
       {
         refreshPending: options.materialize === false ? () => false : materializer.refreshPending,
-        accept: (ids, facts) => materializer.accept(ids, facts, options),
+        accept: (ids, facts) => {
+          materializer.accept(ids, facts, options);
+          for (const id of ids) {
+            if (owner.rows.get(id)?.retainedDatabaseFacts?.runtimeOwnershipRetryPending) {
+              runtimeOwnershipRetries.add(id);
+            } else {
+              runtimeOwnershipRetries.delete(id);
+            }
+          }
+        },
       },
     );
   }
@@ -202,16 +212,20 @@ export function createSessionRowRefresh(
     }
     // Accepted database facts already own selection metadata, even while display is dirty.
     for (const id of owner.dirty) {
-      const row = owner.rows.get(id);
-      const facts = row?.retainedDatabaseFacts;
-      if (
-        !records.isPreparedSessionRowDatabaseFacts(facts) ||
-        (!records.canRetainSessionRowRuntimeOwnership(facts) && !row?.pendingDatabaseFacts)
-      ) {
+      if (rowNeedsDatabaseRead(id)) {
         return true;
       }
     }
     return false;
+  }
+  // Selection and its read loop must agree on this predicate, or preparation never settles.
+  function rowNeedsDatabaseRead(id: string) {
+    const row = owner.rows.get(id);
+    const facts = row?.retainedDatabaseFacts;
+    return (
+      !records.isPreparedSessionRowDatabaseFacts(facts) ||
+      (!records.canRetainSessionRowRuntimeOwnership(facts) && !row?.pendingDatabaseFacts)
+    );
   }
   function retainExactPreparation() {
     exactPreparations++;
@@ -250,6 +264,7 @@ export function createSessionRowRefresh(
     // Lists share metadata readiness, then only their exact pages build display rows.
     selectionPreparation = owner.runAsOwner(async () => {
       try {
+        const attempted = new Set<string>();
         while (selectionNeedsPreparation()) {
           for (
             let pending = owner.prepareRegistryFacts();
@@ -271,9 +286,7 @@ export function createSessionRowRefresh(
           const selected = new Set<string>();
           const held = new Set<Promise<void>>();
           for (const id of owner.dirty) {
-            if (
-              records.isPreparedSessionRowDatabaseFacts(owner.rows.get(id)?.retainedDatabaseFacts)
-            ) {
+            if (attempted.has(id) || !rowNeedsDatabaseRead(id)) {
               continue;
             }
             const pending = bulkReads.get(id) ?? exactReads.get(id)?.completion.promise;
@@ -282,6 +295,13 @@ export function createSessionRowRefresh(
             } else if (selected.add(id).size === MAX_SESSION_ROW_FACTS_KEYS) {
               break;
             }
+          }
+          // Nothing left to read or await: stop rather than spin in microtasks.
+          if (selected.size === 0 && held.size === 0) {
+            break;
+          }
+          for (const id of selected) {
+            attempted.add(id);
           }
           if (selected.size > 0) {
             const read = createDeferredCore();
@@ -421,12 +441,22 @@ export function createSessionRowRefresh(
       // Preserve page priority across search/placement awaits and metadata preparation.
       const release = retainExactPreparation();
       try {
+        // Retry once per foreground request, outside its readiness loops and background drain.
+        for (const id of runtimeOwnershipRetries) {
+          const row = owner.rows.get(id);
+          if (row?.retainedDatabaseFacts?.runtimeOwnershipRetryPending) {
+            row.pendingDatabaseFacts = undefined;
+            owner.dirty.add(id);
+          }
+        }
+        runtimeOwnershipRetries.clear();
         return await consume();
       } finally {
         release();
       }
     },
     dispose(this: void) {
+      runtimeOwnershipRetries.clear();
       exactPreparationsIdle?.resolve();
       for (const [id, read] of queuedExactReads) {
         read.completion.reject(new Error("Session row projection is no longer active"));

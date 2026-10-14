@@ -1,12 +1,12 @@
 import { createMemo, type Accessor } from "solid-js";
 import type { IdentityAvatarInput } from "../../lib/identity-avatar.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { resolveIdentityAvatarView } from "../identity-avatar-view.ts";
-import { useIdentityApplication } from "./identity-application.ts";
 
 export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
-  const application = useIdentityApplication();
+  const application = useOptionalApplication();
   const directory = application
     ? projectSource(profileDirectory(application.gateway), {
         read: (source) => source,

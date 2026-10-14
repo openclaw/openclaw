@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import {
@@ -14,6 +15,65 @@ import { stageSandboxMedia } from "./stage-sandbox-media.js";
 const sandboxMocks = vi.hoisted(() => ({ ensureSandboxWorkspaceForSession: vi.fn() }));
 vi.mock("../../agents/sandbox.js", () => sandboxMocks);
 beforeEach(() => sandboxMocks.ensureSandboxWorkspaceForSession.mockReset());
+
+it.each(["settled", "failed", "aborted"] as const)(
+  "settles attribution before attachment staging (%s)",
+  async (outcome) => {
+    await withSandboxMediaTempHome("openclaw-attribution-media-", async (home) => {
+      const source = path.join(home, ".openclaw", "media", "inbound", "synthetic.png");
+      await fs.mkdir(path.dirname(source), { recursive: true });
+      await fs.writeFile(source, "synthetic image bytes");
+      const workspaceDir = path.join(home, "workspace");
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const { ctx, sessionCtx } = createSandboxMediaContexts(source);
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      const controller = new AbortController();
+      const failure = new Error("capture no longer active");
+      const pending = stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg: createSandboxMediaStageConfig(home),
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        abortSignal: controller.signal,
+        awaitSessionDiffBaseline: () => {
+          entered.resolve();
+          return baseline.promise;
+        },
+      });
+      void pending.catch(() => {});
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "Media bypassed attribution");
+        expect(sandboxMocks.ensureSandboxWorkspaceForSession).not.toHaveBeenCalled();
+        await expect(fs.stat(workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+        if (outcome === "failed") {
+          baseline.reject(failure);
+          await expect(pending).rejects.toBe(failure);
+        } else {
+          if (outcome === "aborted") {
+            controller.abort(failure);
+          }
+          baseline.resolve();
+          if (outcome === "aborted") {
+            await expect(pending).rejects.toBe(failure);
+          } else {
+            const result = await pending;
+            expect(
+              await fs.readFile(path.resolve(workspaceDir, result.staged.get(0)!), "utf8"),
+            ).toBe("synthetic image bytes");
+          }
+        }
+        expect(sandboxMocks.ensureSandboxWorkspaceForSession).toHaveBeenCalledTimes(
+          outcome === "settled" ? 1 : 0,
+        );
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+      }
+    });
+  },
+);
 
 it.each([
   { sandbox: false, reference: "path-only" },

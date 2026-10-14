@@ -11,7 +11,7 @@ import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxContext } from "./context.js";
 import type { prepareLocalSandboxWorkspace } from "./local-workspace.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 
 const projection = vi.hoisted(() => ({
@@ -64,6 +64,7 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
         },
       });
       let revoked = false;
+      const releaseProjection = vi.fn();
       const refusal = new Error("Local sandbox workspace authority changed");
       projection.prepare.mockImplementationOnce(async (params) => {
         const assertCurrent = () => {
@@ -83,6 +84,7 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
             return result;
           },
           checkpoint: async () => {},
+          [Symbol.dispose]: releaseProjection,
         };
       });
       const entered = createDeferred();
@@ -100,7 +102,7 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
         config,
         sessionKey,
         workspaceDir,
-        preparedRuntimeStatus: resolveSandboxRuntimeStatus({
+        preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
           cfg: config,
           sessionKey,
           preparedSessionEntry: null,
@@ -118,6 +120,7 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
         const result = await preparation.catch((error: unknown) => error);
         expect(await fs.readFile(targetSkills, "utf8")).toBe("preserve-managed-skills");
         expect(result).toMatchObject({ code: "sandbox_provisioning", cause: refusal });
+        expect(releaseProjection).toHaveBeenCalledOnce();
       } finally {
         resume.resolve();
         await preparation.catch(() => {});

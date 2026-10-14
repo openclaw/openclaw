@@ -36,6 +36,9 @@ export class CronService implements CronServiceContract {
   }
 
   async start() {
+    if (this.state.schedulerStarted && !this.state.stopped) {
+      return;
+    }
     const generation = this.state.lifecycleGeneration;
     const pending = this.startState;
     if (pending) {
@@ -65,7 +68,6 @@ export class CronService implements CronServiceContract {
 
   private async startOnce(generation: number) {
     this.startInProgress += 1;
-    this.state.schedulerStarted = false;
     try {
       const start = () => lifecycleOps.start(this.state);
       await (this.state.deps.runSchedulerOwned

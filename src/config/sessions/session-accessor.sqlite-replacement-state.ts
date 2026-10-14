@@ -40,6 +40,7 @@ import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sql
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   captureSessionEntryPublicationSource,
+  discardSessionEntryPublicationSource,
   hasSessionEntryPublicationCapacity,
 } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
@@ -125,7 +126,8 @@ export function prepareSessionEntryReplacementPublication(
         ],
         hasBoard: postimage?.sideTables.hasBoard ?? committed?.row.board_present === 1,
         activitySummaryWatermark: readSessionActivitySummary(projectedEntry)
-          ? readSessionTranscriptWatermarkInDatabase(database, projectedEntry.sessionId)
+          ? (postimage?.transcriptWatermark ??
+            readSessionTranscriptWatermarkInDatabase(database, projectedEntry.sessionId))
           : undefined,
       }),
     );
@@ -193,12 +195,16 @@ export function boundSessionEntryReplacementPublication(
   publication: SessionEntryReplacementPublication,
   envelope: unknown = publication,
 ): void {
-  if (!publication.fullEntries || hasSessionEntryPublicationCapacity(envelope)) {
+  if (
+    (!publication.fullEntries && !publication.actorPostimages) ||
+    hasSessionEntryPublicationCapacity(envelope)
+  ) {
     return;
   }
   delete publication.fullEntries;
+  delete publication.actorPostimages;
   if (publication.source) {
-    delete publication.source.writeToken;
+    discardSessionEntryPublicationSource(publication.source);
   }
 }
 

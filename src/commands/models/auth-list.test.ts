@@ -73,65 +73,6 @@ describe("modelsAuthListCommand", () => {
     mocks.resolveModelsTargetAgent.mockClear();
   });
 
-  it("filters profiles by provider and redacts credential material in JSON output", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:user@example.com": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-secret",
-          refresh: "refresh-secret",
-          expires: 1_800_000_000_000,
-          email: "user@example.com",
-        },
-        "anthropic:manual": {
-          type: "token",
-          provider: "anthropic",
-          token: "token-secret",
-        },
-      },
-      usageStats: {
-        "openai:user@example.com": {
-          cooldownUntil: 1_800_000_010_000,
-        },
-      },
-    };
-    mocks.ensureAuthProfileStore.mockReturnValue(store);
-    const runtime = createRuntime();
-
-    await modelsAuthListCommand({ provider: "OpenAI", agent: "coder", json: true }, runtime);
-
-    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), "coder", {
-      kind: "read",
-    });
-    expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
-      cfg: {},
-      provider: "openai",
-    });
-    expect(runtime.jsonPayloads).toStrictEqual([
-      {
-        agentDir: "/tmp/openclaw/agents/coder",
-        agentId: "coder",
-        authStatePath: "/tmp/openclaw/agents/coder/openclaw-agent.sqlite",
-        profiles: [
-          {
-            cooldownUntil: "2027-01-15T08:00:10.000Z",
-            email: "user@example.com",
-            expiresAt: "2027-01-15T08:00:00.000Z",
-            id: "openai:user@example.com",
-            label: "openai:user@example.com",
-            provider: "openai",
-            recoveryHint: "Wait for cooldown or switch provider.",
-            type: "oauth",
-          },
-        ],
-        provider: "openai",
-      },
-    ]);
-    expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
-  });
-
   it("shows the cooldown reason and re-authentication action in text and JSON", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,

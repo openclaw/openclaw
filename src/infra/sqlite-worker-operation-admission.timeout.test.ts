@@ -12,9 +12,42 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import { settleSqliteWorkerOperationContext } from "./sqlite-worker-operation-settlement.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("rolls back when broker custody is revoked after the host grant but before native use", () => {
+  const database = new DatabaseSync(":memory:");
+  database.exec("CREATE TABLE proof (value INTEGER)");
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  const admit = vi.fn((_request, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    custody.retire();
+    return "ok";
+  });
+  try {
+    expect(() =>
+      withSqliteWorkerOperationAdmission(
+        { port: admission.port, requestCustody: custody.descriptor },
+        () =>
+          runSqliteImmediateTransactionSync(database, () => {
+            database.exec("INSERT INTO proof VALUES (1)");
+            requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          }),
+      ),
+    ).toThrow("request custody is revoked");
+    expect(admit).toHaveBeenCalledOnce();
+    expect(database.prepare("SELECT * FROM proof").all()).toEqual([]);
+  } finally {
+    admission.finish();
+    database.close();
+  }
+});
 
 it.each(["transaction", "commit"] as const)(
   "keeps a non-cron $stage write waiting past one second without an explicit deadline",

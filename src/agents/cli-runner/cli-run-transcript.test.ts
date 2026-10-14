@@ -56,6 +56,7 @@ it.each([
       const result = await persistCliAssistantTranscript({
         runParams: {
           ...target,
+          config: {},
           sessionFile: `sqlite://agents/main/${target.sessionId}`,
           workspaceDir: root,
           prompt: "Review the worker result",
@@ -117,6 +118,7 @@ it.each([
       const result = await persistCliAssistantTranscript({
         runParams: {
           ...target,
+          config: {},
           sessionFile: `sqlite://agents/main/${target.sessionId}`,
           workspaceDir: root,
           prompt: "make an artifact",

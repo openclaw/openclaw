@@ -1,8 +1,12 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import { LobsterPetController, type LobsterPetProps } from "./lobster-pet-controller.ts";
-import { LobsterPetDismissMenu } from "./lobster-pet-dismiss-menu.tsx";
+import type { LobsterPetProps } from "./lobster-pet-contract.ts";
+import { LobsterPetController } from "./lobster-pet-controller.ts";
 import { LobsterPetScene } from "./lobster-pet-scene-view.tsx";
+
+const LobsterPetDismissMenu = lazy(() => import("./lobster-pet-dismiss-menu.tsx"), {
+  export: "LobsterPetDismissMenu",
+});
 
 // A bridge remount retires the view, not the host's once-per-load visitor history.
 const pets = new WeakMap<HTMLElement, LobsterPetController>();
@@ -39,11 +43,17 @@ export const LobsterPet = defineSolidBridge<LobsterPetProps>(
     return (
       <>
         <LobsterPetScene scene={scene()} />
-        <LobsterPetDismissMenu
-          position={position()}
-          onDismiss={(permanently) => pet.dismiss(permanently)}
-          onClose={() => pet.closeMenu()}
-        />
+        <Show when={position()}>
+          {(menuPosition) => (
+            <Loading>
+              <LobsterPetDismissMenu
+                position={menuPosition()}
+                onDismiss={(permanently) => pet.dismiss(permanently)}
+                onClose={() => pet.closeMenu()}
+              />
+            </Loading>
+          )}
+        </Show>
       </>
     );
   },

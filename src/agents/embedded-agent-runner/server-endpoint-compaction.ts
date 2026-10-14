@@ -12,7 +12,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
-import { redactTranscriptMessage } from "../transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
 import {
@@ -75,13 +75,12 @@ export async function attemptServerEndpointCompaction(params: {
       );
       return undefined;
     }
-    // The returned window can carry these sources verbatim, and a window that transcript
-    // redaction would change cannot be stored. Decide before paying for the endpoint call.
-    const windowSource = findEndpointWindowRedactionSource(params);
+    // Retained windows must already contain canonical image payloads.
+    const windowSource = findEndpointWindowNormalizationSource(params);
     if (windowSource) {
       log.warn(
-        `Responses compact endpoint skipped: its ${windowSource} would require transcript ` +
-          "redaction in the stored window; using client compaction",
+        `Responses compact endpoint skipped: its ${windowSource} would require image ` +
+          "normalization in the stored window; using client compaction",
       );
       return undefined;
     }
@@ -138,19 +137,19 @@ export async function attemptServerEndpointCompaction(params: {
         return undefined;
       }
     }
-    const redacted = redactTranscriptMessage(replacement, params.config);
+    const normalized = sanitizeTranscriptMessage(replacement);
     if (
-      redacted.role !== "assistant" ||
-      !isDeepStrictEqual(redacted.providerReplay, replacement.providerReplay)
+      normalized.role !== "assistant" ||
+      !isDeepStrictEqual(normalized.providerReplay, replacement.providerReplay)
     ) {
-      throw new Error("Responses compact endpoint window requires transcript redaction");
+      throw new Error("Responses compact endpoint window requires image normalization");
     }
     await withSessionManagerWrite(params.sessionManager, async () => {
       params.requestOptions.signal?.throwIfAborted();
       params.assertActive?.();
       const rewritten = await rewriteTranscriptEntriesInSessionManager({
         sessionManager: params.sessionManager,
-        replacements: [{ entryId: owner.id, message: redacted }],
+        replacements: [{ entryId: owner.id, message: normalized }],
         preserveReplacementCompactionReplay: true,
       });
       if (
@@ -179,8 +178,8 @@ export async function attemptServerEndpointCompaction(params: {
   }
 }
 
-/** Name the first request source the endpoint may retain that redaction would rewrite. */
-function findEndpointWindowRedactionSource(params: {
+/** Name the first request source the endpoint may retain that image normalization would rewrite. */
+function findEndpointWindowNormalizationSource(params: {
   model: Parameters<typeof supportsNativeOpenAIResponsesEndpoint>[0];
   context: { systemPrompt: string; messages: readonly AgentMessage[] };
   config?: OpenClawConfig;
@@ -192,13 +191,12 @@ function findEndpointWindowRedactionSource(params: {
       content: params.context.systemPrompt,
       timestamp: 0,
     };
-    if (redactTranscriptMessage(prompt, params.config) !== prompt) {
+    if (sanitizeTranscriptMessage(prompt) !== prompt) {
       return "system prompt";
     }
   }
   return params.context.messages.some(
-    (message) =>
-      message.role === "user" && redactTranscriptMessage(message, params.config) !== message,
+    (message) => message.role === "user" && sanitizeTranscriptMessage(message) !== message,
   )
     ? "user message"
     : undefined;

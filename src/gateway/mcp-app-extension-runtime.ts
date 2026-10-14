@@ -222,6 +222,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     lease = await acquireSessionMcpRuntime({
       sessionId,
       sessionKey,
+      agentId,
       workspaceDir,
       agentDir: resolveAgentDir(cfg, agentId),
       cfg,

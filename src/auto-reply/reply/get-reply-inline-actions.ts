@@ -20,6 +20,7 @@ import {
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
+import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -324,7 +325,7 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const dependencies = await import("../../agents/openclaw-tools.js");
+      const { createOpenClawToolsAsync } = await import("../../agents/openclaw-tools.js");
       const { hasAnyAuthProfileStoreSourceAsync } =
         await import("../../agents/auth-profiles/source-check.js");
       const authSourceAgentDir = agentDir?.trim();
@@ -372,7 +373,7 @@ export async function handleInlineActions(
             toolName: dispatch.toolName,
           },
         },
-        dependencies,
+        { createOpenClawToolsAsync },
       );
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
@@ -390,7 +391,7 @@ export async function handleInlineActions(
         opts?.abortSignal?.throwIfAborted();
         if (opts?.runId) {
           const transcriptStart =
-            opts.onAgentRunStart && params.sessionEntry?.sessionId
+            (opts.onPreparedAgentRunStart || opts.onAgentRunStart) && params.sessionEntry?.sessionId
               ? await (
                   await import("../../config/sessions/session-transcript-watermark.js")
                 ).readSessionTranscriptStartAsync({
@@ -406,18 +407,20 @@ export async function handleInlineActions(
               : null;
           opts.abortSignal?.throwIfAborted();
           // Tool commands leave transcript persistence with ordinary reply dispatch.
-          opts.onAgentRunStart?.(
-            opts.runId,
-            undefined,
-            {
+          notifyPreparedAgentRunStart(opts, {
+            runId: opts.runId,
+            options: {
               completionSource: "reply-dispatch",
               getResult: () => ({}),
             },
             transcriptStart,
-          );
+          });
         }
         // The execution owner can observe revocation while arming cancellation.
+        await opts?.awaitSessionDiffBaseline?.();
         opts?.abortSignal?.throwIfAborted();
+        opts?.operatorAuthority?.assertCurrent();
+        command.assertOwnerCurrent?.();
         const result = asOptionalObjectRecord(
           await tool.execute(toolCallId, toolArgs, opts?.abortSignal),
         );
@@ -524,6 +527,10 @@ export async function handleInlineActions(
 
   const runCommands = async (commandInput: typeof command) => {
     const { handleCommands } = await commandsRuntimeLoader.load();
+    await opts?.awaitSessionDiffBaseline?.();
+    opts?.abortSignal?.throwIfAborted();
+    opts?.operatorAuthority?.assertCurrent();
+    commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
       ...commandParams,
       // Command handlers mutate the continuation context and retain the dispatch context.

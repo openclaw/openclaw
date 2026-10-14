@@ -7,10 +7,11 @@ import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 import {
   CONFLICT_METHOD,
   matchDialect,
+  SQLITE_PRIMITIVE_OWNERS,
   type DialectMatch,
 } from "./lib/sqlite-dialect-constructs.mts";
 
-// Keep the production scope identical to database-worker-inventory.mjs.
+// Share test exclusions with database-worker-inventory.mjs.
 const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
 type DialectSite = DialectMatch & { line: number; column: number };
@@ -21,7 +22,12 @@ const SQL_STATEMENT =
   /^[\s(]*(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH|CREATE|DROP|ALTER|PRAGMA|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|VACUUM|ATTACH|DETACH|ANALYZE|REINDEX|EXPLAIN)\b/u;
 
 function productionFile(file: string) {
-  return /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) && !excluded.test(file);
+  return (
+    /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) &&
+    !excluded.test(file) &&
+    // PostgreSQL shares JSON function/operator names with SQLite; these artifacts contain no SQLite.
+    !/^src\/state\/postgres-schema\.generated\/[^/]+\.postgres\.sql$/u.test(file)
+  );
 }
 
 function gitPaths(root: string, args: string[]) {
@@ -60,7 +66,12 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const sites: DialectSite[] = [];
   const add = (match: DialectMatch, position: number) => {
     const { line, character } = source.getLineAndCharacterOfPosition(position);
-    sites.push({ ...match, line: line + 1, column: character + 1 });
+    sites.push({
+      ...match,
+      owner: match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
+      line: line + 1,
+      column: character + 1,
+    });
   };
   const literal = (node: ts.StringLiteral | ts.TemplateLiteralToken, owner: boolean) => {
     for (const match of matchDialect(node.text, owner)) {

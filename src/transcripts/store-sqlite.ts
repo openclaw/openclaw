@@ -60,6 +60,13 @@ export function transcriptSummaryInputRevisionFromRow(
   });
 }
 
+/** Descriptor custody tolerates accepted speech, but not changed metadata. */
+export function transcriptSessionInputRevisionFromRow(
+  row: Pick<MeetingTranscriptSessionRow, "title" | "source_json" | "metadata_json" | "stopped_at">,
+): string {
+  return transcriptSummaryInputRevisionFromRow({ ...row, next_utterance_seq: 0 });
+}
+
 export function readTranscriptSummaryInputRevision(
   database: DatabaseSync,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
@@ -119,13 +126,17 @@ export function readRecentStoppedTranscriptSession(
       .where("stopped_at", "<=", stoppedBefore)
       .where((eb) =>
         eb.and(
-          (["accountId", "guildId", "channelId", "meetingUrl", "threadTs", "fileId"] as const).map(
-            (key) =>
-              eb(
-                eb.fn<string | null>("json_extract", [eb.ref("source_json"), eb.val(`$.${key}`)]),
-                source[key] === undefined ? "is" : "=",
-                source[key] ?? null,
-              ),
+          (
+            [
+              ["accountId", "source_account_id"],
+              ["guildId", "source_guild_id"],
+              ["channelId", "source_channel_id"],
+              ["meetingUrl", "source_meeting_url"],
+              ["threadTs", "source_thread_ts"],
+              ["fileId", "source_file_id"],
+            ] as const
+          ).map(([key, column]) =>
+            eb(column, source[key] === undefined ? "is" : "=", source[key] ?? null),
           ),
         ),
       )

@@ -127,9 +127,11 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn fresh_install_carries_null_definition_and_bundled_path() {
+fn fresh_install_with_unknown_mutation_capability_carries_null_definition_and_bundled_path() {
     let fixture = Fixture::new();
-    fixture.write_state(&fixture.absent());
+    let mut absent = fixture.absent();
+    absent["service"]["definitionMutation"] = "unknown".into();
+    fixture.write_state(&absent);
     fresh(&fixture.cli(), &fixture.runtime(), &|| true).unwrap();
     assert_eq!(fixture.installs(), 1);
     assert_eq!(
@@ -186,17 +188,11 @@ fn fresh_install_marks_a_preexisting_canonical_launcher_after_health() {
 }
 
 #[test]
-fn fresh_install_does_not_mark_an_existing_launcher_after_health_failure() {
+fn fresh_install_does_not_mark_an_existing_launcher_after_health_inspection_failure() {
     let fixture = Fixture::new();
     let wrapper = fixture.canonical_launcher();
     let original = fs::read(&wrapper).unwrap();
-    let mut failed = fixture.healthy();
-    failed["service"]["runtime"]["status"] = "stopped".into();
-    fs::write(
-        fixture.0.join("healthy.json"),
-        serde_json::to_vec(&failed).unwrap(),
-    )
-    .unwrap();
+    fs::write(fixture.0.join("healthy.json"), "invalid JSON").unwrap();
     fixture.write_state(&fixture.absent());
     assert!(fresh(&fixture.cli(), &fixture.runtime(), &|| true).is_err());
     assert_eq!(fs::read(wrapper).unwrap(), original);
@@ -427,6 +423,27 @@ fn health_requires_the_intended_service_and_its_listener_not_the_inspecting_cli_
     let mut state = healthy;
     state["port"]["listeners"][0] = serde_json::json!({ "pid": 9000, "ppid": 4100 });
     assert!(Observation(state).healthy_for(&fixture.runtime()));
+}
+
+#[test]
+fn fresh_activation_waits_for_service_start_but_existing_activation_respects_stop() {
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime();
+    for pointer in ["/service/loaded", "/service/runtime/status"] {
+        let mut starting = fixture.healthy();
+        *starting.pointer_mut(pointer).unwrap() = if pointer.ends_with("loaded") {
+            false.into()
+        } else {
+            "stopped".into()
+        };
+        let observation = Observation(starting);
+        assert_eq!(observation.check_health(&runtime, true), Ok(false));
+        assert_eq!(observation.check_health(&runtime, false), Err(UNHEALTHY));
+    }
+    assert_eq!(
+        Observation(fixture.healthy()).check_health(&runtime, true),
+        Ok(true)
+    );
 }
 
 #[test]

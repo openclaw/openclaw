@@ -28,7 +28,11 @@ export {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "./sandbox/manage.js";
-export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+export {
+  resolveSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
+  resolvePreparedSandboxRuntimeStatus,
+} from "./sandbox/runtime-status.js";
 
 export { isToolAllowed } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";

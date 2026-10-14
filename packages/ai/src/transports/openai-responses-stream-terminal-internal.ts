@@ -311,7 +311,7 @@ export function createResponsesTerminalController(params: {
     >["response"],
     responseId = response.id,
   ) => {
-    options?.onServiceTier?.(response.service_tier);
+    options?.onServiceTier?.(response.service_tier, response);
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined
@@ -322,8 +322,11 @@ export function createResponsesTerminalController(params: {
       output.usage = {
         ...usage,
         ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+        usageReport: { state: "available" },
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       };
+    } else {
+      output.usage.usageReport = { state: "unavailable" };
     }
     calculateCost(model, output.usage);
     if (options?.applyServiceTierPricing) {
@@ -350,7 +353,9 @@ export function createResponsesTerminalController(params: {
       hasToolCall: blocks.some((block) => block.type === "toolCall"),
     });
     output.stopReason = terminal.stopReason;
-    output.errorMessage = terminal.errorMessage;
+    if (terminal.errorMessage !== undefined) {
+      output.errorMessage = terminal.errorMessage;
+    }
     if (terminalEventType === "response.completed" && typeof response.end_turn === "boolean") {
       output.endTurn = response.end_turn;
     }

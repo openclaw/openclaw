@@ -12,7 +12,7 @@ read_when:
 
 Use when Gateway startup fails with `Invalid config` or hot reload logs say it skipped an invalid edit.
 
-Startup automatically migrates deterministic legacy keys in eligible single-file
+Startup automatically migrates legacy keys with known replacements in eligible single-file
 configs and continues only if the entire result validates, including plugins. It
 keeps the previous config in the `.bak` ring. Configs using `$include`, Nix-managed
 configs, configs written by a newer version, and configs that still fail validation
@@ -42,6 +42,7 @@ Look for:
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
     - `openclaw doctor --fix` owns legacy-key repair. It can also remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
     - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
+    - If OpenClaw cannot save the `.clobbered.*` copy, recovery is deferred with a warning and the active file stays unchanged. Retry recovery once the snapshot lock or storage problem is resolved.
 
   </Accordion>
   <Accordion title="Inspect and repair">

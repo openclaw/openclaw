@@ -7,12 +7,18 @@ import {
   ReefPeerIdentitySchema,
   ReefPeerTrustSchema,
   matchesReefPeerIdentity,
-  sameReefPeerIdentity,
   reefPeerIdentity,
   type ReefAutonomy,
   type ReefPeerIdentity,
   type ReefPeerTrust,
 } from "./friend-types.js";
+import {
+  overdueReefDeliveries,
+  pendingReefRejections,
+  rejectReefDelivery,
+  reserveReefRejection,
+} from "./trust-delivery-transition.js";
+import { transitionReefPeer, type ReefPeerMutation } from "./trust-peer-transition.js";
 import { validateReefPeerIdentity } from "./trust-store-authority.js";
 import {
   MESSAGE_ID_PATTERN,
@@ -20,7 +26,6 @@ import {
   REEF_DELIVERY_STORE_OPTIONS,
   ReefOutboundDeliveryBindingSchema,
   ReefOutboundDeliverySchema,
-  ReefOutboundRejectionSchema,
   ReefRejectionNoticeStateSchema,
   createReefPairingApproval,
   parseReefPairingApproval,
@@ -111,21 +116,13 @@ export class LegacyReefTrustStore {
   set(peer: string, trust: ReefPeerTrust): void {
     this.assertActive?.();
     const parsedTrust = ReefPeerTrustSchema.parse(trust);
-    this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      return { ...current, revision: current.revision + 1, trust: parsedTrust };
-    });
+    this.#mutatePeer({ type: "set", input: { key: this.#key(peer), trust: parsedTrust } });
   }
 
   remove(peer: string, assertCurrent?: () => void): boolean {
     this.assertActive?.();
     assertCurrent?.();
-    return this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      // Keep a revision tombstone: a reconcile that started before this local
-      // revocation must never recreate trust from its stale relay snapshot.
-      return { revision: current.revision + 1 };
-    });
+    return this.#mutatePeer({ type: "remove", input: { key: this.#key(peer) } });
   }
 
   async beginRemoval(peer: string, assertOwnerCurrent?: () => void): Promise<() => Promise<void>> {
@@ -155,15 +152,9 @@ export class LegacyReefTrustStore {
     assertCurrent?.();
     const normalizedAutonomy = ReefAutonomySchema.parse(autonomy);
     const key = this.#key(peer);
-    const changed = this.#requireUpdate()(key, (value) => {
-      const current = parseReefPeerState(value);
-      if (!current.trust) {
-        return undefined;
-      }
-      return {
-        ...current,
-        trust: { ...current.trust, autonomy: normalizedAutonomy },
-      };
+    const changed = this.#mutatePeer({
+      type: "setAutonomy",
+      input: { key, autonomy: normalizedAutonomy },
     });
     if (!changed) {
       throw new Error(`Reef peer @${requirePeer(peer)} is not locally trusted`);
@@ -172,16 +163,9 @@ export class LegacyReefTrustStore {
 
   markSafetyNumberChanged(peer: string, expectedRevision: number): boolean {
     this.assertActive?.();
-    return this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      if (current.revision !== expectedRevision || !current.trust) {
-        return undefined;
-      }
-      return {
-        ...current,
-        revision: current.revision + 1,
-        trust: { ...current.trust, safetyNumberChanged: true },
-      };
+    return this.#mutatePeer({
+      type: "markSafetyNumberChanged",
+      input: { key: this.#key(peer), expectedRevision },
     });
   }
 
@@ -192,27 +176,9 @@ export class LegacyReefTrustStore {
   ): boolean {
     this.assertActive?.();
     const peer = requirePeer(friend.peer);
-    return this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      if (
-        current.revision !== options.expectedRevision ||
-        (options.expectedOutboundRequestId !== undefined &&
-          current.outboundRequests?.[options.expectedOutboundRequestId] === undefined)
-      ) {
-        return undefined;
-      }
-      return {
-        revision: current.revision + 1,
-        trust: {
-          autonomy: current.trust?.autonomy ?? "bounded",
-          ed25519PublicKey: friend.ed25519_pub,
-          x25519PublicKey: friend.x25519_pub,
-          keyEpoch: friend.key_epoch,
-          safetyNumberChanged: false,
-          approvedAt,
-        },
-        ...(current.rejectionNotice ? { rejectionNotice: current.rejectionNotice } : {}),
-      };
+    return this.#mutatePeer({
+      type: "commitPeerTrust",
+      input: { key: this.#key(peer), friend, ...options, approvedAt },
     });
   }
 
@@ -240,13 +206,12 @@ export class LegacyReefTrustStore {
     this.assertActive?.();
     assertOwnerCurrent?.();
     if (
-      !update(key, (value) => {
-        const current = parseReefPeerState(value);
-        return {
-          ...current,
-          outboundRequests: { ...current.outboundRequests, [requestId]: requestedAt },
-        };
-      })
+      !update(key, (value) =>
+        transitionReefPeer(
+          { type: "beginRequest", input: { key, requestId, requestedAt } },
+          parseReefPeerState(value),
+        ),
+      )
     ) {
       throw new Error(`Failed to persist outbound Reef request for @${requirePeer(peer)}`);
     }
@@ -330,15 +295,12 @@ export class LegacyReefTrustStore {
   ): Array<{ peer: string; id: string; sentAt: number }> {
     this.assertActive?.();
     const peers = new Map<string, ReefPeerTrust | undefined>();
-    return currentReefDeliveries(this.stores.deliveries.entries(), this.#prefix, (peer) =>
-      this.#peerForScan(peer, peers),
-    ).flatMap(({ peer, id, delivery }) =>
-      delivery.rejection ||
-      delivery.overdueNotifiedAt !== undefined ||
-      delivery.sentAt === undefined ||
-      delivery.sentAt + olderThanMs > now
-        ? []
-        : [{ peer, id, sentAt: delivery.sentAt }],
+    return overdueReefDeliveries(
+      currentReefDeliveries(this.stores.deliveries.entries(), this.#prefix, (peer) =>
+        this.#peerForScan(peer, peers),
+      ),
+      olderThanMs,
+      now,
     );
   }
 
@@ -432,59 +394,34 @@ export class LegacyReefTrustStore {
     this.assertActive?.();
     const key = this.#deliveryKey(peer, id);
     const expected = this.#parseDeliveryBinding(binding);
-    const current = this.#outboundDelivery(peer, id);
-    if (!current || !matchesReefDeliveryBinding(current, expected)) {
-      return false;
-    }
-    if (current.rejection) {
-      return true;
-    }
     const update = this.stores.deliveries.update;
     if (!update) {
       throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
     }
-    return update(key, (value) => {
-      const parsed = ReefOutboundDeliverySchema.safeParse(value);
-      if (!parsed.success || !matchesReefDeliveryBinding(parsed.data, expected)) {
-        return undefined;
-      }
-      if (parsed.data.rejection) {
-        return parsed.data;
-      }
-      const rejection = ReefOutboundRejectionSchema.parse({
-        ...(category ? { category } : {}),
-        ...(parsed.data.resendDisabled ? { notice: { lastRejectionAt: Date.now() } } : {}),
-      });
-      return { ...parsed.data, rejection };
+    let matched = false;
+    update(key, (value) => {
+      const next = rejectReefDelivery(value, expected, category, Date.now());
+      matched = next !== undefined;
+      return next?.changed ? next.delivery : undefined;
     });
+    return matched;
   }
 
   pendingOutboundRejections(): ReefDeliveryRejection[] {
     this.assertActive?.();
     const peers = new Map<string, ReefPeerTrust | undefined>();
-    return currentReefDeliveries(
-      this.stores.deliveries.entries(),
-      this.#prefix,
-      (peer) => this.#peerForScan(peer, peers),
-      true,
-    )
-      .flatMap(({ peer, id, delivery }) => {
-        if (!delivery.rejection) {
-          return [];
-        }
-        return [
-          {
-            id,
-            peer,
-            recovery: this.#recovery(peer, id, delivery.recipient),
-            recipient: delivery.recipient,
-            ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
-            ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
-            ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
-          },
-        ];
-      })
-      .toSorted((left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1));
+    return pendingReefRejections(
+      currentReefDeliveries(
+        this.stores.deliveries.entries(),
+        this.#prefix,
+        (peer) => this.#peerForScan(peer, peers),
+        true,
+      ),
+    ).map((entry) =>
+      Object.assign(entry, {
+        recovery: this.#recovery(entry.peer, entry.id, entry.recipient),
+      }),
+    );
   }
 
   #recovery(peer: string, id: string, recipient: ReefPeerIdentity): ReefRejectionRecovery {
@@ -519,26 +456,9 @@ export class LegacyReefTrustStore {
       | { kind: "existing"; state: ReefRejectionNoticeState }
       | undefined;
     const updated = update(this.#deliveryKey(peer, id), (value) => {
-      const parsed = ReefOutboundDeliverySchema.safeParse(value);
-      if (
-        !parsed.success ||
-        !parsed.data.rejection ||
-        !sameReefPeerIdentity(parsed.data.recipient, expectedRecipient)
-      ) {
-        return undefined;
-      }
-      if (parsed.data.rejection.notice) {
-        outcome = { kind: "existing", state: parsed.data.rejection.notice };
-        return parsed.data;
-      }
-      outcome = { kind: "reserved" };
-      return {
-        ...parsed.data,
-        rejection: {
-          ...parsed.data.rejection,
-          notice: noticeState,
-        },
-      };
+      const reservation = reserveReefRejection(value, expectedRecipient, noticeState);
+      outcome = reservation?.outcome;
+      return reservation?.delivery;
     });
     if (!updated || !outcome) {
       throw new Error(`Reef rejection ${id} lost its durable delivery state`);
@@ -607,5 +527,11 @@ export class LegacyReefTrustStore {
       throw new Error("Reef peer trust requires atomic plugin-state updates");
     }
     return update;
+  }
+
+  #mutatePeer(command: ReefPeerMutation): boolean {
+    return this.#requireUpdate()(command.input.key, (value) =>
+      transitionReefPeer(command, parseReefPeerState(value)),
+    );
   }
 }

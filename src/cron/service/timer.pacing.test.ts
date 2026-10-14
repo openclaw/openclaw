@@ -4,7 +4,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.test-support.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import type { CronJobRunResult } from "./timer-execution-timeout.js";

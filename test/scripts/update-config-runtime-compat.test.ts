@@ -90,6 +90,48 @@ console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns, di
   expect(result.stderr).toBe("");
 });
 
+it("reports a reader exit without a result while withholding the reader's stderr", async () => {
+  const root = tempDirs.make("openclaw-update-config-exit-");
+  const dist = path.join(root, "dist");
+  await fs.mkdir(dist);
+  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+  await fs.writeFile(
+    path.join(dist, "io.runtime-Candidate.mjs"),
+    `if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
+  process.stderr.write("synthetic-config-secret\\n");
+  process.exit(7);
+}
+export function createConfigIO() { return { loadConfig: () => ({ valid: true }) }; }
+export async function readConfigFileSnapshot() { return { valid: true }; }
+export function readCurrentConfigForPolicyCheck() { return { valid: true }; }
+`,
+  );
+  writeStableRootRuntimeAliases({ rootDir: root });
+  const script = `
+import assert from "node:assert/strict";
+const warnings = [];
+console.warn = (...args) => warnings.push(args.join(" "));
+const reader = await import(${JSON.stringify(pathToFileURL(path.join(dist, "io.runtime.js")).href)});
+await assert.rejects(reader.readConfigFileSnapshot(), { code: "candidate-config-read-failed" });
+assert.throws(() => reader.readCurrentConfigForPolicyCheck(), { code: "candidate-config-read-failed" });
+console.log(JSON.stringify(warnings));
+`;
+  const result = spawnSync(node, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    timeout: 10_000,
+    env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toEqual(
+    Array.from(
+      { length: 2 },
+      () =>
+        "[update:warning:candidate-config-read-failed] Candidate config read failed: reader process exited with code 7 without a result. The existing service definition was left unchanged. Retry with the updated CLI.",
+    ),
+  );
+});
+
 it("reads candidate config after a package swap without reusing the driver's dependencies", async () => {
   const root = tempDirs.make("openclaw-update-config-runtime-");
   const dist = path.join(root, "dist");
@@ -203,7 +245,7 @@ console.log(JSON.stringify(diagnostics));
   expect(result.stderr).toBe("");
   expect(JSON.parse(result.stdout)).toEqual({
     warnings: [
-      "[update:warning:candidate-config-read-failed] Candidate config read failed; the existing service definition was left unchanged. Retry with the updated CLI.",
+      `[update:warning:candidate-config-read-failed] Candidate config read failed: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${dependencyFile}' imported from ${path.join(dist, "io.runtime-Candidate.mjs")}. The existing service definition was left unchanged. Retry with the updated CLI.`,
     ],
     errors: [],
   });

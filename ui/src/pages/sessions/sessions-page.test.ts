@@ -334,20 +334,70 @@ describe("sessions page lifecycle", () => {
     expect(managed.sessions.patch).not.toHaveBeenCalled();
   });
 
-  it("retargets the Gateway after deleting the current session", async () => {
-    const target = sessionRow("work", { key: "agent:writer:work" });
-    const { page, sessions, connection } = await createDeletionPage([target], "writer");
-    connection.emit({ sessionKey: target.key });
-    page.selectedSessions = new Map([[target.key, target]]);
-    vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    await page.deleteSelected();
-    expect(sessions.deleteMany).toHaveBeenCalledWith([
-      { key: target.key, agentId: undefined, expectedSessionId: target.sessionId },
-    ]);
-    expect(connection.setSessionKey).toHaveBeenCalledWith("agent:writer:main");
-    expect(page.result?.sessions).toEqual([]);
-    expect(page.selectedSessions.size).toBe(0);
-  });
+  it.each([false, true])(
+    "retargets only the deleted incarnation (replaced: %s)",
+    async (replaced) => {
+      const target = sessionRow("work", { key: "agent:writer:work" });
+      const { page, sessions, connection, deleteRequest, query, setRows } =
+        await createDeletionPage([target], "writer");
+      const started = createDeferred();
+      const response = createDeferred<SessionDeleteOutcome>();
+      deleteRequest.mockImplementationOnce(() => {
+        started.resolve();
+        return response.promise;
+      });
+      connection.emit({ sessionKey: target.key });
+      vi.mocked(showConfirmDialog).mockResolvedValue(true);
+      const selectRow = () => {
+        const checkbox = page.querySelector<HTMLInputElement>(
+          `input[aria-label="Select session: ${target.key}"]`,
+        );
+        expect(checkbox).not.toBeNull();
+        checkbox!.click();
+      };
+      try {
+        selectRow();
+        await page.updateComplete;
+        const button = [
+          ...page.querySelectorAll<HTMLButtonElement>(".data-table-bulk-bar button"),
+        ].find((entry) => entry.textContent?.trim() === "Delete");
+        expect(button).toBeDefined();
+        button!.click();
+        await started.promise;
+        expect(deleteRequest).toHaveBeenCalledExactlyOnceWith({
+          key: target.key,
+          deleteTranscript: true,
+          expectedSessionId: target.sessionId,
+        });
+        const replacement = { ...target, sessionId: "replacement-work", label: "New work" };
+        setRows(replaced ? [replacement] : []);
+        if (replaced) {
+          await sessions.refreshList({ ...query, force: true });
+          await page.updateComplete;
+          expect(page.result?.sessions).toEqual([replacement]);
+          selectRow();
+          await page.updateComplete;
+          expect(page.selectedSessions.get(target.key)?.sessionId).toBe(replacement.sessionId);
+        }
+        response.resolve({ deleted: true });
+        await vi.mocked(sessions.deleteMany).mock.results[0]!.value;
+        await page.updateComplete;
+        if (replaced) {
+          expect.soft(connection.setSessionKey).not.toHaveBeenCalled();
+          expect.soft(page.selectedSessions.get(target.key)?.sessionId).toBe(replacement.sessionId);
+          expect.soft(sessions.state.deletedSessions).toEqual([]);
+          expect(page.result?.sessions).toEqual([replacement]);
+        } else {
+          expect(connection.setSessionKey).toHaveBeenCalledWith("agent:writer:main");
+          expect(page.result?.sessions).toEqual([]);
+          expect(page.selectedSessions.size).toBe(0);
+        }
+      } finally {
+        response.resolve({ deleted: false });
+        await vi.mocked(sessions.deleteMany).mock.results[0]?.value;
+      }
+    },
+  );
 
   it("preserves confirmed archived identity when a replacement becomes active", async () => {
     const confirmation = createDeferred<boolean>();

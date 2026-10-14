@@ -7,6 +7,7 @@ import { registerSubagentRun } from "../../agents/subagents/registry/subagent-re
 import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -80,6 +81,8 @@ async function queueCollector(sessionKey: string, groupId: string, runId: string
   await registerSubagentRun({
     runId,
     childSessionKey: sessionKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -131,7 +134,8 @@ it.each([false, true])(
     const kill = vi
       .spyOn(subagentKill, "killSubagentRunAdmin")
       .mockImplementationOnce(async (params, control) => {
-        control?.beforeSessionKill?.();
+        await control?.prepareRead?.();
+        await control?.beforeSessionKill?.();
         if (killFails) {
           throw killFailure;
         }
@@ -179,7 +183,11 @@ it.each([
     sessionKey: "agent:main:subagent:save-warning",
     sessionId: "save-warning-session",
   };
-  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+  await replaceSessionEntry(scope, {
+    sessionId: scope.sessionId,
+    lifecycleRevision: "save-warning-original",
+    updatedAt: Date.now(),
+  });
   const runId = "run-save-failure";
   const active: ChatAbortControllerEntry = createActiveRun(scope.sessionKey, scope);
   const refusal = new SessionMutationAuthorizationChangedError({

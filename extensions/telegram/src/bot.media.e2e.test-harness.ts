@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { finalizeInboundContext, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
@@ -237,6 +238,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 };
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   // Gateway starts the bot after registering this hook; direct harness construction must
   // preserve that boundary so topic routing does not bootstrap bundled plugins mid-turn.
   setActivePluginRegistry(
@@ -279,6 +281,7 @@ afterEach(async () => {
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
+  clearRuntimeConfigSnapshot();
 });
 
 vi.doMock("./bot.runtime.js", () => ({

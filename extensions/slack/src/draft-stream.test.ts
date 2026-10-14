@@ -420,4 +420,23 @@ describe("createSlackDraftStream", () => {
     expect((sendCall?.[2] as { token?: string } | undefined)?.token).toBe("xoxb-test");
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it("keeps mention-safe rendered text through the supplied edit owner", async () => {
+    const { stream, send, edit } = createDraftStreamHarness();
+    const native = "<@U0456EFGH> <#C0456EFGH> <!here>";
+    const escaped = "&lt;@U0456EFGH&gt; &lt;#C0456EFGH&gt; &lt;!here&gt;";
+
+    stream.update({ text: `first ${native}`, escapeMentions: true });
+    await stream.flush();
+    stream.update({ text: `second ${native}`, escapeMentions: true });
+    await stream.flush();
+
+    const sent = mockCalls<Parameters<DraftSendFn>>(send)[0]!;
+    expect(sent[1]).toContain(escaped);
+    expect(sent[1]).not.toContain(native);
+    expect(sent[2]).toEqual(expect.objectContaining({ textIsSlackMrkdwn: true }));
+    const edited = mockCalls<Parameters<DraftEditFn>>(edit)[0]!;
+    expect(edited[2]).toContain(escaped);
+    expect(edited[2]).not.toContain(native);
+  });
 });

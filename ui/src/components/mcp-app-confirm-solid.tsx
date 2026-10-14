@@ -1,7 +1,10 @@
 import { Show } from "solid-js";
+import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { McpAppConfirm } from "./mcp-app-confirm.ts";
 import "../styles/mcp-app-confirm.css";
+
+registerMcpAppEnglish();
 
 export function McpAppConfirmation(props: { confirmation: McpAppConfirm; revision: number }) {
   const pending = () => {

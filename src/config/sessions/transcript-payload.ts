@@ -2,12 +2,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
   createSqliteQueryCache,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
@@ -28,7 +29,6 @@ const MAX_NAVIGATION_BYTES = 16 * 1024;
 const MIN_COMPRESS_BYTES = 1024;
 const DECODE_FUNCTION = "openclaw_transcript_payload_decode";
 const registeredDecoders = new WeakSet<DatabaseSync>();
-const storageEncodings = new WeakMap<DatabaseSync, string>();
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export type TranscriptPayloadRecord = TranscriptPredicateFields & {
@@ -80,7 +80,8 @@ export function createTranscriptEventInserter(database: DatabaseSync, sessionId:
     const prepared = row.preparedPayload;
     const payload =
       prepared?.eventJson === row.eventJson &&
-      prepared.storageEncoding === readTranscriptStorageEncoding(database)
+      prepared.storageEncoding === readTranscriptStorageEncoding(database) &&
+      (!isPostgresSqlConnection(database) || prepared.payload.event_zstd === null)
         ? prepared.payload
         : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
     return insert({ ...row, ...payload });
@@ -114,19 +115,14 @@ export function createTranscriptPayloadUpdater(database: DatabaseSync, sessionId
 }
 
 export function readTranscriptStorageEncoding(database: DatabaseSync): string {
-  let encoding = storageEncodings.get(database);
-  if (encoding === undefined) {
-    const db = getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database);
-    encoding = executeSqliteQueryTakeFirstSync(
-      database,
-      db.selectFrom("pragma_encoding").select("encoding"),
-    )?.encoding;
-    if (encoding === undefined) {
-      throw new Error("SQLite did not report its transcript storage encoding");
-    }
-    storageEncodings.set(database, encoding);
+  if (isPostgresSqlConnection(database)) {
+    return "UTF-8";
   }
-  return encoding;
+  const facts = getAdmittedSqliteSchemaFacts(database);
+  if (!facts) {
+    throw new Error("Transcript payload preparation requires admitted SQLite schema facts");
+  }
+  return facts.textEncoding;
 }
 
 /** Prepared bytes grant no write authority and must match the eventual envelope and encoding. */
@@ -135,10 +131,11 @@ export function prepareTranscriptPayloadForReuse(
   eventJson: string,
   parsedEvent?: unknown,
 ): PreparedTranscriptPayload {
+  const storageEncoding = readTranscriptStorageEncoding(database);
   return {
     eventJson,
-    storageEncoding: readTranscriptStorageEncoding(database),
-    payload: prepareTranscriptPayload(database, eventJson, parsedEvent),
+    storageEncoding,
+    payload: prepareTranscriptPayload(database, eventJson, parsedEvent, storageEncoding),
   };
 }
 
@@ -234,9 +231,10 @@ export function prepareTranscriptPayload(
   database: DatabaseSync,
   eventJson: string,
   parsedEvent?: unknown,
+  storageEncoding = readTranscriptStorageEncoding(database),
 ): TranscriptPayloadRecord {
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
-  const utf8 = readTranscriptStorageEncoding(database) === "UTF-8";
+  const utf8 = storageEncoding === "UTF-8";
   const identity: TranscriptPayloadRecord = {
     ...deriveTranscriptPredicateFields(eventJson),
     event_json: eventJson,
@@ -244,6 +242,10 @@ export function prepareTranscriptPayload(
     event_utf8_bytes: utf8 ? rawBytes : null,
     navigation_json: null,
   };
+  // PostgreSQL rows never carry event_zstd; TOAST owns their physical compression.
+  if (isPostgresSqlConnection(database)) {
+    return identity;
+  }
   // Giant identity values stay available to native SQL without a second full buffer or projection.
   // SQLite and JS can disagree on escaped surrogates and embedded NUL; retain the native path.
   if (
@@ -338,6 +340,11 @@ export function transcriptEventJsonSql(
   database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string> {
+  if (isPostgresSqlConnection(database)) {
+    return /* kysely-allow-raw: closed transcript aliases select PostgreSQL's canonical text. */ sql.ref<string>(
+      `${alias}.event_json`,
+    );
+  }
   registerDecoder(database);
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the canonical identity column. */ sql.ref(

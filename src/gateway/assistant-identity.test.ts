@@ -4,7 +4,8 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as identityFiles from "../agents/identity-file.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
@@ -12,6 +13,43 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 
 describe("resolveAssistantIdentity", () => {
+  it("reads workspace fallbacks only when configured identity leaves a field unresolved", async () => {
+    const read = vi
+      .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
+      .mockResolvedValue({ name: "Workspace", emoji: "🔭", avatar: "workspace.png" });
+    try {
+      const identity = { name: "Configured", emoji: "🦞", avatar: "avatar.png" };
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: {
+            main: { identity },
+          },
+        },
+      };
+      expect(await resolveAssistantIdentity({ cfg, workspaceDir: "/synthetic/workspace" })).toEqual(
+        {
+          agentId: "main",
+          name: "Configured",
+          nameSource: "agent",
+          avatar: "avatar.png",
+          emoji: "🦞",
+        },
+      );
+      expect(read).not.toHaveBeenCalled();
+      identity.emoji = "";
+      expect(
+        await resolveAssistantIdentity({ cfg, workspaceDir: "/synthetic/workspace" }),
+      ).toMatchObject({
+        name: "Configured",
+        avatar: "avatar.png",
+        emoji: "🔭",
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it.each<{
     name: string;
     cfg: OpenClawConfig;

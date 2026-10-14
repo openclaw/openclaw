@@ -25,7 +25,10 @@ captured policy. The tools reach the CLI only through OpenClaw's policy-filtered
 MCP surface, so native CLI tools stay disabled for the turn and every inherited
 deny still applies. Other CLI backends, node-hosted Claude CLI sessions, and
 settle batches do not regain requester tools. Message-tool-only replies keep
-their existing source-bound `message` grant.
+their existing source-bound `message` grant. When that restricted surface needs
+its own Claude CLI session, the requester's next resumed turn receives the
+completion prompt and reply as quoted context when its account may replay saved
+history; see [CLI backends](/gateway/cli-backends#sessions).
 
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
 `message`, `sessions_send`, and the `conversations_*` tools regardless of
@@ -38,7 +41,7 @@ depth. Sub-agents at the configured depth cap additionally
 lose `subagents`, `sessions_list`, `sessions_history`, and `sessions_spawn`, so
 their communication stays on the announce chain.
 
-`sessions_history` remains a bounded, redacted recall view here too — it
+`sessions_history` remains a bounded recall view without secret masking here too — it
 is neither a raw transcript dump nor a prose-only rendering.
 
 By default, sub-agents below depth `5` receive `sessions_spawn`, `subagents`,

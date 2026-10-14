@@ -80,7 +80,7 @@ export function formatSlackSocketModeSharedConnectionWarning(activeConnections: 
   return [
     `slack socket mode reports ${activeConnections} active connections for this Slack app`,
     "Slack may deliver each event to any one connection",
-    "ensure every OpenClaw gateway sharing this app has equivalent routing and authorization, or use a separate Slack app per gateway, one relay ingress, or HTTP Request URLs behind a load balancer",
+    "check that every OpenClaw gateway sharing this app has equivalent routing and authorization, or use a separate Slack app per gateway, one relay ingress, or HTTP Request URLs behind a load balancer",
     `See ${SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL}`,
   ].join("; ");
 }

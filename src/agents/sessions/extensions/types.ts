@@ -1018,13 +1018,13 @@ export interface ExtensionAPI {
     options?: { deliverAs?: "steer" | "followUp" },
   ): void;
 
-  /** @deprecated Use appendEntryAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use appendEntryAsync; removal follows a stable deprecation period. */
   appendEntry(customType: string, data?: unknown): void;
 
   /** Persist a custom entry and return its id after the worker commits. */
   appendEntryAsync(customType: string, data?: unknown): Promise<string>;
 
-  /** @deprecated Use setSessionNameAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use setSessionNameAsync; removal follows a stable deprecation period. */
   setSessionName(name: string): void;
 
   /** Set the display name and publish the change after the worker commits. */
@@ -1032,7 +1032,7 @@ export interface ExtensionAPI {
 
   getSessionName(): string | undefined;
 
-  /** @deprecated Use setLabelAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use setLabelAsync; removal follows a stable deprecation period. */
   setLabel(entryId: string, label: string | undefined): void;
 
   /** Set or clear an entry label after the worker commits. */
@@ -1190,7 +1190,7 @@ export interface ExtensionRuntimeState {
 /**
  * Action implementations for ExtensionAPI methods.
  * Provided to runner.initialize(), copied into the shared runtime.
- * @deprecated Use ExtensionActionsV2; removed in the next Plugin SDK major.
+ * @deprecated Use ExtensionActionsV2; removal follows a stable deprecation period.
  */
 export interface ExtensionActions extends Pick<
   ExtensionAPI,
@@ -1241,7 +1241,7 @@ export interface ExtensionCommandContextActions extends Pick<
 /**
  * Full runtime = state + actions.
  * Created by loader with throwing action stubs, completed by runner.initialize().
- * @deprecated Use ExtensionRuntimeV2; removed in the next Plugin SDK major.
+ * @deprecated Use ExtensionRuntimeV2; removal follows a stable deprecation period.
  */
 export interface ExtensionRuntime
   extends

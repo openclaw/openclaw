@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as imageOps from "../media/image-ops.js";
 import { readImageMetadataFromHeader } from "../media/image-ops.js";
@@ -18,7 +22,10 @@ import { APNG_BYTES } from "./http-image.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["https://example.test/avatar.png", "data:text/html,<html>avatar</html>"])(
   "rejects %s before invoking the native data decoder",
@@ -114,6 +121,7 @@ it.each([
   const config: OpenClawConfig = {
     agents: { entries: { main: { workspace, identity: { avatar } } } },
   };
+  setRuntimeConfigSnapshot(config);
   const { avatar: url } = await resolveGatewayAssistantAvatar({
     cfg: config,
     identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
@@ -159,6 +167,7 @@ it.each(["local", "data"])(
         },
       },
     };
+    setRuntimeConfigSnapshot(config);
     const project = async (agentId = "main") =>
       (
         await resolveGatewayAssistantAvatar({
@@ -219,6 +228,7 @@ it.each(["local", "data"])(
             sourceKind === "local" ? filename : `data:image/png;base64,${bytes.toString("base64")}`,
         },
       };
+      setRuntimeConfigSnapshot(config);
       urls.push(await project(agentId));
       expect((await request({ url: urls[index] })).res.statusCode).toBe(200);
     }
@@ -255,6 +265,7 @@ it.each(["local", "data"])(
       fs.renameSync(path.join(workspace, "replacement.png"), avatarPath);
     } else {
       config.agents!.entries!.main!.identity!.avatar = `data:image/png;base64,${replacement.toString("base64")}`;
+      setRuntimeConfigSnapshot(config);
     }
     const replacedUrl = await project();
     expect(replacedUrl).not.toBe(url);

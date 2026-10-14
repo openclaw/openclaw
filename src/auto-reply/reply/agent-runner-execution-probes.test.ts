@@ -50,7 +50,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       turnKind: kind,
       resetTriggered: false,
     });
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run(
         params.provider,
@@ -401,7 +401,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       followupRun.run.model = "gpt-5.4";
       const { replyOperation, failMock, retainFailureUntilCompleteMock } =
         createMockReplyOperation();
-      replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+      await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
       const emitAgentEvent = vi.mocked(
         (await import("../../infra/agent-events.js")).emitAgentEvent,
       );
@@ -511,7 +511,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       sessionId: followupRun.run.sessionId,
       resetTriggered: false,
     });
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     const steeringRoutes: Array<typeof operation.automaticFallbackRoute> = [];
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params.run("openai", "gpt-5.5", initialFallbackAttemptOptions(params));

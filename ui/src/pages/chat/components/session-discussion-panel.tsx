@@ -8,7 +8,11 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { buildWidgetThemeMessage, postWidgetTheme } from "../../../lib/widget-theme.ts";
+import {
+  buildWidgetThemeMessage,
+  postWidgetTheme,
+  registerWidgetThemeFrame,
+} from "../../../lib/widget-theme.ts";
 import {
   defineSolidBridge,
   LitContent,
@@ -139,19 +143,12 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
       active = false;
     };
   });
-  const postTheme = (
-    frame = host.querySelector<HTMLIFrameElement>(".session-discussion__frame"),
-  ) => {
-    if (frame?.isConnected) {
-      postWidgetTheme(frame, new URL(frame.src).origin);
-    }
+  let releaseTheme: (() => void) | undefined;
+  onCleanup(() => releaseTheme?.());
+  const postTheme = (frame: HTMLIFrameElement) => {
+    const origin = new URL(frame.src).origin;
+    postWidgetTheme(frame, origin);
   };
-  const observer = new MutationObserver(() => postTheme());
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["data-theme", "data-theme-mode", "style"],
-  });
-  onCleanup(() => observer.disconnect());
   const empty = (description: string, openUrl?: string | null) => (
     <PanelEmptyState
       icon={<Icon name="messageSquare" />}
@@ -209,6 +206,10 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
         {embedUrl ? (
           <iframe
             class="session-discussion__frame"
+            ref={(frame) => {
+              releaseTheme?.();
+              releaseTheme = registerWidgetThemeFrame(frame, new URL(embedUrl).origin);
+            }}
             src={embedUrl}
             title={t("chat.sessionDiscussion.frameTitle")}
             sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"

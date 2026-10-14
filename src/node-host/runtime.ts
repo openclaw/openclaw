@@ -1,7 +1,7 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -103,7 +103,7 @@ export async function prepareNodeHostRuntime(params?: {
   if (!commandAllowlist) {
     void ensureTerminalUploadCleanup();
   }
-  const config = params?.config ?? getRuntimeConfig();
+  const config = params?.config ?? (await captureRuntimeConfigAsyncReader()());
   const env = params?.env ?? process.env;
   const platform = params?.platform ?? process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
@@ -480,6 +480,7 @@ export async function prepareNodeHostRuntime(params?: {
                   client,
                   frame,
                   idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+                  signal: controller.signal,
                   onError: () => controller.abort(),
                 })
               : undefined;

@@ -1433,6 +1433,7 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/coder",
       preserveApiKeyMetadata: true,
+      resetFailureState: true,
       validateCurrentCredential: expect.any(Function),
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
@@ -1467,6 +1468,7 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/main",
       preserveApiKeyMetadata: true,
+      resetFailureState: true,
       validateCurrentCredential: expect.any(Function),
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({

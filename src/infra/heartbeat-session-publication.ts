@@ -5,13 +5,9 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import {
-  loadExactSessionEntryReadOnly,
-  loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   publishTranscriptUpdate,
-  readActiveTranscriptEntryAnchor,
 } from "../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
@@ -95,27 +91,7 @@ export async function publishHeartbeatSessionReply(params: {
         throw new Error("heartbeat publication no longer owns the active transcript");
       }
     };
-    const assertTargetCurrent = (messageId?: string) => {
-      assertCurrent();
-      const current = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
-      if (
-        !scope.sessionId ||
-        current?.sessionId !== scope.sessionId ||
-        current.lifecycleRevision !== params.expectedGeneration.lifecycleRevision ||
-        current.activeWriterRunId !== writerRunId ||
-        (messageId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId }))
-      ) {
-        throw new Error("heartbeat publication no longer owns the active transcript");
-      }
-      const unavailable = resolveSessionWorkStartError(scope.sessionKey, current, {
-        ...expected,
-        purpose: "accepted-result-settlement",
-      });
-      if (unavailable) {
-        throw new Error(unavailable);
-      }
-    };
-    assertTargetCurrent();
+    assertCurrent();
     const mirror = metadata?.sourceReplyTranscriptMirror?.transcriptOwner
       ? metadata.sourceReplyTranscriptMirror
       : undefined;
@@ -192,7 +168,6 @@ export async function publishHeartbeatSessionReply(params: {
     ) {
       return { ok: false, reason: "heartbeat runtime final has no matching committed receipt" };
     }
-    assertTargetCurrent(priorId);
     const content: SessionTranscriptAssistantMessage["content"] = [
       { type: "text", text: text.trim() },
     ];
@@ -220,7 +195,6 @@ export async function publishHeartbeatSessionReply(params: {
         ? (await import("../gateway/managed-image-attachments.js"))
             .attachManagedOutgoingMediaToMessage
         : undefined;
-    assertTargetCurrent(priorId);
     // Exact replay preserves runtime rows and rejects changed notification bytes.
     // The transaction guard also prevents resurrecting a removed/abandoned row.
     const committed = await persistSessionTranscriptTurn(scope, {
@@ -252,10 +226,10 @@ export async function publishHeartbeatSessionReply(params: {
       // A later drain failure cannot revoke a notification already published here.
       updateMode: "none",
       onMessageCommitted: (receipt, acceptCompletion) => {
-        assertTargetCurrent(receipt.messageId);
+        assertCurrent();
         const publish = (): Promise<HeartbeatSessionPublication> => {
           const messageSeq = readCommittedTranscriptMessageSequence(receipt);
-          assertTargetCurrent(receipt.messageId);
+          assertCurrent();
           // Replays invalidate history without emitting the assistant message again.
           return publishTranscriptUpdate(
             scope,
@@ -316,13 +290,13 @@ export async function publishHeartbeatSessionReply(params: {
 
 const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
 
-export function prepareHeartbeatTargetAwareness(params: {
+export async function prepareHeartbeatTargetAwareness(params: {
   agentId: string;
   storePath: string;
   runSessionKey: string;
   targetSessionKey?: string;
   startedAt: number;
-}): ((payload: NormalizedOutboundPayload) => void) | undefined {
+}): Promise<((payload: NormalizedOutboundPayload) => void) | undefined> {
   const sessionKey = params.targetSessionKey?.trim();
   if (!sessionKey || sessionKey === params.runSessionKey) {
     return undefined;
@@ -332,24 +306,14 @@ export function prepareHeartbeatTargetAwareness(params: {
       return undefined;
     }
     const scope = { agentId: params.agentId, storePath: params.storePath, sessionKey };
-    const entry = loadExactSessionEntryReadOnly(scope)?.entry;
+    const entry = await readSessionEntryReadOnlyInWorker(scope);
     if (!entry?.sessionId) {
       return undefined;
     }
-    const expectedSessionId = entry.sessionId;
-    const expectedLifecycleRevision = entry.lifecycleRevision;
     const idempotencyKey = `${HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX}${params.startedAt}:${params.runSessionKey}`;
     return (payload) => {
       try {
-        // Recheck the exact pre-send lifecycle before publishing awareness. Resets
-        // can preserve sessionId while rotating lifecycleRevision.
-        const latest = loadExactSessionEntryReadOnly(scope)?.entry;
-        if (
-          latest?.sessionId !== expectedSessionId ||
-          latest.lifecycleRevision !== expectedLifecycleRevision
-        ) {
-          return;
-        }
+        // Awareness is best-effort bookkeeping; a concurrent reset can inherit this notice.
         const deliveredText = resolveMirroredTranscriptText({
           text: payload.hookContent ?? resolveOutboundPayloadMirrorText(payload),
           mediaUrls: payload.mediaUrls,

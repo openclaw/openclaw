@@ -44,7 +44,7 @@ function displayedPhraseIndex(seed: string, bucket: number, length: number): num
   return (offset + bucket * stride) % length;
 }
 
-export const WorkingPhrase = defineSolidBridge<{
+defineSolidBridge<{
   startMs: number | null;
   seed: string;
   phrases: readonly string[] | undefined;

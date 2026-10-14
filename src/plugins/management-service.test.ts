@@ -75,7 +75,7 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   // Keep the pure config/record helpers real; only record IO is stubbed.
   ...(await importOriginal<typeof import("./installed-plugin-index-records.js")>()),
   loadInstalledPluginIndexInstallRecords: (...args: unknown[]) => mocks.installRecords(...args),
-  readPersistedInstalledPluginIndexInstallRecords: (...args: unknown[]) =>
+  readPersistedInstalledPluginIndexInstallRecordsAsync: (...args: unknown[]) =>
     mocks.readPersistedRecords(...args),
 }));
 

@@ -53,6 +53,10 @@ describe("Codex attempt subscription recovery", () => {
     const register = vi.spyOn(codexNativeSubagentMonitorRuntime, "register");
     const harness = createStartedThreadHarness(async () => undefined);
     const attempt = runCodexAppServerAttempt(params);
+    const settledAttempt = attempt.then(
+      (result) => result,
+      (error: unknown) => error,
+    );
     await attempt.waitForTurnAccepted();
     try {
       const registration = register.mock.calls.at(-1)?.[0];
@@ -60,18 +64,19 @@ describe("Codex attempt subscription recovery", () => {
       expect(registration?.historyOwner?.lifecycleRevision).toBeUndefined();
       const submission = registration?.submissionStore;
       expect(submission).toBeDefined();
-      submission!.assertCurrent();
+      await submission!.assertCurrentAsync();
       await patchSessionEntry({
         ...target,
         update: () => ({ sessionId: "replacement-parent" }),
       });
-      expect(() => submission!.assertCurrent()).toThrow(
+      await expect(submission!.assertCurrentAsync()).rejects.toThrow(
         "Native submission session lifecycle is no longer current.",
       );
     } finally {
-      await seedRunSessionOwnerForTest(target.sessionId, target.sessionKey);
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await attempt;
+      expect(await settledAttempt).toMatchObject({
+        message: `Codex session generation is no longer current: ${target.sessionId}`,
+      });
     }
   });
 

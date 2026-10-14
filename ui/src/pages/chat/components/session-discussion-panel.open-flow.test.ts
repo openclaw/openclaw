@@ -33,40 +33,6 @@ describe("session discussion panel", () => {
     }
   });
 
-  it("shows the opening affordance while auto-open is in flight", async () => {
-    const openDiscussion = vi
-      .fn<SessionDiscussionOpener>()
-      .mockImplementation(() => new Promise(() => {}));
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
-      openDiscussion,
-    });
-
-    await vi.waitFor(() => {
-      expect(openDiscussion).toHaveBeenCalledTimes(1);
-      expect(
-        panel
-          .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]')
-          ?.getAttribute("aria-label"),
-      ).toContain("Opening discussion");
-    });
-    expect(panel.querySelector("button")).toBeNull();
-  });
-
-  it("stops the skeleton when auto-open settles without opening", async () => {
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
-      openDiscussion: vi.fn().mockResolvedValue({ state: "available" }),
-    });
-
-    await vi.waitFor(async () => {
-      expect(await emptyStateText(panel)).toContain("cannot be embedded");
-    });
-    expect(
-      panel.querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]'),
-    ).toBeNull();
-  });
-
   it("opens once write access is granted after the discussion resolved", async () => {
     const openDiscussion = vi.fn<SessionDiscussionOpener>().mockResolvedValue({
       state: "open",

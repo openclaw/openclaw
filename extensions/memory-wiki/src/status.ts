@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
+import { parseWikiMarkdown, WIKI_PAGE_GROUPS, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
 
 const STATUS_WARNING_FIXES = {
@@ -61,41 +63,43 @@ function createEmptyVaultCounts() {
 
 async function collectVaultCounts(vaultPath: string) {
   const { pageCounts, sourceCounts } = createEmptyVaultCounts();
-  const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
-  for (const dir of dirs) {
-    for (const relativePath of await listMemoryWikiPagePaths(vaultPath, dir)) {
-      const absolutePath = path.join(vaultPath, relativePath);
-      const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
-      if (raw === null) {
-        continue;
-      }
-      const page = toWikiPageSummary({
-        absolutePath,
-        relativePath,
-        raw,
-      });
-      if (!page) {
-        continue;
-      }
-      pageCounts[page.kind] += 1;
-      if (page.kind !== "source") {
-        continue;
-      }
-      if (page.sourceType === "memory-bridge-events") {
-        sourceCounts.bridgeEvents += 1;
-      } else if (page.sourceType === "memory-bridge") {
-        sourceCounts.bridge += 1;
-      } else if (
-        page.provenanceMode === "unsafe-local" ||
-        page.sourceType === "memory-unsafe-local"
-      ) {
-        sourceCounts.unsafeLocal += 1;
-      } else if (!page.sourceType) {
-        sourceCounts.native += 1;
-      } else {
-        sourceCounts.other += 1;
-      }
-    }
+  for (const { dir, kind } of WIKI_PAGE_GROUPS) {
+    await runTasksWithConcurrency({
+      tasks: (await listMemoryWikiPagePaths(vaultPath, dir)).map((relativePath) => async () => {
+        const raw = await fs.readFile(path.join(vaultPath, relativePath), "utf8").catch(() => null);
+        if (raw === null) {
+          return;
+        }
+        let frontmatter: Record<string, unknown>;
+        try {
+          frontmatter = parseWikiMarkdown(raw).frontmatter;
+        } catch {
+          return;
+        }
+        pageCounts[kind] += 1;
+        if (kind !== "source") {
+          return;
+        }
+        const sourceType = normalizeOptionalString(frontmatter.sourceType);
+        if (sourceType === "memory-bridge-events") {
+          sourceCounts.bridgeEvents += 1;
+        } else if (sourceType === "memory-bridge") {
+          sourceCounts.bridge += 1;
+        } else if (
+          normalizeOptionalString(frontmatter.provenanceMode) === "unsafe-local" ||
+          sourceType === "memory-unsafe-local"
+        ) {
+          sourceCounts.unsafeLocal += 1;
+        } else if (!sourceType) {
+          sourceCounts.native += 1;
+        } else {
+          sourceCounts.other += 1;
+        }
+      }),
+      limit: 16,
+      errorMode: "stop",
+      throwOnError: true,
+    });
   }
   return { pageCounts, sourceCounts };
 }

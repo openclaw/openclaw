@@ -20,8 +20,22 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
-ChatGPT Responses WebSocket connection expiry follows this recovery policy even
-after streaming starts. The failed socket is retired; recovery continues the
+An output-token limit is separate from a transient provider outage. The embedded
+runtime permits at most one continuation for a truncated Responses tool call or
+an empty length stop that still needs an answer. It records an output-limit
+notice and continues the saved transcript, preserving completed actions. A
+second output limit surfaces the unfinished result. Raw model runs and
+`promptMode: "none"` cannot carry that history, so they surface the output limit
+without replaying the original request. Visible partial answers remain visible.
+
+For Responses, `max_output_tokens` includes reasoning and visible output. The
+request uses the configured `maxTokens` override or the model's output cap;
+service tier does not independently change that cap. A long generation with
+ongoing progress can exceed the stream's idle timeout. The separate run deadline
+still applies; see [Agent loop timeouts](/concepts/agent-loop#timeouts).
+
+ChatGPT Responses WebSocket connection expiry and a normal close before the
+terminal event follow this recovery policy even after streaming starts. The failed socket is retired; recovery continues the
 saved transcript instead of replaying the request inside the transport.
 
 Anthropic streaming errors retain their structured error type, so rate limits,
@@ -158,7 +172,7 @@ OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
 - Legacy `credentials/oauth.json`, `auth-profiles.json`, `auth-state.json`, and
   per-agent `auth.json` files are imported only by `openclaw doctor --fix`.
-  Runtime fails closed for the affected agent until credential-bearing legacy
+  Runtime execution is blocked for the affected agent until credential-bearing legacy
   files are migrated. It never silently imports or falls back to them.
 
 More detail: [OAuth](/concepts/oauth)
@@ -259,6 +273,8 @@ CLI-backed runtimes settle profile health only after their resume, fork, and fre
     OpenAI-compatible **provider-completed** stop/finish reasons such as `Unhandled stop reason: error`, `stop reason: error`, `reason: error`, and `Provider finish_reason: error` are classified as **`server_error`** (HTTP-like status 500), not timeout. They remain failover-worthy for model or auth-profile rotation, but diagnostics keep the provider finish-reason text instead of rewriting the user copy to "LLM request timed out." Transport-shaped finish reasons such as `Provider finish_reason: abort`, `network_error`, and `malformed_response` stay in the timeout/failover bucket (status 408).
 
     HTTP status mapping uses **`server_error`** for otherwise-unclassified non-timing `5xx` failures, including `502` and `503`. HTTP `529` retains **`overloaded`**. The timing statuses retain **`timeout`**: request timeout `408`, gateway timeouts `504`, `522`, and `524`, and nginx client-abort `499`. More-specific provider errors and context classifications keep their existing precedence.
+
+    Text-only provider envelopes such as `Google Generative AI API error (503): ...` use the same status mapping, so configured fallback still advances without a separate numeric status. Explicit numeric status fields take precedence; unrelated text containing numbers does not supply an HTTP status.
 
     Generic server text can also land in that timeout bucket when the source matches a known transient pattern. For example, the bare model runtime stream-wrapper message `An unknown error occurred` is treated as failover-worthy for every provider. The shared model runtime emits it when provider streams end with `stopReason: "aborted"` or `stopReason: "error"` without specific details. JSON `api_error` payloads with transient server text such as `internal server error`, `unknown error, 520`, `upstream error`, or `backend error` are also treated as failover-worthy timeouts.
 
@@ -378,6 +394,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end. The chain can then settle back onto the normal default once earlier candidates are exhausted.
     - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
     - Plugins can return `fallbacksOverride` from `before_model_resolve` to select a run-scoped chain, including `[]` to fail on the selected model instead of trying configured fallbacks. See [local model routing](/plugins/hooks/prompt-and-session#restrict-a-run-to-local-models).
+    - After context overflow recovery is exhausted, remaining candidates with known sufficient context are preferred, preserving configured order within each group. Effective `contextTokens` caps apply. If the provider supplies no token count, a larger known window is preferred; metadata is a hint, and each candidate still performs its own context checks. Unknown or smaller-window candidates remain eligible afterward.
 
   </Accordion>
 </AccordionGroup>
@@ -392,6 +409,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - timeout-shaped failover errors
     - billing disables
     - `model_not_found`, including eligible HTTP 404 responses
+    - model context overflow after active-model compaction and oversized-tool-result recovery cannot make the request fit, including a single message that compaction cannot shrink. The turn must still be safe to replay. Existing model locks, explicit empty fallback overrides, and operator restrictions continue to apply
     - `LiveSessionModelSwitchError` for a stale current or earlier candidate. Later configured targets redirect directly, while targets outside the chain return to the bounded session-model retry owner
     - a provider request-size ceiling reaching the fallback boundary, which happens when a transport-owning plugin harness bypasses embedded recovery. The ceiling belongs to the refusing provider's quota rather than to any model's context window, so a differently provisioned candidate may still admit the request
     - other unrecognized errors when there are still remaining candidates
@@ -399,13 +417,16 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   </Tab>
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
-    - context overflow errors that should stay inside compaction/retry logic (for example `request_too_large`, `input token count exceeds the maximum number of input tokens`, `input exceeds the maximum number of tokens`, `input too long for the model`, or `ollama error: context length exceeded`)
-    - context overflow inside an embedded run that has already been declared terminal, including a provider request-size ceiling (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`), which the runner stops on rather than compacting
+    - an incomplete embedded reply ending with a normal `stop` after bounded same-model recovery, unless the harness explicitly classifies the result as a fallback failure. If the host requires an answer, OpenClaw surfaces the incomplete-turn error; optional internal turns may finish silently. Replay safety does not establish that a different model would answer
+    - context overflow after committed tool effects or delivered replies that cannot safely be replayed
+    - a provider request-size ceiling inside an embedded run (for example Groq's `413 ... on tokens per minute (TPM): Limit 8000, Requested 8098`), which remains terminal rather than compacting
     - a final unknown error when there are no candidates left
     - final provider refusals. Eligible Anthropic direct API-key requests handle refusal fallback within the provider request instead (see [Anthropic](/providers/anthropic#safety-refusal-fallback-claude-opus-5-and-fable-5))
 
   </Tab>
 </Tabs>
+
+Successful context-overflow fallback records the answering model and the overflow reason in fallback diagnostics and emits a visible warning. If no candidate succeeds, the original overflow guidance is preserved.
 
 A final provider refusal ends the current turn. OpenClaw surfaces it without automatic recovery turns, compaction retries, or switching to an unrelated model. Except for a misalignment precaution, a queued or later user message still starts its own turn.
 
@@ -493,7 +514,11 @@ These notices are operational messages, not assistant content. They deliver once
 
 Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
 
-When a fallback answers, the Control UI shows the successful answer once and removes empty failed-attempt placeholders from that same run. The raw transcript retains the failed attempts for troubleshooting. Failed turns and attempts that produced partial visible output remain visible.
+For admitted session runs, the Control UI records attempted fallback switches as transcript event dividers, using the same presentation as compaction events. It shows the previous model, the fallback being tried, and the reason for the switch while that candidate is still working. The event remains in history after reload and does not claim the fallback succeeded. When a later turn successfully returns to the selected model, a matching **Returned to selected model** divider records the fallback and selected model. Starting a new attempt or failing on the selected model does not record a successful return.
+
+While recovery is in progress, the Control UI updates the working claw with **Retrying…**, a countdown when the runtime reports a retry deadline, or **Trying fallback model…**. Individual failed attempts do not become warning messages, including after a history reload. When the run recovers, the status returns to normal and the successful answer appears without a failure notice. Hidden internal continuation prompts do not start a new user turn for recovery matching.
+
+If the run ultimately fails after its available recovery attempts, the Control UI shows one terminal failure notice, not one warning per attempt. Partial output and media remain visible, and the raw transcript retains attempt diagnostics for troubleshooting. The latest failed run offers **Try again** to send a continuation that checks completed work before retrying actions, and **Change model** opens the existing model picker. Neither action silently replays the original prompt or clears an unsent draft.
 
 ## Observability and failure summaries
 

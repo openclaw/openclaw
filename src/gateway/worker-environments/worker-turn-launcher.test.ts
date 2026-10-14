@@ -50,7 +50,10 @@ import {
   withWorkerCompactionAdoption,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
-import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import {
+  prepareWorkerTurnTranscriptSource,
+  resolveWorkerTurnTranscriptTarget,
+} from "./worker-turn-transcript-target.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -221,14 +224,9 @@ describe("worker turn launcher local placement", () => {
       updatedAt: Date.now() + 1,
     });
 
-    expect(() =>
-      resolveWorkerTurnTranscriptTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        sessionTarget,
-      }),
-    ).toThrow("transcript identity is no longer current");
+    await expect(prepareWorkerTurnTranscriptSource(sessionTarget)).rejects.toThrow(
+      "transcript identity is no longer current",
+    );
   });
   it("keeps the exact local claim cleanup across compaction successor acceptance", async () => {
     const uninstall = installSessionPlacementAdmissionProvider(localProvider);
@@ -247,7 +245,7 @@ describe("worker turn launcher local placement", () => {
             await expect(adopt("session-local-successor")).resolves.toBe(SESSION_ID);
             expect(loadSessionEntry(sessionTarget)?.sessionId).toBe("session-local-successor");
             expect(placements.get(SESSION_ID)).toEqual(placement);
-            expect(placements.get("session-local-successor")).toBeUndefined();
+            expect(await placements.getAsync("session-local-successor")).toBeUndefined();
             await settle();
             expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
           });
@@ -278,7 +276,7 @@ describe("worker turn launcher local placement", () => {
     }
 
     expect(runLocal).toHaveBeenCalledOnce();
-    expect(placements.list()).toEqual([]);
+    expect(await placements.listAsync()).toEqual([]);
   });
 
   it.each(["cancellation", "placement publication", "run revocation"] as const)(
@@ -613,7 +611,7 @@ describe("worker turn launcher local placement", () => {
     });
     await firstStarted.promise;
     const firstClaimId = placements.get(SESSION_ID)?.turnClaim?.claimId;
-    expect(placements.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect(await placements.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
 
     const second = localProvider.executeLocalTurn(claim, async () => {
       secondStarted.resolve();

@@ -38,12 +38,15 @@ export function formatShutdownReason(
 export function formatShutdownCompletion(
   request: Parameters<typeof formatShutdownReason>[0],
   failed: boolean,
+  stopReason?: GatewayDrainReason,
 ): GatewayBootLifecycleCompletion {
   return request.action !== "stop"
     ? { outcome: "planned_restart", reason: formatShutdownReason(request) }
     : {
         outcome: failed ? "forced_stop" : "clean_stop",
-        reason: failed ? "gateway.stop_close_failed" : formatShutdownReason(request),
+        reason: failed
+          ? "gateway.stop_close_failed"
+          : (stopReason ?? formatShutdownReason(request)),
       };
 }
 
@@ -74,9 +77,12 @@ export function formatStartupFailureCompletion(
   };
 }
 
-export function formatHostExitCompletion(failed: boolean): GatewayBootLifecycleCompletion {
+export function formatHostExitCompletion(
+  failed: boolean,
+  reason?: GatewayDrainReason,
+): GatewayBootLifecycleCompletion {
   return {
     outcome: failed ? "forced_stop" : "clean_stop",
-    reason: failed ? "gateway.restart_close_failed" : "stop (host lifeline closed)",
+    reason: failed ? "gateway.restart_close_failed" : (reason ?? "stop (process exit)"),
   };
 }

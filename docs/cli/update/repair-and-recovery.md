@@ -87,6 +87,11 @@ the original manager and service identity. This does not start the service or
 rewrite its definition. A later refusal still uses the recorded stop to restore
 the previous Gateway; a service that was already stopped remains stopped.
 
+On macOS, a failed LaunchAgent state probe is recorded as a failed recovery
+attempt with its reason. OpenClaw leaves the service definition unchanged and
+prints `LaunchAgent state could not be inspected`. Run
+`openclaw gateway status --deep` to inspect the service before retrying recovery.
+
 An already-current installation can still need plugin maintenance. If the update
 parks its Gateway for Doctor and a maintenance step is refused, recovery uses
 the current run's latest stop and restarts the installed package after Doctor's
@@ -140,6 +145,8 @@ migration resources. The capture stays beside the selected state directory in
 `<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
 capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
+Continuation verifies the recorded live updater's process identity and ancestry;
+unreadable supervisors above that updater do not prevent its Doctor from reusing the capture.
 Inherited control-plane and managed-helper runs retain their existing capture
 behavior. Standalone `doctor --fix` preserves a separate pre-repair copy; that
 copy does not replace an earlier update's originals. Standalone `doctor --fix`
@@ -162,7 +169,10 @@ Keep both names for manual inspection; their presence does not authorize restora
 
 These captures are evidence for manual recovery. Active writers can change state
 during capture; an observed change leaves the capture incomplete and produces a
-warning. The set is not an atomic snapshot across active stores. Missing,
+warning. For databases, the warning names each database that changed after its
+snapshot or had no stable generation during it, followed by the backup's
+database warnings. A running Gateway that writes during capture is enough to
+cause this. The set is not an atomic snapshot across active stores. Missing,
 unreadable, or incomplete captures do not establish a safe
 rollback point. The updater process keeps optional debug-proxy persistence
 disabled because its update history can use an older database schema. Doctor
@@ -306,6 +316,10 @@ from the new installation before restarting through the service manager.
 
 ## `update repair`
 
+If state ownership or a maintenance lock is held, repair refuses before that
+maintenance and reports `Stop the Gateway first (openclaw gateway stop)`. Stop
+the Gateway for the same profile/state directory before retrying.
+
 Repair exits nonzero with the original recovery command when an older package
 journal remains pending and the current CLI cannot settle it. It does not report
 successful repair or continue post-update maintenance while that record remains.
@@ -363,7 +377,10 @@ recovery owner. This behavior does not deliver a newer repair implementation to
 an already-blocked older CLI. For completed `anchor-retired` history, use the
 [independent helper recovery](/install/updating#recover-a-completed-receipt-with-an-older-updater)
 to preserve the receipt and unblock the original updater without replacing its
-installation. Unfinished recovery retains the first-hop installation limitation.
+installation. For the narrowly verified remounted `publishing` case, the
+[independent settlement-only repair](/install/updating#recover-an-unfinished-publication-after-a-remount)
+can also clear the older updater's first-hop block without replacing packages.
+Other unfinished recovery still requires its original owner.
 
 For a package update stranded by an older updater's launcher ownership checks,
 use the manual installation hop, then repair from the new CLI at the same root:
@@ -402,6 +419,12 @@ The same repair handles `ENOENT` when the recorded handoff lease database is
 missing, for example after a reboot clears a temporary filesystem. Its storage
 owner recreates the lease database, and repair acquires fresh update ownership
 before closing an untouched obsolete preparation as `recovery-lease-missing`.
+A recorded lease directory now owned by another local user is also treated as
+missing. Repair acquires ownership in the current user's private temporary
+directory without reading, creating, or changing files in the other user's
+directory. New managed-update leases always use the per-user temporary root,
+so their location does not depend on who creates the shared `/tmp/openclaw`
+directory first.
 A missing or changed lease never permits discarding an unfinished rollback.
 The installed package, launchers, and retained recovery evidence keep the same
 protections. Repair then continues through Doctor and plugin convergence;
@@ -649,11 +672,17 @@ diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
 availability, installation, or load failures appear in
 `postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
 successfully when required checks pass. Doctor maintenance admission refusals
-also finish with a warning when no data is at risk. Repair restores any service
-it stopped and leaves migrations pending. When Doctor could not run, the saved
-run is `skipped` with reason `doctor-maintenance-pending`, and the report leads
-with the next action: stop the Gateway through its service owner, then rerun
-`openclaw update repair` with the same profile and state overrides. A standalone
+also report a warning when no data is at risk. Repair restores any service
+it stopped and leaves migrations pending. A standalone `update repair` exits
+with code **2** when Doctor maintenance is deferred; delegated finalization for
+an existing update keeps exit code **0**, so an older updater can finish with
+warnings. When Doctor could not run, the saved standalone run is `skipped` with
+reason `doctor-maintenance-pending`, and the report leads with the next action:
+stop the Gateway through its service owner (`openclaw gateway stop --force` for
+the managed service), stop other OpenClaw processes using that state, then rerun
+`openclaw update repair` with the same profile and state overrides. The stop
+command also needs the same profile and state overrides; `--force` confirms the
+intentional stop in a non-interactive shell. A standalone
 repair's generic failure is recorded as `repair-failed`; specific failure codes
 and failures belonging to an existing update keep their original reasons. Errors
 after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
@@ -846,7 +875,8 @@ create or change WAL/SHM sidecars, invalidating cleanup's destination check even
 when session content is unchanged. If cleanup reports `Recovery destination
 database changed; preview cleanup again.`, stop those readers, preview again,
 and retry. Cleanup requires exclusive offline state ownership and never stops
-or restarts a service itself.
+or restarts a service itself. On owner or maintenance-lock contention, cleanup
+reports `Stop the Gateway first (openclaw gateway stop)` before any removal.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches

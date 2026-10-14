@@ -1,4 +1,5 @@
 import type { ProviderAcceptance } from "@openclaw/ai/transports";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
@@ -32,6 +33,7 @@ export type ModelCallObservationState = {
   lastProviderActivityAtMs?: number;
   terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   timeToFirstByteMs?: number;
+  providerProcessingMs?: number;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
@@ -179,6 +181,14 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    const timing = Array.isArray(value.diagnostics)
+      ? value.diagnostics.findLast(
+          (entry: unknown) => isRecord(entry) && entry.type === "provider_timing",
+        )
+      : undefined;
+    if (isRecord(timing) && isRecord(timing.details)) {
+      state.providerProcessingMs = asNonNegativeFiniteNumber(timing.details.processingMs);
+    }
     const stopReason = value.stopReason;
     if (
       value.role === "assistant" &&

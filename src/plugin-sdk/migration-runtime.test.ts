@@ -78,6 +78,13 @@ describe("withCachedMigrationConfigRuntime", () => {
 
     const wrapped = withCachedMigrationConfigRuntime(runtime, fallbackConfig);
     expect(wrapped?.config.current()).toEqual(fallbackConfig);
+    const clonedConfig = wrapped?.config.current({ clone: true });
+    if (!clonedConfig) {
+      throw new Error("Expected the migration config snapshot");
+    }
+    expect(clonedConfig).not.toBe(wrapped?.config.current());
+    clonedConfig.agents = { defaults: { model: { primary: "openai/clone" } } };
+    expect(wrapped?.config.current()).toEqual(fallbackConfig);
     runtimeConfig = { agents: { defaults: { model: { primary: "openai/external" } } } };
 
     await wrapped?.config.mutateConfigFile({

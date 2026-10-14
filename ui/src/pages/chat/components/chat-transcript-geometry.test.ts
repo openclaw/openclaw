@@ -8,9 +8,9 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import { measureConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   flushDeferredRowPrune,
@@ -133,9 +133,11 @@ describe("chat transcript geometry", () => {
     const virtualizer = controller.getVirtualizer();
     virtualizer.getVirtualItems();
     try {
-      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(true);
+      const commit = readConnectedTranscriptRows(container, virtualizer);
+      expect(virtualizer.itemSizeCache.has("fractional")).toBe(false);
+      expect(commit?.()).toBe(true);
       expect(virtualizer.itemSizeCache.get("fractional")).toBe(100.375);
-      expect(measureConnectedTranscriptRows(container, virtualizer)).toBe(false);
+      expect(readConnectedTranscriptRows(container, virtualizer)?.()).toBe(false);
     } finally {
       controller.hostDisconnected();
     }
@@ -350,28 +352,32 @@ describe("chat transcript geometry", () => {
     }
   });
 
-  it("remeasures scrolling and visible panes while preserving hidden transcript rows", async () => {
+  it("remeasures panes from a plain owner geometry commit while preserving hidden rows", async () => {
     for (const pane of ["main", "detail"]) {
       saveChatSessionScrollPosition(`pane-geometry-${pane}`, `agent:main:geometry-${pane}`, {
         scrollTop: 0,
         anchorToEnd: false,
       });
     }
-    const host = Object.assign(document.body.appendChild(document.createElement("div")), {
+    const geometryEventTarget = document.body.appendChild(document.createElement("div"));
+    const host = {
       addController: vi.fn(),
       removeController: vi.fn(),
       requestUpdate: vi.fn(),
       updateComplete: Promise.resolve(true),
-    });
+    };
     const viewportChanged = vi.fn();
     const main = new ChatTranscriptController(host, () => "pane-geometry-main", {
+      geometryEventTarget,
       onViewportResize: viewportChanged,
     });
-    const detail = new ChatTranscriptController(host, () => "pane-geometry-detail");
+    const detail = new ChatTranscriptController(host, () => "pane-geometry-detail", {
+      geometryEventTarget,
+    });
     // Another pane may precede main chat in DOM order; neither observer nor
     // scroll commands may rediscover the first thread under the shared host.
-    const detailPanel = host.appendChild(document.createElement("div"));
-    const mainPanel = host.appendChild(document.createElement("div"));
+    const detailPanel = geometryEventTarget.appendChild(document.createElement("div"));
+    const mainPanel = geometryEventTarget.appendChild(document.createElement("div"));
     const mainProps = threadProps("pane-geometry-main", "agent:main:geometry-main");
     const detailProps = threadProps("pane-geometry-detail", "agent:main:geometry-detail");
     const renderTranscripts = () => {

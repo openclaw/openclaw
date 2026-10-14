@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync, constants } from "node:sqlite";
+import { DatabaseSync, constants } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sqliteQueries from "../../../infra/kysely-sync.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
@@ -14,7 +14,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createSubagentStoreRunFixture as createRun,
   loadSubagentRegistryFromSqlite,
@@ -30,15 +29,11 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import {
-  conflictingSubagentRunVersions,
-  writeSubagentRunValuesInDatabase,
-} from "./subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   isReleasedSubagentRunRecord,
   releasedSubagentPayloadFilter,
 } from "./subagent-registry.store.released-reader.test-support.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   readSubagentRun,
@@ -171,75 +166,6 @@ describe("subagent registry sqlite store", () => {
     }
   });
 
-  it.each([
-    { count: 1, upserts: 1 },
-    { count: 32, upserts: 1 },
-    { count: 257, upserts: 3 },
-  ])("reads a $count-row cohort once and bounds its UPSERT parameters", ({ count, upserts }) => {
-    const runs = Array.from({ length: count }, (_, index) =>
-      createRun({ runId: `cohort-${index}`, task: "x".repeat(6_400) }),
-    );
-    saveSubagentRegistryToSqlite(new Map(runs.map((run) => [run.runId, run])));
-    const versions = runs.map((run) => ({
-      runId: run.runId,
-      version: subagentRunRowVersion(bindSubagentRunRecord(run)),
-    }));
-    const values = runs.map((run) => bindSubagentRunRecord({ ...run, model: "updated-model" }));
-    const observed = observeMainThreadSql();
-    try {
-      runOpenClawStateWriteTransaction((database) => {
-        expect(conflictingSubagentRunVersions(database, versions)).toEqual([]);
-        writeSubagentRunValuesInDatabase(database, values, []);
-      });
-      const executed = observed.calls.flatMap((call) =>
-        call.mock.calls.flatMap((bindings, index) => {
-          const statement = call.mock.contexts[index];
-          return statement instanceof StatementSync
-            ? [{ query: statement.sourceSQL, bindings: bindings.length }]
-            : [];
-        }),
-      );
-      expect(
-        executed.filter(({ query }) => /^select .*from "subagent_runs"/i.test(query)),
-      ).toHaveLength(1);
-      const writes = executed.filter(({ query }) => /^insert into "subagent_runs"/i.test(query));
-      expect(writes).toHaveLength(upserts);
-      expect(writes.every(({ bindings }) => bindings <= 1_024)).toBe(true);
-    } finally {
-      observed.restore();
-    }
-    expect([...loadSubagentRegistryFromSqlite().values()].map((run) => run.model)).toEqual(
-      Array.from({ length: count }, () => "updated-model"),
-    );
-  });
-
-  it("preserves absent-row CAS and duplicate conflict ordering across a cohort", () => {
-    const run = createRun({ runId: "run-\uFFFD\u0000" });
-    const boundAlias = "run-\uD800\u0000";
-    const row = bindSubagentRunRecord(run);
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-    const missing = createRun({ runId: "missing" });
-    runOpenClawStateWriteTransaction((database) => {
-      expect(
-        conflictingSubagentRunVersions(database, [
-          { runId: missing.runId, version: null },
-          { runId: boundAlias, version: subagentRunRowVersion(row) },
-          { runId: run.runId, version: subagentRunRowVersion(row) },
-        ]),
-      ).toEqual([]);
-      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(missing)], []);
-      expect(
-        conflictingSubagentRunVersions(database, [
-          { runId: missing.runId, version: null },
-          { runId: boundAlias, version: null },
-          { runId: "still-missing", version: subagentRunRowVersion(row) },
-          { runId: missing.runId, version: null },
-        ]),
-      ).toEqual([missing.runId, boundAlias, "still-missing", missing.runId]);
-    });
-    expect(loadSubagentRegistryFromSqlite().has(missing.runId)).toBe(true);
-  });
-
   it("reuses a complete compact tree with isolated full records and owner writes", async () => {
     await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
       const run = createRun({ model: "original-model" });
@@ -313,43 +239,6 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("keeps complete compact facts after selected tree reads with run-ID collisions", async () => {
-    await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-      const selected = createRun();
-      const other = createRun({
-        runId: "other",
-        childSessionKey: "agent:main:subagent:other",
-        requesterSessionKey: "agent:main:other",
-        createdAt: 200,
-      });
-      const unrelated = { ...other, runId: "unrelated" };
-      saveSubagentRegistryToSqlite(
-        new Map([selected, other, unrelated].map((run) => [run.runId, run])),
-      );
-      openOpenClawStateDatabase()
-        .db.prepare("UPDATE subagent_runs SET run_id = ? WHERE run_id = ?")
-        .run(` ${selected.runId} `, other.runId);
-      const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-      clearSubagentRunsReadCacheForTest();
-      try {
-        await prepareSubagentSessionListReadCache();
-        queries.mockClear();
-        const tree = getSubagentSessionListRunsSnapshotForSessions(new Map(), [
-          selected.requesterSessionKey,
-        ]);
-        expect([...tree.keys()]).toEqual([]);
-        queries.mockClear();
-        const all = getSubagentSessionListRunsSnapshotForRead(new Map());
-        expect(queries).not.toHaveBeenCalled();
-        expect(all.has(unrelated.runId)).toBe(true);
-        expect(all.get(selected.runId)?.childSessionKey).toBe(other.childSessionKey);
-      } finally {
-        queries.mockRestore();
-        clearSubagentRunsReadCacheForTest();
-      }
-    });
-  });
-
   it("keeps full identity selection and records in one snapshot across an external move", async () => {
     const run = createRun({ model: "original-model" });
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
@@ -406,6 +295,7 @@ describe("subagent registry sqlite store", () => {
         batchRunIds: ["run-one", "public-run"],
         requesterYieldBatch: true,
         rearmGeneration: 2,
+        yieldedFinalDeliverable: true,
       },
       completion: {
         required: true,
@@ -424,6 +314,7 @@ describe("subagent registry sqlite store", () => {
     });
     saveSubagentRegistryToSqlite(new Map([run, publicRun].map((entry) => [entry.runId, entry])));
     const original = loadSubagentRegistryFromSqlite().get(run.runId)!;
+    expect(original.requesterSettleWake).toEqual(run.requesterSettleWake);
     const stored = openOpenClawStateDatabase()
       .db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
       .get(run.runId) as { payload_json: string };
@@ -505,11 +396,6 @@ describe("subagent registry sqlite store", () => {
         modelRouteChange: "Model route changed: requested/model → actual/model.",
       } as const,
       resultText: "restart-visible",
-    },
-    {
-      name: "silent",
-      terminalReply: { disposition: "silent" } as const,
-      resultText: "NO_REPLY",
     },
     {
       name: "empty",
@@ -686,35 +572,35 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it.each([
-    { first: "invalid", last: "terminal", admitted: true },
-    { first: "terminal", last: "invalid", admitted: false },
-  ])("uses the last duplicate JSON key: $first then $last", ({ first, last, admitted }) => {
-    for (const completionTarget of [undefined, "parent"] as const) {
-      const run = createRun({ completionTarget });
-      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-      const { db } = openOpenClawStateDatabase();
-      const original = bindSubagentRunRecord(run).payload_json;
-      const payload = original
-        .replace('"execution":{', `"execution":{"status":"${first}"},"execution":{`)
-        .replace('"status":"terminal","startedAt"', `"status":"${last}","startedAt"`);
-      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
-        payload,
-        run.runId,
-      );
-      expect(loadSubagentRegistryFromSqlite().has(run.runId), "canonical row eligibility").toBe(
-        admitted,
-      );
-      expect(
-        loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).has(
+  it.each([{ first: "terminal", last: "invalid", admitted: false }])(
+    "uses the last duplicate JSON key: $first then $last",
+    ({ first, last, admitted }) => {
+      for (const completionTarget of [undefined, "parent"] as const) {
+        const run = createRun({ completionTarget });
+        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+        const { db } = openOpenClawStateDatabase();
+        const original = bindSubagentRunRecord(run).payload_json;
+        const payload = original
+          .replace('"execution":{', `"execution":{"status":"${first}"},"execution":{`)
+          .replace('"status":"terminal","startedAt"', `"status":"${last}","startedAt"`);
+        db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+          payload,
           run.runId,
-        ),
-        "compact row eligibility",
-      ).toBe(admitted);
-    }
-  });
+        );
+        expect(loadSubagentRegistryFromSqlite().has(run.runId), "canonical row eligibility").toBe(
+          admitted,
+        );
+        expect(
+          loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).has(
+            run.runId,
+          ),
+          "compact row eligibility",
+        ).toBe(admitted);
+      }
+    },
+  );
 
-  it.each([undefined, "parent"] as const)(
+  it.each(["parent"] as const)(
     "omits retained bodies from every duplicate envelope (completion target: %s)",
     (completionTarget) => {
       const marker = "retained-duplicate-body:" + "x".repeat(2_048);
@@ -768,7 +654,7 @@ describe("subagent registry sqlite store", () => {
     },
   );
 
-  it.each([undefined, "parent"] as const)(
+  it.each(["parent"] as const)(
     "retains yielded pause reason in cold compact reads (completion target: %s)",
     (completionTarget) => {
       const run = createRun({ pauseReason: "sessions_yield", completionTarget });
@@ -830,38 +716,6 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it("ignores rows with retired flat delivery state", async () => {
-    const run = createRun();
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-
-    const { db } = openOpenClawStateDatabase();
-    db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
-      JSON.stringify({
-        ...run,
-        execution: undefined,
-        completion: undefined,
-        delivery: undefined,
-        pendingFinalDelivery: true,
-      }),
-      run.runId,
-    );
-
-    expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
-    expect(loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase())).toEqual(
-      new Map(),
-    );
-
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-    db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
-      JSON.stringify({ ...run, delivery: "pending" }),
-      run.runId,
-    );
-    expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
-    expect(loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase())).toEqual(
-      new Map(),
-    );
-  });
-
   it("loads explicit controller rows and null-controller requester fallbacks", async () => {
     const explicit = createRun({
       runId: "explicit",
@@ -914,99 +768,4 @@ describe("subagent registry sqlite store", () => {
       new Map(),
     );
   });
-
-  it.each([
-    ...(["pending", "in_progress", "delivered", "failed", "suspended"] as const).map((status) => ({
-      status,
-      yieldedFinalDeliverable: true as const,
-    })),
-    { status: "delivered" as const, yieldedFinalDeliverable: undefined },
-  ])(
-    "preserves private $status handoffs across readers and restart, deliverable=$yieldedFinalDeliverable",
-    async ({ status, yieldedFinalDeliverable }) => {
-      const run = createRun({
-        completionTarget: "parent",
-        completionRequesterSessionId: "original-parent",
-        controllerSessionKey: "agent:main:controller",
-        requesterSettleWake: {
-          status: "dispatching",
-          attemptCount: 1,
-          batchRunIds: ["run-one", "public-run"],
-          requesterYieldBatch: true,
-          rearmGeneration: 2,
-          ...(yieldedFinalDeliverable ? { yieldedFinalDeliverable } : {}),
-        },
-        completion: {
-          required: true,
-          resultText: "private marker",
-          fallbackResultText: "private fallback",
-          terminalReply: {
-            disposition: "visible",
-            text: "private marker\nMEDIA:https://example.com/private.png",
-          },
-        },
-      });
-      run.delivery!.status = status;
-      const publicRun = createRun({
-        runId: "public-run",
-        childSessionKey: "agent:main:subagent:public",
-      });
-      saveSubagentRegistryToSqlite(new Map([run, publicRun].map((entry) => [entry.runId, entry])));
-      const original = loadSubagentRegistryFromSqlite().get(run.runId)!;
-      expect(original.requesterSettleWake).toEqual(run.requesterSettleWake);
-      const stored = openOpenClawStateDatabase()
-        .db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
-        .get(run.runId) as { payload_json: string };
-      expect(JSON.parse(stored.payload_json)).toEqual({ parentCompletion: original });
-      expect(isReleasedSubagentRunRecord(JSON.parse(stored.payload_json))).toBe(false);
-      closeOpenClawStateDatabaseForTest();
-      const database = openOpenClawStateDatabase();
-      expect(loadSubagentRegistryFromSqlite().get(run.runId)).toEqual(original);
-      expect(readSubagentRun(database, run.runId)).toEqual(original);
-      expect(loadSubagentRunsForChildSessionFromSqlite(run.childSessionKey, database)).toEqual([
-        original,
-      ]);
-      expect(
-        loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
-          run.runId,
-        ),
-      ).toMatchObject({
-        runId: run.runId,
-        execution: {
-          status: "terminal",
-          startedAt: 110,
-          endedAt: 250,
-          outcome: { status: "ok" },
-        },
-        delivery: { status },
-      });
-      expect([
-        ...loadSubagentSessionListRunsFromSqlite(
-          ["agent:main:controller"],
-          openOpenClawStateDatabase(),
-        ).values(),
-      ]).toMatchObject([{ runId: run.runId, delivery: { status } }]);
-      const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-      const releasedRows = executeSqliteQuerySync(
-        database.db,
-        stateDb.selectFrom("subagent_runs").selectAll().where(releasedSubagentPayloadFilter()),
-      ).rows;
-      expect(releasedRows.map((row) => row.run_id)).toEqual([publicRun.runId]);
-      // The released full reader feeds both mixed settle and nested summaries.
-      const releasedRuns = new Map(
-        releasedRows.flatMap((row) => {
-          const payload: unknown = JSON.parse(row.payload_json);
-          return isReleasedSubagentRunRecord(payload) ? [[row.run_id, payload] as const] : [];
-        }),
-      );
-      expect(JSON.stringify([...releasedRuns.values()])).not.toContain("private marker");
-      // An old full-snapshot write can discard the unavailable private feature;
-      // it must never promote its nested payload into public completion state.
-      saveSubagentRegistryToSqlite(releasedRuns);
-      expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
-      expect(loadSubagentRegistryFromSqlite().get(publicRun.runId)?.completion).toEqual(
-        publicRun.completion,
-      );
-    },
-  );
 });

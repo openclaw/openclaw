@@ -19,8 +19,9 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import * as transcriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import * as replacementWorker from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -37,6 +38,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { bindCommandHarnessCompletionAssertion } from "../agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "../agent-harness-completion-delivery.js";
 import { captureAdmittedHarnessCompletionForTest } from "../agent-harness-completion.test-support.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
@@ -139,7 +141,7 @@ describe("native completion final-send custody", () => {
       ["owner-bound-unchanged", "owner-bound-source-interleaved"],
     ],
     ["source read onPlatformSendDispatch", ["source-interleaved"]],
-    ["source read assertDirectAdapterHandoff", ["owner-bound-source-interleaved"]],
+    ["source read owner-bound onPlatformSendDispatch", ["owner-bound-source-interleaved"]],
   ] as const) {
     const restart = boundary.startsWith("restart");
     const readFailure = boundary.startsWith("source read");
@@ -169,7 +171,7 @@ describe("native completion final-send custody", () => {
           );
           await appendInput();
           await replaceSessionEntry(target, entry);
-          const { opts } = await bindCommandHarnessCompletionAssertion({
+          const { opts } = bindCommandHarnessCompletionAssertion({
             claim,
             persisted: entry,
             sessionKey: key,
@@ -190,7 +192,7 @@ describe("native completion final-send custody", () => {
             commandOwnerReference: assertCurrent.recoveryReference,
           });
           expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
-          assertCurrent();
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent());
           const entered = createDeferred();
           const release = createDeferred();
           const writes: string[] = [];
@@ -280,10 +282,13 @@ describe("native completion final-send custody", () => {
             sessionEntry: marker.sessionEntry,
             result: { meta: { durationMs: 1 } },
             payloads,
-            assertDeliveryCurrent: () => {
-              assertCurrent();
-              controller.signal.throwIfAborted();
-            },
+            assertDeliveryCurrent: composeSessionSourceAssertion(
+              [assertCurrent],
+              (assertSource) => {
+                assertSource();
+                controller.signal.throwIfAborted();
+              },
+            ),
           }).then(
             (value) => ({ ok: true as const, value }),
             (error: unknown) => ({ ok: false as const, error }),
@@ -302,14 +307,25 @@ describe("native completion final-send custody", () => {
           expect(writes).toEqual([]);
           if (readFailure) {
             expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
+            const retain = historyWorker.retainSessionHistoryWorkerDatabase;
             const sourceRead = vi
-              .spyOn(transcriptReads, "everySessionTranscriptUserInputFrom")
-              .mockImplementationOnce(() => {
-                throw new Error("Source transcript read unavailable");
+              .spyOn(historyWorker, "retainSessionHistoryWorkerDatabase")
+              .mockImplementationOnce((...args) => {
+                const retained = retain(...args);
+                vi.spyOn(retained.owner, "readHarnessCompletionSource").mockRejectedValueOnce(
+                  new Error("Source transcript read unavailable"),
+                );
+                return retained;
               });
             release.resolve();
             try {
-              expect((await delivery).ok).toBe(false);
+              const settled = await delivery;
+              expect(settled.ok).toBe(false);
+              if (!settled.ok) {
+                expect(settled.error).toMatchObject({
+                  message: "Source transcript read unavailable",
+                });
+              }
             } finally {
               sourceRead.mockRestore();
             }
@@ -319,7 +335,9 @@ describe("native completion final-send custody", () => {
               { ...target, sessionId: entry.sessionId },
               { message: { role: "user", content: "A new request", timestamp: Date.now() } },
             );
-            expect(assertCurrent).toThrow(SessionWorkStartChangedError);
+            await expect(
+              runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent()),
+            ).rejects.toThrow(SessionWorkStartChangedError);
           }
           if (boundary === "queued after cleanup") {
             await appendTranscriptMessage(
@@ -371,7 +389,9 @@ describe("native completion final-send custody", () => {
                 ? { sessionId: "replacement-parent" }
                 : { lifecycleRevision: "replacement-revision" }),
             });
-            expect(assertCurrent).toThrow();
+            await expect(
+              runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent()),
+            ).rejects.toThrow();
           }
           if (handoff) {
             if (restart) {

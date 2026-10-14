@@ -121,8 +121,10 @@ describe("pending cron receipt retention", () => {
       owner.stop();
       await editor.update(job.id, { agentId: "beta" });
 
-      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      // A late settlement still prunes after an owner edit closes its receipt.
+      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toMatchObject({
+        receiptId: pending!.receiptId,
+      });
+      // A late result prunes while preserving the unreconciled run marker after an owner edit.
       const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
       let fetchedRows: number;
       try {
@@ -131,6 +133,7 @@ describe("pending cron receipt retention", () => {
             database: db,
             receiptSchema: prepareCronRunReceiptWriteSchema(db),
             handle: pending!,
+            pendingReceiptId: pending!.receiptId,
             status: "ok",
             finishedAtMs: now,
           }),

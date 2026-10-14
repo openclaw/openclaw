@@ -27,6 +27,7 @@ import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
@@ -187,8 +188,9 @@ export async function handleChatHistoryRequest({
     });
     const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
-    // Recovery lookahead keeps its read budget; every response has the same byte target.
-    const maxResponseBytes = Math.min(maxBytes ?? Infinity, 512 * 1024, maxHistoryBytes);
+    // Keep the default response small while honoring explicit back-scroll budgets.
+    // Recovery lookahead retains its separate read budget.
+    const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId
@@ -397,6 +399,7 @@ export async function handleChatHistoryRequest({
               ...getSessionDefaults(cfg, defaultModelCatalog, {
                 agentId: sessionAgentId,
                 allowPluginNormalization: false,
+                metadataSnapshot: readPreparedGatewayModelMetadata(cfg),
                 providerPolicySource: "active",
               }),
               modelSelectionTarget: resolveGatewayModelSelectionPolicy({

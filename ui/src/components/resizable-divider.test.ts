@@ -76,8 +76,11 @@ describe("resizable-divider", () => {
     vi.restoreAllMocks();
   });
 
-  it("exposes separator semantics and current split value on the host", async () => {
+  it("exposes the supplied split without measuring until a resize gesture", async () => {
     const divider = await renderDivider();
+    const measureRatio = vi.fn(() => 0.55);
+    divider.measureRatio = measureRatio;
+    await divider.updateComplete;
 
     expect(divider.getAttribute("role")).toBe("separator");
     expect(divider.getAttribute("tabindex")).toBe("0");
@@ -92,10 +95,18 @@ describe("resizable-divider", () => {
 
     expect(divider.getAttribute("aria-valuenow")).toBe("65");
 
-    divider.measureRatio = () => 0.55;
+    divider.label = "Resize panel";
     await divider.updateComplete;
 
-    expect(divider.getAttribute("aria-valuenow")).toBe("55");
+    expect(divider.getAttribute("aria-label")).toBe("Resize panel");
+    expect(divider.getAttribute("aria-valuenow")).toBe("65");
+    expect(measureRatio).not.toHaveBeenCalled();
+
+    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(measureRatio).not.toHaveBeenCalled();
+    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(measureRatio).toHaveBeenCalledOnce();
+    expect(divider.getAttribute("aria-valuenow")).toBe("53");
   });
 
   it("updates the fallback separator label when the locale changes", async () => {

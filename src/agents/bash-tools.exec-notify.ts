@@ -43,6 +43,7 @@ export function prepareExecExitNotification(
       session.notifySessionTarget = target;
     },
     (error: unknown) => {
+      session.notifyOnExit = false;
       logWarn(
         `exec: automatic completion has no destination (${formatErrorMessage(error)}); use process poll.`,
       );

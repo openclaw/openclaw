@@ -148,7 +148,8 @@ struct AppStateIsolationTests {
             let state = AppStateStore.shared
             let previousMode = state.connectionMode
             state.connectionMode = .local
-            let manager = GatewayProcessManager()
+            let clock = ManualTestClock()
+            let manager = GatewayProcessManager(readinessClock: clock)
             let connection = GatewayConnection(testEndpointProvider: { throw CancellationError() })
             manager.setTestingConnection(connection)
             manager.setTestingSkipControlChannelRefresh(true)
@@ -169,6 +170,10 @@ struct AppStateIsolationTests {
             // An inconclusive inspection defers installation, so readiness fails with nothing
             // listening. No other process owns the port; the operator must see the real cause.
             manager.setActive(true)
+            await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+            clock.advance(by: .seconds(2))
+            await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+            clock.advance(by: .seconds(GatewayLaunchAgentManager.reusedLaunchdColdStartTolerance))
             await manager.waitForStartupAttempt()
             guard case let .failed(reason) = manager.status else {
                 Issue.record("expected a terminal startup failure")

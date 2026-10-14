@@ -16,7 +16,7 @@ import {
   assertReadableSharedGitHubPublication,
   checkSharedWorktreeReceipt,
 } from "./github-publication-receipt.js";
-import { githubPublicationDatabase } from "./github-publication-store.js";
+import { githubPublicationDatabase } from "./github-publication-store.worker.js";
 import { checkRepositoryGitHubPublication as checked } from "./github-repository-publication.kernel.js";
 
 const table = "github_repository_publication_requests";

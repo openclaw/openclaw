@@ -2,7 +2,7 @@
 import { endianness } from "node:os";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createMemoryVectorWriter } from "./manager-vector-write.js";
+import { writeMemoryVectors } from "./manager-vector-write.js";
 
 function vectorHex(values: number[]): string {
   const view = new DataView(new ArrayBuffer(values.length * 4));
@@ -34,9 +34,9 @@ describe("memory vector dedupe", () => {
     db
       .prepare("SELECT id, hex(embedding) AS embedding FROM memory_index_chunks_vec ORDER BY id")
       .all();
+  const write = (id: string, embedding: number[]) => writeMemoryVectors(db, [{ id, embedding }]);
 
   it("deletes existing vector rows and binds each replacement independently", () => {
-    const write = createMemoryVectorWriter(db);
     write("chunk-1", [1, 0, 0]);
     write("chunk-2", [-0, 0.5, -1.25]);
     expect(write("chunk-1", [2, -3, 0.125])).toBeUndefined();
@@ -46,8 +46,20 @@ describe("memory vector dedupe", () => {
     ]);
   });
 
+  it("replaces a batch and keeps the final embedding for a repeated id", () => {
+    write("chunk-1", [1, 0, 0]);
+    writeMemoryVectors(db, [
+      { id: "chunk-1", embedding: [0, 1, 0] },
+      { id: "chunk-2", embedding: [0, 0, 1] },
+      { id: "chunk-1", embedding: [-1, 0, 0] },
+    ]);
+    expect(rows()).toEqual([
+      { id: "chunk-1", embedding: vectorHex([-1, 0, 0]) },
+      { id: "chunk-2", embedding: vectorHex([0, 0, 1]) },
+    ]);
+  });
+
   it("still inserts after DELETE preparation fails and retries that DELETE on reuse", () => {
-    const write = createMemoryVectorWriter(db);
     let denied = false;
     db.setAuthorizer((action, table) => {
       if (!denied && action === constants.SQLITE_DELETE && table === "memory_index_chunks_vec") {
@@ -68,7 +80,6 @@ describe("memory vector dedupe", () => {
   });
 
   it("attempts INSERT after a DELETE step failure and reuses the writer after recovery", () => {
-    const write = createMemoryVectorWriter(db);
     write("chunk-1", [1, 0, 0]);
     db.exec(`
       CREATE TABLE delete_attempts (id TEXT);
@@ -88,7 +99,6 @@ describe("memory vector dedupe", () => {
   });
 
   it("propagates INSERT failure after deletion without retaining stale bindings", () => {
-    const write = createMemoryVectorWriter(db);
     write("chunk-1", [1, 0, 0]);
     db.exec(`
       CREATE TRIGGER refuse_vector_insert

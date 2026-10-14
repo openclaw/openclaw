@@ -11,7 +11,7 @@ import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { stop } from "./ops-lifecycle.js";
-import { runMissedJobs } from "./timer.js";
+import { runMissedJobs } from "./timer.test-support.js";
 
 const opsRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-startup-notifications-",
@@ -105,7 +105,6 @@ it.each([
           .prepare("SELECT receipt_id FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
           .all(cronStoreKey(storePath), job.id),
       ).toEqual([]);
-      expect(state.startupCatchup).toBeUndefined();
       expect(outcome).toEqual({ kind: "completed" });
       expect(committed).toBe(true);
       expect(persisted).toMatchObject({

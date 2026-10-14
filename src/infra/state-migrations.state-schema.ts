@@ -1,21 +1,11 @@
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { STATE_SCHEMA_MIGRATION_DESCRIPTIONS } from "../state/openclaw-state-db-contract.js";
-import {
-  prepareOpenClawStateDatabaseSchema,
-  type OpenClawStateDatabaseSchemaMigration,
-} from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type {
   LegacyStateMigrationEndpoint,
   LegacyStateMigrationMode,
   LegacyStateMigrationStep,
 } from "./state-migrations.types.js";
-
-export function describeStateSchemaMigration(
-  migration: OpenClawStateDatabaseSchemaMigration,
-): string {
-  return STATE_SCHEMA_MIGRATION_DESCRIPTIONS[migration.kind];
-}
 
 export function createStateSchemaMigrationStep(params: {
   stateDir: string;

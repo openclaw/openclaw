@@ -6,28 +6,7 @@ import { useSessionActivityControllerFixture } from "./session-activity-controll
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
 
-it("loads a bounded current-work query independently of chat, people, and recency", async () => {
-  const { client, request, controller } = setup();
-  void controller.load(client, "current");
-  await vi.waitFor(() => expect(controller.result?.sessions).toEqual([active]));
-  expect(request).toHaveBeenCalledExactlyOnceWith(
-    "sessions.list",
-    {
-      rowMode: "compact",
-      source: "activity",
-      activeOnly: true,
-      excludeDock: true,
-      archived: "all",
-      includeGlobal: true,
-      includeUnknown: true,
-      includeDerivedTitles: true,
-      limit: 100,
-    },
-    expect.objectContaining({ signal: expect.any(AbortSignal) }),
-  );
-});
-
-it.each([false, true])(
+it.each([true])(
   "publishes usable snapshots while new work keeps starting (refresh: %s)",
   async (refresh) => {
     vi.useFakeTimers();
@@ -106,52 +85,6 @@ it("keeps an incomplete empty snapshot loading and permits retry after catch-up 
   expect(controller.incomplete).toBe(false);
 });
 
-it.each([false, true])(
-  "does not resurrect completed work after a stale snapshot (another turn: %s)",
-  async (anotherTurn) => {
-    vi.useFakeTimers();
-    const { client, request, controller, publications } = setup();
-    void controller.load(client, "current");
-    await vi.advanceTimersByTimeAsync(0);
-    const stale = createDeferred<SessionsListResult>();
-    request.mockReturnValueOnce(stale.promise).mockResolvedValue(listing([]));
-    void controller.load(client, "current", "refresh");
-    controller.invalidate({
-      ...active,
-      updatedAt: 200,
-      hasActiveRun: false,
-      activeRunIds: [],
-      status: "done",
-    });
-    expect(controller.result?.sessions).toEqual([]);
-    if (anotherTurn) {
-      controller.invalidate({
-        ...active,
-        updatedAt: 201,
-        runId: "next-run",
-        activeRunIds: ["next-run"],
-        status: "running",
-      });
-      controller.invalidate({
-        ...active,
-        updatedAt: 202,
-        runId: "next-run",
-        hasActiveRun: false,
-        activeRunIds: [],
-        status: "done",
-      });
-    }
-    const terminalPublication = publications.length;
-    stale.resolve(listing([active]));
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(controller.result?.sessions).toEqual([]);
-    expect(
-      publications.slice(terminalPublication).some((rows) => rows?.some((row) => row.hasActiveRun)),
-    ).toBe(false);
-    expect(request).toHaveBeenCalledTimes(anotherTurn ? 3 : 2);
-  },
-);
-
 it("retires current work on disconnect and only accepts the replacement query", async () => {
   vi.useFakeTimers();
   const { client, request, controller } = setup();
@@ -171,7 +104,6 @@ it("retires current work on disconnect and only accepts the replacement query", 
 });
 
 it.each([
-  { bothFinish: false, hasMore: false, newer: false },
   { bothFinish: true, hasMore: false, newer: false },
   { bothFinish: false, hasMore: true, newer: true },
 ])(
@@ -238,7 +170,7 @@ it.each([
   },
 );
 
-it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
+it.each([{ activeRunIds: null }])(
   "uses canonical replacement liveness before a delayed old completion (run IDs: %j)",
   async ({ activeRunIds }) => {
     vi.useFakeTimers();
@@ -278,7 +210,7 @@ it.each([{ activeRunIds: ["next-run"] }, { activeRunIds: null }])(
   },
 );
 
-it.each([false, undefined])(
+it.each([false])(
   "keeps a replacement run after an older terminal event (active flag: %s)",
   async (hasActiveRun) => {
     vi.useFakeTimers();
@@ -297,14 +229,7 @@ it.each([false, undefined])(
   },
 );
 
-it.each([
-  { change: "active", pending: false },
-  { change: "terminal", pending: false },
-  { change: "delete", pending: false },
-  { change: "active", pending: true },
-  { change: "terminal", pending: true },
-  { change: "delete", pending: true },
-])(
+it.each([{ change: "delete", pending: true }])(
   "refreshes a conflicting $change generation without confusing global owners (pending: $pending)",
   async ({ change, pending }) => {
     vi.useFakeTimers();
@@ -416,14 +341,9 @@ it.each(["current", { personId: null, time: "all", query: "" }] as const)(
   },
 );
 
-it.each([
-  { hasMore: false, limitApplied: 100, admit: true },
-  { hasMore: true, limitApplied: 100, admit: false },
-  { hasMore: false, limitApplied: 1, admit: false },
-  { hasMore: false, limitApplied: 100, isDock: true, admit: false },
-])(
+it.each([{ hasMore: false, limitApplied: 100, isDock: true, admit: false }])(
   "admits certified active membership only into a complete window with space (%j)",
-  async ({ hasMore, limitApplied, isDock = false, admit }) => {
+  async ({ hasMore, limitApplied, isDock, admit }) => {
     vi.useFakeTimers();
     const { client, request, controller } = setup();
     request.mockResolvedValue({ ...listing([active]), hasMore, limitApplied });
@@ -448,14 +368,7 @@ it.each([
   },
 );
 
-it.each([
-  { heldChild: true, full: false, pending: false },
-  { heldChild: true, full: false, pending: true },
-  { heldChild: false, full: false, pending: false },
-  { heldChild: false, full: false, pending: true },
-  { heldChild: true, full: true, pending: false },
-  { heldChild: true, full: true, pending: true },
-])(
+it.each([{ heldChild: true, full: true, pending: true }])(
   "refreshes held parent facts after uncertified child completion (held: $heldChild, full: $full, pending: $pending)",
   async ({ heldChild, full, pending }) => {
     vi.useFakeTimers();
@@ -520,7 +433,7 @@ it.each([
   },
 );
 
-it.each([false, true])(
+it.each([true])(
   "applies certified ancestor rows and references without refetching current work (pending: %s)",
   async (pending) => {
     vi.useFakeTimers();

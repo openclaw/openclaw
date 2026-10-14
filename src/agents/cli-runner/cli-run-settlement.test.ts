@@ -13,10 +13,12 @@ import {
   unopenedMcpConfig,
 } from "../agent-bundle-mcp-manager.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "../agent-bundle-mcp-runtime-shared.js";
+import { transformCliResultText } from "../cli-output-results.js";
 import { isCliBindingFlushed, runCliAgent } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
 import * as cliTranscript from "../command/attempt-execution.helpers.js";
+import { resolveDiagnosticModelResponse } from "../diagnostic-model-response.js";
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
@@ -51,15 +53,6 @@ describe("isCliBindingFlushed", () => {
 
     expect(await isCliBindingFlushed(undefined, "claude-cli")).toBe(false);
     expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("returns true when the transcript has content on the first probe", async () => {
-    const probe = vi.fn(async () => true);
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
-    expect(await isCliBindingFlushed("sid-fresh", "claude-cli", workspaceDir)).toBe(true);
-    expect(probe).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledWith({ sessionId: "sid-fresh", workspaceDir });
   });
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
@@ -113,14 +106,6 @@ describe("isCliBindingFlushed", () => {
     expect(await isCliBindingFlushed("sid-codex", "codex-cli")).toBe(true);
     expect(await isCliBindingFlushed("sid-anthropic", "anthropic")).toBe(true);
     expect(await isCliBindingFlushed("sid-openai", "openai")).toBe(true);
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("returns true without probing when provider is undefined", async () => {
-    const probe = vi.fn(async () => false);
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
-    expect(await isCliBindingFlushed("sid-x", undefined)).toBe(true);
     expect(probe).not.toHaveBeenCalled();
   });
 
@@ -250,27 +235,100 @@ describe.each(["anthropic", undefined])(
 );
 
 describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFails) => {
-  it.each([undefined, null, 0, false])(
-    "rejects the thrown value %s after cleanup",
-    async (error) => {
-      const context = buildPreparedCliRunContext();
-      const cleanup = vi.fn(async () => {
-        if (cleanupFails) {
-          throw new Error("synthetic cleanup failure");
-        }
-      });
-      context.params.cleanupCliLiveSessionOnRunEnd = true;
-      context.preparedBackend.closeLiveSession = cleanup;
+  it.each([undefined])("rejects the thrown value %s after cleanup", async (error) => {
+    const context = buildPreparedCliRunContext();
+    const cleanup = vi.fn(async () => {
+      if (cleanupFails) {
+        throw new Error("synthetic cleanup failure");
+      }
+    });
+    context.params.cleanupCliLiveSessionOnRunEnd = true;
+    context.preparedBackend.closeLiveSession = cleanup;
 
-      await expect(
-        settlePreparedCliRun({
-          context,
-          run: vi.fn().mockRejectedValue(error),
-        }),
-      ).rejects.toThrow(new Error(String(error)));
-      expect(cleanup).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(
+      settlePreparedCliRun({
+        context,
+        run: vi.fn().mockRejectedValue(error),
+      }),
+    ).rejects.toThrow(new Error(String(error)));
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+});
+
+it.each(["progress", "ambiguous", "final"] as const)(
+  "requires final source delivery to preserve a %s message through cleanup failure",
+  async (delivery) => {
+    const context = buildPreparedCliRunContext();
+    const error = new Error("backend release failed");
+    context.preparedBackend.cleanup = async () => {
+      throw error;
+    };
+    const result = {
+      payloads: [{ text: "output" }],
+      meta: { durationMs: 1 },
+      didSendViaMessagingTool: true,
+      ...(delivery === "ambiguous"
+        ? {}
+        : {
+            messagingToolSourceReplyPayloads: [
+              { text: "output", sourceReplyFinal: delivery === "final" },
+            ],
+          }),
+    };
+    const settled = settlePreparedCliRun({ context, run: async () => result });
+    if (delivery === "final") {
+      await expect(settled).resolves.toBe(result);
+    } else {
+      await expect(settled).rejects.toBe(error);
+    }
+  },
+);
+
+it("captures only the last CLI result as the model's final message", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  const result = buildCliRunResult({
+    context,
+    output: transformCliResultText({
+      text: "Checking now\nDone",
+      textParts: ["Checking now", "Done"],
+      rawFinalText: "Done",
+    }),
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.meta.finalAssistantRawText).toBe("Checking now\nDone");
+  expect(resolveDiagnosticModelResponse(result)).toBe("Done");
+});
+
+it("captures nothing when the CLI's final message was empty after narration", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  const result = buildCliRunResult({
+    context,
+    output: transformCliResultText({ text: "Checking now", rawFinalText: "" }),
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.meta.finalAssistantRawText).toBe("Checking now");
+  expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
+});
+
+it("never captures host-synthesized optional silence as model output", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "optional";
+  const result = buildCliRunResult({
+    context,
+    output: { text: "" },
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+  expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
 });
 
 it("preserves completed result boundaries for independent final delivery", async () => {

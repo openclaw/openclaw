@@ -346,7 +346,12 @@ export type PluginRuntimeCore = {
   decisions: import("../../decisions/types.js").DecisionRuntimeV1;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
-    current: () => DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;
+    current: {
+      /** Independent mutable copy retaining the published config's resolution facts. */
+      (options: { clone: true }): import("../../config/types.openclaw.js").OpenClawConfig;
+      /** Keep the default last so ReturnType consumers retain the readonly snapshot. */
+      (): DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;
+    };
     /**
      * Persist a focused config mutation. Callers must choose the post-write
      * behavior explicitly so the gateway can hot-reload, restart, or defer.
@@ -435,7 +440,7 @@ export type PluginRuntimeCore = {
           assertCurrent: () => void;
         }>
       >;
-      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
+      /** @deprecated Use prepareSessionEntryPatch; removed after a stable deprecation period. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -445,7 +450,7 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
+      /** @deprecated Use prepareSessionEntryPatch; removed after a stable deprecation period. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -532,9 +537,13 @@ export type PluginRuntimeCore = {
     ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
+    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. */
     listProviders: (
       params?: RuntimeProviderListParams,
     ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];
+    listProvidersAsync: (
+      params?: RuntimeProviderListParams,
+    ) => Promise<import("../web-provider-types.js").PluginWebSearchProviderEntry[]>;
     search: (
       params: import("../../web-search/runtime-types.js").RunWebSearchParams,
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
@@ -565,7 +574,7 @@ export type PluginRuntimeCore = {
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T, 2>;
     /**
      * @deprecated Use openKeyedStoreV2 and await its operations. This synchronous
-     * compatibility adapter will be removed in the next Plugin SDK major.
+     * compatibility adapter will be removed after a stable deprecation period.
      */
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,

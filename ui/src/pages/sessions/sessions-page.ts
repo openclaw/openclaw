@@ -1,6 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -21,6 +20,7 @@ import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-sessio
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -45,8 +45,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
   parseAgentSessionKey,
   isPinnableUiSessionRow,
   isSubagentSessionKey,
@@ -56,12 +54,11 @@ import {
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
 import { SessionsPageArchive } from "./archive-actions.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
+import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { SessionsPageDialog } from "./page-dialog.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
@@ -69,6 +66,7 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
   reconcileSelectedSessions,
+  settleSelectedSession,
   updateSelectedSessions,
   type SessionDeleteRow,
 } from "./selection.ts";
@@ -117,20 +115,15 @@ type SessionsPageState = Pick<
   sessionMenuWork: SessionsPageMenuProps["work"];
 };
 
-export class SessionsPageController implements ReactiveControllerHost {
-  private readonly controllers = new Set<ReactiveController>();
+export class SessionsPageController {
+  private subscribedContext?: ApplicationContext;
+  private contextSubscriptions: (() => void)[] = [];
   private readonly listeners = new Set<() => void>();
   private pendingUpdate: Promise<boolean> | null = null;
   private connected = false;
   context?: ApplicationContext;
   routeData?: SessionsRouteData;
 
-  addController(controller: ReactiveController) {
-    this.controllers.add(controller);
-  }
-  removeController(controller: ReactiveController) {
-    this.controllers.delete(controller);
-  }
   get isConnected() {
     return this.connected;
   }
@@ -141,8 +134,8 @@ export class SessionsPageController implements ReactiveControllerHost {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  // Existing controllers invalidate this owner through their host contract.
-  requestUpdate = this.invalidate.bind(this);
+
+  requestUpdate = () => this.invalidate();
 
   private invalidate() {
     if (this.pendingUpdate || !this.connected) {
@@ -153,9 +146,8 @@ export class SessionsPageController implements ReactiveControllerHost {
       if (!this.connected) {
         return false;
       }
-      for (const controller of this.controllers) {
-        controller.hostUpdate?.();
-      }
+      this.bindContextSubscriptions();
+      this.gatewayLifecycle.refresh();
       this.synchronize();
       for (const listener of this.listeners) {
         listener();
@@ -167,9 +159,8 @@ export class SessionsPageController implements ReactiveControllerHost {
     this.context = context;
     if (!this.connected) {
       this.connected = true;
-      for (const controller of this.controllers) {
-        controller.hostConnected?.();
-      }
+      this.bindContextSubscriptions();
+      this.gatewayLifecycle.connect();
     }
     this.applyRouteData();
     this.invalidate();
@@ -241,7 +232,7 @@ export class SessionsPageController implements ReactiveControllerHost {
   private listRequest?: Promise<void>;
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
-  private readonly details = new SessionDetailsController(this, {
+  private readonly details = new SessionDetailsController(() => this.invalidate(), {
     captureScope: () => this.captureRequestScope(),
     isCurrent: (scope) => this.isRequestScopeCurrent(scope),
     row: () => this.state.result?.sessions.find((row) => row.key === this.state.expandedSessionKey),
@@ -263,16 +254,31 @@ export class SessionsPageController implements ReactiveControllerHost {
     }
     this.invalidate();
   });
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watchStore(() => this.context?.agentIdentity)
-    .watchStore(() => this.context?.navigation)
-    .effect(
-      () => this.context?.agentSelection,
-      (agentSelection) => this.observeAgentScope(agentSelection),
-    )
-    .watchStore(() => this.context?.runtimeConfig)
-    .watchStore(() => this.context?.plugins);
-  private readonly gatewayLifecycle = new GatewayPageController(this, {
+  private bindContextSubscriptions() {
+    const context = this.context;
+    if (context === this.subscribedContext) {
+      return;
+    }
+    this.clearContextSubscriptions();
+    this.subscribedContext = context;
+    if (!context) {
+      return;
+    }
+    this.contextSubscriptions = [
+      ...[context.agentIdentity, context.navigation, context.runtimeConfig, context.plugins].map(
+        (source) => source.subscribe(() => this.invalidate()),
+      ),
+      this.observeAgentScope(context.agentSelection),
+    ];
+  }
+
+  private clearContextSubscriptions() {
+    this.contextSubscriptions.forEach((stop) => stop());
+    this.contextSubscriptions = [];
+    this.subscribedContext = undefined;
+  }
+
+  private readonly gatewayLifecycle = new GatewayPageBinding(() => this.invalidate(), {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
       const retiredResult = this.listBinding?.sessions.listSnapshot(this.listBinding.query).result;
@@ -341,14 +347,13 @@ export class SessionsPageController implements ReactiveControllerHost {
     this.unsubscribeList?.();
     this.unsubscribeList = undefined;
     this.listBinding = undefined;
-    this.subscriptions.clear();
+    this.clearContextSubscriptions();
     this.invalidatePageWork();
     // Dialogs mount on document.body, so navigating away would otherwise leave
     // one over the destination, still submitting against this detached page.
     this.inputDialog.abort();
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
+    this.details.reset();
+    this.gatewayLifecycle.dispose();
     this.listeners.clear();
   }
 
@@ -821,37 +826,19 @@ export class SessionsPageController implements ReactiveControllerHost {
         window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       }
       if (result.deleted.length > 0) {
-        const deleted = new Set(result.deleted);
-        const selected = new Map(this.state.selectedSessions);
-        for (const key of result.deleted) {
-          selected.delete(key);
-        }
-        this.state.selectedSessions = selected;
-        if (this.state.expandedSessionKey && deleted.has(this.state.expandedSessionKey)) {
-          this.state.expandedSessionKey = null;
-        }
-        if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
-          this.deepLinkSessionKey = null;
-        }
-        const deletedCurrent = result.deleted.find((key) =>
-          areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey),
-        );
-        if (deletedCurrent) {
-          const agentId =
-            parseAgentSessionKey(deletedCurrent)?.agentId ??
-            scope.context.agentSelection.state.selectedId ??
-            "main";
+        const outcome = resolveSessionDeleteOutcome(scope.context, requests, result.deleted, {
+          selectedSessions: this.state.selectedSessions,
+          expandedSessionKey: this.state.expandedSessionKey,
+          deepLinkSessionKey: this.deepLinkSessionKey,
+        });
+        this.state.selectedSessions = outcome.selectedSessions;
+        this.state.expandedSessionKey = outcome.expandedSessionKey;
+        this.deepLinkSessionKey = outcome.deepLinkSessionKey;
+        if (outcome.selection) {
           selectApplicationSession({
             selection: scope.context.agentSelection,
             gateway: scope.gateway,
-            agentId,
-            sessionKey: buildAgentMainSessionKey({
-              agentId,
-              mainKey: resolveUiConfiguredMainKey({
-                agentsList: scope.context.agents.state.agentsList,
-                hello: scope.gateway.snapshot.hello,
-              }),
-            }),
+            ...outcome.selection,
           });
         }
       }
@@ -1188,9 +1175,8 @@ export class SessionsPageController implements ReactiveControllerHost {
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      const selected = new Map(this.state.selectedSessions);
-      selected.delete(key);
-      this.state.selectedSessions = selected;
+      const selected = this.state.selectedSessions;
+      this.state.selectedSessions = settleSelectedSession(selected, key, patched.entry.sessionId);
       return "completed";
     } catch (error) {
       return this.publishRequestError(scope, error);

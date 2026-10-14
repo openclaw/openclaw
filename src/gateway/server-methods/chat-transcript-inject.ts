@@ -107,7 +107,15 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     // Runtime projections retain their terminal state; host-authored partials
     // keep their replayable default and carry cancellation in openclawAbort.
     stopReason: params.stopReason ?? "stop",
-    usage: makeZeroUsageSnapshot(),
+    usage: {
+      ...makeZeroUsageSnapshot(),
+      ...(params.abortMeta
+        ? {
+            usageReport: { state: "unavailable" } as const,
+            contextUsage: { state: "unavailable" } as const,
+          }
+        : {}),
+    },
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
     provider: "openclaw",

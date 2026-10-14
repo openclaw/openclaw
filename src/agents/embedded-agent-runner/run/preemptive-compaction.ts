@@ -254,16 +254,15 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   };
 }
 
-/** Check the projected foreground request; persisted usage alone cannot bind its prefix. */
-export function checkMidTurnPrecheck(params: {
+/** Price the projected foreground request; persisted usage alone cannot bind its prefix. */
+export function resolveProjectedRequestPressure(params: {
   context: Parameters<StreamFn>[1];
   previousRequest?: MeasuredRequestContext;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
   replay?: CompactionReplayPressureContext;
-  onPrecheck: (request: MidTurnPrecheckRequest) => void;
-}): void {
+}) {
   const { context, previousRequest } = params;
   const anchor =
     previousRequest &&
@@ -324,6 +323,16 @@ export function checkMidTurnPrecheck(params: {
       `promptBudgetBeforeReserve=${decision.promptBudgetBeforeReserve} ` +
       `overflowTokens=${decision.overflowTokens}`,
   );
+  return decision;
+}
+
+/** Stop before a projected foreground request that no longer fits its budget. */
+export function checkMidTurnPrecheck(
+  params: Parameters<typeof resolveProjectedRequestPressure>[0] & {
+    onPrecheck: (request: MidTurnPrecheckRequest) => void;
+  },
+): void {
+  const decision = resolveProjectedRequestPressure(params);
   if (decision.route !== "fits") {
     const request = { ...decision, route: decision.route };
     params.onPrecheck(request);

@@ -50,13 +50,6 @@ declare module "@solidjs/web" {
       "openclaw-chat-svg-attachment": CustomElementProps<
         HTMLElementTagNameMap["openclaw-chat-svg-attachment"]
       >;
-      "openclaw-chat-pasted-text": HTMLAttributes<HTMLElement> & {
-        "prop:src"?: string;
-        "prop:sizeBytes"?: number;
-        "prop:scope"?: string;
-        "prop:onOpen"?: () => void;
-        "prop:admission"?: AttachmentAdmission;
-      };
     }
   }
 }

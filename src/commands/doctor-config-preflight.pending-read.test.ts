@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as pendingMigrations from "../infra/deferred-plugin-migrations.js";
+import { invalidateSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,7 +14,7 @@ import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["Doctor repair", "Gateway readiness"] as const)(
-  "awaits pending inputs before backup selection through %s",
+  "preserves config and closes state reads through %s",
   async (owner) => {
     const gateway = owner === "Gateway readiness";
     await withDoctorConfigPreflightHome(async (home) => {
@@ -24,7 +25,7 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         meta: { migrations: { webhookListeners: true } },
         gateway: { mode: "local" },
         plugins: { enabled: false },
-        legacyFixture: "retained",
+        ...(gateway ? {} : { legacyFixture: "retained" }),
       };
       const raw = JSON.stringify(retained);
       const backup = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
@@ -41,6 +42,8 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
       };
       await pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
       await closeOpenClawStateDatabaseAsync();
+      // Exercise snapshot admission; a clean seal intentionally skips this wait.
+      invalidateSqliteDatabaseCleanClose(databasePath);
       const held = createDeferredCore();
       const release = createDeferredCore();
       const prepareSnapshot = snapshotSource.prepareSqliteReadOnlyLocation;
@@ -99,10 +102,17 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         const result = await operation;
         expect(snapshotsClosedAtReadiness.length > 0).toBe(gateway);
         expect(snapshotsClosedAtReadiness).not.toContain(false);
-        expect(pendingRead).toHaveBeenCalled();
+        if (gateway) {
+          expect(pendingRead).not.toHaveBeenCalled();
+        } else {
+          expect(pendingRead).toHaveBeenCalled();
+        }
         expect(snapshotClosed).toBe(true);
         expect(result.snapshot.valid).toBe(true);
-        expect(result.snapshot.sourceConfig).toHaveProperty("legacyFixture", "retained");
+        expect(result.snapshot.sourceConfig.gateway?.mode).toBe("local");
+        if (!gateway) {
+          expect(result.snapshot.sourceConfig).toHaveProperty("legacyFixture", "retained");
+        }
         expect(pendingMigrations.readDeferredPluginMigrations({ path: databasePath })).toEqual([
           pending,
         ]);

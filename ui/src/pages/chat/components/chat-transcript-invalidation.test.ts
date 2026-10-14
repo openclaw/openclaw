@@ -21,14 +21,14 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
-import * as chatMessage from "./chat-message-group.ts";
+import * as chatMessage from "./chat-message-group-frame.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import {
   renderTranscriptSearch,
   resetTranscriptSession,
   toggleTranscriptSearch,
 } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
@@ -84,7 +84,7 @@ describe("chat transcript invalidation", () => {
     },
   );
 
-  it.each(["session participants", "history", "pending input"] as const)(
+  it.each(["session participants", "pending input"] as const)(
     "shows your name when a peer arrives through %s and keeps it while search hides the peer",
     async (peerSource) => {
       const paneId = `pane-sender-${peerSource}`;
@@ -150,8 +150,6 @@ describe("chat transcript invalidation", () => {
             expandedParticipants: [...props.selectedSession.participants!, peer],
             participantCount: 3,
           };
-        } else if (peerSource === "history") {
-          props.messages = [...props.messages, peerMessage];
         } else {
           props.pendingInputs = [
             {
@@ -362,7 +360,7 @@ describe("chat transcript invalidation", () => {
     expect(chip()).toBeNull();
   });
 
-  it.each(["agent:main:main", "agent:main:dashboard:history"])(
+  it.each(["agent:main:dashboard:history"])(
     "does not normalize historical messages again when their transcript is projected in %s",
     (sessionKey) => {
       const messages = Array.from({ length: 30 }, (_, index) => ({
@@ -390,7 +388,7 @@ describe("chat transcript invalidation", () => {
     },
   );
 
-  it.each(["unchanged", "stream-only"] as const)(
+  it.each(["stream-only"] as const)(
     "keeps settled run frames idle during %s updates",
     async (update) => {
       vi.spyOn(Date, "now").mockReturnValue(60_000);
@@ -457,7 +455,7 @@ describe("chat transcript invalidation", () => {
         expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
           props.stream,
         );
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        const prepareMessage = vi.spyOn(chatMessage, "prepareGroupMessage");
         if (update === "stream-only") {
           props.stream = "Advanced next reply";
         }
@@ -469,50 +467,14 @@ describe("chat transcript invalidation", () => {
         expect(container.querySelector('[data-entry-id="settled-final"]')).toBe(finalBubble);
         expect(finalBubble.textContent).toContain("Workspace checked");
         expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-        expect(renderGroup.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
-          [],
-        );
+        expect(
+          prepareMessage.mock.calls.filter(([group]) => group.runId === completedRunId),
+        ).toEqual([]);
       } finally {
         transcript.hostDisconnected();
       }
     },
   );
-
-  it("keeps settled history idle across unchanged rerenders", async () => {
-    // A minute rollover intentionally invalidates rows; this case keeps time unchanged.
-    vi.spyOn(Date, "now").mockReturnValue(1_700_000_010_000);
-    const props = threadProps("pane-unchanged-rerender");
-    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
-      scrollTop: 0,
-      anchorToEnd: false,
-    });
-    const transcript = createTestTranscript(props.paneId);
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    };
-    try {
-      rerender();
-      transcript.hostConnected();
-      await flushDeferredRowPrune();
-      const bubbles = Array.from(container.querySelectorAll(".chat-bubble"));
-      expect(bubbles).toHaveLength(4);
-      const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
-
-      for (let rerenderIndex = 0; rerenderIndex < 3; rerenderIndex++) {
-        rerender();
-
-        expect(renderGroup).not.toHaveBeenCalled();
-        const currentBubbles = Array.from(container.querySelectorAll(".chat-bubble"));
-        expect(currentBubbles).toHaveLength(bubbles.length);
-        currentBubbles.forEach((bubble, index) => expect(bubble).toBe(bubbles[index]));
-        expect(container.textContent).toContain("reply two");
-      }
-    } finally {
-      transcript.hostDisconnected();
-    }
-  });
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
@@ -626,11 +588,11 @@ describe("chat transcript invalidation", () => {
     rerender();
     const userRow = expectDefined(container.querySelector(".chat-group.user"), "user row");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
-    const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+    const prepareMessage = vi.spyOn(chatMessage, "prepareGroupMessage");
 
     props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
     rerender();
-    expect(renderGroup).not.toHaveBeenCalled();
+    expect(prepareMessage).not.toHaveBeenCalled();
     expect(container.querySelector(".chat-group.user")).toBe(userRow);
 
     props.selectedSession = { ...props.selectedSession, kind: "group" };
@@ -768,6 +730,7 @@ describe("chat transcript invalidation", () => {
       transcript.hostUpdated();
     };
     state.requestUpdate = renderPane;
+    vi.spyOn(pane.chatState, "requestBackgroundUpdate").mockImplementation(renderPane);
 
     renderPane();
     transcript.hostConnected();

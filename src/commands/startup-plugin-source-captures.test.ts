@@ -21,7 +21,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
-  readConfigPreflightSnapshot: mocks.read,
+  createConfigPreflightSnapshotReader: () => ({
+    read: mocks.read,
+    takePluginCache: () => undefined,
+    [Symbol.asyncDispose]: async () => {},
+  }),
   readAdmittedConfigSnapshot: mocks.read,
 }));
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({

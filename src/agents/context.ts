@@ -1,7 +1,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { settlesWithin } from "../shared/settle-within.js";
 import {
   applyConfiguredContextWindows,
   prepareContextWindowCaches,
@@ -9,9 +8,6 @@ import {
 } from "./context-cache-projection.js";
 import {
   getContextWindowCaches,
-  lookupCachedContextTokens,
-  lookupCachedContextWindow,
-  minPositiveContextTokens,
   replaceContextWindowCaches,
   replaceDiscoveredContextTokenCache,
 } from "./context-cache.js";
@@ -172,25 +168,6 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   }
 }
 
-export async function waitForContextWindowCacheLoad(options?: {
-  timeoutMs?: number;
-}): Promise<"idle" | "loaded" | "timeout"> {
-  const promise = CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
-  if (
-    !promise ||
-    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration !== CONTEXT_WINDOW_RUNTIME_STATE.generation
-  ) {
-    return "idle";
-  }
-
-  const timeoutMs = Math.max(0, Math.trunc(options?.timeoutMs ?? 250));
-  if (timeoutMs === 0) {
-    return "timeout";
-  }
-
-  return (await settlesWithin(promise, timeoutMs)) ? "loaded" : "timeout";
-}
-
 /** Restore configured context limits without acquiring a model catalog. */
 export function resetContextWindowCache(cfg: OpenClawConfig): void {
   beginContextWindowCacheRefresh();
@@ -221,20 +198,6 @@ function prepareContextWindowCache(options?: {
     // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
-}
-
-export function lookupContextTokens(
-  modelId?: string,
-  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
-): number | undefined {
-  if (!modelId) {
-    return undefined;
-  }
-  prepareContextWindowCache(options);
-  return minPositiveContextTokens(
-    lookupCachedContextTokens(modelId),
-    lookupCachedContextWindow(modelId),
-  );
 }
 
 export function resolveContextTokensForModel(

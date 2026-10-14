@@ -8,14 +8,13 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { saveCronStore } from "../cron/store.js";
-import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
-  finishCronRunReceiptAsync,
   makeCronReceiptJob,
 } from "../cron/store/run-receipt-store.test-support.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
@@ -30,7 +29,6 @@ it("joins accepted cron writes and receipt finalization before closing shared st
   let saving: Promise<void> | undefined;
   let finishing: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
-  let releaseReceipt: (() => void) | undefined;
   let restore: (() => void) | undefined;
   try {
     const port = await fixture.reservePort();
@@ -41,10 +39,9 @@ it("joins accepted cron writes and receipt finalization before closing shared st
     const job = makeCronReceiptJob("accepted-before-close", "main");
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const handle = claimCronRunReceiptForTest(storePath, job, 1);
-    releaseReceipt = () => releaseLocalCronRunReceiptOwnership(handle);
     const observation = probe.command(stateWorker, async (command, options, scope) => {
       const result = await scope.execute(command, options);
-      if (command.type === "cron.save" || command.type === "cron.finishReceipt") {
+      if (command.type === "cron.save" || command.type === "cron.finalizeRuns") {
         (command.type === "cron.save" ? saveCommitted : finishCommitted).resolve();
         await releaseReplies.promise;
       }
@@ -58,9 +55,37 @@ it("joins accepted cron writes and receipt finalization before closing shared st
       awaitGateBeforeSettlement(saveCommitted.promise, saving, "Cron save did not commit"),
       signal,
     );
-    finishing = kernel.connectionWork.track(() =>
-      finishCronRunReceiptAsync({ handle, status: "ok", finishedAtMs: 3 }),
-    );
+    finishing = kernel.connectionWork.track(async () => {
+      await stateWorker.runOpenClawStateWorkerOperation(
+        captureOpenClawStateWorkerContext(),
+        (scope) =>
+          scope.execute({
+            type: "cron.finalizeRuns",
+            input: {
+              storeKey: handle.storeKey,
+              snapshot: {
+                nowMs: 3,
+                defaultAgentId: "main",
+                outcomes: [
+                  {
+                    jobId: job.id,
+                    job,
+                    runReceipt: handle,
+                    status: "ok",
+                    completionStatus: "succeeded",
+                    deliveryState: {
+                      status: "not-requested",
+                      failureNotification: { status: "not-requested" },
+                    },
+                    startedAt: 1,
+                    endedAt: 3,
+                  },
+                ],
+              },
+            },
+          }),
+      );
+    });
     await withinTest(
       awaitGateBeforeSettlement(
         finishCommitted.promise,
@@ -109,7 +134,6 @@ it("joins accepted cron writes and receipt finalization before closing shared st
     releaseReplies.resolve();
     await Promise.allSettled([saving, finishing, closing]);
     restore?.();
-    releaseReceipt?.();
     await fixture.cleanup();
   }
 });
