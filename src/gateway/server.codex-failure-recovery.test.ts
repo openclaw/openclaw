@@ -1,3 +1,6 @@
+// Load the Gateway's deferred runtime during collection, outside the recovery deadline.
+import "../agents/prepared-model-runtime.js";
+import "./server-start.js";
 import childProcess, { type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -363,9 +366,9 @@ it.each(cases)(
     });
     const runtimeConfig = getRuntimeConfigSnapshot();
     assert(runtimeConfig, "Gateway must publish its prepared runtime config before a turn");
-    // The native SDK has a separate module graph from the source Gateway fixture.
+    // Load the built SDK directly; Bun's tsconfig aliases would select the source SDK.
     nativeConfig = createRequire(path.join(sdkHost, "package.json"))(
-      "openclaw/plugin-sdk/runtime-config-snapshot",
+      path.join(sdkHost, "dist/plugin-sdk/runtime-config-snapshot.js"),
     ) as typeof import("../plugin-sdk/runtime-config-snapshot.js");
     nativeConfig.setRuntimeConfigSnapshot(
       runtimeConfig,
