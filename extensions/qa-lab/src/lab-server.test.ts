@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { writeQaLabSuiteResultFixture } from "./lab-server-suite.test-support.js";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import * as runConfig from "./run-config.js";
 import * as suiteSummary from "./suite-summary.js";
 
 const qaChannelMock = vi.hoisted(() => ({
@@ -601,7 +602,9 @@ describe("qa-lab server", () => {
     );
   });
 
-  it("allows only one concurrent request to commit a resolved suite plan", async ({ signal }) => {
+  it("serializes suite admission and drains accepted work before stopping the bus", async ({
+    signal,
+  }) => {
     const summaryValidated = Promise.withResolvers<number>();
     const readSummary = suiteSummary.readQaSuiteFailedOrSkippedScenarioCountFromFile;
     using _ = vi
@@ -612,8 +615,12 @@ describe("qa-lab server", () => {
         void validation.then(summaryValidated.resolve, summaryValidated.reject);
         return validation;
       });
+    const modelCatalog = await import("./model-catalog.runtime.js");
+    using catalog = vi.spyOn(modelCatalog, "loadQaRunnerModelOptions").mockResolvedValue([]);
     const lab = await startQaLabServerForTest();
-    cleanups.push(lab.stop);
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= lab.stop());
+    cleanups.push(stop);
     let finishSuite: ((value: unknown) => void) | undefined;
     suiteLaunchMock.runQaSuite.mockImplementation(
       () =>
@@ -634,17 +641,42 @@ describe("qa-lab server", () => {
       responses.map((response) => response.status).toSorted((left, right) => left - right),
     ).toEqual([202, 409]);
     expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1);
-    finishSuite?.({
+    const result = {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
       result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
-    });
-    await withinTest(summaryValidated.promise, signal);
-    const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
-      runner: { status: string };
     };
-    expect(bootstrap.runner.status).toBe("completed");
+    let stopped = false;
+    const stoppedRun = stop().then(() => {
+      stopped = true;
+    });
+    try {
+      const outbound = await postLabJson(lab.baseUrl, "/v1/outbound/message", {
+        to: "dm:qa-operator",
+        text: "accepted suite still delivering",
+      });
+      expect(outbound.status).toBe(200);
+      expect(await outbound.json()).toMatchObject({
+        message: { direction: "outbound", text: "accepted suite still delivering" },
+      });
+      expect(stopped).toBe(false);
+      const bootstrap = await fetch(`${lab.baseUrl}/api/bootstrap`);
+      expect(bootstrap.status).toBe(200);
+      await bootstrap.json();
+      expect(catalog).not.toHaveBeenCalled();
+      for (const route of ["/api/reset", "/api/scenario/self-check", "/api/scenario/suite"]) {
+        const response = await postLabJson(lab.baseUrl, route, {});
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toEqual({ error: "QA Lab is stopping" });
+      }
+    } finally {
+      finishSuite?.(result);
+      await withinTest(summaryValidated.promise, signal);
+      await withinTest(stoppedRun, signal);
+    }
+    expect(stopped).toBe(true);
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
   it("rejects empty and unknown explicit selections before dispatch", async () => {
@@ -810,7 +842,7 @@ describe("qa-lab server", () => {
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
-  it("keeps the bus available until the embedded gateway finishes stopping", async () => {
+  it("keeps the bus available during shutdown and rejects a suite whose plan resolves after stop", async () => {
     let markGatewayStopping = () => {};
     const gatewayStopping = new Promise<void>((resolve) => {
       markGatewayStopping = resolve;
@@ -862,9 +894,21 @@ describe("qa-lab server", () => {
     slowInbound.on("error", () => undefined);
     slowInbound.write(inboundBody.slice(0, 1));
     await vi.waitFor(() => expect(pollWaiterStarted).toBe(true));
-    const stopping = lab.stop();
+    let stopping: Promise<void> | undefined;
+    const resolvePlan = runConfig.resolveQaLabRunPlan;
+    using _ = vi.spyOn(runConfig, "resolveQaLabRunPlan").mockImplementationOnce((...args) => {
+      stopping = lab.stop();
+      return resolvePlan(...args);
+    });
+    const suiteResponse = postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      channelDriver: "qa-channel",
+      providerMode: "mock-openai",
+      scenarioIds: ["dm-chat-baseline"],
+    });
     await gatewayStopping;
     try {
+      expect((await suiteResponse).status).toBe(503);
+      expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
       await expect(fetch(`${lab.baseUrl}/healthz`)).resolves.toMatchObject({ status: 200 });
       expect(pollWaiterSettled).toBe(false);
     } finally {

@@ -159,7 +159,7 @@ export async function runCodexAppServerSideQuestion(
   if (denyToolCalls && (!options.nativeHookRelay || options.nativeHookRelay.enabled === false)) {
     throw new Error("Session fork tool denial requires the Codex native hook relay to be enabled.");
   }
-  const { binding, authority } = await resolveCodexSessionBinding({
+  const { binding, authority, release } = await resolveCodexSessionBinding({
     bindingStore: options.bindingStore,
     identity: bindingIdentity,
     config: params.cfg,
@@ -167,6 +167,7 @@ export async function runCodexAppServerSideQuestion(
     assertCurrent: hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
   });
+  using _ = { [Symbol.dispose]: release };
   const assertCurrent = authority.assertCurrent;
   if (!binding?.threadId) {
     throw new Error(

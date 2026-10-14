@@ -23,6 +23,7 @@ type DebugProxyCaptureDatabase = Pick<
 >;
 type NodeSqliteDatabase = Parameters<typeof getNodeSqliteKysely>[0];
 
+/** @deprecated Use AsyncDebugProxyCaptureReader and await its read operations. */
 export type DebugProxyCaptureReader = {
   getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
   readBlob(blobId: string): string | null;

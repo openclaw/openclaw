@@ -56,6 +56,8 @@ export type EmbeddedAttemptExecutionState = {
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
+  /** Final assistant text captured for the run-completed diagnostic event; gated before export. */
+  diagnosticFinalResponse?: string;
 };
 
 export type EmbeddedAttemptExternalAbortController = {
@@ -141,6 +143,7 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  modelCallSequence?: { value: number };
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;
   disableToolSearch?: true;

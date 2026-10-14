@@ -25,7 +25,6 @@ export async function prepareGitHubPublicationFact(
     }
     const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
     using _ = { [Symbol.dispose]: () => currentWorkspace.release() };
-
     const workspace = currentWorkspace.initial;
     const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
     const originUrl =

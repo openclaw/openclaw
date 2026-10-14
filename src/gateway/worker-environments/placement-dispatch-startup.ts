@@ -27,10 +27,11 @@ import {
   requireProvisionedEnvironment,
 } from "./placement-dispatch-provisioning.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import {
+  readWorkerPreparation,
   readWorkerProjectPreparation,
-  type WorkerProviderPreparedIntent,
-} from "./preparation-identity.js";
+} from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { runWorkerProjectLifecycle } from "./project-setup-script.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
@@ -146,7 +147,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     intent: WorkerProviderPreparedIntent;
     assertCurrent: WorkerPlacementAuthorization;
   }) => {
-    const preparation = readWorkerProjectPreparation(params.intent.profileSnapshot.project);
+    const preparation = readWorkerPreparation(params.intent.profileSnapshot);
     if (!preparation || params.intent.preparationKey !== preparation.key) {
       return undefined;
     }

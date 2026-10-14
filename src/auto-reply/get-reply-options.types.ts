@@ -279,7 +279,7 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
-   * @deprecated Use onVerboseProgressVisibilityAsync; retained until the next Plugin SDK major.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Retained during stable deprecation.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */

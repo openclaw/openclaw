@@ -3,6 +3,7 @@ import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.j
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { loadOpenClawAgentCanonicalValidationReceipt } from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
@@ -85,6 +86,7 @@ export async function certifySessionCanonicalValidationPending(
   try {
     const readiness = database
       ? runSqliteReadOperationSync(database.db, () => {
+          loadOpenClawAgentCanonicalValidationReceipt(database);
           const initialize = !hasOpenClawAgentCanonicalValidation(database);
           return {
             initialize,
@@ -204,9 +206,6 @@ export async function certifySessionCanonicalValidationPending(
                       assertCurrent();
                       execution?.assertCurrent();
                       worker.assertCurrent(databaseOptions, currentClaim);
-                      if (validation && readValidation() !== validation) {
-                        throw new Error("Canonical validation admission changed");
-                      }
                     };
                     assertCommitAllowed();
                     return await worker.runCanonicalValidation({
@@ -249,10 +248,11 @@ export async function certifySessionCanonicalValidationPending(
             assertReadinessCurrent();
             claim?.assertCurrent();
             const currentValidation = readValidation();
-            if (!currentValidation || (validation && validation !== currentValidation)) {
+            if (!currentValidation) {
               throw new Error("SQLite session reclamation database owner is no longer current");
             }
-            validation ??= currentValidation;
+            // A successful worker admission can renew proof for the same physical owner.
+            validation = currentValidation;
             oversizedRows += result.oversizedRows;
             if (!result.hasMore) {
               if (

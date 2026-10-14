@@ -454,8 +454,8 @@ describe("scripts/changed-lanes", () => {
     },
   );
 
-  it.each([{ failingCommand: "tsgo:core:test" }, { failingCommand: null }])(
-    "retains serial gate execution and stops on $failingCommand before broad audits",
+  it.each([{ failingCommand: "check:no-conflict-markers" }, { failingCommand: null }])(
+    "retains serial execution and runs every selected check after $failingCommand fails",
     ({ failingCommand }) => {
       const { events, paths, result } = runChangedCheckWithRecordedCommands(failingCommand);
       expect(result.error, result.stderr).toBeUndefined();
@@ -468,11 +468,7 @@ describe("scripts/changed-lanes", () => {
         bin: command.bin ?? "pnpm",
         args: command.args,
       }));
-      const end =
-        failingCommand === null
-          ? planned.length
-          : planned.findIndex((command) => command.args[0] === failingCommand) + 1;
-      expect(commands.map(({ bin, args }) => ({ bin, args }))).toEqual(planned.slice(0, end));
+      expect(commands.map(({ bin, args }) => ({ bin, args }))).toEqual(planned);
       expect(events).toEqual(
         commands.flatMap(({ bin, args }) => [
           { event: "start", bin, args },
@@ -490,13 +486,11 @@ describe("scripts/changed-lanes", () => {
       );
       if (failingCommand !== null) {
         expect(result.stderr).toContain(`Synthetic check failure: ${failingCommand}`);
-        expect(broadAudits).toEqual([]);
-      } else {
-        expect(broadAudits).toHaveLength(3);
-        const lastTypecheck = commands.findLastIndex(({ args }) => args[0]?.startsWith("tsgo:"));
-        for (const audit of broadAudits) {
-          expect(commands.indexOf(audit)).toBeGreaterThan(lastTypecheck);
-        }
+      }
+      expect(broadAudits).toHaveLength(3);
+      const lastTypecheck = commands.findLastIndex(({ args }) => args[0]?.startsWith("tsgo:"));
+      for (const audit of broadAudits) {
+        expect(commands.indexOf(audit)).toBeGreaterThan(lastTypecheck);
       }
     },
   );

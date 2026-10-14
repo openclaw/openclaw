@@ -321,7 +321,7 @@ suite.define(() => {
       .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     await page.keyboard.press("Enter");
-    await expect.poll(() => preview.locator("wa-dropdown[open]").count()).toBe(1);
+    await expect.poll(() => preview.locator(".oc-menu:popover-open").count()).toBe(1);
     await page.keyboard.press("Escape");
     for (const width of [796, 794, 390]) {
       await page.setViewportSize({ width, height: 900 });

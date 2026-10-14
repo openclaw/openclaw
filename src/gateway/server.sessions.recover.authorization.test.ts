@@ -155,6 +155,9 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   sourceOwner.connect.scopes = ["operator.sessions.write"];
   const broadWriter = roleClient("write", "linked-recovery-writer");
   broadWriter.connect.scopes = ["operator.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(sourceOwner);
+  prepareGatewayRecipientProfile(broadWriter);
   const cfg = recoveryConfig(storePath);
   const revokedRole = rolePolicyConfig().gateway!.roles!;
   const writeRole = revokedRole.definitions.write;
@@ -169,9 +172,6 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
     storePath,
     ownerProfileId: sourceOwner.authenticatedUserProfile!.profileId,
   });
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-  prepareGatewayRecipientProfile(sourceOwner);
-  prepareGatewayRecipientProfile(broadWriter);
   const context = createDirectChatContext({
     getRuntimeConfig: () =>
       loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })?.mainRestartRecovery
@@ -242,7 +242,7 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
     id: "linked-recovery-explicit-member",
     key: sourceKey,
   });
-  expect(granted).toMatchObject({
+  expect(granted, JSON.stringify(granted)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -261,14 +261,14 @@ test("sessions.recover retains source revocation for its accepted own successor"
   const sourceSessionId = "narrow-own-recovery-source";
   const owner = roleClient("view", "narrow-recovery-owner");
   owner.connect.scopes = ["operator.sessions.write"];
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  prepareGatewayRecipientProfile(owner);
   await seedRecoverableSession({
     sourceKey,
     sourceSessionId,
     storePath,
     ownerProfileId: owner.authenticatedUserProfile!.profileId,
   });
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-  prepareGatewayRecipientProfile(owner);
   const context = createDirectChatContext({ getRuntimeConfig: () => recoveryConfig(storePath) });
   const requestAuthority = captureGatewayDeviceRevocation(
     context,
@@ -283,7 +283,7 @@ test("sessions.recover retains source revocation for its accepted own successor"
     hasCurrentClientAuthority: requestAuthority.isCurrent,
   });
 
-  expect(recovered).toMatchObject({
+  expect(recovered, JSON.stringify(recovered)).toMatchObject({
     ok: true,
     payload: { key: expect.any(String), continuation: { status: "started" } },
   });

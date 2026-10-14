@@ -372,12 +372,13 @@ it.each(["stale", "newer-write", "rebound-owner"])(
               );
             }
             if (scenario === "rebound-owner") {
-              withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () =>
+              withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () => {
+                noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
                 setRuntimeAuthProfileStoreSnapshot(
                   { version: 1, profiles: { selected: credential("synthetic-rebound") } },
                   agentDir,
-                ),
-              );
+                );
+              });
             }
             if (!execution) {
               throw new Error("Missing real auth execution");

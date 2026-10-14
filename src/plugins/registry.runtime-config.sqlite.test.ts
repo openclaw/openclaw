@@ -5,10 +5,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -115,6 +116,10 @@ describe("plugin registry SQLite session ownership", () => {
       const sessionId = "incognito-session";
       const lockedKey = "agent:researcher:dashboard:incognito-locked-owner";
       const lockedSessionId = "locked-incognito-session";
+      const memoryLocation = {
+        agentId: "researcher",
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "researcher" }),
+      };
       try {
         await replaceSessionEntry(
           { agentId: "researcher", sessionKey },
@@ -187,8 +192,9 @@ describe("plugin registry SQLite session ownership", () => {
           }),
         ).rejects.toThrow('owned by plugin "harness-owner"');
         expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-        expect(captureOpenClawAgentDatabaseExecution.listIncognito()).toEqual([]);
+        expect(memorySessionActorOwners.read(memoryLocation)).toBeDefined();
       } finally {
+        memorySessionActorOwners.closeDatabase(memoryLocation);
         closeOpenClawAgentDatabasesForTest();
       }
     });

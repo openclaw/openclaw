@@ -13,6 +13,7 @@ import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js
 import type { OpenClawConfig } from "../../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
@@ -23,7 +24,6 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
-import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
 import { createBrowserProvider, createBrowserSessionMock } from "./client-fixtures.test-support.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
@@ -57,7 +57,7 @@ const mocks = vi.hoisted(() => ({
   canonicalizeRealtimeVoiceProviderId: vi.fn((providerId: string | undefined) =>
     providerId === "gemini-live" ? "google" : providerId?.trim().toLowerCase(),
   ),
-  listRealtimeVoiceProviders: vi.fn(() => []),
+  listRealtimeVoiceProviders: vi.fn<() => RealtimeVoiceProviderPlugin[]>(() => []),
   canonicalizeRealtimeTranscriptionProviderId: vi.fn((providerId: string | undefined) =>
     providerId === "openai-realtime" ? "openai" : providerId?.trim().toLowerCase(),
   ),
@@ -104,6 +104,7 @@ const mocks = vi.hoisted(() => ({
         release = registeredRelease;
       });
       return {
+        run: { runId: "run-voice-1", sessionKey: "agent:main:main" },
         release,
         isCurrent: () => true,
         abortIfCurrent: () => {},
@@ -411,9 +412,7 @@ describe("talk.catalog handler", () => {
         },
       },
     ] as never);
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-      provider: { id: "realtime" },
-    });
+    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockRejectedValue(new Error("unavailable"));
     const respond = vi.fn();
     await callTalkHandler("talk.catalog", {
       params: {},
@@ -552,6 +551,10 @@ describe("talk.catalog handler", () => {
       mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider: { id: "google" },
         providerConfig: { apiKey: "live-key", project: "base", model: "talk-model" },
+        capabilities: expectDefined(
+          mocks.listRealtimeVoiceProviders()[0],
+          "configured realtime fixture",
+        ).capabilities,
       } as never);
 
       const respond = vi.fn();
@@ -697,15 +700,15 @@ describe("talk.catalog handler", () => {
     mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
     mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
       provider: { id: "openai" },
-      providerConfig: {},
+      providerConfig: { model: "gpt-live-test-canary" },
+      capabilities: {
+        transports: ["gateway-relay"],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+        voices: ["marin", "cedar"],
+        voiceSelectionPolicy: "allowlist-default",
+      },
     } as never);
-    mocks.resolveRealtimeVoiceProviderCapabilitiesAsync.mockReturnValueOnce({
-      transports: ["gateway-relay"],
-      inputAudioFormats: [],
-      outputAudioFormats: [],
-      voices: ["marin", "cedar"],
-      voiceSelectionPolicy: "allowlist-default",
-    });
     const respond = vi.fn();
 
     await callTalkHandler("talk.catalog", {
@@ -747,13 +750,7 @@ describe("talk.catalog handler", () => {
         agentId: expect.any(String),
       }),
     );
-    expect(mocks.isRealtimeVoiceProviderConfiguredAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: expect.any(String),
-        providerConfig: expect.objectContaining({ model: "gpt-live-test-canary" }),
-        surface: "browser-session",
-      }),
-    );
+    expect(catalog.realtime.providers[0]).toMatchObject({ configured: true });
   });
 
   it.each([undefined, "force-agent-consult"])(
@@ -794,7 +791,8 @@ describe("talk.catalog handler", () => {
       mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
       mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
         provider,
-        providerConfig: {},
+        providerConfig: { model: expectedModel, azure },
+        capabilities: provider.capabilities,
       } as never);
       const respond = vi.fn();
 
@@ -822,14 +820,6 @@ describe("talk.catalog handler", () => {
       expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "voice", surface: "gateway-relay", autoRespondToAudio }),
       );
-      expect(mocks.resolveRealtimeVoiceProviderCapabilitiesAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "voice",
-          surface: "gateway-relay",
-          providerConfig: { model: expectedModel, azure },
-        }),
-      );
-      expect(isConfigured).toHaveBeenCalledWith(expect.not.objectContaining({ surface: "bridge" }));
       const catalog = expectRespondOk(respond);
       expect(catalog.realtime).toEqual(expect.objectContaining({ ready: true }));
       expect(catalog.realtime.providers[0]).toMatchObject({
@@ -837,7 +827,7 @@ describe("talk.catalog handler", () => {
         defaultModel: expectedModel,
         voices: ["relay-default"],
       });
-      expect(provider.resolveConfig).toHaveBeenCalledOnce();
+      expect(provider.resolveConfig).not.toHaveBeenCalled();
     },
   );
 
@@ -2105,6 +2095,7 @@ describe("talk.session unified handlers", () => {
     expect(mocks.stopTalkRealtimeRelaySession).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
+      disposition: undefined,
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     const closedSession = vi.fn();
@@ -2949,7 +2940,7 @@ describe("talk.client.toolCall handler", () => {
           ? undefined
           : ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
         transcript: { display: false, excludeFromContext: true },
-        prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
+        prepareAssistantTranscriptMessage: expect.any(Function),
         beforeDispatch: expect.any(Function),
       });
       const response = expectRespondOk(respond, { runId: "run-voice-1" });
@@ -3002,6 +2993,11 @@ describe("talk.client.toolCall handler", () => {
         args: { question: "What now?" },
       },
       respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        chatAbortControllers: new Map([["run-voice-1", { sessionId: "session-main" }]]),
+        logGateway: { warn: vi.fn() },
+      },
     });
 
     expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
@@ -3010,6 +3006,7 @@ describe("talk.client.toolCall handler", () => {
       sessionKey: "agent:main:main",
       runId: "run-voice-1",
       callId: "call-1",
+      transcriptSessionId: "session-main",
       assertCurrent: expect.any(Function),
       registerVoice: expect.any(Function),
     });
@@ -4025,7 +4022,7 @@ describe("role-required Talk session creation", () => {
       },
     },
   ])("passes authenticated creator isolation through $method", async ({ method, params }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       vi.clearAllMocks();
       const profile = ensureProfileForEmail("talk-required@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };

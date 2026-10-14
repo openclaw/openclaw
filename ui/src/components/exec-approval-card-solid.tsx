@@ -472,7 +472,7 @@ export const ExecApprovalCard = defineSolidBridge<{ props?: ExecApprovalCardProp
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );
-defineSolidBridge<{ props?: SidebarApprovalRowProps }>(
+export const SidebarApprovalRow = defineSolidBridge<{ props?: SidebarApprovalRowProps }>(
   "openclaw-sidebar-approval-row",
   (props, host) => {
     host.style.display = "contents";

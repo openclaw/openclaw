@@ -14,7 +14,7 @@ export function defineNativeModuleBoundaryTests(
 
     it("closes navigation while the sidebar element is still unregistered", async () => {
       const testCase = {
-        module: moduleRequest("ui/src/components/app-sidebar.ts"),
+        module: moduleRequest("ui/src/components/app-sidebar.tsx"),
         pathname: "new",
         readySelector: ".new-session-page__message",
         tag: "openclaw-app-sidebar",
@@ -77,7 +77,7 @@ export function defineNativeModuleBoundaryTests(
         beforeNavigate: async (targetPage) => {
           held = await holdModuleResponse(
             targetPage,
-            moduleRequest("ui/src/components/sidebar-attention-panel.runtime.ts"),
+            moduleRequest("ui/src/components/sidebar-attention-panel.runtime.tsx"),
           );
         },
       });
@@ -92,10 +92,12 @@ export function defineNativeModuleBoundaryTests(
         const moduleUrl = await held.request;
         expect(await dialog.count()).toBe(0);
         if (action === "reconnection") {
-          await attention!.evaluate((element) => {
+          await attention!.evaluate(async (element) => {
             const parent = element.parentNode!;
             const next = element.nextSibling;
             element.remove();
+            // Cross the bridge's move-preserving turn before reconnecting.
+            await Promise.resolve();
             parent.insertBefore(element, next);
           });
         } else if (action === "outside pointer") {
@@ -103,17 +105,15 @@ export function defineNativeModuleBoundaryTests(
         } else if (action === "Escape") {
           await page.keyboard.press("Escape");
         } else {
-          const collapse = page.locator('[data-navigation-view][aria-pressed="true"]');
-          await collapse.click();
-          await expect
-            .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
-            .toBe(true);
+          const toggle = page.locator('[data-navigation-view="sessions"]');
+          await toggle.click();
+          await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
           // The native event does not generate an outside pointer that could
           // accidentally dismiss an Inbox resurrected by the old import.
           await page.evaluate(() => {
             window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
           });
-          await expect.poll(() => collapse.isVisible()).toBe(true);
+          await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(true);
           if (action === "replacement open") {
             await inbox.click();
           }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
@@ -25,6 +26,7 @@ import type {
   PluginDoctorCronJob,
 } from "../../../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
@@ -119,8 +121,18 @@ export async function repairLegacyCronJobOwnersForDoctor(
 export async function inspectCronJobsForDoctor(
   scope: DoctorCronScope,
 ): Promise<PluginDoctorCronInventory> {
+  // Doctor admits live authority reads only after its offline backup boundary.
+  // Borrow that owner instead of allocating another disposable snapshot and worker.
+  const databasePath = resolveOpenClawStateSqlitePath(scope.env);
+  if (!existsSync(databasePath)) {
+    return { jobs: [] };
+  }
+  const reused = withMaintenanceOpenClawStateDatabaseReadOnly(
+    ({ db }) => inspectCronRowsForDoctor(db),
+    databasePath,
+  );
   return {
-    jobs: await inspectCronJobsReadOnly(scope.env),
+    jobs: reused.reused ? reused.value : await inspectCronJobsReadOnly(scope.env),
   };
 }
 

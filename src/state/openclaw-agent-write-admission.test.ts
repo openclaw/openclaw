@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -17,6 +18,8 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
+import { withSqliteDatabaseAdmissionExchange } from "../infra/sqlite-database-admission.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import * as logging from "../logging/logger.js";
 import {
@@ -29,19 +32,79 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["single", "batch"] as const)(
+  "lets a cold native task finish its background write before a %s foreground reservation",
+  async (kind) =>
+    withSqliteDatabaseAdmissionExchange(
+      () => [],
+      async () => {
+        const root = tempDirs.make("openclaw-cold-writer-order-");
+        const options = { agentId: "usage", path: path.join(root, "z", "agent.sqlite") };
+        const earlier = { agentId: "earlier", path: path.join(root, "a", "agent.sqlite") };
+        const entered = createDeferred();
+        const requestPrune = createDeferred();
+        const releaseTurn = createDeferred();
+        const order: string[] = [];
+        let pruning: Promise<void> | undefined;
+        const native = runWithSqliteDatabaseAdmissionTurn([options.path], async () => {
+          entered.resolve();
+          await requestPrune.promise;
+          pruning = runOpenClawAgentWorkerWrite(
+            options,
+            async () => {
+              order.push("prune");
+            },
+            undefined,
+            undefined,
+            "background",
+          );
+          // Let failure cleanup release the synthetic turn without stranding the FIFO.
+          await Promise.race([pruning, releaseTurn.promise]);
+        });
+        await entered.promise;
+        let foregroundEntered = false;
+        const prepare = () => {
+          foregroundEntered = true;
+          return runWithSqliteDatabaseAdmissionTurn([options.path], async () => {
+            order.push("foreground");
+          });
+        };
+        const foreground =
+          kind === "single"
+            ? runOpenClawAgentWriteAdmission(options, prepare)
+            : runOpenClawAgentWriteAdmissions([earlier, options], prepare);
+        try {
+          await Promise.resolve();
+          expect(foregroundEntered).toBe(false);
+          requestPrune.resolve();
+          await Promise.all([native, foreground]);
+          expect(order).toEqual(["prune", "foreground"]);
+        } finally {
+          releaseTurn.resolve();
+          requestPrune.resolve();
+          await Promise.allSettled([native, foreground]);
+          await pruning;
+        }
+      },
+    ),
+);
+
 it.each([false, true])(
   "defers background writes behind later foreground work (abort=%s)",
   async (abort) => {
     const root = tempDirs.make("openclaw-background-admission-");
     const options = { agentId: "usage", path: path.join(root, "agent.sqlite") };
+    const entered = createDeferred();
     const release = createDeferred();
     const controller = new AbortController();
     const reason = new Error("closed");
     const order: string[] = [];
     const held = runOpenClawAgentWorkerWrite(options, async () => {
       order.push("held");
+      entered.resolve();
       await release.promise;
     });
+    await entered.promise;
     const background = runOpenClawAgentWorkerWrite(
       options,
       async () => {
@@ -188,27 +251,43 @@ it.each(["ok", "error"] as const)(
   "reports the slow direct holder, not its long-waiting fast follower (%s)",
   async (outcome) => {
     const { options, clock, warnings } = fixture();
+    const entered = createDeferred();
     const release = createDeferred();
     const releaseFollower = createDeferred();
     const failure = new Error("synthetic-private-error");
     const value = { result: "synthetic-private-result" };
     const order: string[] = [];
+    const observations: unknown[] = [];
+    const diagnostics = channel("openclaw.agent-database.reservation");
+    const observe = (observation: unknown) => {
+      observations.push(observation);
+    };
+    diagnostics.subscribe(observe);
     const first = withSqliteReaderOwner(
       { operation: "synthetic-private-operation", ownerKind: "main" },
       () =>
-        runOpenClawAgentWriteAdmission(options, async () => {
-          order.push("holder");
-          await release.promise;
-          if (outcome === "error") {
-            throw failure;
-          }
-          return value;
-        }),
+        runOpenClawAgentWriteAdmission(
+          options,
+          async () => {
+            order.push("holder");
+            entered.resolve();
+            await release.promise;
+            if (outcome === "error") {
+              throw failure;
+            }
+            return value;
+          },
+          false,
+          undefined,
+          undefined,
+          "session-manager.write",
+        ),
     );
     const settled = first.then(
       (result) => ({ result }),
       (error: unknown) => ({ error }),
     );
+    await entered.promise;
     clock.now = 100;
     const next = runOpenClawAgentWriteAdmission(options, async () => {
       order.push("follower");
@@ -232,6 +311,7 @@ it.each(["ok", "error"] as const)(
         [
           {
             operation: "direct",
+            caller: "session-manager.write",
             outcome,
             pid: process.pid,
             threadId,
@@ -247,73 +327,68 @@ it.each(["ok", "error"] as const)(
       ]);
       expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
       expect(JSON.stringify(warnings)).not.toContain(options.path);
+      expect(observations).toEqual([
+        warnings[0]![0],
+        expect.objectContaining({ operation: "direct", writerExecutionMs: 25 }),
+      ]);
+      expect(JSON.stringify(observations)).not.toContain("synthetic-private");
     } finally {
       release.resolve();
       releaseFollower.resolve();
       await Promise.allSettled([first, next]);
+      diagnostics.unsubscribe(observe);
     }
   },
 );
 
-it.each(["file", "ephemeral"] as const)(
-  "keeps an aborted %s worker reservation until settlement and reports it once",
-  async (kind) => {
-    const { options, clock, warnings } = fixture();
-    const target =
-      kind === "file"
-        ? options
-        : {
-            target: {
-              kind: "ephemeral" as const,
-              handle: "synthetic-private-handle",
-              incarnation: "synthetic-private-incarnation",
-            },
-            assertCurrent: () => {},
-          };
-    const release = createDeferred();
-    const controller = new AbortController();
-    const reason = new Error("synthetic-private-abort");
-    const order: string[] = [];
-    const first = runOpenClawAgentWorkerWrite(
-      target,
-      async () => {
-        order.push("holder");
-        await release.promise;
-        controller.signal.throwIfAborted();
-      },
-      undefined,
-      controller.signal,
-    );
-    const failed = expect(first).rejects.toBe(reason);
-    const next = runOpenClawAgentWorkerWrite(target, async () => {
-      order.push("follower");
-    });
-    try {
-      controller.abort(reason);
-      expect(order).toEqual(["holder"]);
-      clock.now = 1_000;
-      release.resolve();
-      await failed;
-      await next;
-      expect(order).toEqual(["holder", "follower"]);
-      expect(warnings).toEqual([
-        [
-          expect.objectContaining({
-            operation: "worker",
-            outcome: "error",
-            writerExecutionMs: 1_000,
-            reentrant: false,
-          }),
-          "slow agent database reservation",
-        ],
-      ]);
-      expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
-    } finally {
-      release.resolve();
-      await Promise.allSettled([first, next]);
-    }
-  },
-);
+it("keeps an aborted worker reservation until settlement and reports it once", async () => {
+  const { options, clock, warnings } = fixture();
+  const release = createDeferred();
+  const entered = createDeferred();
+  const controller = new AbortController();
+  const reason = new Error("synthetic-private-abort");
+  const order: string[] = [];
+  const first = runOpenClawAgentWorkerWrite(
+    options,
+    async () => {
+      order.push("holder");
+      entered.resolve();
+      await release.promise;
+      controller.signal.throwIfAborted();
+    },
+    undefined,
+    controller.signal,
+  );
+  const failed = expect(first).rejects.toBe(reason);
+  await entered.promise;
+  const next = runOpenClawAgentWorkerWrite(options, async () => {
+    order.push("follower");
+  });
+  try {
+    controller.abort(reason);
+    expect(order).toEqual(["holder"]);
+    clock.now = 1_000;
+    release.resolve();
+    await failed;
+    await next;
+    expect(order).toEqual(["holder", "follower"]);
+    expect(warnings).toEqual([
+      [
+        expect.objectContaining({
+          operation: "worker",
+          outcome: "error",
+          writerExecutionMs: 1_000,
+          reentrant: false,
+        }),
+        "slow agent database reservation",
+      ],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain("synthetic-private");
+  } finally {
+    release.resolve();
+    await Promise.allSettled([first, next]);
+  }
+});
 
 it("reports each ordered-read reservation across an awaited read without reporting reentrant borrowing", async () => {
   const { options, clock, warnings } = fixture();
@@ -354,31 +429,46 @@ it("reports each ordered-read reservation across an awaited read without reporti
   }
 });
 
-it("does not report a cancelled waiter as a holder", async () => {
-  const { options, clock, warnings } = fixture();
-  const release = createDeferred();
-  const first = runOpenClawAgentWriteAdmission(options, () => release.promise);
-  const controller = new AbortController();
-  const callback = vi.fn(async () => {});
-  const waiting = runOpenClawAgentWriteAdmission(
-    options,
-    callback,
-    false,
-    undefined,
-    controller.signal,
-  );
-  const reason = new Error("cancel waiting reservation");
-  try {
-    clock.now = 1_500;
-    controller.abort(reason);
-    await expect(waiting).rejects.toBe(reason);
-    expect(callback).not.toHaveBeenCalled();
-    expect(warnings).toEqual([]);
-  } finally {
-    release.resolve();
-    await Promise.allSettled([first, waiting]);
-  }
-});
+it("does not report a cancelled waiter as a holder", async () =>
+  withSqliteDatabaseAdmissionExchange(
+    () => [],
+    async () => {
+      const { options, clock, warnings } = fixture();
+      const release = createDeferred();
+      const entered = createDeferred();
+      const first = runOpenClawAgentWriteAdmission(options, () => {
+        entered.resolve();
+        return release.promise;
+      });
+      await entered.promise;
+      const controller = new AbortController();
+      const callback = vi.fn(async () => {});
+      const waiting = runOpenClawAgentWriteAdmission(
+        options,
+        callback,
+        false,
+        undefined,
+        controller.signal,
+      );
+      const reason = new Error("cancel waiting reservation");
+      const nativeCallback = vi.fn(async () => {});
+      let successor: Promise<void> | undefined;
+      try {
+        clock.now = 1_500;
+        controller.abort(reason);
+        await expect(waiting).rejects.toBe(reason);
+        expect(callback).not.toHaveBeenCalled();
+        expect(warnings).toEqual([]);
+        successor = runWithSqliteDatabaseAdmissionTurn([options.path], nativeCallback);
+        await Promise.resolve();
+        expect(nativeCallback).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, waiting, successor]);
+      }
+      expect(nativeCallback).toHaveBeenCalledOnce();
+    },
+  ));
 
 it.each(["ok", "error"] as const)(
   "preserves %s settlement when slow-path logging fails",

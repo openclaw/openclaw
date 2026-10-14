@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
@@ -137,19 +138,21 @@ it.each([
   },
 );
 
-it("keeps native incognito accounting and final custody on the retained memory owner", async () => {
+it("keeps incognito accounting and final custody on the retained memory owner", async () => {
   const root = tempDirs.make("openclaw-native-completion-");
   const env = { OPENCLAW_STATE_DIR: root };
   const nativePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   const options = { agentId: "main", env, path: nativePath };
-  const owner = openOpenClawAgentDatabase(options);
   try {
     const fixture = await createAgentAccountingPersistenceFixture({
       storePath: nativePath,
+      incognito: true,
       root,
       fixtureId: ++fixtureSequence,
       registerOperation: (operation) => operations.push(operation),
     });
+    const owner = memorySessionActorOwners.read(options);
+    expect(owner).toBeDefined();
     fixture.context.execution.result.meta.agentMeta = {
       sessionId: fixture.sessionId,
       provider: diagnostic.provider,
@@ -174,10 +177,11 @@ it("keeps native incognito accounting and final custody on the retained memory o
         deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
       },
     });
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(owner);
+    expect(memorySessionActorOwners.read(options)).toBe(owner);
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
     expect(fs.existsSync(nativePath)).toBe(false);
   } finally {
-    await disposeOpenClawAgentDatabaseByPath(nativePath);
+    memorySessionActorOwners.closeDatabase(options);
   }
 });
 
@@ -390,6 +394,42 @@ it.each([
     if (diagnostics) {
       expect(diagnostics.text).toContain("QUEUED_INPUT");
       expect(isReplyPayloadTerminalContent(diagnostics)).toBe(false);
+    }
+    expect(fixture.read()?.traceLevel).toBe(stored);
+  },
+);
+
+it.each([
+  { stored: "off", selected: "raw", authorized: true, trace: true },
+  { stored: "raw", selected: "off", authorized: true, trace: false },
+  { stored: "raw", selected: undefined, authorized: true, trace: true },
+  { stored: "raw", selected: "raw", authorized: false, trace: false },
+] as const)(
+  "retains trace $selected over stored $stored after native delivery with authority=$authorized",
+  async ({ stored, selected, authorized, trace }) => {
+    const fixture = await createFixture();
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      traceLevel: stored,
+      verboseLevel: "off",
+    });
+    fixture.context.followupRun.run.traceAuthorized = authorized;
+    fixture.context.followupRun.run.traceLevelOverride = selected;
+    fixture.context.execution.result.payloads = [];
+    fixture.context.execution.result.sourceReplyDeliveryState = "delivered";
+    fixture.context.execution.result.meta!.finalAssistantRawText = "STREAMED_REPLY";
+    fixture.context.sessionCtx.agentText = "STREAMED_INPUT";
+
+    const result = await finalizeReplyAgentRun(fixture.context);
+    const delivered = Array.isArray(result) ? result : result ? [result] : [];
+    expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
+    const diagnostics = delivered.find((payload) =>
+      payload.text?.includes("Model Input (User Role)"),
+    );
+    expect(Boolean(diagnostics)).toBe(trace);
+    if (diagnostics) {
+      expect(diagnostics.text).toContain("STREAMED_INPUT");
+      expect(diagnostics.text).toContain("STREAMED_REPLY");
     }
     expect(fixture.read()?.traceLevel).toBe(stored);
   },

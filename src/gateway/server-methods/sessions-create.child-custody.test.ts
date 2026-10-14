@@ -354,6 +354,12 @@ async function createHostedChildFixture(
     beforeInputCommit,
     provider,
     persistenceResult,
+    providerDiagnostics: () =>
+      JSON.stringify({
+        persistenceResults: persistenceResult.mock.calls,
+        warnings: vi.mocked(context.logGateway.warn).mock.calls,
+        errors: vi.mocked(context.logGateway.error).mock.calls,
+      }),
     dispatchEntered: dispatchEntered.promise,
     closeParent: () => parent.close(),
     closeInvocation: () => {
@@ -456,7 +462,7 @@ describe("hosted creation transfers accepted child input", () => {
           );
           expect(loadSessionEntry(fixture.parentScope)?.publicShare).toBeUndefined();
           await fixture.finish();
-          expect(fixture.provider).toHaveBeenCalledTimes(1);
+          expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledTimes(1);
           const nested = await fixture.sendNested();
           expect(nested.publicRead).toBe(false);
           expect(nested.entry).not.toHaveProperty("publicShare");
@@ -509,7 +515,7 @@ describe("hosted creation transfers accepted child input", () => {
     });
     await expect(readCredit()).resolves.toEqual(expectedCredit);
     await fixture.finish();
-    expect(fixture.provider).toHaveBeenCalledOnce();
+    expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledOnce();
     const nested = await fixture.sendNested();
     expect(nested.runStarted).toBe(true);
     expect(nested.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
@@ -520,7 +526,7 @@ describe("hosted creation transfers accepted child input", () => {
       }),
     ).resolves.toEqual(expectedCredit);
     await fixture.finish();
-    expect(fixture.provider).toHaveBeenCalledTimes(2);
+    expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledTimes(2);
     for (const childScope of [scope, fixture.scope(nested.key)]) {
       expect(
         (listSessionParticipantsReadOnly(childScope).get(childScope.sessionKey) ?? []).filter(
@@ -602,7 +608,7 @@ describe("hosted creation transfers accepted child input", () => {
       fixture.closeInvocation();
       fixture.closeParent();
       await fixture.finish();
-      expect(fixture.provider).toHaveBeenCalledOnce();
+      expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledOnce();
       expect(userMessages(scope)).toHaveLength(1);
       expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
       expect(fixture.context.chatAbortControllers.has(accepted.runId)).toBe(false);

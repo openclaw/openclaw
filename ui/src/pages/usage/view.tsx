@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { Menu } from "../../components/solid/menu.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
 import {
   SettingsSection,
@@ -8,7 +9,6 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/usage.css";
 import { resolveUsageOverviewState } from "./cache-status.ts";
@@ -404,52 +404,48 @@ export function renderUsage(props: UsageProps) {
                 >
                   {props.display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
                 </button>
-                <wa-dropdown
+                <Menu
+                  id="usage-export"
+                  label={t("usage.export.label")}
                   class="usage-export-menu"
+                  triggerClass="btn btn--sm"
                   placement="bottom-end"
-                  onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
-                    const value = event.detail.item.value;
-                    switch (value) {
+                  triggerAttributes={{ "aria-busy": props.data.exporting ? "true" : "false" }}
+                  trigger={
+                    <>{props.data.exporting ? t("common.loading") : t("usage.export.label")} ▾</>
+                  }
+                  items={[
+                    {
+                      id: "sessions-csv",
+                      label: t("usage.export.sessionsCsv"),
+                      disabled: props.data.exporting || state().exportSessionCount === 0,
+                    },
+                    {
+                      id: "daily-csv",
+                      label: t("usage.export.dailyCsv"),
+                      disabled: state().filteredDaily.length === 0,
+                    },
+                    {
+                      id: "json",
+                      label: t("usage.export.json"),
+                      disabled:
+                        props.data.exporting ||
+                        props.data.loading ||
+                        (state().exportSessionCount === 0 && state().filteredDaily.length === 0),
+                    },
+                  ]}
+                  onSelect={(item) => {
+                    switch (item.id) {
                       case "sessions-csv":
                       case "daily-csv":
-                        props.callbacks.display.onExportCsv(value);
+                        props.callbacks.display.onExportCsv(item.id);
                         break;
                       case "json":
                         props.callbacks.display.onExportJson();
                         break;
-                      case undefined:
-                        break;
                     }
                   }}
-                >
-                  <button
-                    slot="trigger"
-                    type="button"
-                    class="btn btn--sm"
-                    aria-busy={props.data.exporting ? "true" : "false"}
-                  >
-                    {props.data.exporting ? t("common.loading") : t("usage.export.label")} ▾
-                  </button>
-                  <wa-dropdown-item
-                    value="sessions-csv"
-                    disabled={props.data.exporting || state().exportSessionCount === 0}
-                  >
-                    {t("usage.export.sessionsCsv")}
-                  </wa-dropdown-item>
-                  <wa-dropdown-item value="daily-csv" disabled={state().filteredDaily.length === 0}>
-                    {t("usage.export.dailyCsv")}
-                  </wa-dropdown-item>
-                  <wa-dropdown-item
-                    value="json"
-                    disabled={
-                      props.data.exporting ||
-                      props.data.loading ||
-                      (state().exportSessionCount === 0 && state().filteredDaily.length === 0)
-                    }
-                  >
-                    {t("usage.export.json")}
-                  </wa-dropdown-item>
-                </wa-dropdown>
+                />
               </div>
             </div>
 

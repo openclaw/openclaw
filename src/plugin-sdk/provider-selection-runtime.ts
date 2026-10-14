@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 /** Provider descriptor fields needed for explicit or automatic selection. */
 export type AutoSelectableProvider = {
@@ -176,6 +177,11 @@ export function resolveConfiguredCapabilityProvider<
     ) => boolean;
   },
 ): ResolvedConfiguredProvider<TProvider, TConfig> {
+  warnPluginSdkDeprecation({
+    family: "provider-selection",
+    method: "resolveConfiguredCapabilityProvider",
+    replacement: "await resolveConfiguredCapabilityProviderAsync()",
+  });
   const { configuredProviderId, providers } = prepareProviderCandidates(params);
   if (providers.length === 0) {
     return {

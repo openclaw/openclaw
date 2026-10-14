@@ -299,6 +299,68 @@ describe("chat transcript scroll ownership", () => {
       }
     },
   );
+  it("preserves following through intermediate native movement of an active end command", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { policy, transcript } = createPolicyTranscript("intermediate-end-retarget");
+    const { container } = await mountTestTranscript(
+      "intermediate-end-retarget",
+      Array.from({ length: 20 }, (_, index): TestContentRow => ({
+        kind: "content",
+        key: `row:${index}`,
+        content: html`<div>row ${index}</div>`,
+      })),
+      transcript,
+    );
+    let scrollHeight = 2000;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    container.scrollTo = (options?: ScrollToOptions | number) => {
+      // Smooth requests deliver native offsets later; they do not jump to the target.
+      if (typeof options === "object" && options.behavior !== "smooth") {
+        container.scrollTop = Math.min(options.top ?? container.scrollTop, scrollHeight - 600);
+      }
+    };
+    policy.chatScrollElement = () => container;
+    policy.chatScrollToEnd = (options) => transcript.scrollToEnd(options);
+    policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
+    policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
+    const onScroll = (event: Event) => handleChatScroll(policy, event);
+    container.addEventListener("scroll", onScroll);
+    try {
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+      }
+      container.scrollTop = 1300;
+      policy.chatLastScrollTop = 1300;
+      transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+      expect(transcript.isProgrammaticScroll).toBe(true);
+
+      // Rows retire and grow before the queued native offset arrives. The end
+      // journey still owns its intermediate upward movement, away from the new end.
+      scrollHeight = 1800;
+      container.scrollTop = 1200;
+      scrollHeight = 1920;
+      container.scrollTop = 1250;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatFollowLocked, "end movement must not take reader control").toBe(false);
+
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -80 }));
+      container.scrollTop -= 80;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatFollowLocked).toBe(true);
+      expect(transcript.isProgrammaticScroll).toBe(false);
+      scrollHeight = 2040;
+      scheduleCommittedChatScroll(policy);
+      flushFrames();
+      expect(container.scrollTop).toBe(1170);
+    } finally {
+      container.removeEventListener("scroll", onScroll);
+      transcript.hostDisconnected();
+    }
+  });
+
   it("preserves following through an upward end retarget and no-op until real reader input takes over", async () => {
     const flushFrames = stubAnimationFrames();
     const { policy, transcript } = createPolicyTranscript("upward-end-retarget");

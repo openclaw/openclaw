@@ -1,10 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import { sql, type Expression } from "kysely";
+import type { Expression } from "kysely";
+import { beginEngineStoreReadSnapshot } from "../../infra/database-engine/adapters.js";
+import { engineTextByteSliceSql } from "../../infra/database-engine/text-bytes.js";
 import {
-  iterateSqliteQuerySync,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -40,6 +44,7 @@ export async function streamSessionTranscriptHydration(
       throw new SessionTranscriptStorageUnavailableError(opened.reason);
     }
     const { database } = opened;
+    let snapshot: ReturnType<typeof beginEngineStoreReadSnapshot> | undefined;
     let outcome:
       | { value: Extract<SessionTranscriptHydrationWorkerResult, { kind: "full" }> }
       | { error: unknown };
@@ -47,8 +52,7 @@ export async function streamSessionTranscriptHydration(
       if (request.expectedIdentity) {
         assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
       }
-      // sqlite-allow-raw: This task's dedicated read-only handle keeps one snapshot across host ACKs.
-      database.db.exec("BEGIN DEFERRED");
+      snapshot = beginEngineStoreReadSnapshot(database.db);
       const fence = resolveSqliteSessionTranscriptReadFence({ database, ...request.resolvedScope });
       const { version, coldArchive } = readTranscriptContextStateInTransaction(
         database,
@@ -58,15 +62,31 @@ export async function streamSessionTranscriptHydration(
         throw new SessionTranscriptColdError(request.resolvedScope.sessionId);
       }
       const encoding = readTranscriptStorageEncoding(database.db);
+      const PAGE_ROWS = isPostgresSqlConnection(database.db) ? 16 : 256;
       const source = prepareTranscriptEventReadQuery(database, request.resolvedScope.sessionId, {
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
-      }).$if(request.afterSeq !== undefined, (query) => query.where("seq", ">", request.afterSeq!));
+      });
       const eventSlice = (offset: number | Expression<number>) =>
-        /* kysely-allow-raw: Slice database-encoded canonical bytes natively so identity TEXT never enters JS whole. */
-        sql<Uint8Array>`substr(CAST(${transcriptEventJsonSql(database.db)} AS BLOB), ${offset}, ${SLICE_BYTES})`.as(
-          "data",
-        );
+        engineTextByteSliceSql(
+          database.db,
+          transcriptEventJsonSql(database.db),
+          offset,
+          SLICE_BYTES,
+        ).as("data");
+      const pageQuery = source
+        .select(["seq", eventSlice(1)])
+        .orderBy("seq", "asc")
+        .limit(PAGE_ROWS);
+      const readPage = prepareSqliteQuerySync<number, { seq: number; data: Uint8Array }>(
+        database.db,
+        (parameter) =>
+          pageQuery.where(
+            "seq",
+            ">",
+            parameter((seq) => seq),
+          ),
+      );
       const readPart = prepareSqliteQueryTakeFirstSync<
         { seq: number; offset: number },
         { data: Uint8Array }
@@ -94,34 +114,43 @@ export async function streamSessionTranscriptHydration(
         bytes = 0;
         control.throwIfCancelled();
       };
-      for (const row of iterateSqliteQuerySync(
-        database.db,
-        source.select(["seq", eventSlice(1)]).orderBy("seq", "asc"),
-      )) {
-        for (let offset = 1; ; offset += SLICE_BYTES) {
-          control.throwIfCancelled();
-          const data =
-            offset === 1
-              ? row.data
-              : expectDefined(readPart({ seq: row.seq, offset }), "transcript snapshot row").data;
-          if (bytes + data.byteLength > CHUNK_BYTES) {
-            await flush();
-          }
-          const endOfEvent = data.byteLength < SLICE_BYTES;
-          frames.push({
-            data,
-            endOfEvent,
-            ...(request.includeEventJson && endOfEvent ? { seq: row.seq } : {}),
-          });
-          bytes += data.byteLength;
-          if (bytes >= CHUNK_BYTES || frames.length >= CHUNK_FRAMES) {
-            await flush();
-          }
-          if (endOfEvent) {
-            eventCount++;
-            break;
+      let afterSeq = request.afterSeq;
+      for (;;) {
+        control.throwIfCancelled();
+        const page =
+          afterSeq === undefined
+            ? executeSqliteQuerySync(database.db, pageQuery).rows
+            : readPage(afterSeq).rows;
+        for (const row of page) {
+          for (let offset = 1; ; offset += SLICE_BYTES) {
+            control.throwIfCancelled();
+            const data =
+              offset === 1
+                ? row.data
+                : expectDefined(readPart({ seq: row.seq, offset }), "transcript snapshot row").data;
+            if (bytes + data.byteLength > CHUNK_BYTES) {
+              await flush();
+            }
+            const endOfEvent = data.byteLength < SLICE_BYTES;
+            frames.push({
+              data,
+              endOfEvent,
+              ...(request.includeEventJson && endOfEvent ? { seq: row.seq } : {}),
+            });
+            bytes += data.byteLength;
+            if (bytes >= CHUNK_BYTES || frames.length >= CHUNK_FRAMES) {
+              await flush();
+            }
+            if (endOfEvent) {
+              eventCount++;
+              break;
+            }
           }
         }
+        if (page.length < PAGE_ROWS) {
+          break;
+        }
+        afterSeq = expectDefined(page.at(-1), "transcript page").seq;
       }
       await flush();
       control.throwIfCancelled();
@@ -136,10 +165,7 @@ export async function streamSessionTranscriptHydration(
     }
     try {
       try {
-        if (database.db.isTransaction) {
-          // sqlite-allow-raw: Finish this read snapshot before releasing its native handle.
-          database.db.exec("ROLLBACK");
-        }
+        snapshot?.close();
       } finally {
         database.close();
       }

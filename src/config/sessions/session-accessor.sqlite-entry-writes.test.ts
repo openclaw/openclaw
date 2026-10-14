@@ -8,10 +8,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
-import {
-  readCommittedSessionEntryCache,
-  readSessionEntryCache,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { writeSessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readSessionEntrySelectionSnapshot,
@@ -42,12 +40,12 @@ it("publishes canonical side metadata through cold, warm, and field-only writes"
         expect(entry).not.toHaveProperty(field);
       }
     };
-    const write = (label: string) =>
+    const write = (label: string, updatedAt = 10) =>
       runOpenClawAgentWriteTransaction(
         (writer) =>
           writeSessionEntry(writer, scope.sessionKey, {
             sessionId: "cache-metadata",
-            updatedAt: 10,
+            updatedAt,
             label,
             skillsSnapshot: { prompt: "saved prompt", skills: [] },
           }),
@@ -69,8 +67,8 @@ it("publishes canonical side metadata through cold, warm, and field-only writes"
       expect(published?.fullEntry?.skillsSnapshot?.prompt).toBe("saved prompt");
 
       readSessionEntryCache(database, { cache: true, projection: "list" });
-      write("warm");
-      expect(current()?.label).toBe("warm");
+      write("warm", 20);
+      expect(current()).toMatchObject({ label: "warm", updatedAt: 20 });
       expectAbsentMetadata(current());
       expectAbsentMetadata(published?.entry);
 

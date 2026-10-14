@@ -66,16 +66,16 @@ import {
 } from "./sqlite.js";
 import type { SaveAuthProfileStoreOptions } from "./store-save.js";
 import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
-import type {
-  AuthStoreUpdatePrepared,
-  AuthStoreUpdateCommitted,
-  AuthStoreUpdateResponse,
-} from "./store-update-kernel.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
 import {
   sendAuthProfileUpdateValue,
   receiveAuthProfileUpdateValue,
 } from "./store-update-transfer.js";
+import type {
+  AuthStoreUpdatePrepared,
+  AuthStoreUpdateCommitted,
+  AuthStoreUpdateResponse,
+} from "./store-update.worker.js";
 import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
 import type { AuthProfileStore, PreparedAuthProfileStoreOwner } from "./types.js";
 import { reserveAuthProfileUsagePreparation, runAuthProfileUsage } from "./usage-lifecycle.js";

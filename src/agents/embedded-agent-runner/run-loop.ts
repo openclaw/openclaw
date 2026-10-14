@@ -1,6 +1,7 @@
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -99,7 +100,11 @@ export async function runPreparedEmbeddedLoop(
   );
   // Admission and cancellation travel together: recovery must observe queue expiry
   // after the physical attempt closes, even when the caller signal remains live.
-  const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
+  const admittedRunInput: PreparedEmbeddedRunInput = {
+    ...input,
+    runParams: params,
+    modelCallSequence: getAgentRunContext(params.runId)?.modelCallSequence ?? { value: 0 },
+  };
   ({ provider, modelId } = preparedRuntime);
   const {
     model,
@@ -592,7 +597,20 @@ export async function runPreparedEmbeddedLoop(
       if (terminalResolution.action === "retry") {
         continue;
       }
-      return providerReview.finish(terminalResolution.result);
+      // Diagnostics-only final-message fact from terminal preparation; terminal
+      // resolution builds the rest of the completed result.
+      const { result } = terminalResolution;
+      return providerReview.finish(
+        terminalPrepared.finalAssistantMessageRawText === undefined
+          ? result
+          : {
+              ...result,
+              meta: {
+                ...result.meta,
+                finalAssistantMessageRawText: terminalPrepared.finalAssistantMessageRawText,
+              },
+            },
+      );
     }
   } finally {
     // Successful registration already cleared the marker; every earlier exit

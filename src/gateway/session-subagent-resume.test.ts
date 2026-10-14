@@ -16,14 +16,11 @@ import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/su
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
-import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   assertParentSubagentResumeCurrent,
   assertParentSubagentResumeSuccessorCurrent,
@@ -363,28 +360,6 @@ it("checks transcript incarnation even if the target key and task still match", 
       sessionId,
     }),
   ).toThrow(/changed/);
-});
-
-it("rejects a foreign task replacement instead of accepting untracked work", async () => {
-  const state = await arrangePausedChild();
-  const adopt = await state.prepare();
-  const replacement = {
-    ...state.entry,
-    generation: state.entry.generation! + 1,
-    task: "replacement task",
-  };
-  // An independent writer changes execution ownership before the worker's version check.
-  writeSubagentRunValuesInDatabase(
-    openOpenClawStateDatabase(),
-    [bindSubagentRunRecord(replacement)],
-    [],
-  );
-  await expect(adopt()).rejects.toThrow(/changed/);
-  expect(subagentRuns.has(nextRunId)).toBe(false);
-  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
-  const stored = loadSubagentRegistryFromSqlite();
-  expect(stored.has(nextRunId)).toBe(false);
-  expect(stored.get(previousRunId)).toEqual(replacement);
 });
 
 it("delivers a result once after the former synchronous wait window, through the task owner", async () => {

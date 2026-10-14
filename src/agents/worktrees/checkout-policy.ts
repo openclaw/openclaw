@@ -1,4 +1,7 @@
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withWorktreeGitConfig, type WorktreeGitPolicy } from "./checkout-git-config.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -15,7 +18,10 @@ export async function usesSourceOnlyWorktreeGit(
   if (!record.ownerId) {
     return true;
   }
-  const source = captureIncognitoSessionSource({ sessionKey: record.ownerId, env });
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: record.ownerId, env },
+    { assertCurrent() {}, authorize() {} },
+  );
   const [
     { readSessionEntryReadOnlyInWorker },
     { resolveSessionStorePathCore },
@@ -34,21 +40,15 @@ export async function usesSourceOnlyWorktreeGit(
   }
   const cfg = getConfig();
   const agentId = resolveSessionAgentId({ config: cfg, sessionKey: record.ownerId });
-  source?.admissionSignal?.throwIfAborted();
-  if (source) {
-    if ("kind" in source) {
-      source.assertCurrent();
-    } else {
-      source.actor.assertReadable();
-    }
-  }
-  const entry = await readSessionEntryReadOnlyInWorker({
-    agentId,
-    sessionKey: record.ownerId,
-    env,
-    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
-    clone: false,
-  });
+  const entry = source
+    ? readCapturedSessionActorEntry(source, record.ownerId)
+    : await readSessionEntryReadOnlyInWorker({
+        agentId,
+        sessionKey: record.ownerId,
+        env,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
+        clone: false,
+      });
   // Missing or replaced session custody cannot authorize host-side repository programs.
   if (!entry || entry.worktree?.id !== record.id || entry.sandbox === "required") {
     return true;

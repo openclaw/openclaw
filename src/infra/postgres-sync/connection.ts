@@ -17,6 +17,7 @@ import {
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
+import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
   beginSqliteDatabaseWrite,
   finishSqliteDatabaseWrite,
@@ -101,8 +102,8 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private loseConnection(): Error {
     if (!this.failure && this.outcomeUnknown) {
       // The write may have committed, so invalidate anchor caches before reconnecting.
-      beginSqliteDatabaseWrite(this.anchor);
-      finishSqliteDatabaseWrite(this.anchor);
+      beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
+      finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
     }
     this.failure ??= this.outcomeUnknown
       ? new SqliteWorkerError("PostgreSQL connection lost; outcome unknown", "outcome-unknown")
@@ -195,11 +196,11 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       );
     if (result.command === "COMMIT" || autocommitWrite) {
       // All confirmed commits advance the anchor, including callers using raw SQL.
-      withSqlitePostCommitPublications(this.anchor, () => {
-        beginSqliteDatabaseWrite(this.anchor);
-        finishSqliteDatabaseWrite(this.anchor);
+      withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
+        beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
+        finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
         if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
-          deferSqliteWorkerCommitReceipt(this.anchor, {});
+          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(this), {});
         }
       });
     }

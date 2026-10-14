@@ -117,9 +117,13 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   });
 
   createEffect(
-    () => runtime.read().state.configSnapshot?.appliedConfigHash,
-    (appliedHash, previousHash) => {
-      if (previousHash !== undefined && appliedHash !== previousHash) {
+    () =>
+      [
+        runtime.read().state.configSnapshot?.appliedConfigHash,
+        canCall("crabbox.images.list"),
+      ] as const,
+    (current, previous) => {
+      if (previous?.some((value, index) => value !== current[index])) {
         queueMicrotask(() => void load());
       }
     },

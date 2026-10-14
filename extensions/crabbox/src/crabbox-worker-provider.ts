@@ -705,6 +705,7 @@ export function createCrabboxWorkerProvider(
             await warmImages.capture({
               ...context,
               profile: captureProfile,
+              teardown: true,
               onCaptureStart: () => {
                 capturing = true;
                 captureStarted.resolve();

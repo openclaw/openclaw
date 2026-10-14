@@ -297,6 +297,49 @@ describe("checkUpdateStatus", () => {
     });
   });
 
+  it("uses the Dev default only for opted-in detached checkouts", async () => {
+    await withTestDir({ prefix: "openclaw-update-check-detached-" }, async (base) => {
+      const sourceRoot = path.join(base, "source");
+      const localRoot = path.join(base, "local");
+      await initGitRepo(sourceRoot);
+      await commitGit(sourceRoot, "base");
+      const targetSha = await runGit(sourceRoot, "rev-parse", "HEAD");
+      await runGit(base, "clone", "--quiet", sourceRoot, localRoot);
+      await runGit(localRoot, "checkout", "--detach", targetSha);
+      await runGit(localRoot, "branch", "-D", "main");
+      const readStatus = (detached: boolean) =>
+        checkUpdateStatus({
+          root: localRoot,
+          includeRegistry: false,
+          fetchGit: true,
+          timeoutMs: 5000,
+          useDetachedDevUpstream: detached,
+        });
+      expect((await readStatus(true)).git).toMatchObject({
+        branch: "HEAD",
+        sha: targetSha,
+        upstream: "origin/main",
+        upstreamSha: targetSha,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      });
+      expect((await readStatus(false)).git).toMatchObject({
+        branch: "HEAD",
+        upstream: null,
+        upstreamSha: null,
+      });
+      await runGit(localRoot, "checkout", "-b", "feature", targetSha);
+      expect((await readStatus(true)).git).toMatchObject({
+        branch: "feature",
+        upstream: null,
+        upstreamSha: null,
+        ahead: null,
+        behind: null,
+      });
+    });
+  });
+
   it("checks the registry while Git freshness is still pending", async () => {
     await withTestDir({ prefix: "openclaw-update-check-overlap-" }, async (base) => {
       const remoteRoot = path.join(base, "remote");

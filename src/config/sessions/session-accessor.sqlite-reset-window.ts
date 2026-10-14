@@ -677,6 +677,10 @@ export function readVisibleTranscriptStats(projection: CurrentTranscriptProjecti
   eventCount: number;
   sizeBytes: number;
 } {
+  if (projection.contextMetadata) {
+    const { eventCount, sizeBytes } = projection.contextMetadata;
+    return { eventCount, sizeBytes };
+  }
   const window = resolveTranscriptBoundaryWindow(projection, "context");
   const db = getActiveTranscriptKysely(projection.database);
   const base = db

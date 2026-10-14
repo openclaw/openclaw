@@ -18,13 +18,18 @@ import { createSessionRowProjectionRevisions } from "./session-row-projection-re
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { projectGatewaySessionRunState } from "./session-utils-display.js";
+import { deriveSessionTitle } from "./session-utils-core.js";
+import {
+  projectGatewaySessionRunState,
+  resolveGatewaySessionDisplayName,
+} from "./session-utils-display.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   materializeSessionRow,
   presentSessionRow,
   readSessionRowInputs,
 } from "./session-utils-row.js";
+import type { SessionTitleFields } from "./session-utils.types.js";
 
 type Row = NonNullable<ReturnType<SessionRowProjection["describe"]>>;
 
@@ -37,6 +42,7 @@ export function createSessionRowProjectionFixture(params: {
   modelCatalog?: Parameters<typeof readSessionRowInputs>[0]["modelCatalog"];
   targetsBySessionKey?: GatewayStoredSessionTargets;
   rowContext?: SessionListRowContext;
+  titleFieldsBySessionKey?: ReadonlyMap<string, SessionTitleFields>;
 }) {
   const { cfg, modelCatalog } = params;
   const storePath = params.storePath ?? "";
@@ -90,6 +96,7 @@ export function createSessionRowProjectionFixture(params: {
       return;
     }
     store[key] = entry;
+    const titleFields = params.titleFieldsBySessionKey?.get(fields.key);
     const { inputs, presentation } = readSessionRowInputs({
       cfg,
       storePath,
@@ -100,8 +107,14 @@ export function createSessionRowProjectionFixture(params: {
       agentId,
       modelCatalog,
       rowContext,
-      includeDerivedTitles: true,
-      includeLastMessage: true,
+      preparedTitle: {
+        derivedTitle: deriveSessionTitle(
+          entry,
+          titleFields?.firstUserMessage,
+          resolveGatewaySessionDisplayName(fields.key, entry),
+        ),
+        lastMessagePreview: titleFields?.lastMessagePreview ?? undefined,
+      },
       modelSource: { entry, readSourceEntry: (parentKey) => store[parentKey] },
     });
     rows.set(id(fields), {

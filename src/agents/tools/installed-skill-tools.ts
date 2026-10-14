@@ -18,6 +18,12 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 
+const SkillsSearchSchema = Type.Object({
+  query: Type.String({ minLength: 1, maxLength: 1000 }),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+});
+const SkillsReadSchema = Type.Object({ name: Type.String({ minLength: 1 }) });
+
 export function createInstalledSkillTools(skills: readonly InstalledSkill[]): AnyAgentTool[] {
   if (skills.length === 0) {
     return [];
@@ -31,10 +37,7 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         label: "Search Installed Skills",
         description:
           "Find relevant installed, eligible skills by task or exact name, including skills omitted from the prompt directory. Searches names and descriptions, plus bounded instruction text when skill reads are allowed. Returns metadata only; coverage reports any incomplete body indexing. Read the selected skill's whole instructions before applying it. Does not search ClawHub or install anything.",
-        parameters: Type.Object({
-          query: Type.String({ minLength: 1, maxLength: 1000 }),
-          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-        }),
+        parameters: SkillsSearchSchema,
         execute: async (_id, args, signal) => {
           signal?.throwIfAborted();
           const params = asToolParamsRecord(args);
@@ -68,7 +71,7 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         label: "Read Installed Skill",
         description:
           "Load complete SKILL.md instructions for an exact installed skill name. Use a known name directly; search is not required first. Does not execute the skill or grant additional tool permissions.",
-        parameters: Type.Object({ name: Type.String({ minLength: 1 }) }),
+        parameters: SkillsReadSchema,
         execute: async (_id, args, signal) => {
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });

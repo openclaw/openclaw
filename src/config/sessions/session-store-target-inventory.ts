@@ -42,6 +42,7 @@ import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
 } from "./targets-collision.js";
+import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 import {
   shouldSkipDiscoveryError,
   toDiscoveredSessionStoreTarget,
@@ -54,7 +55,6 @@ import {
 import {
   isPerAgentSessionStoreConfig,
   listConfiguredSessionStoreAgentIds,
-  listKnownSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredSessionStoreTargets,
 } from "./targets.js";
@@ -256,7 +256,14 @@ export function createSessionStoreRegistryMutationFilter(params: {
           params.preparedSources.some(
             (prepared) =>
               prepared.agentId === source.agentId &&
-              prepared.identity === source.identity &&
+              (prepared.identity === source.identity ||
+                // A creator's COMMIT promotes its captured absent locator to this file.
+                params.captured.some(
+                  ({ candidate, identity, birthtime }) =>
+                    birthtime === undefined &&
+                    identity === source.identity &&
+                    (candidate.path === prepared.path || candidate.physicalPath === prepared.path),
+                )) &&
               isCurrentRegistrySourceGeneration(prepared, source),
           ))
       ) {

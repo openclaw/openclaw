@@ -21,6 +21,8 @@ import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
+import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -54,7 +56,7 @@ type Readers = CliHistoryReaders;
 type CachedIndex = {
   database?: DatabaseSync;
   key: string;
-  index: CliSessionHistoryIndex;
+  index: CliHistoryIndex;
   release: () => void;
   readWindow?: TranscriptReadWindow;
   displaySource?: string;
@@ -145,7 +147,10 @@ export async function prepareCliSessionHistoryReader(
     }
   };
   if (!cached) {
-    const index = new CliSessionHistoryIndex(!revision?.database);
+    const index =
+      params.entry?.incognito === true
+        ? new MemoryCliSessionHistoryIndex()
+        : new CliSessionHistoryIndex();
     try {
       await visitClaudeCliSessionMessages(
         source[0],

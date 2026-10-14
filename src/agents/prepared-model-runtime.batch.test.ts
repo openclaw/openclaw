@@ -13,6 +13,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as inlineProviderModels from "./embedded-agent-runner/model.inline-provider.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import * as configuredModels from "./model-selection-shared.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
   getPreparedModelRuntimeSnapshot,
@@ -323,7 +324,9 @@ describe("prepared fleet batches", () => {
     });
     cancelled = true;
     markPreparedModelRuntimeSnapshotsStale("cancel before workspace preparation");
-    await expect(publication).rejects.toThrow("superseded");
+    await expect(publication).rejects.toBeInstanceOf(
+      PreparedModelRuntimePublicationSupersededError,
+    );
     expect(lateLoads).toBe(0);
   });
 
