@@ -341,9 +341,9 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
                 // failed dispatch without logging prompts or tool payloads.
                 const turn = await Promise.race([
                   outcome,
-                  new Promise<{ kind: "pending" }>((resolve) =>
-                    setTimeout(() => resolve({ kind: "pending" }), 1_000),
-                  ),
+                  new Promise<{ kind: "pending" }>((resolve) => {
+                    setTimeout(() => resolve({ kind: "pending" }), 1_000);
+                  }),
                 ]);
                 const history = await liveGateway
                   .call("chat.history", { sessionKey, limit: 100 })
