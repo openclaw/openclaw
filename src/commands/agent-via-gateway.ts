@@ -894,6 +894,7 @@ async function agentViaGatewayCommand(
             replyTo: opts.replyTo,
             sessionId: opts.sessionId,
             sessionKey,
+            createSessionIfMissing: deferSessionId || undefined,
             thinking: opts.thinking,
             deliver: Boolean(opts.deliver),
             channel,

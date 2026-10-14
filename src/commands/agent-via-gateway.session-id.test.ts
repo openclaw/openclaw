@@ -69,6 +69,7 @@ describe("agent CLI session IDs", () => {
             agentId: "main",
             sessionId: "saved-id",
             sessionKey: undefined,
+            createSessionIfMissing: true,
           }),
         }),
       );
