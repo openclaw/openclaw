@@ -534,24 +534,49 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     }
 
     expect(turkish!.tabs.map((tab) => tab.tab)).toEqual([
-      "Başlangıç", "Kurulum", "Kanallar", "Ajanlar", "Yetenekler", "Modeller",
-      "Platformlar", "Gateway ve operasyonlar", "Başvuru", "Sürümler", "Katkıda bulunma", "Yardım",
+      "Başlangıç",
+      "Kurulum",
+      "Kanallar",
+      "Ajanlar",
+      "Yetenekler",
+      "Modeller",
+      "Platformlar",
+      "Gateway ve operasyonlar",
+      "Başvuru",
+      "Sürümler",
+      "Katkıda bulunma",
+      "Yardım",
     ]);
     expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
     for (const { tab, parent, child, page } of [
       { tab: "Kurulum", parent: "Bakım", child: "Geçiş", page: "tr/install/migrating" },
-      { tab: "Ajanlar", parent: "Oturumlar ve bellek", child: "Active Memory", page: "tr/concepts/active-memory/enabling" },
-      { tab: "Yetenekler", parent: "Plugin kılavuzları", child: "Codex harness", page: "tr/plugins/codex-harness/placement" },
+      {
+        tab: "Ajanlar",
+        parent: "Oturumlar ve bellek",
+        child: "Active Memory",
+        page: "tr/concepts/active-memory/enabling",
+      },
+      {
+        tab: "Yetenekler",
+        parent: "Plugin kılavuzları",
+        child: "Codex harness",
+        page: "tr/plugins/codex-harness/placement",
+      },
       { tab: "Yetenekler", parent: "Araçlar", child: "Tarayıcı", page: "tr/tools/browser/setup" },
-      { tab: "Gateway ve operasyonlar", parent: "Gateway", child: "OpenTelemetry", page: "tr/gateway/opentelemetry/setup" },
+      {
+        tab: "Gateway ve operasyonlar",
+        parent: "Gateway",
+        child: "OpenTelemetry",
+        page: "tr/gateway/opentelemetry/setup",
+      },
       { tab: "Başvuru", parent: "CLI komutları", child: "Gateway", page: "tr/cli/gateway/running" },
     ]) {
-      const parentGroup = turkish!.tabs.find((entry) => entry.tab === tab)
+      const parentGroup = turkish!.tabs
+        .find((entry) => entry.tab === tab)
         ?.groups?.find((entry) => entry.group === parent);
       expect(findNestedGroup(parentGroup?.pages, child)).toEqual(
         expect.objectContaining({ pages: expect.arrayContaining([page]) }),
       );
     }
-
   });
 });
