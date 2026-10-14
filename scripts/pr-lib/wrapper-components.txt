@@ -2337,7 +2337,6 @@ src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
-src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-reply-text.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
