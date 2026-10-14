@@ -24,11 +24,13 @@ const validatedSchemas = resolveGlobalSingleton(
   Symbol.for("openclaw.agentCanonicalValidationSchemas"),
   () => new WeakMap<DatabaseSync, { cookie: number; schema?: SqliteSchemaFacts }>(),
 );
-// Writer validation leaves one queue table; triggers on the covered tables are rejected.
-const canonicalDefinitions = new Map([
+// Canonical writers no longer install validation triggers; only the pending table is expected.
+const expectedDefinitions = new Map([
   [
     "session_canonical_validation_pending",
-    normalizeSchemaSql(canonicalSessionValidationSchemaSql()),
+    normalizeSchemaSql(
+      extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_canonical_validation_pending"),
+    ),
   ],
 ]);
 
@@ -71,10 +73,9 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
     return;
   }
   validatedSchemas.delete(database);
-  const expected = canonicalDefinitions;
   const actual = readDefinitions(database, schema);
-  for (const name of new Set([...expected.keys(), ...actual.keys()])) {
-    if (expected.get(name) !== actual.get(name)) {
+  for (const name of new Set([...expectedDefinitions.keys(), ...actual.keys()])) {
+    if (expectedDefinitions.get(name) !== actual.get(name)) {
       throw classifyOpenClawAgentDatabaseReadError(
         database,
         new Error(

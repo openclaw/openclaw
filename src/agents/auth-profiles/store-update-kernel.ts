@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { MessageChannel } from "node:worker_threads";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -179,15 +180,20 @@ export function updateAuthProfileStoreInDatabase(
     });
     let credentialFacts: AuthStoreUpdateCommitted["credentialFacts"];
     if (publication.credentialsChanged) {
-      const { receipt } = authProfileCredentialPublication.capture(database, () => {
-        if (response.deleteEmptyStore && Object.keys(payload.profiles).length === 0) {
-          deleteAuthProfileJsonCell(database, "store", kind);
-        } else {
-          writeAuthProfileJsonCell(database, "store", kind, payload);
-        }
-      });
+      const { receipt } = authProfileCredentialPublication.capture(
+        sqlPublicationAnchor(database),
+        () => {
+          if (response.deleteEmptyStore && Object.keys(payload.profiles).length === 0) {
+            deleteAuthProfileJsonCell(database, "store", kind);
+          } else {
+            writeAuthProfileJsonCell(database, "store", kind, payload);
+          }
+        },
+      );
       credentialFacts = authProfileCredentialPublication.bound(receipt);
-      deferSqliteWorkerCommitReceipt(database, { authCredentials: credentialFacts });
+      deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database), {
+        authCredentials: credentialFacts,
+      });
     }
     if (publication.stateChanged) {
       if (statePayload) {

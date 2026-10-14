@@ -246,6 +246,10 @@ describe("PaletteSessionDraft", () => {
     const ensure = vi.mocked(context.agentIdentity.ensure);
     await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
 
+    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
+    await waitForSolid(() =>
+      expect(host.querySelector(".palette-session-settings")?.matches(":popover-open")).toBe(true),
+    );
     ensure.mockClear();
     trigger.click();
     await waitForSolid(() => {
@@ -538,8 +542,10 @@ describe("PaletteSessionDraft", () => {
     expect(route).not.toHaveBeenCalled();
     expect(sessionStorage.length).toBe(1);
     expect(host.querySelector(".new-session-page__where-popover")).toBeNull();
-    expect(host.querySelector("wa-popover.palette-session-settings")?.getAttribute("for")).toMatch(
-      /^palette-session-\d+-settings-trigger$/,
+    const settingsTrigger = host.querySelector(".palette-session-settings__trigger");
+    expect(settingsTrigger?.id).toMatch(/^palette-session-\d+-settings-trigger$/);
+    expect(settingsTrigger?.getAttribute("aria-controls")).toBe(
+      host.querySelector(".oc-popover.palette-session-settings")?.id,
     );
   });
 

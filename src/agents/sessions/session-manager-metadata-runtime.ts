@@ -14,13 +14,12 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { prepareSessionManagerMetadataCommand } from "./session-manager-metadata-command.js";
 import {
@@ -34,7 +33,7 @@ const log = createSubsystemLogger("agents/session-metadata");
 /** Each command settles and unbinds before the next; the enclosing manager keeps its FIFO turn. */
 export async function withSessionMetadataWorker<T>(
   options: OpenClawAgentDatabaseOptions,
-  database: OpenClawAgentDatabase | SessionManagerIncognitoDatabase,
+  database: OpenClawAgentDatabaseExecution | SessionManagerIncognitoDatabase,
   assertCurrent: () => void,
   operation: (scope: Pick<SqliteWorkerStore<SessionMetadataOperations>, "execute">) => Promise<T>,
   controls?: {
@@ -52,27 +51,38 @@ export async function withSessionMetadataWorker<T>(
     cliWriter?.assertCurrent();
   };
   const admission = captureSessionMessageAdmission(assertMetadataCurrent, controls);
-  const physical = readOpenClawAgentDatabaseIdentity(database);
-  const transcriptPublication =
-    physical && typeof physical.identity === "string"
-      ? createSessionManagerPublicationHooks({
-          agentId: database.agentId,
-          storePath: database.path,
-          databaseIdentity: physical.identity,
-          initialWriter: controls?.initialWriter,
-          beforeIdentityPublication: controls?.beforeIdentityPublication,
-        })
-      : undefined;
+  await runOpenClawAgentWorkerWrite(options, () =>
+    database.prepare({
+      assertCurrent: assertMetadataCurrent,
+      createAdmission: (binding) => () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          assertMetadataCurrent();
+          if (!grant()) {
+            throw new Error("Session metadata preparation admission expired");
+          }
+        }, binding.attachment),
+      }),
+    }),
+  );
+  const transcriptPublication = createSessionManagerPublicationHooks({
+    agentId: database.agentId,
+    storePath: database.path,
+    databaseIdentity: () => database.fileIdentity?.physicalIdentity,
+    initialWriter: controls?.initialWriter,
+    beforeIdentityPublication: controls?.beforeIdentityPublication,
+  });
   const worker = await openOpenClawAgentSqliteWorkerStore<SessionMetadataWorkerOperations>(
     options,
-    database.db,
+    { execution: database },
     {
       moduleUrl,
       input: undefined,
       assertAdmission: (request) =>
-        admission.assertAdmission(transcriptPublication?.unwrap(request) ?? request),
-      onAdmitted: transcriptPublication?.onAdmitted,
-      observeAdmission: transcriptPublication?.observeAdmission,
+        admission.assertAdmission(transcriptPublication.unwrap(request)),
+      onAdmitted: transcriptPublication.onAdmitted,
+      observeAdmission: transcriptPublication.observeAdmission,
     },
   );
   let result: Result<T, unknown>;

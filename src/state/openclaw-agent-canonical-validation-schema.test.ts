@@ -1,13 +1,17 @@
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import {
   readPendingCanonicalSessionValidationBatch,
   validateCanonicalSessionValidationBatch,
 } from "../config/sessions/session-canonical-validation.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { RuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import type { RetainedNativeWorker } from "../infra/worker-native-lifecycle.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -72,72 +76,141 @@ describe("canonical validation schema admission", () => {
     missingTables: ["session_canonical_validation_pending"],
     cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
   });
-  it("validates a cold reader without constructing a comparison database", async () => {
+  it("avoids comparison SQL in fresh workers while forwarding runtime facts and detecting schema drift", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.path("canonical-reader.sqlite");
-      const database = new DatabaseSync(pathname);
-      const source = captureRetainedNativeWorkerSource();
-      let pending = createDeferredCore<unknown>();
-      const worker = source.create(
-        `
-        const { parentPort, workerData } = require("node:worker_threads");
-        const { DatabaseSync } = require("node:sqlite");
-        const exec = DatabaseSync.prototype.exec;
-        const executions = [];
-        DatabaseSync.prototype.exec = function(sql) {
-          executions.push(sql);
-          return exec.call(this, sql);
-        };
-        let database, canonical;
-        parentPort.on("message", async () => {
-          executions.length = 0;
-          let error;
-          try {
-            if (!database) {
-              const { register } = await import(workerData.loader);
-              register();
-              canonical = await import(workerData.canonical);
-              database = new DatabaseSync(workerData.pathname, { readOnly: true });
-            }
-            canonical.assertCanonicalSessionValidationSchema(database);
-          } catch (caught) {
-            error = caught.message;
-          }
-          parentPort.postMessage({ error, executions });
-        });
-        `,
-        {
-          eval: true,
-          execArgv: [],
-          workerData: {
-            pathname,
-            loader: import.meta.resolve("tsx/esm/api"),
-            canonical: new URL("./openclaw-agent-canonical-validation-schema.ts", import.meta.url)
-              .href,
+      const factKeys = ["openclaw.sqliteNativeRuntimeAdmission"] as const;
+      const originalFacts = factKeys.map((name) => getEnvironmentData(name));
+      const installFacts = (values: Parameters<typeof setEnvironmentData>[1][]) =>
+        factKeys.forEach((name, index) => setEnvironmentData(name, values[index]));
+      let closeSource: Parameters<RuntimeWorkerGeneration["retain"]>[1] | undefined;
+      const source = captureRetainedNativeWorkerSource({
+        runtimeGeneration: {
+          resolve: (url) => url,
+          retain: (_owner, close) => {
+            closeSource = close;
           },
         },
-      );
-      worker.on("message", (value) => pending.resolve(value));
-      worker.on("error", (error) => pending.reject(error));
-      const read = () => {
-        pending = createDeferredCore<unknown>();
-        worker.postMessage(undefined, []);
-        return pending.promise;
+      });
+      const children: RetainedNativeWorker[] = [];
+      source.retain({}, async () => {
+        await Promise.all(children.map((child) => child.terminate()));
+      });
+      const pathname = state.path("worker-admission.sqlite");
+      const spawn = () => {
+        const worker = source.create(
+          `
+          const { parentPort, workerData } = require("node:worker_threads");
+          const { DatabaseSync, StatementSync } = require("node:sqlite");
+          const reads = [], executions = [];
+          for (const method of ["get", "all", "run", "iterate"]) {
+            const original = StatementSync.prototype[method];
+            StatementSync.prototype[method] = function(...args) {
+              reads.push(this.sourceSQL);
+              return Reflect.apply(original, this, args);
+            };
+          }
+          const originalExec = DatabaseSync.prototype.exec;
+          DatabaseSync.prototype.exec = function(sql) {
+            executions.push(sql);
+            return Reflect.apply(originalExec, this, [sql]);
+          };
+          let database, canonical;
+          parentPort.on("message", async (command) => {
+            if (command === "ping") {
+              parentPort.postMessage({ ready: true });
+              return;
+            }
+            reads.length = executions.length = 0;
+            let error;
+            try {
+              if (!database) {
+                const { register } = await import(workerData.loader);
+                register();
+                const native = await import(workerData.native);
+                canonical = await import(workerData.canonical);
+                database = native.openNodeSqliteDatabase(workerData.pathname, { readOnly: true });
+              }
+              canonical.assertCanonicalSessionValidationSchema(database);
+            } catch (caught) {
+              error = caught.message;
+            }
+            parentPort.postMessage({
+              error,
+              nativeProbes: reads.filter((sql) => /sqlite_(?:version|compileoption_used)\\(/u.test(sql)).length,
+              comparisonBootstraps: executions.filter((sql) => sql !== workerData.schemaSql && sql.includes("CREATE TABLE IF NOT EXISTS session_canonical_validation_pending")).length,
+              diagnosticBootstraps: executions.filter((sql) => sql === workerData.schemaSql).length,
+              catalogReads: reads.filter((sql) => sql.includes("FROM main.sqlite_schema")).length,
+            });
+          });
+        `,
+          {
+            eval: true,
+            execArgv: [],
+            workerData: {
+              pathname,
+              schemaSql: OPENCLAW_AGENT_SCHEMA_SQL,
+              loader: import.meta.resolve("tsx/esm/api"),
+              native: new URL("../infra/node-sqlite.ts", import.meta.url).href,
+              canonical: new URL("./openclaw-agent-canonical-validation-schema.ts", import.meta.url)
+                .href,
+            },
+          },
+        );
+        children.push(worker);
+        let pending: ReturnType<typeof createDeferredCore<unknown>>;
+        worker.on("message", (value) => pending.resolve(value));
+        worker.on("error", (error) => pending.reject(error));
+        return (command = "read") => {
+          pending = createDeferredCore<unknown>();
+          worker.postMessage(command, []);
+          return pending.promise;
+        };
       };
+      let database: DatabaseSync | undefined;
       try {
+        installFacts([]);
+        await spawn()("ping");
+        installFacts(originalFacts);
+        // Native runtime facts are ready; canonical admission has not run in the host.
+        database = openNodeSqliteDatabase(pathname);
         database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-        expect(await read()).toEqual({ error: undefined, executions: [] });
+        const read = spawn();
+        const admitted = await read();
         database.exec(
           "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
         );
-        expect(await read()).toMatchObject({
-          error: expect.stringMatching(/canonical validation schema is missing or drifted/u),
-        });
+        const drifted = await read();
         database.exec("DROP TRIGGER unexpected_node_validation");
-        expect(await read()).toEqual({ error: undefined, executions: [] });
+        installFacts([]);
+        const absent = await spawn()();
+        expect(admitted).toMatchObject({
+          error: undefined,
+          nativeProbes: 0,
+          comparisonBootstraps: 0,
+          diagnosticBootstraps: 0,
+        });
+        assert(admitted && typeof admitted === "object" && "catalogReads" in admitted);
+        expect(admitted.catalogReads).toBeLessThanOrEqual(1);
+        expect(drifted).toMatchObject({
+          error: expect.stringMatching(/canonical validation schema is missing or drifted/u),
+          nativeProbes: 0,
+          comparisonBootstraps: 0,
+        });
+        assert(drifted && typeof drifted === "object" && "catalogReads" in drifted);
+        expect(drifted.catalogReads).toBeGreaterThan(0);
+        expect(absent).toMatchObject({
+          error: undefined,
+          comparisonBootstraps: 0,
+        });
+        assert(absent && typeof absent === "object" && "nativeProbes" in absent);
+        expect(absent.nativeProbes).toBeGreaterThan(0);
       } finally {
-        database.close();
-        await worker.terminate();
+        database?.close();
+        installFacts(originalFacts);
+        const retire = await closeSource?.();
+        if (retire) {
+          await retire();
+        }
       }
     });
   });

@@ -3097,6 +3097,7 @@ export const en: TranslationMap & {
       openParent: "Open parent session {title}",
       subagentsRunning: "Subagents · {count} running",
       layout: "Layout",
+      panels: "Panels",
       continueInTerminal: {
         action: "Continue in terminal…",
         title: "Continue in terminal",

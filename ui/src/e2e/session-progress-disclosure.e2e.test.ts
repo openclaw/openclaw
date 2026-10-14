@@ -103,7 +103,7 @@ suite.define(() => {
       const openSettings = async () => {
         await sidebar.locator(".sidebar-identity-card").click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };

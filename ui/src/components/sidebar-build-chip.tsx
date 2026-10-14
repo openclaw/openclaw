@@ -3,8 +3,8 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
-import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import {
@@ -12,6 +12,7 @@ import {
   formatSidebarBuildSubtitle,
 } from "./sidebar-build-chip-format.ts";
 import { Icon } from "./solid/icon.tsx";
+import type { MenuItemBindings } from "./solid/menu.tsx";
 
 export type SidebarBuildChipProps = {
   basePath: string;
@@ -19,6 +20,7 @@ export type SidebarBuildChipProps = {
   updateAttentionDismissed: boolean;
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
+  menuAttributes?: MenuItemBindings;
 };
 
 function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement) {
@@ -34,6 +36,7 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
     return (
       <openclaw-tooltip class="sidebar-hover-tooltip" prop:delay={600} prop:closeDelay={300}>
         <a
+          {...props.menuAttributes}
           class="sidebar-footer-build"
           href={pathForRoute("about", props.basePath)}
           role={props.variant === "identity" ? "menuitem" : undefined}
@@ -43,6 +46,11 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
               : t("aboutPage.artifactDetails")
           }
           onClick={(event) => {
+            const onClick = props.menuAttributes?.onClick;
+            if (onClick) {
+              onClick(event);
+              return;
+            }
             if (!shouldHandleNavigationClick(event)) {
               return;
             }
@@ -76,6 +84,7 @@ export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
       updateAttentionDismissed: { default: false, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       variant: { default: "identity", attribute: false },
+      menuAttributes: { default: undefined, attribute: false },
     },
   },
 );

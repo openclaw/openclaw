@@ -27,7 +27,6 @@ import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
 } from "../../config/sessions/transcript-write-context.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -59,11 +58,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): Promise<number> {
     return withSessionManagerWrite(this, async (admission) => {
-      if (
-        !admission ||
-        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) && "db" in admission.database)
-      ) {
-        // Incognito retains its process-held owner until the worker-owned migration activates.
+      if (!admission) {
         return runSessionPersistenceSync(this.prepareTrailingEntriesRemoval(predicate, options));
       }
       const target = this.persistenceTarget!;
