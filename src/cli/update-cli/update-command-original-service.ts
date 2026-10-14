@@ -119,7 +119,7 @@ export async function revalidateOriginalManagedServiceRuntime(
   assertCurrent();
   const ownRebind = allowOwnRebind && original.definition.rebound === definition;
   const runtimePin = readDaemonRuntimePinForInstall(
-    { kind: "gateway", env: original.service.serviceEnv ?? {} },
+    { kind: "gateway", env: original.service.serviceEnv ?? {}, allowNativeRead: true },
     state.command,
     true,
   );
