@@ -586,6 +586,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         await sandbox.bridge?.stat({
           filePath: spill.path,
           cwd: sandbox.root,
+          expectedPolicyPath: spill.path,
           signal: params.signal,
         })
       )?.type === "file";

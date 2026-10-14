@@ -160,6 +160,22 @@ describe("web_fetch sandbox output recovery", () => {
       ).toContain(marker);
       expect((await fs.stat(result.spill.path)).mode & 0o077).toBe(0);
       await expect(fs.stat(path.join(root, "guest-write.txt"))).rejects.toThrow();
+      await fs.rm(path.dirname(result.spill.path), { recursive: true });
+      const renewed = details(
+        await tool.execute("renew", { url: "https://example.com/native-read-only" }),
+      );
+      expect(renewed.cached).toBeUndefined();
+      assert(renewed.spill);
+      expect(renewed.spill.path).not.toBe(result.spill.path);
+      expect(
+        JSON.stringify(
+          await read.execute("renewed-read", {
+            path: renewed.spill.path,
+            offset: 1_000,
+            limit: 30,
+          }),
+        ),
+      ).toContain(marker);
     },
   );
 
