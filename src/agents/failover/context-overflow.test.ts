@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
+  classifyFailoverSignal,
   isContextOverflowError,
   isLikelyContextOverflowError,
   isProviderRequestSizeCeilingError,
 } from "./classify.js";
+
+const DASHSCOPE_INPUT_LENGTH =
+  "<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]";
+const DASHSCOPE_INPUT_LENGTH_MESSAGES = [
+  ["provider text", DASHSCOPE_INPUT_LENGTH],
+  ["sdk status prefix", `400 ${DASHSCOPE_INPUT_LENGTH}`],
+  [
+    "json body",
+    JSON.stringify({
+      error: {
+        code: "invalid_parameter_error",
+        type: "invalid_request_error",
+        message: DASHSCOPE_INPUT_LENGTH,
+      },
+    }),
+  ],
+] as const;
 
 // Groq states both numbers in the refusal, so the two shapes are separable by wording alone.
 const GROQ_OVERSIZED_REQUEST_413 =
@@ -55,4 +73,25 @@ describe("provider request-size ceilings worded as TPM limits", () => {
       expect(classifyFailoverReason(message)).toBe("rate_limit");
     },
   );
+});
+
+describe("DashScope input length overflow", () => {
+  it.each(DASHSCOPE_INPUT_LENGTH_MESSAGES)(
+    "classifies %s as context overflow",
+    (_name, message) => {
+      expect(classifyFailoverReason(message)).toBe("context_overflow");
+      expect(classifyFailoverSignal({ status: 400, message })).toEqual({
+        kind: "context_overflow",
+      });
+    },
+  );
+
+  it("does not treat other DashScope parameter ranges as overflow", () => {
+    const message = "Range of max_tokens should be [1, 8192]";
+    expect(classifyFailoverReason(message)).not.toBe("context_overflow");
+    expect(classifyFailoverSignal({ status: 400, message })).toEqual({
+      kind: "reason",
+      reason: "format",
+    });
+  });
 });

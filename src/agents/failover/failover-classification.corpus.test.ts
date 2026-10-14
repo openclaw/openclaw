@@ -33,6 +33,7 @@ function classifyReplyRequest(signal: FailoverSignal) {
 // The shared corpus also feeds retry tests; select only distinct classification paths here.
 const representativeCorpusIds = new Set([
   "patterns-context-lmstudio-loaded-length-400",
+  "patterns-context-dashscope-input-length-400",
   "billing-together-payment-required",
   "billing-proxy-subscription",
   "http-structured-insufficient-quota",

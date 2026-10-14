@@ -49,8 +49,17 @@ describe("provider overflow messages", () => {
   it.each([
     "Context window exceeded: estimated input 35137 leaves only 0 output tokens within the 32768-token context.",
     "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
+    "<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+    "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+    '{"error":{"code":"invalid_parameter_error","type":"invalid_request_error","message":"<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]"}}',
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
+  });
+
+  it("does not treat other DashScope parameter ranges as context overflow", () => {
+    expect(
+      isContextOverflow(errorMessage("Range of max_tokens should be [1, 8192]"), 262_144),
+    ).toBe(false);
   });
 });
 

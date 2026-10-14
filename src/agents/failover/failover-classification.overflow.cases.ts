@@ -206,5 +206,11 @@ export const overflowCases = [
       message:
         '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
     },
+    {
+      id: "patterns-context-dashscope-input-length-400",
+      status: 400,
+      message:
+        "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+    },
   ]),
 ] satisfies readonly FailoverClassificationCorpusRow[];
