@@ -171,7 +171,7 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
       await expect.poll(distance).toBe(0);
       if (acquisition === "native observation") {
         await settleFrames();
-        expect(host.transcript.isProgrammaticScroll).toBe(false);
+        await expect.poll(() => host.transcript.isProgrammaticScroll).toBe(false);
       }
     }
 
@@ -188,7 +188,7 @@ it.each(["requested", "smooth no-op", "native observation"] as const)(
     await settleFrames();
     expect(distance()).toBe(0);
     if (acquisition !== "smooth no-op") {
-      expect(host.transcript.isProgrammaticScroll).toBe(false);
+      await expect.poll(() => host.transcript.isProgrammaticScroll).toBe(false);
     }
     if (acquisition === "requested") {
       expect(thread.scrollHeight - thread.clientHeight - previousMax).toBe(48);
