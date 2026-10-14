@@ -4,13 +4,14 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
+import { hashRuntimeConfigValue } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
@@ -179,7 +180,10 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     return {
       acquireAgentRunPreparedModelRuntime: vi.fn(acquire),
       acquireReadOnlyPreparedModelRuntime: vi.fn(acquire),
-      preparedModelRuntimeConfigsMatch,
+      // Mirrors the owner's comparison; importing the owner here re-enters
+      // runner mocks that are still pending and hangs the importing test.
+      preparedModelRuntimeConfigsMatch: (left: OpenClawConfig, right: OpenClawConfig) =>
+        left === right || hashRuntimeConfigValue(left) === hashRuntimeConfigValue(right),
       prepareModelRuntimeSnapshot: vi.fn(async (input: PreparedModelRuntimeInput) =>
         createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
       ),
