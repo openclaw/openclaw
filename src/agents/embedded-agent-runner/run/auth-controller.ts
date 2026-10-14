@@ -476,7 +476,11 @@ export function createEmbeddedRunAuthController(params: {
     throw new Error(message);
   };
 
-  const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
+  const applyApiKeyInfo = async (
+    candidate?: string,
+    attemptIndex?: number,
+    forceRefresh = false,
+  ): Promise<void> => {
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
     const apiKeyInfo = await getApiKeyForModelCore({
       model: preparedModel?.runtimeModel ?? state.models.runtime,
@@ -485,7 +489,8 @@ export function createEmbeddedRunAuthController(params: {
       store: params.authStore,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      lockedProfile: candidate != null && candidate === params.lockedProfileId,
+      lockedProfile: forceRefresh || (candidate != null && candidate === params.lockedProfileId),
+      forceRefresh,
       allowAuthProfileFallback: preparedModel?.allowAuthProfileFallback,
       secretSentinels: true,
     });
@@ -623,15 +628,24 @@ export function createEmbeddedRunAuthController(params: {
     errorText: string,
     retried: boolean,
   ): Promise<boolean> => {
-    if (!state.runtimeAuthState || retried) {
-      return false;
-    }
-    if (classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {
+    if (retried || classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {
       return false;
     }
     try {
-      await refreshRuntimeAuth("auth-error");
-      scheduleRuntimeAuthRefresh();
+      if (state.runtimeAuthState) {
+        await refreshRuntimeAuth("auth-error");
+        scheduleRuntimeAuthRefresh();
+      } else if (
+        params.provider === "openai" &&
+        state.lastProfileId &&
+        state.apiKeyInfo?.mode === "oauth" &&
+        state.apiKeyInfo.authFlow === "chatgpt-token-sharing" &&
+        /\btoken_expired\b|\bauthentication token is expired\b/iu.test(errorText)
+      ) {
+        await applyApiKeyInfo(state.lastProfileId, state.profileIndex, true);
+      } else {
+        return false;
+      }
       return true;
     } catch {
       return false;

@@ -72,7 +72,7 @@ export function createCrabboxProfileSuggestionDiscovery(dependencies: {
           provider,
           target: "linux",
           class: machineClass,
-          ttl: "8h",
+          ttl: "4h",
           idleTimeout: "45m",
           warmImage: true,
         },

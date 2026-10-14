@@ -12,7 +12,12 @@ export function applyCompletionsReasoningAndRouting(
   const direct = mode === "direct";
   const nativeEffort = compat.thinkingFormat === "openrouter" ? undefined : reasoning.effort;
   const enabled = reasoning.thinkingEnabled ?? false;
-  if (model.reasoning) {
+  if (
+    model.reasoning &&
+    (!compat.thinkingOffControlUndeclared ||
+      reasoning.thinkingEnabled !== undefined ||
+      !reasoning.thinkingExplicit)
+  ) {
     let allowScalarEffort = true;
     if (direct && compat.thinkingFormat === "zai") {
       params.thinking = enabled ? { type: "enabled", clear_thinking: false } : { type: "disabled" };
