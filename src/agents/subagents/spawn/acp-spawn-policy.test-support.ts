@@ -50,6 +50,13 @@ export function registerAcpSpawnPolicyTests(fixture: {
         inheritedToolPolicySource: "sender",
         spawnDepth: 1,
         sessionRoot: os.tmpdir(),
+        // The policy root is persisted as this child's working directory even
+        // though the request named no cwd. Working-directory readers must read
+        // that as inherited rather than as an explicit request — see
+        // `buildSharedCwdIndex` in `subagent-list.ts`, which keys that
+        // exemption on `inheritedToolPolicySource` and so leaves the enforced
+        // directory on the entry.
+        spawnedCwd: os.tmpdir(),
         inheritedToolDeny: ["browser"],
       }),
     );

@@ -282,7 +282,9 @@ function capSharedCwdPath(value: string) {
  * The only filesystem work is one canonicalization per distinct explicit
  * directory (see `canonicalCwdIdentity`). Runs without an explicit `spawnedCwd`
  * inherited the parent workspace — the default for `collect` swarms — and are
- * skipped so the advisory stays silent on normal usage.
+ * skipped so the advisory stays silent on normal usage. A sender-restricted
+ * helper is skipped for the same reason even though it does carry a
+ * `spawnedCwd`: see the `inheritedToolPolicySource` check below.
  */
 function buildSharedCwdIndex(params: {
   runs: SubagentRunRecord[];
@@ -295,7 +297,21 @@ function buildSharedCwdIndex(params: {
     if (!isRetainedUnendedSubagentRun(run, params.now)) {
       continue;
     }
-    const spawnedCwd = params.sessionEntries.get(run.runId)?.spawnedCwd?.trim();
+    const sessionEntry = params.sessionEntries.get(run.runId);
+    // A sender-restricted helper never chose its directory, so its
+    // `spawnedCwd` is not the explicit request this advisory reports on. Both
+    // spawn owners refuse any cwd that is not the requester's own root
+    // (`resolveSubagentChildPlan`, `resolveAcpSenderSpawnError`) and then hand
+    // the child exactly that root as `spawnedCwd` so the restriction stays
+    // enforceable downstream. Two such helpers therefore always collide by
+    // construction — the inherited-workspace case the advisory already exempts
+    // — and the operator has no cwd to change in response. Reading the flag
+    // here keeps the enforced directory on the entry, which clearing it to
+    // silence the advisory would not.
+    if (sessionEntry?.inheritedToolPolicySource === "sender") {
+      continue;
+    }
+    const spawnedCwd = sessionEntry?.spawnedCwd?.trim();
     if (!spawnedCwd) {
       continue;
     }

@@ -17,8 +17,10 @@
  * What is NOT executed: the ACP dispatch itself. `spawnAcpDirect()` launches an
  * external ACP agent through a live Gateway, which this offline script cannot
  * stand up. The ACP owner's own patch assembly is pinned instead by
- * `src/agents/subagents/spawn/acp-spawn.test.ts` ("persists an explicit ACP cwd
- * so working-directory readers see it like a native child"); what this script
+ * `src/agents/subagents/spawn/acp-spawn-policy.test-support.ts`, registered
+ * into the `acp-spawn.test.ts` suite ("persists an explicit ACP cwd
+ * so working-directory readers see it like a native child", and "keeps a
+ * restricted same-agent ACP helper in the requester's root"); what this script
  * proves is that an ACP-shaped child session written through the production
  * writer is grouped and reported by the production readers, and that the same
  * child WITHOUT the persisted field — i.e. current `main` — is not.
@@ -54,6 +56,13 @@
  *      covered by `subagent-list.test.ts` ("groups by each run's own metadata
  *      when two agents share one raw session key") through the supported test
  *      state.
+ *  10. Sender-restricted helpers. A restricted sender's helper is handed the
+ *      requester's root as `spawnedCwd` even when the request named no cwd,
+ *      because both owners refuse any other directory for it. Asserts the
+ *      enforced directory is still on the entry, that two such helpers produce
+ *      no advisory in either the structured list or the `/subagents` text, and
+ *      — as the control — that the identical directory without the policy
+ *      marker is still reported.
  *
  * Run: pnpm tsx scripts/proof-135480-subagent-shared-cwd-advisory.ts
  */
@@ -155,6 +164,12 @@ async function main(): Promise<void> {
     requestedCwd?: string;
     /** Set false to reproduce current `main`, which persists nothing for ACP. */
     persistCwd?: boolean;
+    /**
+     * Adds the two fields both owners stamp for a sender-restricted helper.
+     * The cwd then names the requester's root because policy put it there, not
+     * because the request asked for it.
+     */
+    senderRestricted?: boolean;
   }) => {
     const spawnedCwd = resolveExplicitSpawnedCwd(params.requestedCwd);
     await upsertSessionEntryCore({ storePath: params.storePath, sessionKey: params.sessionKey }, {
@@ -162,6 +177,9 @@ async function main(): Promise<void> {
       completionOwnerSessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
       ...(spawnedCwd && params.persistCwd !== false ? { spawnedCwd } : {}),
+      ...(params.senderRestricted
+        ? { inheritedToolPolicySource: "sender", sessionRoot: spawnedCwd }
+        : {}),
       inheritedToolPolicyVersion: 1,
     } as never);
     return spawnedCwd;
@@ -587,6 +605,66 @@ async function main(): Promise<void> {
       assert.equal(list.sharedCwdGroupTotal, 1);
       assert.equal(list.sharedCwdGroups[0]?.runCount, runs.length);
       assert.ok(list.active.every((item) => item.sharedCwdGroupId === 1));
+    });
+  }
+
+  console.log("── scenario 10: sender-restricted helpers are not an explicit request ──");
+  {
+    // Both spawn owners refuse any cwd that is not the requester's own root
+    // for a restricted sender, then hand the child exactly that root as
+    // `spawnedCwd` so the restriction stays enforceable. Two such helpers
+    // therefore always name one directory, with nothing the operator could
+    // change — the inherited-workspace case the advisory exempts. The control
+    // below writes the identical directory WITHOUT the policy marker, so this
+    // measures the marker rather than the path.
+    const store = path.join(root, "sessions-restricted.json");
+    const requesterRoot = path.join(root, "restricted-root");
+    await fs.mkdir(requesterRoot, { recursive: true });
+    const restricted = [makeRun("restricted-a", now), makeRun("restricted-b", now)];
+    for (const run of restricted) {
+      await createChildSession({
+        storePath: store,
+        sessionKey: run.childSessionKey,
+        requestedCwd: requesterRoot,
+        senderRestricted: true,
+      });
+    }
+    const cfg = { session: { store } } as OpenClawConfig;
+    const restrictedContext = buildReadContext(restricted, 30);
+    const restrictedSelection = await readSubagentListSessionEntries(cfg, restrictedContext);
+    console.log(
+      `   restricted entries persist spawnedCwd=${restrictedSelection.get(restricted[0]!.runId)?.spawnedCwd} inheritedToolPolicySource=${restrictedSelection.get(restricted[0]!.runId)?.inheritedToolPolicySource}`,
+    );
+    check("the enforced working directory is still on the entry, not cleared", () => {
+      for (const run of restricted) {
+        assert.equal(restrictedSelection.get(run.runId)?.spawnedCwd, path.resolve(requesterRoot));
+        assert.equal(restrictedSelection.get(run.runId)?.sessionRoot, path.resolve(requesterRoot));
+      }
+    });
+    const { list: restrictedList, text: restrictedText } = await listFor(store, restricted);
+    check("two restricted helpers in one root produce no advisory", () => {
+      assert.equal(restrictedList.sharedCwdGroupTotal, 0);
+      assert.deepEqual(restrictedList.sharedCwdGroups, []);
+      assert.ok(restrictedList.active.every((item) => item.sharedCwdGroupId === undefined));
+      assert.equal(restrictedList.text.includes("shared working directories"), false);
+      assert.equal(JSON.stringify(restrictedText).includes("shared working directories"), false);
+      assert.equal(JSON.stringify(restrictedText).includes("shared cwd group"), false);
+    });
+
+    const controlStore = path.join(root, "sessions-restricted-control.json");
+    const control = [makeRun("restricted-control-a", now), makeRun("restricted-control-b", now)];
+    for (const run of control) {
+      await createChildSession({
+        storePath: controlStore,
+        sessionKey: run.childSessionKey,
+        requestedCwd: requesterRoot,
+      });
+    }
+    const { list: controlList } = await listFor(controlStore, control);
+    check("the same directory without the policy marker is still reported", () => {
+      assert.equal(controlList.sharedCwdGroupTotal, 1);
+      assert.equal(controlList.sharedCwdGroups[0]?.path, path.resolve(requesterRoot));
+      assert.equal(controlList.sharedCwdGroups[0]?.runCount, control.length);
     });
   }
 
