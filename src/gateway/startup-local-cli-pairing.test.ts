@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe("startup local CLI pairing", () => {
   it("creates and reuses a local CLI pairing off the main thread with canonical Windows metadata", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     await withStateDirEnv("openclaw-startup-local-cli-pairing-", async () => {
       const observer = observeParentSqlite();
@@ -42,6 +42,7 @@ describe("startup local CLI pairing", () => {
         deviceFamily: "Windows",
         tokens: { operator: { token: expect.any(String) } },
       });
+      platform.mockRestore();
       expect(
         readDeviceAuthTokenForTest({ deviceId: identity!.deviceId, role: "operator" }),
       ).toMatchObject({
