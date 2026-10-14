@@ -55,6 +55,17 @@ export type ChatRunError = {
   runId?: string;
 };
 
+/** Only the latest terminal failure owns the visible recovery actions. */
+export function chatFailureRunId(
+  error: ChatRunError | null | undefined,
+  session: GatewaySessionRow | undefined,
+) {
+  return (
+    error?.runId ??
+    (session?.status === "failed" || session?.status === "timeout" ? session.lastRunId : undefined)
+  );
+}
+
 export type ChatRunUiStatus = {
   phase: "done" | "interrupted";
   runId: string | null;

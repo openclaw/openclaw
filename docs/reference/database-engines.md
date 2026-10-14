@@ -55,11 +55,73 @@ agent/session storage, and other stores continue using SQLite. Incognito storage
 remains memory-only. A supported store never silently falls back to SQLite when
 its PostgreSQL connection or admission fails.
 
-Existing SQLite workboard data cannot switch engines yet. Keep that installation
-on SQLite until the future `openclaw database port` tool is available; selecting
-PostgreSQL refuses the existing store instead of copying, replacing, or ignoring
-its data. Omitting `database` preserves the SQLite default, so ordinary updates
-require no configuration or data migration.
+Use `openclaw database port` to move existing workboard data between engines.
+Changing `database.engine` alone does not migrate existing data. Omitting
+`database` preserves the SQLite default, so ordinary updates require no
+configuration or data migration.
+
+## Port existing workboard stores
+
+Stop the Gateway first, through the service owner that normally manages it, and
+stop embedded agents using the same state directory. The command refuses a live
+owner and never stops or restarts services for you. Configure
+`database.postgres.connection` before porting to PostgreSQL, leaving the current
+`database.engine` unchanged until the command switches it.
+
+```bash
+openclaw database port --to postgres --dry-run
+openclaw database port --to postgres
+```
+
+The command inventories all existing registered workboard stores, including
+disabled workboard plugin stores. It does not create missing stores. Shared state,
+agent databases, and safety journals remain on SQLite; shared-state and agent
+support await their respective PostgreSQL migrations. A dry run checks read-only
+prerequisites and reports checks that still require private migration, copying,
+or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or target
+namespace. Add `--json` for machine-readable results without connection strings
+or row payloads.
+
+The real operation retains exact original database and config captures under
+`<stateDir>/recovery/database-port/<operation-id>/`. SQLite originals are verified
+snapshots with WAL changes settled. PostgreSQL originals include a matched
+anchor and exact SQLite export; these captures retain current rows without the
+user-backup sanitizer. Config captures include the root file and its includes.
+Keep this directory private and retain the complete set. Former PostgreSQL
+namespaces are not dropped automatically.
+
+All destination stores are privately migrated and verified before publication.
+The command replaces each store atomically, switches config last while preserving
+SecretRefs, environment references, and includes, then archives its completed
+manifest with the captures. After success, start the Gateway through its service
+owner.
+
+An interrupted operation keeps startup blocked by
+`<stateDir>/recovery/database-port/manifest.json`. Keep the Gateway stopped and
+use that active manifest with one of:
+
+```bash
+openclaw database port --resume <stateDir>/recovery/database-port/manifest.json
+openclaw database port --rollback <stateDir>/recovery/database-port/manifest.json
+```
+
+Resume revalidates the captured evidence and finishes the interrupted operation.
+Rollback restores the entire original store and config set. These options are
+mutually exclusive and cannot be combined with `--to` or `--dry-run`. Completed,
+archived manifests are not an undo command after runtime has resumed.
+
+To return to SQLite without losing writes accepted after a successful port, stop
+the Gateway and run a new reverse port:
+
+```bash
+openclaw database port --to sqlite --dry-run
+openclaw database port --to sqlite
+```
+
+Reverse-port before downgrading through a raw package manager such as npm, pnpm,
+or Homebrew: those paths bypass `openclaw update` engine compatibility checks.
+An old SQLite capture is historical and does not contain later PostgreSQL writes.
+See the [CLI reference](/cli#database).
 
 ## Isolation and durability
 
@@ -67,7 +129,10 @@ One Gateway owns each store. PostgreSQL does not enable multiple active Gateways
 external writers, replication management, or connection-pool management.
 
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
-the store identity. Snapshot reads use `REPEATABLE READ READ ONLY`. Connections
+the store identity. Every PostgreSQL write, including a single statement, uses
+the adapter's `runTransaction` so it retains that lock and publishes its write
+token. A single-statement read may use autocommit; multi-statement snapshot reads
+use `REPEATABLE READ READ ONLY`. Connections
 set `synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: a
 server or operating-system crash can lose recently acknowledged commits. Backups
 and recovery must account for that durability policy. The adapter sets generous
@@ -94,18 +159,65 @@ repair, and file-snapshot requests refuse with a PostgreSQL recovery instruction
 Runtime PostgreSQL queries run in workers. Physical open and boot migration code
 may use the synchronous `withEngineStoreAdmission` scope from
 `openclaw/plugin-sdk/database-engine-worker-runtime`; retaining a connection after
-that scope ends does not authorize main-thread queries. Close remains available
-to settle resources. The store owner supplies `openEngineStore` with its existing
-SQLite-data decision, so partially initialized stores are also protected from an
-accidental engine switch.
+that scope ends does not authorize main-thread queries. The callback must remain
+synchronous. Close remains available to settle resources. The store owner supplies
+`openEngineStore` with `inspectSqlite(): { hasExistingData, hasEngineAnchor }`,
+so partially initialized stores are also protected from an accidental engine
+switch. See the canonical
+[`admission scope`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/admission-scope.ts)
+and [`engine opener`](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/open.ts).
 
-Back up both the local anchor and its PostgreSQL schema as a matched set. Stop
-the Gateway while taking or restoring that pair, and include the SQLite stores
-that still hold the rest of the installation. A local anchor backup alone does
-not contain PostgreSQL rows. See [Backups](/install/backups) for SQLite snapshot
-requirements; PostgreSQL backup and restore remain operator-managed.
+Use `openclaw backup create` to capture PostgreSQL stores together with the
+SQLite stores that still hold the rest of the installation. PostgreSQL backup
+requires the Gateway stopped. If it is running, the command refuses: “stop
+through the service owner, then rerun.” It never stops the Gateway automatically.
+This requirement also applies to generic local snapshots and Git backups when
+their selected source is PostgreSQL. `openclaw backup sqlite` refuses a PostgreSQL
+anchor and directs you to `openclaw backup create`.
+
+A PostgreSQL backup contains a portable SQLite export image, the original anchor,
+and a format-2 manifest. The export reads one `REPEATABLE READ READ ONLY` snapshot,
+then applies the existing user-backup sanitizer before compaction and hashing.
+The manifest records the backup profile, engine, store UUID, schema versions,
+active fragments, allocation facts, artifact sizes, and hashes. It never records
+the connection DSN. Preserve the complete matched set: an anchor alone contains
+no PostgreSQL rows. Existing format-1 SQLite backups remain readable.
+
+PostgreSQL restore verifies the matched set, loads a fresh owned namespace, and
+publishes its matching anchor only after verification. Keep the displaced
+namespace until recovery is confirmed. User backups follow the usual
+sanitization and credential-exclusion policy; they are not exact updater recovery
+captures. See [Backups](/install/backups) and [Backup CLI](/cli/backup).
+
+## Updates and target compatibility
+
+Updates preserve each store's physical engine. Before database mutation, the
+installed updater captures PostgreSQL rows and their matching anchor without
+sanitization, alongside the existing exact SQLite captures. Recovery restores
+PostgreSQL into a fresh owned namespace and publishes its matched anchor; the
+migrated namespace remains available until recovery is confirmed. Changed state
+or uncertain custody prevents automatic restore and retains the captures for
+recovery. An update never silently ports a store or falls back to SQLite.
+
+Release packages declare supported engines in the optional
+`openclaw.databaseEngines` array in `package.json`, next to
+`openclaw.updateAdmissionProtocol`. An absent array means `["sqlite"]`; the
+admission protocol remains `1`. Only installations with a physical non-SQLite
+store use this additional check. A target without `postgres` is refused before
+mutation with a remedy: reverse-port to SQLite with the current compatible binary,
+or stay on the current version. SQLite-only installations keep their existing
+admission behavior. The installed driver owns this check; a candidate cannot
+repair an older driver. See [Update admission](/cli/update#candidate-owned-admission).
 
 ## Limits and recovery
+
+Startup checks the fixed `recovery/database-port/manifest.json` under the selected
+state directory before CLI config snapshots and again after acquiring fresh
+Gateway or embedded-writer custody. An absent manifest or valid completed
+manifest permits startup. An incomplete, unreadable, malformed, or unknown
+manifest refuses startup and identifies the recovery artifact. These checks do
+not open a database. Keep the manifest and its captured originals intact, then
+use `openclaw database port --resume <manifest>` or `--rollback <manifest>`.
 
 Fresh stores bootstrap from generated PostgreSQL DDL at the current store schema
 version. PostgreSQL forward migrations are not available until schema lockstep
@@ -123,12 +235,14 @@ PostgreSQL text cannot contain NUL characters. Values containing NUL fail with a
 engine error. Search/vector capabilities remain store-specific; selecting an
 engine does not add PostgreSQL support to an unported store.
 
-| Failure                                 | Next step                                                                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Missing or unresolved connection secret | Configure `database.postgres.connection` and verify the SecretRef provider is available to the Gateway. |
-| Unreachable PostgreSQL server           | Check the DSN, network access, role permissions, and server availability.                               |
-| Store UUID mismatch                     | Restore the matching anchor and PostgreSQL schema; do not pair an anchor with another store.            |
-| Newer or otherwise mismatched schema    | Use the matching OpenClaw version or restore its matching backup; do not force a downgrade.             |
+| Failure                                  | Next step                                                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Missing or unresolved connection secret  | Configure `database.postgres.connection` and verify the SecretRef provider is available to the Gateway. |
+| Unreachable PostgreSQL server            | Check the DSN, network access, role permissions, and server availability.                               |
+| Store UUID mismatch                      | Restore the matching anchor and PostgreSQL schema; do not pair an anchor with another store.            |
+| Newer or otherwise mismatched schema     | Use the matching OpenClaw version or restore its matching backup; do not force a downgrade.             |
+| Gateway running during PostgreSQL backup | Stop through the service owner, then rerun the backup command.                                          |
+| Update target lacks PostgreSQL support   | Stay on the current version or reverse-port with the current compatible binary before retrying.         |
 
 ## Observe database work
 

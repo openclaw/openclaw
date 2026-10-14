@@ -59,7 +59,7 @@ export function pluginLifecycleError(
     return errorShape(
       ErrorCodes.UNAVAILABLE,
       "Another plugin or config operation is already running; retry when it completes.",
-      { retryable: true, retryAfterMs: 1_000 },
+      { retryable: true, retryAfterMs: 1_000, details: { mutationAccepted: false } },
     );
   }
   const error =

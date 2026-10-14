@@ -7,7 +7,7 @@ import { createApplicationRouter } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { createChatPageSessions } from "./chat-page.test-support.ts";
+import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { pages } from "./route.ts";
 

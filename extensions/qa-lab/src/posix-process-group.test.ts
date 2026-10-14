@@ -101,27 +101,6 @@ describe("POSIX process group inspection", () => {
     expect(procFs.readFileSync).toHaveBeenCalledWith("/proc/123/status", "utf8");
   });
 
-  it.each(["empty"])(
-    "confirms a group reaped during an %s Linux snapshot is stopped",
-    (snapshot) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      let reaped = false;
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        if (reaped) {
-          throw Object.assign(new Error("group reaped"), { code: "ESRCH" });
-        }
-        return true;
-      });
-
-      expect(
-        isQaPosixProcessGroupAlive(123, () => {
-          reaped = true;
-          return snapshot === "empty" ? inspectLinuxProcessGroupStats(123, [], () => true) : null;
-        }),
-      ).toBe(false);
-    },
-  );
-
   it.each(["ESRCH", "EPERM"])("preserves the group signal contract on %s", (code) => {
     const failure = Object.assign(new Error("group signal failed"), { code });
     const processKill = vi.spyOn(process, "kill").mockImplementation(() => {

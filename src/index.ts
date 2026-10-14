@@ -129,25 +129,34 @@ if (!isMain) {
 
 const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
 const compileCacheDirectory = shouldRunCli
-  ? resolveOpenClawCompileCacheDirectory({ installRoot: fileURLToPath(packageRootUrl) })
+  ? resolveOpenClawCompileCacheDirectory({
+      installRoot: fileURLToPath(packageRootUrl),
+      foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+    })
   : undefined;
 const compileCacheRespawnEnv =
   shouldRunCli &&
   !isForegroundGmailRunArgv(process.argv) &&
   !shouldKeepNativeHookRelayInProcess(process.argv, process.platform)
-    ? resolveOpenClawCompileCacheRespawnEnv({ directory: compileCacheDirectory })
+    ? resolveOpenClawCompileCacheRespawnEnv({
+        directory: compileCacheDirectory,
+        foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+      })
     : undefined;
 if (compileCacheRespawnEnv) {
   const args = [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)];
   // External supervisors require the serving Gateway to retain its listener PID.
-  if (process.execve && isForegroundGatewayRunArgv(process.argv)) {
+  if (process.platform !== "win32" && process.execve && isForegroundGatewayRunArgv(process.argv)) {
     process.execve(process.execPath, [process.execPath, ...args], compileCacheRespawnEnv);
   }
   const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
   await runRespawnedChild(process.execPath, args, compileCacheRespawnEnv);
 }
 if (shouldRunCli && !compileCacheRespawnEnv) {
-  enableOpenClawCompileCache({ directory: compileCacheDirectory });
+  enableOpenClawCompileCache({
+    directory: compileCacheDirectory,
+    foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+  });
   const [
     { formatCliFailureLines, formatCliJsonFailure, isExpectedCliError },
     { isJsonOutputModeActive },
@@ -202,7 +211,7 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(1);
+    exitAfterSignalExitBarriers(1, "uncaught exception");
   });
 
   void runCliWithExitFinalization({

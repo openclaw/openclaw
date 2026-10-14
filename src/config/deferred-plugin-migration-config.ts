@@ -32,12 +32,12 @@ export function getDeferredPluginMigrationConfigFacts(
   return isRecord(source) ? snapshotMigrationFacts.get(source) : undefined;
 }
 
-export function readConfigWriteMigrationFacts(
+export async function readConfigWriteMigrationFacts(
   snapshot: Pick<ConfigFileSnapshot, "path" | "sourceConfig">,
   env?: NodeJS.ProcessEnv,
   options?: Pick<ConfigIoFactoryOptions, "deferredPluginMigrations">,
-): readonly DeferredPluginMigration[] | undefined {
-  return readConfigWritePendingMigrations(
+): Promise<readonly DeferredPluginMigration[] | undefined> {
+  return await readConfigWritePendingMigrations(
     snapshot.path,
     env,
     options?.deferredPluginMigrations ??

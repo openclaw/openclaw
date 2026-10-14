@@ -2,6 +2,7 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -319,7 +320,7 @@ function runSession(): void {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const value = sqliteReadOnlyOperations.execute(request, {
+          const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
           });
@@ -339,7 +340,12 @@ function runSession(): void {
           return;
         }
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        const rows = readAuthProfileRowsReadOnly(pathname, readSqliteAuthSchema(read.schema));
+        const rows = readAuthProfileRowsReadOnly(
+          pathname,
+          readSqliteAuthSchema(read.schema),
+          expectedIdentity,
+          read.retainReader === true,
+        );
         if (read.artifactPreserving === true) {
           rows.cacheable = false;
         }
@@ -357,7 +363,9 @@ function runSession(): void {
         isRecord(read) && read.artifactPreserving === true
           ? withArtifactPreservingStateReads(execute, { agentDatabases: true })
           : execute()
-      ).catch((error: unknown) => fail(id, error));
+      )
+        .catch((error: unknown) => fail(id, error))
+        .finally(scheduleOpenClawCompileCacheFlush);
       return;
     }
     if (
@@ -390,7 +398,8 @@ function runSession(): void {
           busy = false;
         });
       })
-      .catch((error: unknown) => fail(id, error));
+      .catch((error: unknown) => fail(id, error))
+      .finally(scheduleOpenClawCompileCacheFlush);
   });
 }
 

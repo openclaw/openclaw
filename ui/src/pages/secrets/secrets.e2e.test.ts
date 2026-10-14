@@ -272,7 +272,7 @@ suite.define(() => {
 
       const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
       await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
-      await existingSecretRow.locator('wa-dropdown-item[value="edit"]').click();
+      await existingSecretRow.locator('.oc-menu-item[data-value="edit"]').click();
       const editSecretDialog = page.locator('openclaw-modal-dialog[label="Edit"]');
       await editSecretDialog.getByRole("button", { name: "Save", exact: true }).click();
       await editSecretDialog.getByRole("alert").getByText("Enter a value.").waitFor();
@@ -453,7 +453,7 @@ suite.define(() => {
 
         const bulkRow = page.getByRole("row", { name: /BULK_URL/u });
         await bulkRow.getByRole("button", { name: "Actions: BULK_URL" }).click();
-        await bulkRow.locator('wa-dropdown-item[value="delete"]').click();
+        await bulkRow.locator('.oc-menu-item[data-value="delete"]').click();
         const confirm = page.locator('openclaw-modal-dialog[label="Delete"]');
         await confirm.getByRole("button", { name: "Delete", exact: true }).click();
         await page.getByRole("status").getByText("Deleted BULK_URL.").waitFor();
@@ -487,7 +487,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
       const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
       await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      await entryRow.locator('.oc-menu-item[data-value="delete"]').click();
       const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
       await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
 
@@ -555,7 +555,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
       const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
       await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      await entryRow.locator('.oc-menu-item[data-value="delete"]').click();
       const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
       await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
 

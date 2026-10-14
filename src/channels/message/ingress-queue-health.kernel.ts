@@ -4,7 +4,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
 import type {
   ChannelIngressFailedHealth,
-  ChannelIngressPressureHealth,
+  ChannelIngressPressureSnapshot,
 } from "./ingress-queue-read-contract.js";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
@@ -38,7 +38,7 @@ export function countFailedChannelIngressQueueEntriesInDatabase(
 export function countChannelIngressQueuePressureInDatabase(
   db: DatabaseSync,
   now: number,
-): ChannelIngressPressureHealth[] {
+): ChannelIngressPressureSnapshot {
   const queueDb =
     getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">>(db);
   const staleClaimCutoff = now - INGRESS_CLAIM_LEASE_MS;
@@ -51,47 +51,71 @@ export function countChannelIngressQueuePressureInDatabase(
       eb.fn.countAll<number>().filterWhere("status", "=", "pending").as("pendingCount"),
       eb.fn.countAll<number>().filterWhere("status", "=", "claimed").as("claimedCount"),
       eb.fn.min<number>("received_at").as("oldestReceivedAt"),
+      eb.fn
+        .min<number>("claimed_at")
+        .filterWhere("status", "=", "claimed")
+        .filterWhere("claimed_at", ">", staleClaimCutoff)
+        .as("nextClaimedAt"),
+      eb.fn
+        .countAll<number>()
+        .filterWhere((filter) =>
+          filter.or([
+            filter.and([
+              filter("attempts", ">=", DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS),
+              filter("last_error", "is not", null),
+            ]),
+            filter.and([
+              filter("status", "=", "claimed"),
+              filter("claimed_at", "<=", staleClaimCutoff),
+            ]),
+          ]),
+        )
+        .as("pressuredCount"),
     ])
     .where("status", "in", ["pending", "claimed"])
     .where("lane_key", "is not", null)
     .groupBy(["queue_name", "lane_key", "channel_id", "account_id"])
-    .having(
-      (eb) =>
-        eb.fn
-          .countAll<number>()
-          .filterWhere((filter) =>
-            filter.or([
-              filter.and([
-                filter("attempts", ">=", DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS),
-                filter("last_error", "is not", null),
-              ]),
-              filter.and([
-                filter("status", "=", "claimed"),
-                filter("claimed_at", "<=", staleClaimCutoff),
-              ]),
-            ]),
-          ),
-      ">",
-      0,
-    )
     .as("lanes");
-  return executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     db,
     queueDb
       .selectFrom(laneTotals)
       .select((eb) => [
         "lanes.channel_id as channelId",
         "lanes.account_id as accountId",
-        eb.fn.countAll<number>().as("laneCount"),
-        eb.fn.sum<number>("lanes.pendingCount").as("pendingCount"),
-        eb.fn.sum<number>("lanes.claimedCount").as("claimedCount"),
-        eb(eb.fn.sum<number>("lanes.activeCount"), "-", eb.fn.countAll<number>()).as(
-          "blockedCount",
-        ),
-        eb.fn.min<number>("lanes.oldestReceivedAt").as("oldestReceivedAt"),
+        eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0).as("laneCount"),
+        eb.fn
+          .sum<number>("lanes.pendingCount")
+          .filterWhere("lanes.pressuredCount", ">", 0)
+          .as("pendingCount"),
+        eb.fn
+          .sum<number>("lanes.claimedCount")
+          .filterWhere("lanes.pressuredCount", ">", 0)
+          .as("claimedCount"),
+        eb(
+          eb.fn.sum<number>("lanes.activeCount").filterWhere("lanes.pressuredCount", ">", 0),
+          "-",
+          eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0),
+        ).as("blockedCount"),
+        eb.fn
+          .min<number>("lanes.oldestReceivedAt")
+          .filterWhere("lanes.pressuredCount", ">", 0)
+          .as("oldestReceivedAt"),
+        eb.fn.min<number>("lanes.nextClaimedAt").as("nextClaimedAt"),
       ])
       .groupBy(["lanes.channel_id", "lanes.account_id"])
       .orderBy("lanes.channel_id", "asc")
       .orderBy("lanes.account_id", "asc"),
   ).rows;
+  let nextClaimExpiryAtMs: number | null = null;
+  const pressure = rows.flatMap(({ nextClaimedAt, ...row }) => {
+    if (nextClaimedAt != null) {
+      nextClaimExpiryAtMs = Math.min(
+        nextClaimExpiryAtMs ?? Infinity,
+        nextClaimedAt + INGRESS_CLAIM_LEASE_MS,
+      );
+    }
+    return row.laneCount > 0 ? [row] : [];
+  });
+  return { pressure, nextClaimExpiryAtMs };
 }

@@ -1,4 +1,5 @@
 import {
+  hasNonEmptyString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -335,13 +336,14 @@ function* createMessageToolSteps(
         decisions.runBoundary(() => explicitTargetGuard.require(params, action));
       }
       // The admitted prompt wins over an inherited external delivery route. Only
-      // an explicit external channel enters the ordinary channel reaction path.
-      const requestedReactionChannel = normalizeOptionalLowercaseString(params.channel);
-      if (
-        action === "react" &&
-        currentPromptReaction &&
-        (!requestedReactionChannel || requestedReactionChannel === "webchat")
-      ) {
+      // an explicit external channel enters the ordinary channel reaction path,
+      // including on runs without a grant, which see the same stable definition.
+      const reactionChannel = normalizeOptionalLowercaseString(params.channel) ?? "webchat";
+      const reactsToCurrentPrompt = action === "react" && reactionChannel === "webchat";
+      if (reactsToCurrentPrompt && supportsPromptReactions && !currentPromptReaction) {
+        throw new Error("No prompt here permits reactions; pass channel, target, and messageId.");
+      }
+      if (reactsToCurrentPrompt && currentPromptReaction) {
         const allowedParams = new Set(["action", "channel", "emoji", "remove", "dryRun"]);
         if (
           Object.keys(params).some((key) => params[key] !== undefined && !allowedParams.has(key))
@@ -497,18 +499,14 @@ function* createMessageToolSteps(
         });
       }
 
-      const hasCurrentMessageId =
-        typeof options?.currentMessageId === "number" ||
-        (typeof options?.currentMessageId === "string" &&
-          options.currentMessageId.trim().length > 0);
-
       const toolContext =
         effectiveCurrentChannel.currentChannelId ||
         effectiveCurrentChannel.currentChatType ||
         effectiveCurrentChannel.currentChannelProvider ||
         effectiveCurrentChannel.currentMessagingTarget ||
         currentThreadTs ||
-        hasCurrentMessageId ||
+        typeof options?.currentMessageId === "number" ||
+        hasNonEmptyString(options?.currentMessageId) ||
         replyToMode ||
         options?.hasRepliedRef ||
         options?.sameChannelThreadRequired
@@ -660,8 +658,7 @@ function* createMessageToolSteps(
             resolveTrustedDecisionChannel(result.channel, preparedMessageToolCatalog),
           );
           const toolResult = getToolResult(result);
-          // A2A enters through webchat but resolves an external source route here.
-          // Compare the completed send with that route, independently of display mirrors.
+          // Resolve source completion independently of display mirrors.
           const sourceReply = {
             action,
             cfg,
@@ -676,8 +673,9 @@ function* createMessageToolSteps(
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =
-            result.handledBy !== "internal-source" &&
-            (await isDeliveredCurrentSourceReplyAsync(sourceReply));
+            result.handledBy === "internal-source"
+              ? options?.inputProvenance?.kind !== "inter_session"
+              : await isDeliveredCurrentSourceReplyAsync(sourceReply);
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.
           if (

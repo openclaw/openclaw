@@ -12,10 +12,10 @@ import { createSessionEntryWithTranscript } from "../config/sessions/session-acc
 import {
   loadSessionEntry,
   patchSessionEntryCore,
-  readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "../gateway/session-transcript-readers.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -781,7 +781,11 @@ describe("client voice session lifecycle", () => {
           role: "user",
           text: "Stored in the prepared session",
         });
-        expect(readSessionTranscriptMessageEvents({ ...storage, sessionId })).toEqual([
+        const transcript = await readSessionTranscriptBoundedMessageTailPageAsync(
+          { ...storage, sessionId },
+          { maxBytes: 4096, maxMessages: 10, offset: 0 },
+        );
+        expect(transcript.events).toEqual([
           expect.objectContaining({
             event: expect.objectContaining({
               message: expect.objectContaining({

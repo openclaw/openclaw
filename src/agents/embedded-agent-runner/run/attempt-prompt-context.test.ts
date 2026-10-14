@@ -131,6 +131,7 @@ function createInput(options?: {
 }
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { userTimezone: "UTC" } } });
   vi.clearAllMocks();
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-09T12:00:00Z"));
   vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);

@@ -54,7 +54,7 @@ export function resolveSelectedNodeTestRunner(
   job: CompactNodeTestShard,
   runnerBackend: string | undefined,
 ) {
-  // Two selected files cannot use the full CLI owner's wider worker allowance.
+  // Two selected files cannot use the full owner's wider worker allowance.
   // Apply after packing so the capacity cut does not change process placement.
   return ["blacksmith", "hybrid"].includes(runnerBackend ?? "blacksmith") &&
     job.runner === EXTRA_LARGE_NODE_TEST_RUNNER &&
@@ -64,9 +64,11 @@ export function resolveSelectedNodeTestRunner(
     job.groups.length > 0 &&
     job.groups.every(
       (group) =>
-        /^agentic-cli(?:-hosted-\d+)?$/u.test(group.shard_name) &&
         group.configs.length === 1 &&
-        group.configs[0] === "test/vitest/vitest.cli.config.ts" &&
+        ((/^agentic-cli(?:-hosted-\d+)?$/u.test(group.shard_name) &&
+          group.configs[0] === "test/vitest/vitest.cli.config.ts") ||
+          (/^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name) &&
+            group.configs[0] === "test/vitest/vitest.gateway-client.config.ts")) &&
         [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
         group.fallbackMaxWorkers === 2 &&
         group.minTotalMemoryBytes === undefined &&

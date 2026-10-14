@@ -70,7 +70,7 @@ describe("native Solid modal focus and top layer", () => {
       expect(document.activeElement).toBe(trigger);
       handle.show();
       expect(modalDialog(handle)).toBe(dialog);
-      expect(document.activeElement).toBe(name);
+      await expect.element(name).toHaveFocus();
       notes.focus();
       notes.setSelectionRange(notes.value.length, notes.value.length);
       dialog.focus();

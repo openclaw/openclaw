@@ -198,7 +198,7 @@ export async function prepareOpenClawStateDatabaseSchema(
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: DatabaseSync) => T,
-  options: OpenClawStateDatabaseOptions & { atomic?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & { atomic?: boolean; sealOnClose?: boolean } = {},
 ): T {
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
   const database = getOpenClawStateDatabaseIfOpen(options);
@@ -208,11 +208,15 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   ) {
     // Lease rows use the admitted owner; legacy/native bootstrap still needs its
     // separate integrity-proven connection before the full schema can be opened.
-    return runOpenClawStateWriteTransaction(
+    const result = runOpenClawStateWriteTransaction(
       ({ db }) => callback(db),
       { env: options.env, path: database.path },
       { operationLabel: "state.startup-checkpoint.write" },
     );
+    if (options.sealOnClose) {
+      stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
+    }
+    return result;
   }
   return withOpenClawStateStartupCheckpointConnection(callback, options, ensureSchema);
 }
@@ -481,14 +485,14 @@ export function runWithOpenClawStateBusyTimeout<T>(
   }
 }
 
-/** Run a synchronous immediate transaction against the shared state database. */
+/** Run an admitted shared-state write; complete single statements may use autocommit. */
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
   transactionOptions: Pick<
     SqliteTransactionOptions,
     "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
-  > = {},
+  > & { singleStatement?: true } = {},
 ): T {
   if (
     isArtifactPreservingStateRead("agent", options.database?.path ?? resolveDatabasePath(options))

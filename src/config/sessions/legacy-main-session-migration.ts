@@ -6,7 +6,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -80,12 +83,6 @@ function resolveArmingDecision(cfg: OpenClawConfig, legacyAgentId: string): Armi
   return { armed: false, reason: "owner-unresolved" };
 }
 
-function addPhysicalStore(stores: PhysicalStore[], candidate: PhysicalStore): void {
-  if (!stores.some((store) => samePhysicalStore(store, candidate))) {
-    stores.push(candidate);
-  }
-}
-
 function resolveMissingPhysicalPath(pathname: string): string {
   const prefix = resolvePathPrefixSync(path.resolve(pathname));
   return path.join(prefix.existingPath, ...prefix.unresolvedSegments);
@@ -140,7 +137,9 @@ function resolvePhysicalStores(params: {
     });
   }
   const defaultAgentId = params.ownerAgentId ?? resolveSessionStoreCompatibilityAgentId(params.cfg);
-  const stores: PhysicalStore[] = [];
+  const stores = new Map<string, PhysicalStore>();
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
+  const physicalStoreKey = isSameDatabasePath.createIndex();
   const jsonPaths = new Set<string>();
   const unreadable: LegacyMainSessionMigrationOutcome[] = [];
   for (const target of logicalTargets) {
@@ -155,6 +154,7 @@ function resolvePhysicalStores(params: {
         agentId: target.agentId,
         defaultAgentId,
         env: params.env,
+        isSameDatabasePath,
       });
       const physical: PhysicalStore = {
         databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
@@ -162,7 +162,10 @@ function resolvePhysicalStores(params: {
         path: resolved.path,
       };
       resolvePhysicalPathIdentity(physical.path);
-      addPhysicalStore(stores, physical);
+      const key = physicalStoreKey(physical.path);
+      if (!stores.has(key)) {
+        stores.set(key, physical);
+      }
     } catch (error) {
       if (params.mode === "doctor-fix") {
         throw new Error(
@@ -179,7 +182,7 @@ function resolvePhysicalStores(params: {
       });
     }
   }
-  return { jsonPaths: [...jsonPaths], stores, unreadable };
+  return { jsonPaths: [...jsonPaths], stores: [...stores.values()], unreadable };
 }
 
 function resolveSourceLayout(resolved: ResolvedPhysicalStores): string[] {

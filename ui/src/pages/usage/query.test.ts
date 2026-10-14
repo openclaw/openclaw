@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import {
   buildDailyCsv,
   buildQuerySuggestions,
@@ -56,6 +57,20 @@ it("limits suggestions before matching while preserving raw option spelling", ()
 });
 
 describe("usage query CSV export", () => {
+  it("leaves unavailable numeric cells blank rather than exporting zero or a completed subtotal", () => {
+    const usage = {
+      ...createEmptyCostUsageTotals(),
+      input: 50,
+      totalTokens: 50,
+      totalCost: 0.01,
+      usageReport: { state: "unavailable" as const },
+    };
+    const daily = buildDailyCsv([{ date: "2026-10-11", ...usage }]);
+    expect(daily.split("\n")[1]).toBe("2026-10-11,,,,,,,,,,");
+    const sessions = buildSessionsCsv([{ key: "interrupted", usage }]);
+    expect(sessions.split("\n")[1]?.split(",").slice(-6)).toEqual(Array(6).fill(""));
+  });
+
   it("keeps daily headers aligned with numeric cells", () => {
     expect(
       buildDailyCsv([

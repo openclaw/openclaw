@@ -268,6 +268,7 @@ async function fixture({
     "update-command-execution-guards",
     "update-command-result",
     "../../infra/update-failure-result",
+    "../../infra/package-update-refusal",
     "../../infra/update-failure-public-codes",
     "../../infra/update-run-step-key",
     "../../infra/update-preflight-details",

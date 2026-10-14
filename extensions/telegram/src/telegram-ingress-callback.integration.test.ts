@@ -229,9 +229,9 @@ it.each(["none", "middleware", "handler"] as const)(
         expect(heldMenuResponse).toBeDefined();
         sendResult(heldMenuResponse!, menu);
         heldMenuResponse = undefined;
+        // Wait for the router, not a polling deadline, before checking ACK recovery.
+        await handlerAnswerRead.promise;
         if (recovery === "handler") {
-          // Wait for the router, not a polling deadline, before rejecting its pending answer.
-          await handlerAnswerRead.promise;
           const firstResponse = heldAnswerResponses.shift();
           expect(firstResponse).toBeDefined();
           firstResponse!.writeHead(503, { "content-type": "application/json" });

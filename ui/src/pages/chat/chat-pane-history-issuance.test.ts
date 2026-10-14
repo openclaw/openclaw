@@ -190,7 +190,7 @@ describe("chat pane history issuance across Gateway connection transitions", () 
   });
 
   it("discards a disconnected history request after the selected session changes", async () => {
-    const request = vi.fn();
+    const request = vi.fn(async (method: string) => (method === "agents.list" ? agentsList : {}));
     const { pane, state, snapshot } = createCanonicalRoutePane(request);
     state.connected = false;
 

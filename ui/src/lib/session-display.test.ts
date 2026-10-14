@@ -282,3 +282,17 @@ describe("resolveChannelSessionInfo", () => {
     });
   });
 });
+
+it("displays device folder provenance instead of stale Gateway workspace metadata", () => {
+  const row = {
+    deviceFolder: { deviceId: "build-runner", path: "/srv/existing" },
+    spawnedCwd: "/gateway/stale",
+    worktree: { repoRoot: "/gateway/stale", branch: "main" },
+  };
+  expect(resolveSessionWorkContext(row)).toEqual({
+    kind: "workspace",
+    name: "existing",
+    path: "/srv/existing",
+  });
+  expect(resolveSessionWorkSubtitle(row)).toBe("/srv/existing · build-runner");
+});

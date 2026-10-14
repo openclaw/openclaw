@@ -93,6 +93,12 @@ two-minute lease expiry reopens admission automatically.
 Closing the Gateway cancels background work queued by operator reconnects without
 waiting for suspension expiry. Shutdown still waits for work already running to finish.
 
+Lifecycle operator requests take priority over unrelated queued work. Their
+authentication, live authority checks, and same-connection mutation ordering
+still apply. Hello does not wait for session membership refreshes: people remain
+visible, while pending watched-session references are omitted until a subsequent
+presence publication.
+
 The hello snapshot includes `suspension: { phase }`, and `gateway.suspension`
 events publish admission changes immediately. The phase is `accepting`,
 `preparing`, `draining`, or `prepared`; neither surface exposes suspension IDs.
@@ -173,10 +179,10 @@ Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 does not leave new work waiting through the longer busy-preparation retry.
 While blockers remain, status returns `status: "draining"`
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
-Each status call refreshes the active-work snapshot. If protected lifecycle or
-final-chat writes are pending, the RPC waits up to 15 seconds for them to settle,
-then returns a fresh observation. Writes still pending at that deadline remain
-reported; polling never cancels work, releases custody, or renews the lease.
+Each status call immediately returns a fresh active-work snapshot, including
+pending protected lifecycle or final-chat writes. Polling never waits for those
+writes, cancels work, releases custody, or renews the lease. The handoff owner
+checks write custody again before authorizing a stop.
 Once every blocker has finished, the same lease transitions to
 `{"status":"ready","expiresAtMs":...}`.
 Status preserves the original response shape by default for published validators.
@@ -253,7 +259,7 @@ predecessor and handle transport closure through their lifecycle owner.
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
 and resume all return that error, the Gateway remains not-ready and
-fail-closed, and the host must not freeze or snapshot it. OpenClaw retries the
+refuses new work, and the host must not freeze or snapshot it. OpenClaw retries the
 scheduler automatically and reopens admission only after recovery succeeds. A
 mismatched resume ID returns `INVALID_REQUEST`. Prepare is subject to the
 Gateway's control-plane write limit of 30 attempts per minute; honor the
@@ -313,7 +319,8 @@ contract.
 
 <Tip>
   For host wake scheduling, keep the OpenClaw-facing part in an in-process
-  plugin and project idempotent full snapshots to the external host adapter.
+  plugin and send full snapshots to the external host adapter. Applying the same
+  snapshot again must have no additional effect.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
   projection](/plugins/hooks/lifecycle#safe-external-cron-projection).

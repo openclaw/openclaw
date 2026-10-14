@@ -40,6 +40,15 @@ previews too.
 
 The browser-side CSP restriction itself is always on and not configurable.
 
+## Connection permissions
+
+The Control UI uses the granted scopes returned by the Gateway handshake.
+Session readers can open shared chats without polling operator-only dashboards,
+scheduled tasks, voice catalogs, or provider authentication status. Restricted
+surfaces are hidden or show an access message. A dashboard `FORBIDDEN` response
+stops automatic retries; reconnecting replaces the connection's granted scopes.
+The Gateway continues to authorize every request and subscription.
+
 ## Public transcript boundary
 
 Public threads use the same `/chat/...` URL as the authenticated Control UI.

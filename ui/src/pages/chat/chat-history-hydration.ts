@@ -39,7 +39,7 @@ import {
   applyHistoryRun,
 } from "./chat-history-stream.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
@@ -365,7 +365,7 @@ export async function hydrateChatHistory(
       if (
         state.chatRunId &&
         (hasVisibleStream || liveToolIds.length > 0) &&
-        !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+        !isChatRunRecoveryStatus(state.chatRunStartup)
       ) {
         reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
       }

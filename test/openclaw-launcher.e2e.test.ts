@@ -1166,7 +1166,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         expect(result.stdout).not.toContain(path.join(cwd, "openclaw"));
       } else {
         expect(result.stdout).toBe(
-          mode === "source" ? "cache:disabled;respawn:1" : "cache:enabled;respawn:0",
+          mode === "source"
+            ? "cache:disabled;respawn:1"
+            : mode === "default"
+              ? "cache:disabled;respawn:0"
+              : "cache:enabled;respawn:0",
         );
       }
     },
@@ -1794,13 +1798,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
 
   it.each([
     "owned",
+    "inherited",
+    "inherited-windows",
     "direct",
     "foreign",
     "source",
     "disabled-zero",
     "disabled-empty",
     "cache-empty",
-  ])("shares the first-success compile cache base with bundled helpers: %s", async (mode) => {
+  ])("keeps Gateway main uncached and shares the worker cache base: %s", async (mode) => {
     const fixtureRoot = await makeLauncherFixture(fixtures);
     const tmpRoot = fixtures.createTempDir("openclaw-launcher-cache-");
     await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.9.6"}\n');
@@ -1850,15 +1856,17 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          import { resolveNodeCompileCacheEnv as resolveB } from "./cache-b.mjs";
          import { enableOpenClawCompileCache } from "./cache-owner.mjs";
          const before = { ...process.env };
-         // First enable for direct entry; ALREADY_ENABLED after the real launcher.
+         // Direct entry and launcher consumers share the same worker cache owner.
          enableOpenClawCompileCache({ currentFile: ${JSON.stringify(path.join(fixtureRoot, mode === "source" ? "src/entry.ts" : "dist/entry.js"))}, installRoot: ${JSON.stringify(fixtureRoot)} });
          const parentDirectory = getCompileCacheDir() ?? null;
          const a = resolveA();
          const b = resolveB();
          assert.deepEqual(a, b, "separate built helpers must share the launcher fact");
-         if (["owned", "direct"].includes(${JSON.stringify(mode)})) {
-           assert.ok(parentDirectory);
-           assert.equal(process.env.NODE_COMPILE_CACHE, undefined);
+         const cachedWorkers = ["owned", "inherited", "inherited-windows", "direct", "source"].includes(${JSON.stringify(mode)});
+         if (cachedWorkers) {
+           assert.equal(parentDirectory, null);
+           assert.ok(a.NODE_COMPILE_CACHE);
+           process.on("exit", () => assert.equal(getCompileCacheDir(), undefined));
          } else if (${JSON.stringify(mode)} === "foreign") {
            assert.ok(parentDirectory);
            assert.equal(process.env.NODE_COMPILE_CACHE, undefined);
@@ -1875,11 +1883,19 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          const [directory] = await once(worker, "message");
          const [code] = await exited;
          assert.equal(code, 0);
-         assert.equal(directory, ["owned", "direct"].includes(${JSON.stringify(mode)}) ? parentDirectory : null);
+         if (cachedWorkers) {
+           assert.ok(directory);
+           assert.ok(directory.startsWith(a.NODE_COMPILE_CACHE));
+         } else {
+           assert.equal(directory, null);
+         }
          assert.deepEqual({ ...process.env }, before);
          process.stdout.write("cache-base:verified");`,
     );
-    const args = [path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs")];
+    const args = [
+      path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs"),
+      ...(mode === "foreign" ? ["status"] : ["gateway", "run"]),
+    ];
     if (mode === "foreign") {
       const preload = path.join(fixtureRoot, "foreign.mjs");
       await fs.writeFile(
@@ -1888,6 +1904,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
            import { enableCompileCache, constants } from "node:module";
            assert.equal(enableCompileCache(${JSON.stringify(path.join(tmpRoot, "foreign"))}).status,
              constants.compileCacheStatus.ENABLED);`,
+      );
+      args.unshift("--import", pathToFileURL(preload).href);
+    }
+    if (mode === "inherited-windows") {
+      const preload = path.join(fixtureRoot, "windows-execve.mjs");
+      await fs.writeFile(
+        preload,
+        `Object.defineProperty(process, "platform", { value: "win32" });
+         process.execve = () => { throw new Error("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"); };`,
       );
       args.unshift("--import", pathToFileURL(preload).href);
     }
@@ -1901,7 +1926,12 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         NODE_OPTIONS: undefined,
         NODE_DISABLE_COMPILE_CACHE:
           mode === "disabled-zero" ? "0" : mode === "disabled-empty" ? "" : undefined,
-        NODE_COMPILE_CACHE: mode === "cache-empty" ? "" : undefined,
+        NODE_COMPILE_CACHE:
+          mode === "cache-empty"
+            ? ""
+            : mode === "inherited" || mode === "inherited-windows"
+              ? path.join(tmpRoot, "inherited")
+              : undefined,
         // This negative control must retain its foreign first enable in the same
         // Node instance; all ordinary launch modes scrub inherited sentinels.
         OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: mode === "foreign" ? "1" : undefined,

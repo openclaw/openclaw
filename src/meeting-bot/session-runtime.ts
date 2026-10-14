@@ -60,7 +60,6 @@ export class MeetingSessionRuntime<
 > {
   readonly #sessions = new Map<string, TSession>();
   readonly #participation?: MeetingParticipation<TSession>;
-  readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
   readonly #meetingLock = new KeyedAsyncQueue();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
@@ -259,8 +258,7 @@ export class MeetingSessionRuntime<
       return { found: false };
     }
     this.#participation?.close(sessionId);
-    // The meeting lock fences joins and leaves before terminal transcript work;
-    // #sessionLeaves then coalesces retries owned by the same session.
+    // Joins and leaves share one queue through terminal transcript work and cleanup.
     return await this.#meetingLock.enqueue(
       this.#meetingKey(session.transport, session.url),
       async () => await this.#leaveUnlocked(sessionId, options),
@@ -573,10 +571,6 @@ export class MeetingSessionRuntime<
     sessionId: string,
     options?: { keepBrowserTab?: boolean },
   ): Promise<MeetingSessionLeaveResult<TSession>> {
-    const inFlight = this.#sessionLeaves.get(sessionId);
-    if (inFlight) {
-      return await inFlight;
-    }
     const session = this.#sessions.get(sessionId);
     if (!session) {
       return { found: false };
@@ -592,15 +586,7 @@ export class MeetingSessionRuntime<
         ...(session.browserLeft === undefined ? {} : { browserLeft: session.browserLeft }),
       };
     }
-    const leave = this.#leaveSession(session, options);
-    this.#sessionLeaves.set(sessionId, leave);
-    try {
-      return await leave;
-    } finally {
-      if (this.#sessionLeaves.get(sessionId) === leave) {
-        this.#sessionLeaves.delete(sessionId);
-      }
-    }
+    return await this.#leaveSession(session, options);
   }
 
   async #leaveSession(

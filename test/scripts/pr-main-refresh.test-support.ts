@@ -11,6 +11,7 @@ import {
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
+import type { RollupPayload } from "../../scripts/lib/watch-pr-ci-rollup.mjs";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
@@ -251,6 +252,7 @@ export function createMainRefreshFixture(
   const eventsFile = join(root, "events.jsonl");
   const control = {
     metadata,
+    rollup: null as RollupPayload | null,
     authorPermission: "write",
     failFetch: false,
     failPrFetch: false,
@@ -552,6 +554,14 @@ if (args[0] === 'pr' && args[1] === 'view') {
         ref: { target: { oid: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } },
         pullRequest: control.metadata,
       } } };
+    } else if (args.some(arg => arg.includes('statusCheckRollup'))) {
+      event({ kind: 'rollup-read' });
+      value = { data: { repository: { pullRequest: {
+        state: control.metadata.state,
+        mergeable: control.metadata.mergeable,
+        headRefOid: control.metadata.headRefOid,
+        statusCheckRollup: control.rollup,
+      } } } };
     } else {
       throw new Error('Unexpected GraphQL request');
     }

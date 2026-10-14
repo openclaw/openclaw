@@ -13,7 +13,7 @@ import {
   scheduleCommittedChatScroll,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
@@ -133,6 +133,43 @@ describe("chat transcript controller", () => {
     render(renderChatThread(props, transcript), container);
 
     expect(transcriptSize(container)).toBe(200);
+  });
+
+  it("reveals committed initial row sizes without waiting for an animation frame", async () => {
+    stubAnimationFrames();
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    const host = new TranscriptTestHost();
+    const transcript = new ChatTranscriptController(host, () => "native-measured-tail");
+    const rows = numberedContentRows(6);
+    host.renderTranscript = () => html`
+      <div class="chat-thread">
+        ${transcript.renderSession("agent:main:native-measured-tail", (session) => {
+          session.setContentReady(true);
+          return session.render(
+            rows,
+            (row) => (row.kind === "content" ? row.content : nothing),
+            null,
+            false,
+          );
+        })}
+      </div>
+    `;
+    document.body.append(host);
+    await host.settleUpdates();
+    const extent = expectDefined(
+      host.querySelector<HTMLElement>(".chat-thread-inner"),
+      "initial rows",
+    );
+    expect(transcriptRows(host).every((row) => observedElements.has(row))).toBe(true);
+    await Promise.resolve();
+    flush();
+    await host.settleUpdates();
+    expect(extent.style.visibility).toBe("");
+    expect(
+      transcriptRows(host).every((row) => row.style.containIntrinsicBlockSize === "100px"),
+    ).toBe(true);
+    expect(host.textContent).toContain("row 5");
+    host.remove();
   });
 
   it("keeps retained MCP rows and the virtual row model atomic through teardown", async () => {
@@ -371,6 +408,8 @@ describe("chat transcript controller", () => {
     }));
     const props = threadProps("pane-underfill-anchor", "agent:main:underfill", messages);
     render(renderChatThread(props, transcript), container);
+    await Promise.resolve();
+    flush();
     const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
     expect(scrollElement).not.toBeNull();
     Object.defineProperties(scrollElement, {
@@ -384,6 +423,11 @@ describe("chat transcript controller", () => {
     await Promise.resolve();
     flushFrames();
     render(renderChatThread(props, transcript), container);
+    await Promise.resolve();
+    flush();
+    render(renderChatThread(props, transcript), container);
+    await Promise.resolve();
+    flush();
     expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
     expect(container.textContent).toContain("message 0");
   });
@@ -955,15 +999,18 @@ describe("chat transcript controller", () => {
   });
 
   it.each([false, true])(
-    "keeps disclosure anchoring only without reader interruption=%s",
+    "keeps disclosure anchoring after a plain owner geometry commit unless interrupted=%s",
     async (interrupt) => {
-      const host = Object.assign(document.body.appendChild(document.createElement("div")), {
+      const geometryEventTarget = document.body.appendChild(document.createElement("div"));
+      const host = {
         addController: vi.fn(),
         removeController: vi.fn(),
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
+      };
+      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`, {
+        geometryEventTarget,
       });
-      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`);
       const rows: TestContentRow[] = [
         {
           kind: "content",
@@ -972,7 +1019,7 @@ describe("chat transcript controller", () => {
         },
       ];
       const { container } = await mountTestTranscript(`disclosure-${interrupt}`, rows, transcript);
-      host.append(container);
+      geometryEventTarget.append(container);
       container.className = "sidebar-region__right-runtime";
       try {
         const row = transcriptRows(container)[0]!;
@@ -1023,6 +1070,7 @@ describe("chat transcript controller", () => {
       });
       renderRows(rows);
       for (let frame = 0; frame < 3; frame += 1) {
+        await Promise.resolve();
         flushFrames();
         renderRows(rows);
       }

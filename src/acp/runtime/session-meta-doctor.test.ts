@@ -11,7 +11,9 @@ import {
   type PluginDoctorContractModule,
 } from "../../plugins/doctor-contract-module.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "./session-meta.js";
 
 it("inspects without creating state and conditionally updates only the proven current owner", async () => {
@@ -48,6 +50,16 @@ it("inspects without creating state and conditionally updates only the proven cu
         }),
       });
     }
+    // Legacy JSON retains the first duplicate in its promoted column until rewritten.
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        db.prepare("UPDATE acp_sessions SET identity_json = ? WHERE session_key = ?").run(
+          '{"state":"resolved","source":"ensure","lastUpdatedAt":10,"acpxRecordId":"record-work","acpxSessionId":"upstream-work","acpxSessionId":"normalized-work"}',
+          buildAcpDatabaseSessionKey("global", "work"),
+        );
+      },
+      { env },
+    );
     const evidence = await readOnly.inspectAcpSessionClaims!();
     expect(evidence.incomplete).toEqual([]);
     expect(evidence.claims.map((claim) => claim.agentId).toSorted()).toEqual([
@@ -79,6 +91,17 @@ it("inspects without creating state and conditionally updates only the proven cu
       ...claim.meta,
       runtimeSessionName: "owned-work",
       identity: { ...claim.meta.identity, acpxRecordId: "owned-record-work" },
+    });
+    expect(
+      runOpenClawStateWriteTransaction(
+        ({ db }) =>
+          db
+            .prepare("SELECT resume_acpx_session_id FROM acp_sessions WHERE session_key = ?")
+            .get(buildAcpDatabaseSessionKey("global", "work")),
+        { env },
+      ),
+    ).toEqual({
+      resume_acpx_session_id: "normalized-work",
     });
     expect(
       readAcpSessionEntry({ cfg, env, agentId: "main", sessionKey: "global" })?.acp

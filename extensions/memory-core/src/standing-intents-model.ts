@@ -243,7 +243,11 @@ export type StandingIntentWorkerOperations = {
     input: StandingIntentOperations[Key]["input"];
     output:
       | { kind: "schema-prepared" }
-      | { kind: "result"; value: StandingIntentOperations[Key]["output"] };
+      | {
+          kind: "result";
+          value: StandingIntentOperations[Key]["output"];
+          nextDueAt: number | null;
+        };
   };
 };
 

@@ -15,8 +15,6 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import {
   acquireStateDatabaseSchemaLease,
-  assertStateDatabaseAccessAllowed,
-  assertStateDatabaseReadAllowed,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
@@ -77,15 +75,14 @@ export async function dispatchSqliteWorkerJob(
     job.signal?.throwIfAborted();
     assertCurrentJob();
     prepareSqliteWorkerActorContext(actor, job);
-    const databasePath = actor?.target
-      ? undefined
-      : (job.request.stateDatabasePath ?? actor?.databasePath);
+    const stateAccess = actor?.stateAccess;
+    const databasePath = stateAccess?.canonicalPath;
     // Retirement must drain even after ordinary database access is revoked.
-    if (databasePath && job.request.type !== "close") {
+    if (stateAccess && job.request.type !== "close") {
       const assertAccessAllowed = () => {
         job.signal?.throwIfAborted();
         assertCurrentJob();
-        assertStateDatabaseAccessAllowed(databasePath, {
+        stateAccess.assertAccessAllowed({
           maintenanceScope: job.maintenanceScope,
         });
       };
@@ -199,7 +196,7 @@ function prepareSqliteWorkerOperationAdmission(
       const assertAccess = () => {
         assertCurrentJob();
         job.maintenanceScope?.assertAdmission();
-        assertStateDatabaseReadAllowed(databasePath, {
+        actor?.stateAccess.assertReadAllowed({
           maintenanceScope: job.maintenanceScope,
           schemaLease,
         });

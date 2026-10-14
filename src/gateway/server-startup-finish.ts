@@ -204,6 +204,7 @@ export async function finishGatewayStartup(params: {
       activateGatewayAgentDatabaseStartup({
         admission: databaseStartupAdmission,
         preparationReady: databasePreparationReady.promise,
+        waitForPostReadyWork: params.waitForPostReadyWork,
         getConfig: getRuntimeConfig,
         getPluginRegistry: () => pluginRuntime.registry,
         getPluginMetadataSnapshot,
@@ -271,6 +272,7 @@ export async function finishGatewayStartup(params: {
           isNixMode,
           startupStartedAt: opts.startupStartedAt,
           broadcastToConnIds,
+          broadcast,
           getClientConnIds: gatewayRequestContext.getClientConnIds!,
           broadcastPluginEvent,
           controlUiRootLifecycle,

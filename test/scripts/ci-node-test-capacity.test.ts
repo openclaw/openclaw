@@ -22,12 +22,20 @@ function selectedCliJob(): CompactNodeTestShard {
   };
 }
 
-it.each([undefined, "blacksmith", "hybrid"])(
-  "uses 16-class capacity for a complete two-file serial CLI selection (%s)",
-  (backend) => {
-    expect(resolveSelectedNodeTestRunner(selectedCliJob(), backend)).toBe(
-      "blacksmith-16vcpu-ubuntu-2404",
-    );
+it.each(
+  [undefined, "blacksmith", "hybrid"].flatMap((backend) =>
+    ["cli", "gateway-client"].map((family) => ({ backend, family })),
+  ),
+)(
+  "uses 16-class capacity for a complete two-file serial $family selection ($backend)",
+  ({ backend, family }) => {
+    const job = selectedCliJob();
+    if (family === "gateway-client") {
+      job.groups[0]!.shard_name = "agentic-gateway-core-2-hosted-1";
+      job.groups[0]!.configs = ["test/vitest/vitest.gateway-client.config.ts"];
+      job.groups[0]!.includePatterns = ["src/gateway/first.test.ts", "src/gateway/second.test.ts"];
+    }
+    expect(resolveSelectedNodeTestRunner(job, backend)).toBe("blacksmith-16vcpu-ubuntu-2404");
   },
 );
 
@@ -81,6 +89,25 @@ it.each<{
     reason: "mixed config",
     change: (job) => {
       job.groups[0]!.configs.push("test/vitest/vitest.tooling.config.ts");
+    },
+  },
+  {
+    reason: "Gateway owner with a CLI config",
+    change: (job) => {
+      job.groups[0]!.shard_name = "agentic-gateway-core-2-hosted-1";
+    },
+  },
+  {
+    reason: "CLI owner with a Gateway config",
+    change: (job) => {
+      job.groups[0]!.configs = ["test/vitest/vitest.gateway-client.config.ts"];
+    },
+  },
+  {
+    reason: "another Gateway family",
+    change: (job) => {
+      job.groups[0]!.shard_name = "agentic-gateway-core-1-hosted-1";
+      job.groups[0]!.configs = ["test/vitest/vitest.gateway-client.config.ts"];
     },
   },
 ])("retains 32-class capacity for $reason", ({ change }) => {

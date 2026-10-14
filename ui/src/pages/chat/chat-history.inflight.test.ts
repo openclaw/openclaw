@@ -6,7 +6,6 @@ import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import {
   activeHistory,
   createState,
@@ -22,7 +21,6 @@ import {
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
@@ -741,46 +739,6 @@ it("retains newer live startup progress through delayed history", async () => {
     runId: "run-live",
     phase: "creating_worktree",
   });
-});
-
-it("reconciles retry waits after live progress", async () => {
-  const history = activeHistory("run-live");
-  history.inFlightRun!.text = "I finished the first step.";
-  const retry = event(2, "run_status", {
-    phase: "retrying",
-    message: "Rate limited. Retrying in 4 seconds (attempt 3/8).",
-  });
-  history.inFlightRun!.events = [
-    event(1, "tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" }),
-    retry,
-  ];
-  const state = createState(history);
-  const label = () =>
-    chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
-  const text = () =>
-    materializeVisibleAssistantStreamMessages(state.chatMessages, state).map(extractText);
-  await loadChatHistory(state);
-  expect(label()).toBe(retry.data.message);
-  expect(state.chatRunId).toBe("run-live");
-  expect(text()).toEqual(["I finished the first step."]);
-  await loadChatHistory(state);
-  expect(label()).toBe(retry.data.message);
-  expect(text()).toEqual(["I finished the first step."]);
-  const progress = event(3, "assistant", { text: "Continuing" });
-  handleAgentEvent(state, progress);
-  await loadChatHistory(state);
-  expect(label()).toBeUndefined();
-  handleAgentEvent(state, { ...retry, seq: 4 });
-  await loadChatHistory(state);
-  expect(label()).toBe(retry.data.message);
-  handleChatGatewayEvent(state, {
-    runId: "run-live",
-    sessionKey: "main",
-    state: "final",
-    message: { role: "assistant", content: "Finished" },
-  });
-  expect(state.chatRunId).toBeNull();
-  expect(label()).toBeUndefined();
 });
 
 describe("chat history run ownership recovery", () => {

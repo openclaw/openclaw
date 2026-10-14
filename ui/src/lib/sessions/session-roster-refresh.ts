@@ -118,12 +118,23 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       "key" | "agentId" | "controlOwnerSessionKey" | "parentSessionKey" | "spawnedBy"
     >,
     sourceListScope?: SessionListScope,
+    observedReadRevision?: number,
   ) => {
     const matches = sessionListEventMatcher({ agentId, session: row });
     const sourceKey = sourceListScope && sessionListQueryKey(sourceListScope);
     // Adopting a query's accepted row into the primary roster cannot make
     // that supplying query stale. Other membership projections still refresh.
-    scheduleManagedLists((entry) => matches(entry.query, entry.snapshot.result), sourceKey);
+    scheduleManagedLists(
+      (entry) =>
+        // A list already covers metadata requested before it; real events
+        // and later observations still retire its pages and schedule a fresh read.
+        !(
+          (entry.pending || entry.snapshot.readSucceeded === true) &&
+          observedReadRevision !== undefined &&
+          entry.readRevision >= observedReadRevision
+        ) && matches(entry.query, entry.snapshot.result),
+      sourceKey,
+    );
   };
 
   const refreshManagedList = createSessionManagedListRefresh(host, {

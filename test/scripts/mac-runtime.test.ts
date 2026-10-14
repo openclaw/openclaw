@@ -30,6 +30,11 @@ describe("Mac app runtime publication", () => {
       const scripts = path.join(root, "scripts");
       const bin = path.join(root, "bin");
       mkdirSync(scripts);
+      mkdirSync(path.join(scripts, "lib"));
+      writeFileSync(
+        path.join(scripts, "lib/desktop-runtime-plugins.mjs"),
+        'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
+      );
       mkdirSync(bin);
       symlinkSync(process.execPath, path.join(bin, "node"));
       writeFileSync(

@@ -29,15 +29,11 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import {
-  conflictingSubagentRunVersions,
-  writeSubagentRunValuesInDatabase,
-} from "./subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   isReleasedSubagentRunRecord,
   releasedSubagentPayloadFilter,
 } from "./subagent-registry.store.released-reader.test-support.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   readSubagentRun,
@@ -168,33 +164,6 @@ describe("subagent registry sqlite store", () => {
     } finally {
       olderReader.close();
     }
-  });
-
-  it("preserves absent-row CAS and duplicate conflict ordering across a cohort", () => {
-    const run = createRun({ runId: "run-\uFFFD\u0000" });
-    const boundAlias = "run-\uD800\u0000";
-    const row = bindSubagentRunRecord(run);
-    saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-    const missing = createRun({ runId: "missing" });
-    runOpenClawStateWriteTransaction((database) => {
-      expect(
-        conflictingSubagentRunVersions(database, [
-          { runId: missing.runId, version: null },
-          { runId: boundAlias, version: subagentRunRowVersion(row) },
-          { runId: run.runId, version: subagentRunRowVersion(row) },
-        ]),
-      ).toEqual([]);
-      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(missing)], []);
-      expect(
-        conflictingSubagentRunVersions(database, [
-          { runId: missing.runId, version: null },
-          { runId: boundAlias, version: null },
-          { runId: "still-missing", version: subagentRunRowVersion(row) },
-          { runId: missing.runId, version: null },
-        ]),
-      ).toEqual([missing.runId, boundAlias, "still-missing", missing.runId]);
-    });
-    expect(loadSubagentRegistryFromSqlite().has(missing.runId)).toBe(true);
   });
 
   it("reuses a complete compact tree with isolated full records and owner writes", async () => {

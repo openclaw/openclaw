@@ -68,3 +68,8 @@ export interface PostgresSqlConnection extends Pick<
 export function isPostgresSqlConnection(db: object): db is PostgresSqlConnection {
   return postgresConnectionBrand in db && db[postgresConnectionBrand] === true;
 }
+
+/** Publications and receipts must key on the store anchor for every engine. */
+export function sqlPublicationAnchor(db: DatabaseSync | PostgresSqlConnection): DatabaseSync {
+  return isPostgresSqlConnection(db) ? db.anchor : db;
+}

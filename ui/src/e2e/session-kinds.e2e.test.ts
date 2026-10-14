@@ -58,10 +58,10 @@ suite.define(() => {
       expect.soft(ascending).toEqual(["direct", "cron", "cron", "direct", "direct", "group"]);
 
       await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+      await page.locator(".sessions-filter-popover:popover-open").waitFor();
       await page.locator(".session-groupby__select").selectOption("kind");
       await page.keyboard.press("Escape");
-      await page.locator("wa-popover.sessions-filter-popover").waitFor({ state: "hidden" });
+      await page.locator(".sessions-filter-popover").waitFor({ state: "hidden" });
       await table.locator(".session-group-row").first().waitFor();
       const groups = await table.locator(".session-group-row__label").allTextContents();
       if (captureUiProof) {
@@ -81,14 +81,14 @@ suite.define(() => {
       expect.soft(groups).toEqual(["cron", "direct", "group"]);
       expect.soft(await kinds()).toEqual(["cron", "cron", "direct", "direct", "direct", "group"]);
       await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+      await page.locator(".sessions-filter-popover:popover-open").waitFor();
       await page.locator(".session-groupby__select").selectOption("none");
       await expect.poll(() => table.locator(".session-group-row").count()).toBe(0);
       expect(await table.locator(".session-data-row").first().textContent()).toContain(
         "Pinned conversation",
       );
       await page.keyboard.press("Escape");
-      await page.locator("wa-popover.sessions-filter-popover").waitFor({ state: "hidden" });
+      await page.locator(".sessions-filter-popover").waitFor({ state: "hidden" });
       await table
         .locator(".session-data-row")
         .filter({ hasText: "Daily check" })
@@ -104,6 +104,22 @@ suite.define(() => {
           .locator(".session-detail-stat__value")
           .textContent(),
       ).toBe("cron");
+
+      const search = page.locator(".sessions-toolbar__search input");
+      await search.fill("Pinned");
+      const filters = page.getByRole("button", { name: "Filters", exact: true });
+      await filters.click();
+      const popover = page.locator(".sessions-filter-popover");
+      await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      await expect
+        .poll(() => popover.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await popover.waitFor({ state: "hidden" });
+      await expect
+        .poll(() => filters.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      expect(await search.inputValue()).toBe("Pinned");
     });
   });
 });

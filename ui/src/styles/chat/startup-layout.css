@@ -145,6 +145,7 @@
 
   position: absolute;
   inset: 0;
+  inset-inline-end: var(--chat-details-space, 0px);
   container: chat-conversation / size;
   display: flex;
   min-width: 0;
@@ -388,6 +389,64 @@
   margin-left: auto;
   row-gap: 0;
   justify-self: end;
+}
+
+/* Mobile keeps the session identity between navigation and its two action owners. */
+.chat-pane__header--mobile {
+  gap: 4px;
+  padding-inline: 8px;
+}
+
+.chat-pane__header--mobile .chat-pane__header-leading {
+  flex: 1 1 0;
+  gap: 6px;
+}
+
+.chat-pane__header--mobile .chat-pane__header-trailing {
+  flex-wrap: nowrap;
+  gap: 0;
+}
+
+.chat-pane__header--mobile .chat-pane__crumbs {
+  flex: 1 1 auto;
+}
+
+.chat-pane__header--mobile
+  :is(.chat-pane__nav-toggle, .chat-header-session-menu__trigger, .chat-pane__layout-trigger) {
+  display: inline-flex;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-pane__header--mobile
+  :is(.chat-pane__nav-toggle, .chat-header-session-menu__trigger, .chat-pane__layout-trigger)
+  svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Keep Web Awesome's menu and dismissal owner; only its phone surface changes. */
+.chat-panel-layout-menu--mobile::part(menu) {
+  position: fixed;
+  inset: auto 8px calc(8px + env(safe-area-inset-bottom));
+  width: calc(100vw - 16px);
+  max-height: calc(100dvh - 80px - env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  overflow-y: auto;
+  border-radius: 16px;
+}
+
+.chat-panel-layout-menu--mobile .session-menu__item {
+  min-height: 44px;
 }
 
 /* Identity trail: project, then session. One flex row owns the alignment of
@@ -747,10 +806,10 @@ html.openclaw-native-nav .shell--nav-collapsed:not(.shell--mobile-nav) {
   --shell-titlebar-inset: 204px;
 }
 
-html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav, .shell--settings) {
   --shell-titlebar-inset: calc(
-    var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
-      var(--shell-chrome-controls-gap) + var(--shell-attention-width)
+    var(--shell-native-titlebar-controls-left) - var(--shell-nav-width) +
+      var(--shell-native-titlebar-controls-width) + 8px
   );
 }
 

@@ -14,10 +14,11 @@ import {
 } from "../agents/session-activity-notes.js";
 import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import {
-  patchSessionEntryCore,
-  patchSessionEntryTarget,
-} from "../config/sessions/session-accessor.js";
+  applySessionEntryOperation,
+  applySessionEntryTargetOperation,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -67,27 +68,6 @@ export function isSameSessionObserverLifecycle(
     left.sessionId === right.sessionId &&
     left.lifecycleRevision === right.lifecycleRevision
   );
-}
-
-export function resolveSessionObserverDigestForLifecycle(
-  digest: SessionObserverDigest | undefined,
-  lifecycle: SessionObserverLifecycle | undefined,
-): SessionObserverDigest | undefined {
-  if (
-    !digest ||
-    !lifecycle ||
-    (digest.sessionId !== undefined && digest.sessionId !== lifecycle.sessionId) ||
-    ((digest.sessionId !== undefined || digest.lifecycleRevision !== undefined) &&
-      digest.lifecycleRevision !== lifecycle.lifecycleRevision)
-  ) {
-    return undefined;
-  }
-  // Legacy stored digests inherit the captured owner before any asynchronous write.
-  return {
-    ...digest,
-    ...(lifecycle.sessionId ? { sessionId: lifecycle.sessionId } : {}),
-    ...(lifecycle.lifecycleRevision ? { lifecycleRevision: lifecycle.lifecycleRevision } : {}),
-  };
 }
 
 export type SessionObserverState = SessionActivityNoteState & {
@@ -319,7 +299,7 @@ export function defaultReadSession(
 }
 
 export async function defaultPersistDigest(params: {
-  target?: Parameters<typeof patchSessionEntryTarget>[0];
+  target?: Parameters<typeof applySessionEntryTargetOperation>[0];
   sessionKey: string;
   sessionId?: string;
   agentId: string;
@@ -327,59 +307,32 @@ export async function defaultPersistDigest(params: {
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
 }): Promise<boolean | null> {
-  // No fallbackEntry is supplied, so the accessor returns null only when the
-  // row is gone (→ null) and a truthy clone on rejection — track acceptance
-  // separately since the result alone can't distinguish the three states.
+  if (params.stillCurrent?.() === false) {
+    return false;
+  }
+  // Rejected reducers return the existing row; only a commit receipt marks acceptance.
   let applied = false;
   const patchEntry = params.target
-    ? patchSessionEntryTarget.bind(undefined, params.target)
-    : patchSessionEntryCore.bind(undefined, {
+    ? applySessionEntryTargetOperation.bind(undefined, params.target)
+    : applySessionEntryOperation.bind(undefined, {
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         ...(params.storePath ? { storePath: params.storePath } : {}),
       });
   const result = await patchEntry(
-    (entry) => {
-      if (params.stillCurrent?.() === false) {
-        return null;
-      }
-      if (params.sessionId !== undefined && entry.sessionId !== params.sessionId) {
-        return null;
-      }
-      const hasSessionIdentity =
-        params.sessionId !== undefined || params.digest.sessionId !== undefined;
-      if (
-        (params.digest.sessionId !== undefined && entry.sessionId !== params.digest.sessionId) ||
-        ((hasSessionIdentity || params.digest.lifecycleRevision !== undefined) &&
-          entry.lifecycleRevision !== params.digest.lifecycleRevision)
-      ) {
-        return null;
-      }
-      const previousDigest = resolveSessionObserverDigestForLifecycle(entry.observerDigest, entry);
-      if ((previousDigest?.revision ?? 0) >= params.digest.revision) {
-        return null;
-      }
-      applied = true;
-      return { observerDigest: params.digest };
-    },
+    { kind: "observer-digest", digest: params.digest, sessionId: params.sessionId },
     {
       preserveActivity: true,
-      workerGuard: {
-        assertCurrent: () => {
-          // An already-stale updater keeps its false result; planned writes retain live authority.
-          if (applied && params.stillCurrent?.() === false) {
-            throw new Error("Session observer authority changed before digest commit");
-          }
-        },
-      },
-      onCommitted: () =>
+      onCommitted: () => {
+        applied = true;
         sessionChanges.emit({
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           storePath: params.storePath,
           scope: "runtime",
           facts: { kind: "unchanged" },
-        }),
+        });
+      },
     },
   );
   return result === null ? null : applied;

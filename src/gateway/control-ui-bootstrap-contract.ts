@@ -3,6 +3,14 @@ import type { PluginControlUiModule } from "../../packages/gateway-protocol/src/
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+export function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
+  // The default SPA infers this namespace before it receives its bootstrap config.
+  return (
+    pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
+    (basePath === "" && pathname === `/__openclaw__${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`)
+  );
+}
+
 /** Authenticated document copy of the canonical bootstrap payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE = "data-openclaw-bootstrap-config";
 
@@ -46,6 +54,12 @@ export type ControlUiPluginFrameGrantAck = {
 
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
+  /** Viewer-scoped display projection, never an editable config snapshot. */
+  preferences?: {
+    profileId?: string;
+    config?: Record<string, unknown>;
+    entries?: Record<string, unknown>;
+  };
   basePath: string;
   assistantName: string;
   assistantAvatar: string;

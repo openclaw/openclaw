@@ -170,6 +170,82 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     await fixture.lifetime.cleanup();
   });
 
+  it.each([
+    "prepared",
+    "candidate",
+    "content",
+    "launcher",
+    "publishing-intent",
+    "publishing-launcher",
+  ] as const)(
+    "verifies the previous generation before settling remounted preparation: %s",
+    async (scenario) => {
+      const { root } = fixture.setup();
+      const f = await prepareRemountedPublication(
+        fixture,
+        root,
+        false,
+        "different-files",
+        "previous",
+      );
+      if (scenario === "candidate") {
+        fs.appendFileSync(
+          path.join(f.anchor, "candidate/openclaw.mjs"),
+          "damaged unused candidate",
+        );
+      } else if (scenario === "content") {
+        fs.appendFileSync(path.join(f.packageRoot, "package.json"), " ");
+      } else if (scenario === "launcher") {
+        fs.appendFileSync(f.launcher, "changed");
+      } else if (scenario.startsWith("publishing")) {
+        const database = new DatabaseSync(f.journalPath);
+        try {
+          database
+            .prepare(
+              "UPDATE package_activation SET phase = 'publishing', intent_json = ?, publications_json = ?",
+            )
+            .run(
+              scenario === "publishing-intent" ? JSON.stringify({ kind: "displace" }) : "null",
+              scenario === "publishing-launcher"
+                ? JSON.stringify([
+                    { name: "openclaw", identity: f.historical.launchers[0]!.candidateIdentity },
+                  ])
+                : "[]",
+            );
+        } finally {
+          database.close();
+        }
+      }
+      const liveTree = legacyPackageFingerprint(f.packageRoot);
+      const launcher = fs.readFileSync(f.launcher);
+      const before = fs.readFileSync(f.journalPath);
+      const settle = () =>
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+          operationId: f.operationId,
+        });
+      if (scenario === "prepared" || scenario === "candidate") {
+        await expect(
+          settlePendingPackageActivation(f.packageRoot, undefined, undefined, { dryRun: true }),
+        ).resolves.toMatchObject({ reason: "publication-not-started" });
+        expect(fs.readFileSync(f.journalPath)).toEqual(before);
+        await expect(settle()).resolves.toMatchObject({ reason: "publication-not-started" });
+        expect(fs.existsSync(f.journalPath)).toBe(false);
+        expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}/candidate`)).toBe(true);
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      } else {
+        await expect(settle()).rejects.toThrow(
+          scenario.startsWith("publishing")
+            ? "previous package has unfinished publication"
+            : /fingerprint changed|launcher changed/u,
+        );
+        expect(fs.readFileSync(f.journalPath)).toEqual(before);
+        expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
+      }
+      expect(legacyPackageFingerprint(f.packageRoot)).toEqual(liveTree);
+      expect(fs.readFileSync(f.launcher)).toEqual(launcher);
+    },
+  );
+
   it("keeps separate-helper settlement from retiring an ordinary prepared operation", async () => {
     fixture.setup();
     const f = await fixture.prepare();

@@ -17,6 +17,10 @@ import {
 } from "vitest";
 import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
+import {
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "./daemon/windows-task-supervisor-contract.js";
 import { createDeferredCore } from "./shared/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "./test-utils/env.js";
 import { withMockedPlatform } from "./test-utils/vitest-spies.js";
@@ -155,8 +159,9 @@ describe("entry compile cache", () => {
   });
 
   it.each(["git", "source", "package"])(
-    "activates compiled-entry cache for an enabled %s install",
+    "activates compiled worker cache for an enabled %s install",
     async (kind) => {
+      argv = [process.execPath, entryFile, "gateway", "run"];
       if (kind === "git") {
         await fs.writeFile(path.join(root, ".git"), "gitdir: .git/worktrees/openclaw\n", "utf8");
       } else if (kind === "source") {
@@ -176,13 +181,35 @@ describe("entry compile cache", () => {
     },
   );
 
+  it.each([
+    ["gateway", WINDOWS_TASK_SUPERVISOR_FLAG],
+    ["gateway", "run", `${WINDOWS_TASK_SUPERVISOR_CHILD_FLAG}=65536`],
+  ])("keeps worker caching for Windows service arguments: %j", (...args) => {
+    argv = [process.execPath, entryFile, ...args];
+    enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
+    expect(enableCompileCache).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves source entry compilation uncached", async () => {
     await markSourceCheckout();
     enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
     expect(enableCompileCache).not.toHaveBeenCalled();
   });
 
+  it("keeps compiled one-shot commands free of automatic exit-time cache work", () => {
+    argv = [process.execPath, entryFile, "config", "set", "gateway.mode", "local"];
+    enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });
+    expect(enableCompileCache).not.toHaveBeenCalled();
+    enableOpenClawCompileCache({
+      currentFile: entryFile,
+      env: { NODE_COMPILE_CACHE: path.join(root, ".requested-cache") },
+      installRoot: root,
+    });
+    expect(enableCompileCache).toHaveBeenCalledOnce();
+  });
+
   it("skips cache activation with a warning when Windows TEMP makes the path too long", () => {
+    argv = [process.execPath, entryFile, "gateway", "run"];
     vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "x".repeat(200)));
     withMockedPlatform("win32", () => {
       enableOpenClawCompileCache({ currentFile: entryFile, env: {}, installRoot: root });

@@ -528,7 +528,7 @@ describe("native transcript catalog SDK", () => {
   });
 
   it("exports portable senders and creators, linking only verified numeric GitHub identities on opt-in", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const github = syncGitHubIdentity({
         identity: { accountId: 12345, login: "portable-user", name: "Portable User" },
         authenticationAlias: { kind: "github-login", login: "portable-user" },

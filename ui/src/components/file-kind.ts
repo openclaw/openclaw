@@ -21,67 +21,53 @@ const FILE_KIND_BY_NAME: Record<string, FileKind> = {
   "yarn.lock": "package",
 };
 
-const FILE_KIND_BY_EXTENSION: Record<string, FileKind> = {
-  astro: "component",
-  avif: "image",
-  bash: "shell",
-  c: "code",
-  cc: "code",
-  cfg: "data",
-  cjs: "code",
-  conf: "data",
-  cpp: "code",
-  cs: "code",
-  css: "code",
-  cts: "code",
-  fish: "shell",
-  gif: "image",
-  go: "code",
-  h: "code",
-  hpp: "code",
-  htm: "code",
-  html: "code",
-  ico: "image",
-  ini: "data",
-  java: "code",
-  jpeg: "image",
-  jpg: "image",
-  js: "code",
-  json: "data",
-  jsonc: "data",
-  jsx: "component",
-  kt: "code",
-  kts: "code",
-  less: "code",
-  lock: "data",
-  markdown: "markdown",
-  md: "markdown",
-  mdx: "markdown",
-  mjs: "code",
-  mts: "code",
-  php: "code",
-  plist: "data",
-  png: "image",
-  proto: "data",
-  py: "code",
-  rb: "code",
-  rs: "code",
-  scss: "code",
-  sh: "shell",
-  sql: "code",
-  svelte: "component",
-  svg: "image",
-  swift: "code",
-  toml: "data",
-  ts: "code",
-  tsx: "component",
-  vue: "component",
-  webp: "image",
-  xml: "data",
-  yaml: "data",
-  yml: "data",
-  zsh: "shell",
-};
+const FILE_EXTENSIONS_BY_KIND: ReadonlyArray<readonly [FileKind, readonly string[]]> = [
+  ["component", ["astro", "jsx", "svelte", "tsx", "vue"]],
+  [
+    "data",
+    ["cfg", "conf", "ini", "json", "jsonc", "lock", "plist", "proto", "toml", "xml", "yaml", "yml"],
+  ],
+  ["image", ["avif", "gif", "ico", "jpeg", "jpg", "png", "svg", "webp"]],
+  ["markdown", ["markdown", "md", "mdx"]],
+  ["shell", ["bash", "fish", "sh", "zsh"]],
+  [
+    "code",
+    [
+      "c",
+      "cc",
+      "cjs",
+      "cpp",
+      "cs",
+      "css",
+      "cts",
+      "go",
+      "h",
+      "hpp",
+      "htm",
+      "html",
+      "java",
+      "js",
+      "kt",
+      "kts",
+      "less",
+      "mjs",
+      "mts",
+      "php",
+      "py",
+      "rb",
+      "rs",
+      "scss",
+      "sql",
+      "swift",
+      "ts",
+    ],
+  ],
+];
+const FILE_KIND_BY_EXTENSION = new Map(
+  FILE_EXTENSIONS_BY_KIND.flatMap(([kind, extensions]) =>
+    extensions.map((extension) => [extension, kind] as const),
+  ),
+);
 
 // Windows paths reach chat verbatim, so both separators split segments.
 const PATH_SEPARATOR_RE = /[\\/]/;
@@ -95,9 +81,7 @@ export function fileKindForPath(path: string): FileKind {
   // an extension; it falls through to the generic document kind.
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 ? name.slice(dot + 1) : "";
-  return Object.hasOwn(FILE_KIND_BY_EXTENSION, extension)
-    ? FILE_KIND_BY_EXTENSION[extension]!
-    : "file";
+  return FILE_KIND_BY_EXTENSION.get(extension) ?? "file";
 }
 
 type SuffixTrieNode = {

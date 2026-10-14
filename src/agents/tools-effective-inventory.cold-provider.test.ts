@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { resolvePluginProviders } from "openclaw/plugin-sdk/provider-catalog-runtime";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -182,7 +183,7 @@ function createFixture(state: OpenClawTestState) {
     mode: string;
   }> = [];
   const preparationGates: Array<{
-    started: boolean;
+    started: Deferred;
     resume: Deferred;
   }> = [];
   const resources: {
@@ -263,7 +264,7 @@ module.exports = {
         const gate = state.nextPreparation;
         if (gate) {
           state.nextPreparation = undefined;
-          gate.started = true;
+          gate.started.resolve();
           await gate.resume.promise;
           database.prepare("SELECT 42 AS value").get();
         }
@@ -344,7 +345,7 @@ module.exports = {
         stateDir: state.stateDir,
         reason: "manual",
       });
-      const gate = { started: false, resume: createDeferredCore() };
+      const gate = { started: createDeferredCore(), resume: createDeferredCore() };
       preparationGates.push(gate);
       resources.nextPreparation = gate;
       return gate;
@@ -603,7 +604,9 @@ describe("cold dynamic-model effective inventory", () => {
     });
   });
 
-  it("keeps a cancelled build's database until actual preparation settles before its replacement", async () => {
+  it("keeps a cancelled build's database until actual preparation settles before its replacement", async ({
+    signal,
+  }) => {
     await withColdFixture(async (fixture) => {
       const input = fixture.runtimeInput;
       const gate = await fixture.pausePreparation();
@@ -635,7 +638,14 @@ describe("cold dynamic-model effective inventory", () => {
       let replacement: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
       let pendingReplacement: ReturnType<typeof acquireReadOnlyPreparedModelRuntime> | undefined;
       try {
-        await expect.poll(() => gate.started).toBe(true);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            gate.started.promise,
+            first,
+            "Model runtime build settled before provider preparation",
+          ),
+          signal,
+        );
         expect(fixture.connections).toHaveLength(2);
         const original = fixture.connections[1]!;
         expect(original.preparations).toBe(1);

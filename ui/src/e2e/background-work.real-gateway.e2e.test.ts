@@ -153,10 +153,10 @@ suite.define(() => {
             "[background-work-real-gateway] failure",
             JSON.stringify({
               stage: proof.stage,
-              gatewayRpc: wire.completed.slice(-32).map(({ request, response }) => ({
-                method: request.method,
-                outcome: response.ok ? "ok" : "error",
-              })),
+              parentRequests: provider.parentRequests(),
+              parentPending: provider.parentIsPending(),
+              processOpen: provider.processIsOpen(),
+              rpc: wire.diagnostics(),
             }),
           );
         signal.addEventListener("abort", logFailure, { once: true });
@@ -257,11 +257,11 @@ suite.define(() => {
         const detail = subagents.locator(".chat-subagent-detail");
         proof.stage = "wait for child task transcript";
         await detail.getByText(fixture.childTask, { exact: false }).waitFor();
-        proof.stage = "wait for child in-flight history";
+        proof.stage = "observe child in-flight startup response";
         const history = payloadOf(
           await wire.waitFor(
             (rpc) =>
-              ["chat.history", "chat.startup"].includes(rpc.request.method) &&
+              rpc.request.method === "chat.startup" &&
               paramsOf(rpc).sessionKey === childKey &&
               Boolean((rpc.response.payload as ChatHistoryResult | undefined)?.inFlightRun),
           ),
@@ -270,6 +270,7 @@ suite.define(() => {
         proof.childHistory = { runId: run.runId, sessionAbortable: run.sessionAbortable ?? false };
         expect(run.runId).toBeTruthy();
         expect(run.runId).not.toBe(parentRunId);
+        proof.stage = "render child streaming progress";
         provider.writeChildProgress();
         proof.stage = "wait for child progress";
         await detail.getByText(fixture.childText, { exact: true }).waitFor();
@@ -358,6 +359,7 @@ suite.define(() => {
             runIds: expect.arrayContaining([run.runId]),
           });
         }
+        proof.stage = "settle child provider cancellation";
         await provider.wait(provider.childClosed, signal);
         await childStop.waitFor({ state: "hidden" });
         expect(provider.processIsOpen(), "child Stop must not stop parent exec").toBe(true);
@@ -399,6 +401,7 @@ suite.define(() => {
         expect(payloadOf(stoppedProcess) as SessionsProcessesStopResult).toEqual({
           requested: true,
         });
+        proof.stage = "settle process cancellation and observe terminal response";
         await provider.wait(provider.processClosed, signal);
         const terminal = (
           payloadOf(

@@ -15,6 +15,7 @@ export type GatewayShutdownTrigger =
   | "SIGINT"
   | "SIGUSR2"
   | "hosted Gateway stop"
+  | "process exit"
   | "host lifeline closed";
 export type GatewayDrainReason =
   | "restart"

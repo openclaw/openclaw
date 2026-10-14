@@ -1,10 +1,15 @@
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { stripEnvelope } from "../shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
+import {
+  stripAssistantMediaDirectivesForDisplay,
+  takeAssistantManagedMediaUrlsForDisplay,
+} from "./chat-display-projection.helpers.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
-import type { SessionPreviewItem } from "./session-utils.types.js";
 
 const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
 const SESSION_DISPLAY_PROJECTION_MAX_CHARS = 800;
@@ -55,9 +60,20 @@ export function projectSessionDisplayMessage(
   if (role !== "user" && role !== "assistant") {
     return null;
   }
+  const projectedEntry =
+    role === "assistant" && options.view !== "model-context"
+      ? projectAssistantDisplayContent({ ...entry, role })
+      : entry;
   const extracted =
-    role === "assistant" ? extractAssistantPhaseText(entry) : extractUserText(entry);
-  let text = extracted?.trim();
+    role === "assistant" ? extractAssistantPhaseText(projectedEntry) : extractUserText(entry);
+  let text = extracted;
+  if (text && role === "assistant" && options.view !== "model-context") {
+    text = stripAssistantMediaDirectivesForDisplay(
+      text,
+      takeAssistantManagedMediaUrlsForDisplay(projectedEntry, role).urls,
+    );
+  }
+  text = text?.trim();
   if (!text || (role === "assistant" && isSuppressedControlReplyText(text))) {
     return null;
   }

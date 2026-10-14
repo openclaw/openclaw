@@ -138,7 +138,7 @@ export async function collectAttackSurfaceSummaryFindings(
     {
       checkId: "summary.attack_surface",
       severity: "info",
-      title: "Attack surface summary",
+      title: "Exposure summary",
       detail,
     },
   ];

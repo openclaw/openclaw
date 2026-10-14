@@ -15,6 +15,7 @@ import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
+  captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   hasActiveGatewayStateOwner,
   resolveGatewayStateOwnerPath,
@@ -315,13 +316,17 @@ describe("Gateway state ownership", () => {
             ? lease.path
             : path.join(resolveGatewayLockDir(root), "gateway.state.lock");
         const original = kind === "owner" ? fs.readFileSync(replacedPath) : undefined;
+        const retainedAccess = captureStateDatabaseAccess(databasePath);
         try {
           const replace = () => {
             fs.writeFileSync(replacedPath, "replacement");
             expect(() => lease.assertCurrent()).toThrow("no longer current");
             if (kind === "owner") {
               expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-                "could not be verified",
+                "lock removed/replaced; restart the Gateway",
+              );
+              expect(() => retainedAccess.assertAccessAllowed()).toThrow(
+                "lock removed/replaced; restart the Gateway",
               );
             }
             expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(

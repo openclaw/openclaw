@@ -62,6 +62,8 @@ reply-admission ticket before acknowledging, so a later send cannot overtake a
 message whose preparation is still pending.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
+Chat admission rechecks current committed session access independently of sidebar
+refreshes. Durable input custody still checks that authority at the write boundary.
 The Control UI replaces its provisional source with accepted custody, then with
 the canonical row. Accepted inputs stay below saved conversation history until
 they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
@@ -83,6 +85,39 @@ WebChat has two separate data paths:
 
 Normal agent-run final answers should be durable because the embedded runtime writes the assistant `message_end`. Any fallback that mirrors a delivered final payload into the transcript must first avoid duplicating an assistant turn that the embedded runtime already wrote.
 
+## Speech
+
+When `tts` is configured, assistant messages offer **Read aloud**. Audio is
+synthesized by the Gateway using the configured TTS provider, voice, and endpoint.
+**Stop reading** cancels browser playback. Long replies play in ordered chunks
+within `tts.maxTextLength`. Starting another Read aloud or Talk action stops the
+previous playback. The control does not use browser speech synthesis. The former `messages.tts` configuration is migrated to `tts` by Doctor.
+
+Hold the microphone button for dictation. Explicit audio models in
+`tools.media.models` use the same transcription owner as uploaded voice notes,
+including local OpenAI-compatible `/v1/audio/transcriptions` endpoints and local
+CLI models. Audio is transcribed when capture ends; file-based providers do not
+produce partial captions. An explicit Talk transcription provider, matching
+`agents.defaults.voiceModel`, or Voice Call streaming configuration keeps the
+streaming path. Dictation is unavailable when none of the configured file
+providers or CLI commands can run.
+Loopback and private-network endpoints use the existing provider opt-in:
+`models.providers.<id>.request.allowPrivateNetwork: true`.
+
+Set `talk.realtime.mode: "stt-tts"` for split browser Talk: the Gateway transcribes
+each utterance, the current chat session's agent answers it, and the browser plays
+the Gateway's generated speech. This uses the configured agent model, including
+local models. Output uses `talk.provider` when set, otherwise `tts`.
+The browser pauses capture while generating and playing the answer. Stop ends
+capture and playback and cancels that call's active chat run. Split Talk requires
+both transcription and speech output to be configured. Dictation in an existing
+conversation uses that conversation's agent credentials; the catalog remains an
+advisory view of the configured Talk agent.
+
+Without these settings, the existing realtime Talk and transcription-provider
+selection remain unchanged. Browser microphone capture requires a secure context
+(HTTPS or localhost) and microphone permission.
+
 ## Human mention delivery
 
 The Control UI binds each [selected person](/concepts/multi-user#mentioning-people) to the submitted message text. `chat.send`, the initial message on `sessions.create`, and `sessions.send` accept an optional `mentions` array of `{ profileId, start, end }` annotations. There are at most ten annotations. `start` is inclusive and `end` is exclusive, measured in UTF-16 code units. The Gateway validates their text ranges and recipients before accepting the input. Plain `@name` text and agent output do not create human mentions. Copying or quoting text does not copy its recipient selections.
@@ -103,6 +138,8 @@ The supporting RPCs require `operator.read` and use the authenticated profile, n
 Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restarts within their retention limits. Capacity limits can still skip alerts. Restarting or reconnecting does not resend old browser notifications or restore dismissed entries. Notification failures do not retry or undo the posted chat message. Browser push does not provide exactly-once delivery. See [Inbox retention](/concepts/multi-user#temporary-mentions-inbox) and [notification preferences](/web/notifications#receive-human-mention-alerts).
 
 Dismissing an unknown or already dismissed entry is harmless and returns the current Inbox snapshot. If an Inbox request returns an `UNAVAILABLE` error, the Control UI retries with increasing delays and respects the Gateway’s minimum retry delay. Ordinary connection updates and mention events do not bypass that backoff.
+
+Background Inbox refresh failures retry after one minute, doubling the delay up to fifteen minutes until a refresh succeeds. Session and profile updates respect the pending background retry; explicit Inbox reads can still retry immediately. The `gateway/mentions` warning records the failing phase, source, error class and code, cause, elapsed time, and next retry delay.
 
 ## Control UI agents tools panel
 

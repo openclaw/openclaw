@@ -1,3 +1,4 @@
+import { resolveOpenAIResponsesRequestContextTokens } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -163,6 +164,8 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   nativeModelOwned: boolean;
   contextWindow?: string;
   contextTokenBudget?: number;
+  requestExtraParams?: Record<string, unknown>;
+  requestServiceTiers?: readonly string[];
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;
@@ -228,7 +231,15 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
     });
   }
 
-  const contextTokenBudget = Math.min(ctxInfo.tokens, params.contextTokenBudget ?? ctxInfo.tokens);
+  const contextTokenBudget = Math.min(
+    ctxInfo.tokens,
+    params.contextTokenBudget ?? ctxInfo.tokens,
+    resolveOpenAIResponsesRequestContextTokens(
+      params.runtimeModel,
+      params.requestExtraParams,
+      params.requestServiceTiers,
+    ) ?? Infinity,
+  );
   const contextWindowInfo =
     contextTokenBudget < ctxInfo.tokens
       ? {

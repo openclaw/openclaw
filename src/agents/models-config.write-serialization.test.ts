@@ -339,7 +339,7 @@ describe("models-config write serialization", () => {
       expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
       expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
       const modelsPath = path.join(result.agentDir, "models.json");
-      await expect(fs.access(modelsPath)).resolves.toBeUndefined();
+      await fs.access(modelsPath);
       if (process.platform !== "win32") {
         // The captured mode proves privacy before the writer's follow-up chmod.
         expect(modeAfterWrite).toBe(0o600);

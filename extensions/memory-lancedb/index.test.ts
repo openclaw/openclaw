@@ -615,8 +615,8 @@ describe("memory plugin e2e", () => {
     const service = firstObjectArg(registerService as unknown as MockCallSource, "service");
     const stop = service.stop as () => Promise<void>;
     await expect(stop()).rejects.toThrow("provider close failed");
-    await expect(stop()).resolves.toBeUndefined();
-    expect(closeProvider).toHaveBeenCalledTimes(2);
+    await expect(stop()).rejects.toThrow("provider close failed");
+    expect(closeProvider).toHaveBeenCalledOnce();
     expect(createProvider).toHaveBeenCalledOnce();
     expect(embedQuery).toHaveBeenCalledWith("project memory", {
       inputType: "query",
@@ -630,7 +630,7 @@ describe("memory plugin e2e", () => {
     );
     expect(createProvider).toHaveBeenCalledTimes(2);
     await stop();
-    expect(closeProvider).toHaveBeenCalledTimes(3);
+    expect(closeProvider).toHaveBeenCalledTimes(2);
   });
 
   test("keeps provider auth agent-scoped across memory tools and automatic hooks", async () => {

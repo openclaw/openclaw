@@ -12,6 +12,10 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -235,7 +239,6 @@ export async function sendControlUiHtmlBody(
   res: ServerResponse,
   body: string,
   isCurrent?: () => boolean,
-  staleRedirectPath?: string,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -245,20 +248,16 @@ export async function sendControlUiHtmlBody(
   setControlUiEncodingHeaders(res, ".html", encoding);
   const encoded =
     encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  const ingress = getRemoteControlUiIngressContext(req);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
   if (isCurrent && !isCurrent()) {
     res.removeHeader("Content-Encoding");
-    if (!staleRedirectPath) {
-      respondPlainText(res, 403, "Session access changed. Reload the conversation.");
-      return;
-    }
-    // A session entry re-enters through its plain app path, where the normal
-    // auth gate decides access; the prepared entry document is never sent.
-    res.statusCode = 303;
-    res.setHeader("Location", staleRedirectPath);
     res.setHeader("Cache-Control", "no-store");
-    res.removeHeader("Content-Type");
     res.removeHeader("Content-Security-Policy");
-    res.end();
+    res.removeHeader("X-OpenClaw-Session-Entry");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation or log in again.");
     return;
   }
   res.end(encoded);

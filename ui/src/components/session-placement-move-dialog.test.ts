@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -15,6 +15,65 @@ beforeEach(() => {
 afterEach(() => {
   document.body.replaceChildren();
   restoreDialogPolyfill();
+});
+
+describe.each(["dispatch", "move", "restart"] as const)("%s machine selection", (mode) => {
+  it.each(["smaller", "configured", "explicit"] as const)(
+    "submits the displayed %s choice",
+    async (choice) => {
+      const result = showSessionPlacementTargetDialog({
+        mode,
+        sessionLabel: "Example session",
+        activeRun: false,
+        loadCatalog: async () => ({
+          devices: [],
+          profiles: [
+            {
+              id: "cloud",
+              providerId: "worker",
+              operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+              machines: [
+                {
+                  id: "large",
+                  label: "Large",
+                  cpu: 32,
+                  memoryGb: 64,
+                  default: choice === "configured",
+                },
+                { id: "small", label: "Small", cpu: 8, memoryGb: 16 },
+              ],
+            },
+          ],
+        }),
+      });
+      flush();
+      const { modal } = await getRenderedModalDialog(document.body);
+      try {
+        modal.querySelector<HTMLButtonElement>('[data-value="cloud:cloud"]')!.click();
+        flush();
+        if (choice === "explicit") {
+          modal.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
+          flush();
+        }
+        const machineClass = choice === "smaller" ? "small" : "large";
+        expect(
+          modal
+            .querySelector(`[data-value="machine:${machineClass}"]`)
+            ?.getAttribute("aria-pressed"),
+        ).toBe("true");
+        modal.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+        await expect(result).resolves.toEqual({
+          kind: "profile",
+          profileId: "cloud",
+          os: "linux",
+          machineClass,
+        });
+      } finally {
+        modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+        await result;
+      }
+    },
+  );
 });
 
 it("does not repaint a cancelled placement dialog when its catalog finishes loading", async () => {

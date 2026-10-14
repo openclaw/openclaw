@@ -469,7 +469,7 @@ it("submits deferred child results after canonical archive pruning without poiso
   if (!archivePath) {
     throw new Error("Expected published child transcript archive");
   }
-  await expect(access(archivePath)).resolves.toBeUndefined();
+  await access(archivePath);
   expect(
     await findSessionTranscriptArchiveEventReadOnly(archived.target, archived.child.runId),
   ).toMatchObject({

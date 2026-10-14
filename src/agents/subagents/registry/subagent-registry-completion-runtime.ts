@@ -366,10 +366,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       return 0;
     }
     pendingLifecycle.clear(runId);
-    if (
-      typeof entry.cleanupCompletedAt === "number" &&
-      entry.terminalOwner !== "interrupted-recovery"
-    ) {
+    if (typeof entry.cleanupCompletedAt === "number") {
       return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
     }
     let publishedEntry = entry;
