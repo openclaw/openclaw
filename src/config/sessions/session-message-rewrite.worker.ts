@@ -531,11 +531,11 @@ export function prepareSessionMessageRewrite(
   );
 }
 
-function prepareMessageRewrite(
+function assertMessageRewriteAllowed(
   input: SessionMessageRewriteSelection,
   database: OpenClawAgentDatabase,
   facts: SessionActorRewriteFacts | undefined,
-): SessionMessageRewriteSnapshot | null {
+): void {
   const { scope, target, expectedEntry } = input;
   if (!facts) {
     assertSessionTranscriptHot(database.db, scope.sessionId);
@@ -554,25 +554,34 @@ function prepareMessageRewrite(
       throw new SessionTranscriptWriterClaimReboundError();
     }
   }
+  if (target.kind === "anchor" && target.active) {
+    const active = facts
+      ? facts.anchor
+      : readActiveTranscriptEntryAnchorInTransaction({
+          database,
+          resolved: scope,
+          entryId: target.anchor.entryId,
+        });
+    if (
+      target.active === "exact"
+        ? !isDeepStrictEqual(active, target.anchor)
+        : active?.rawSeq !== target.anchor.rawSeq
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+  }
+}
+
+function prepareMessageRewrite(
+  input: SessionMessageRewriteSelection,
+  database: OpenClawAgentDatabase,
+  facts: SessionActorRewriteFacts | undefined,
+): SessionMessageRewriteSnapshot | null {
+  assertMessageRewriteAllowed(input, database, facts);
+  const { scope, target } = input;
   let seq: number;
   if (target.kind === "anchor") {
     seq = target.anchor.rawSeq;
-    if (target.active) {
-      const active = facts
-        ? facts.anchor
-        : readActiveTranscriptEntryAnchorInTransaction({
-            database,
-            resolved: scope,
-            entryId: target.anchor.entryId,
-          });
-      if (
-        target.active === "exact"
-          ? !isDeepStrictEqual(active, target.anchor)
-          : active?.rawSeq !== seq
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
-    }
   } else {
     const found = findTranscriptEventInDatabase(
       database,
@@ -645,29 +654,31 @@ export function applySessionMessageRewrite<T>(
         input.scope,
         input.target.kind === "anchor" ? input.target.anchor.entryId : undefined,
       );
-      const current = prepareMessageRewrite(input, database, facts);
-      if (
-        !current ||
-        current.seq !== input.expected.seq ||
-        current.eventJson !== input.expected.eventJson
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
+      assertMessageRewriteAllowed(input, database, facts);
+      // Changed bytes are checked by the CAS; a no-op can acknowledge its prepared selection.
+      const current = input.expected;
       const changed = input.message !== undefined;
       let generation: string | undefined;
       if (changed) {
-        generation = rewriteSqliteTranscriptEventRowsInTransaction(
-          database,
-          input.scope,
-          [
-            {
-              event: { ...current.event, message: input.message },
-              expectedEventJson: current.eventJson,
-              seq: current.seq,
-            },
-          ],
-          { projectionCurrent: facts !== undefined },
-        );
+        try {
+          generation = rewriteSqliteTranscriptEventRowsInTransaction(
+            database,
+            input.scope,
+            [
+              {
+                event: { ...current.event, message: input.message },
+                expectedEventJson: current.eventJson,
+                seq: current.seq,
+              },
+            ],
+            { projectionCurrent: facts !== undefined },
+          );
+        } catch (error) {
+          if (error instanceof SqliteTranscriptMutationConflictError) {
+            throw new SessionTranscriptWriterClaimReboundError();
+          }
+          throw error;
+        }
       }
       generation ??= facts
         ? facts.generation

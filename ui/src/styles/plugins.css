@@ -722,6 +722,32 @@ h3.settings-row__title {
   color: var(--danger);
 }
 
+.plugins-row-message--info {
+  display: block;
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  white-space: normal;
+}
+
+.plugins-row-message--info a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.plugin-compatibility-apis {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.plugin-compatibility-apis dd {
+  margin: var(--space-1) 0 0;
+}
+
 .plugins-row-message--warning {
   align-items: stretch;
   flex-direction: column;

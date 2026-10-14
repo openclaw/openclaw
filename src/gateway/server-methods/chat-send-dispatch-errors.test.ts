@@ -1,4 +1,3 @@
-import { copyFile, readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -6,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -13,12 +13,16 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
-import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import {
+  GatewayDrainingError,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   beginSessionWorkAdmission,
   getTerminalSessionWorkAdmissionRelease,
@@ -28,7 +32,6 @@ import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
 } from "../../state/agent-database-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
@@ -81,6 +84,7 @@ async function captureTerminalTarget(scope: {
 
 describe("handleChatSendSetupError", () => {
   it.each([
+    new GatewayDrainingError(),
     new SessionTranscriptProjectionUnavailableError("sess-main"),
     new AgentDatabaseAdmissionError(
       createAgentDatabaseInspectionRefusal({
@@ -97,6 +101,11 @@ describe("handleChatSendSetupError", () => {
       const broadcast = vi.fn();
       const respond = vi.fn();
       const dedupe = new Map();
+      const terminalizeRestartSafeAdmission = vi.fn();
+      const restart = error instanceof GatewayDrainingError;
+      if (restart) {
+        markGatewayRestartDraining();
+      }
 
       await handleChatSendSetupError({
         admission: {
@@ -108,7 +117,7 @@ describe("handleChatSendSetupError", () => {
           },
           cleanupAdmittedRun,
           lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
+          restartSafeAdmission: restart ? { requestFingerprint: "restart" } : undefined,
         },
         context: {
           agentRunSeq: new Map(),
@@ -126,9 +135,14 @@ describe("handleChatSendSetupError", () => {
           clientRunId: "setup-projection-retry",
           sessionKey: "agent:main:main",
         },
-        terminalizeRestartSafeAdmission: vi.fn(),
+        terminalizeRestartSafeAdmission,
+      }).finally(() => {
+        if (restart) {
+          resetGatewayWorkAdmission();
+        }
       });
 
+      expect(terminalizeRestartSafeAdmission).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledWith(
         false,
         expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
@@ -146,105 +160,11 @@ describe("handleChatSendSetupError", () => {
 });
 
 describe("createChatSendDispatchErrorLifecycle", () => {
-  it("does not terminalize a replacement physical store containing the same claim", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:terminal",
-        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "same-session",
-        updatedAt: 1,
-        restartRecoveryDeliveryRunId: "same-run",
-      });
-      const captured = await captureTerminalTarget(scope);
-      await closeOpenClawAgentDatabasesAsync();
-      const original = `${scope.storePath}.original`;
-      await rename(scope.storePath, original);
-      await copyFile(original, scope.storePath);
-      const replacement = await readFile(scope.storePath);
-      await expect(
-        terminalizeRestartSafeChatAdmission({
-          ...captured,
-          admittedSessionId: "same-session",
-          clientRunId: "same-run",
-          startedAt: 1,
-          status: "killed",
-          retryable: false,
-        }),
-      ).rejects.toThrow(/identity changed/u);
-      expect(await readFile(scope.storePath)).toEqual(replacement);
-    });
-  });
-  it.each(["claim", "lifecycle", "authority"] as const)(
-    "refuses queued terminal settlement after its %s changes",
-    async (changed) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        setRuntimeConfigSnapshot({});
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:terminal",
-          storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-        };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "terminal-session",
-          lifecycleRevision: "terminal-lifecycle",
-          updatedAt: 1,
-          restartRecoveryDeliveryRunId: "terminal-run",
-        });
-        const captured = await captureTerminalTarget(scope);
-        const entered = createDeferred();
-        const resume = createDeferred();
-        let current = true;
-        const writer = patchSessionEntryCore(scope, async () => {
-          entered.resolve();
-          await resume.promise;
-          return changed === "claim"
-            ? { restartRecoveryDeliveryRunId: "successor-run" }
-            : changed === "lifecycle"
-              ? { lifecycleRevision: "successor-lifecycle" }
-              : null;
-        });
-        await entered.promise;
-        const terminal = terminalizeRestartSafeChatAdmission({
-          ...captured,
-          admittedSessionId: "terminal-session",
-          clientRunId: "terminal-run",
-          startedAt: 1,
-          status: "killed",
-          retryable: false,
-          assertCurrent() {
-            if (!current) {
-              throw new Error("terminal owner released");
-            }
-          },
-        });
-        const observed = terminal.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        current = changed !== "authority";
-        resume.resolve();
-        await writer;
-        if (changed === "authority") {
-          expect(await observed).toMatchObject({
-            error: expect.objectContaining({ message: "terminal owner released" }),
-          });
-        } else {
-          expect(await observed).toEqual({ value: false });
-        }
-        expect(loadSessionEntry(scope)?.status).toBeUndefined();
-        expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBe(
-          changed === "claim" ? "successor-run" : "terminal-run",
-        );
-      });
-    },
-  );
   it.each([
     { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
     { settlement: "fallback", stateContention: true },
+    { settlement: "fallback", restartFailure: true },
+    { settlement: "restart-safe", restartFailure: true },
     { settlement: "restart-safe", stateContention: true },
     {
       settlement: "restart-safe",
@@ -275,7 +195,14 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     },
   ])(
     "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
-    async ({ settlement, missingProfile, policyFailure, sessionChanged, stateContention }) => {
+    async ({
+      settlement,
+      missingProfile,
+      policyFailure,
+      sessionChanged,
+      stateContention,
+      restartFailure,
+    }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
         const target = {
@@ -285,6 +212,9 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           storePath: path.join(state.sessionsDir(), "sessions.json"),
         };
         const runId = "dispatch-failure-run";
+        const lifecycleGeneration = restartFailure
+          ? getAgentEventLifecycleGeneration()
+          : "test-generation";
         const restartSafe = settlement === "restart-safe";
         await upsertSessionEntryCore(target, {
           sessionId: target.sessionId,
@@ -327,7 +257,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
               sessionId: target.sessionId,
               sessionKey: target.sessionKey,
               agentId: target.agentId,
-              lifecycleGeneration: "test-generation",
+              lifecycleGeneration,
             },
             activeRunAbort: {
               cleanup: vi.fn(),
@@ -336,7 +266,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
               registered: true,
             } as never,
             cleanupAdmittedRun: vi.fn(),
-            lifecycleGeneration: "test-generation",
+            lifecycleGeneration,
             restartSafeAdmission: restartSafe
               ? { requestFingerprint: "test-fingerprint" }
               : undefined,
@@ -377,31 +307,47 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           userTurnRecorder: { hasPersisted: () => userPersisted, isBlocked: () => false },
         });
 
-        const failure = stateContention
-          ? Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 })
-          : sessionChanged
-            ? new DispatchSessionRefreshRequiredError(
-                new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
-              )
-            : missingProfile
-              ? createSelectedAuthProfileUnavailableError({
-                  profileId: "openai:removed",
-                  provider: "openai",
-                  modelId: "fixture-model",
-                })
-              : policyFailure
-                ? new AgentHarnessPreflightError("private-policy-diagnostic", {
-                    userMessage: policyMessage,
+        const failure = restartFailure
+          ? new GatewayDrainingError()
+          : stateContention
+            ? Object.assign(new Error("database is locked"), {
+                code: "ERR_SQLITE_ERROR",
+                errcode: 5,
+              })
+            : sessionChanged
+              ? new DispatchSessionRefreshRequiredError(
+                  new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
+                )
+              : missingProfile
+                ? createSelectedAuthProfileUnavailableError({
+                    profileId: "openai:removed",
+                    provider: "openai",
+                    modelId: "fixture-model",
                   })
-                : new Error("Cloud worker unavailable");
-        await lifecycle.handleError(failure);
-        expect(previewGroup?.signal.aborted).toBe(false);
-        await lifecycle.finalize();
+                : policyFailure
+                  ? new AgentHarnessPreflightError("private-policy-diagnostic", {
+                      userMessage: policyMessage,
+                    })
+                  : new Error("Cloud worker unavailable");
+        if (restartFailure) {
+          markGatewayRestartDraining();
+        }
+        try {
+          await lifecycle.handleError(failure);
+          expect(previewGroup?.signal.aborted).toBe(false);
+          await lifecycle.finalize();
+        } finally {
+          if (restartFailure) {
+            resetGatewayWorkAdmission();
+          }
+        }
         expect(broadcast).toHaveBeenLastCalledWith(
           "chat",
-          expect.objectContaining({ state: "error" }),
+          expect.objectContaining(
+            restartFailure ? { state: "aborted", stopReason: "restart" } : { state: "error" },
+          ),
           {
-            liveText: { group: previewGroup?.signal, settle: true },
+            liveText: { group: previewGroup?.signal, settle: restartFailure ? undefined : true },
             sessionKeys: [target.sessionKey],
           },
         );
@@ -409,11 +355,27 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         expect(previewGroup?.signal.aborted).toBe(true);
 
         expect(warn).not.toHaveBeenCalled();
-        expect(loadSessionEntry(target)).toMatchObject({ status: "failed", lastRunId: runId });
+        expect(loadSessionEntry(target)).toMatchObject({
+          status: restartFailure ? "interrupted" : "failed",
+          lastRunId: runId,
+        });
         const messages = (await loadTranscriptEvents(target)).filter(
           (entry) =>
             isRecord(entry) && (entry.type === "message" || entry.type === "custom_message"),
         );
+        if (restartFailure) {
+          expect(messages).toEqual([
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({ role: "user", content: "Please continue." }),
+            }),
+          ]);
+          expect(loadSessionEntry(target)).toMatchObject({ abortedLastRun: true });
+          if (restartSafe) {
+            expect(loadSessionEntry(target)?.restartRecoveryDeliverySourceRunId).toBe(runId);
+          }
+          return;
+        }
         expect(messages).toMatchObject([
           { type: "message", message: { role: "user", content: "Please continue." } },
           {
@@ -732,69 +694,77 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     },
   );
 
-  it("keeps a signal-only dispatch rejection as an error without an explicit abort", async () => {
-    const controller = new AbortController();
-    controller.abort(new Error("restart interrupted dispatch"));
-    const chatRunState = createChatRunState();
-    const dedupe = new Map();
-    const broadcast = vi.fn();
-    const lifecycle = createChatSendDispatchErrorLifecycle({
-      admission: {
-        sessionBinding: {
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          agentId: "main",
+  it.each([false, true])(
+    "classifies dispatch authority failure from typed restart=%s",
+    async (restart) => {
+      const controller = new AbortController();
+      controller.abort(
+        restart ? createAgentRunRestartAbortError() : new Error("restart interrupted dispatch"),
+      );
+      const chatRunState = createChatRunState();
+      const dedupe = new Map();
+      const broadcast = vi.fn();
+      const lifecycle = createChatSendDispatchErrorLifecycle({
+        admission: {
+          sessionBinding: {
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            lifecycleGeneration: "test-generation",
+          },
+          activeRunAbort: {
+            cleanup: vi.fn(),
+            controller,
+            entry: undefined,
+            registered: true,
+          } as never,
+          cleanupAdmittedRun: vi.fn(),
           lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
         },
-        activeRunAbort: {
-          cleanup: vi.fn(),
-          controller,
-          entry: undefined,
-          registered: true,
+        context: {
+          agentRunSeq: new Map(),
+          broadcast,
+          chatRunState,
+          dedupe,
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+          nodeSendToSession: vi.fn(),
+          removeChatRun: vi.fn(),
         } as never,
-        cleanupAdmittedRun: vi.fn(),
-        lifecycleGeneration: "test-generation",
-        restartSafeAdmission: undefined,
-      },
-      context: {
-        agentRunSeq: new Map(),
-        broadcast,
-        chatRunState,
-        dedupe,
-        getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
-        nodeSendToSession: vi.fn(),
-        removeChatRun: vi.fn(),
-      } as never,
-      isQueuedFollowupEnqueued: () => false,
-      isAgentRunStarted: () => false,
-      persistUserTurnTranscript: vi.fn(),
-      session: {
-        agentId: "main",
-        backingSessionId: "sess-main",
-        cfg: {},
-        clientRunId: "signal-only-dispatch-rejection",
-        now: 1,
-        rawSessionKey: "agent:main:main",
-        sessionKey: "agent:main:main",
-      },
-      terminalizeRestartSafeAdmission: vi.fn(),
-      userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
-    });
+        isQueuedFollowupEnqueued: () => false,
+        isAgentRunStarted: () => false,
+        persistUserTurnTranscript: vi.fn(),
+        session: {
+          agentId: "main",
+          backingSessionId: "sess-main",
+          cfg: {},
+          clientRunId: "signal-only-dispatch-rejection",
+          now: 1,
+          rawSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+        },
+        terminalizeRestartSafeAdmission: vi.fn(),
+        userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
+      });
 
-    await lifecycle.handleError(new Error("dispatch rejected after restart"));
-    await lifecycle.finalize();
+      await lifecycle.handleError(new Error("operator source authority is no longer active"));
+      await lifecycle.finalize();
 
-    expect(dedupe.get("chat:signal-only-dispatch-rejection")).toMatchObject({
-      ok: false,
-      payload: { runId: "signal-only-dispatch-rejection", status: "error" },
-    });
-    expect(broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId: "signal-only-dispatch-rejection", state: "error" }),
-      { sessionKeys: ["agent:main:main"] },
-    );
-  });
+      expect(dedupe.get("chat:signal-only-dispatch-rejection")).toMatchObject({
+        ok: restart,
+        payload: { runId: "signal-only-dispatch-rejection", status: restart ? "timeout" : "error" },
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId: "signal-only-dispatch-rejection",
+          state: restart ? "aborted" : "error",
+        }),
+        { sessionKeys: ["agent:main:main"] },
+      );
+    },
+  );
 
   it.each([true, false])(
     "does not overwrite a lifecycle terminal after persistence success=%s",

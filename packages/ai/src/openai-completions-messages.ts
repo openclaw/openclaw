@@ -8,6 +8,7 @@ import type {
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
 import { isImageWithMediaPayload } from "./media-payload.js";
+import { preparedRequestSuffix } from "./provider-options.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
 import type { ProviderMessage } from "./provider-types.js";
 import {
@@ -275,7 +276,13 @@ export function convertMessages(
           const toolResultMsg: ChatCompletionToolMessageParam = {
             role: "tool",
             content,
-            tool_call_id: toolMsg.toolCallId,
+            tool_call_id: preparedRequestSuffix.has(context)
+              ? preparedRequestSuffix.toolCallId(
+                  context,
+                  toolMsg.toolCallId,
+                  normalizeToolCallId(toolMsg.toolCallId),
+                )
+              : toolMsg.toolCallId,
           };
           if (compat.requiresToolResultName && toolMsg.toolName) {
             (toolResultMsg as typeof toolResultMsg & { name?: string }).name = toolMsg.toolName;

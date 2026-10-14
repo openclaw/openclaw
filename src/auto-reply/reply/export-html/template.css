@@ -91,7 +91,8 @@ body {
   cursor: pointer;
 }
 
-.filter-btn:hover {
+.filter-btn:hover,
+.sidebar-close:hover {
   color: var(--text);
   border-color: var(--text);
 }
@@ -113,11 +114,6 @@ body {
   border-radius: 3px;
   cursor: pointer;
   margin-left: auto;
-}
-
-.sidebar-close:hover {
-  color: var(--text);
-  border-color: var(--text);
 }
 
 .tree-container {
@@ -181,10 +177,7 @@ body {
   color: var(--success);
 }
 
-.tree-role-tool {
-  color: var(--muted);
-}
-
+.tree-role-tool,
 .tree-muted {
   color: var(--muted);
 }
@@ -604,12 +597,15 @@ body {
   cursor: pointer;
 }
 
-.system-prompt-header {
+.system-prompt-header,
+.tools-header,
+.hook-type {
   font-weight: bold;
   color: var(--customMessageLabel);
 }
 
-.system-prompt-preview {
+.system-prompt-preview,
+.system-prompt-full {
   color: var(--customMessageText);
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -625,11 +621,6 @@ body {
 
 .system-prompt-full {
   display: none;
-  color: var(--customMessageText);
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  font-size: 11px;
-  margin-top: var(--line-height);
 }
 
 .system-prompt.expanded .system-prompt-preview,
@@ -643,8 +634,6 @@ body {
 
 /* Tools list */
 .tools-header {
-  font-weight: bold;
-  color: var(--customMessageLabel);
   margin-bottom: var(--line-height);
 }
 
@@ -652,7 +641,8 @@ body {
   font-size: 11px;
 }
 
-.tool-item-name {
+.tool-item-name,
+.tool-param-name {
   font-weight: bold;
   color: var(--text);
 }
@@ -695,11 +685,6 @@ body {
   font-size: 11px;
 }
 
-.tool-param-name {
-  font-weight: bold;
-  color: var(--text);
-}
-
 .tool-param-type {
   color: var(--dim);
   font-style: italic;
@@ -726,11 +711,6 @@ body {
   color: var(--customMessageText);
   padding: var(--line-height);
   border-radius: 4px;
-}
-
-.hook-type {
-  color: var(--customMessageLabel);
-  font-weight: bold;
 }
 
 /* Branch summary */

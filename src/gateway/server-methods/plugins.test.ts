@@ -1,11 +1,17 @@
 // Plugin management read tests cover inventory, inspection, and catalog DTOs.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Compile } from "typebox/compile";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PluginsListResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { encodePluginDiscoveryId } from "../../plugins/catalog-discovery.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimePluginScope,
+  withPluginRuntimeRegistryScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const managementMocks = vi.hoisted(() => ({
@@ -90,6 +96,55 @@ describe("plugin management Gateway handlers", () => {
     catalogMocks.categories.mockReset();
     catalogMocks.overview.mockReset();
     catalogMocks.detail.mockReset();
+  });
+
+  it("returns observed SDK compatibility per plugin without changing runtime state", async () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      withPluginRuntimePluginScope({ pluginId: "deprecated-sdk-fixture" }, () =>
+        warnPluginSdkDeprecation({
+          family: "session-store",
+          method: "getSessionEntry",
+          replacement: "getSessionEntryAsync",
+        }),
+      );
+      managementMocks.list.mockResolvedValue({
+        plugins: [
+          { ...workboard, id: "deprecated-sdk-fixture" },
+          { ...workboard, id: "current-sdk-fixture" },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      });
+      const result = await callHandler("plugins.list", {});
+      expect(result.ok).toBe(true);
+      expect(result.response).toMatchObject({
+        plugins: [
+          {
+            id: "deprecated-sdk-fixture",
+            runtime: { state: "unloaded" },
+            compatibilityNotices: [
+              {
+                code: "deprecated-sdk-api",
+                severity: "info",
+                removalDate: "2026-12-31",
+                apis: [
+                  {
+                    displayName: "getSessionEntry",
+                    replacement: "getSessionEntryAsync",
+                    removeAfter: "2026-12-31",
+                  },
+                ],
+              },
+            ],
+          },
+          { id: "current-sdk-fixture", compatibilityNotices: [] },
+        ],
+      });
+      expect(Compile(PluginsListResultSchema).Check(result.response)).toBe(true);
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it("projects opaque local identities without inventing ClawHub publication", async () => {

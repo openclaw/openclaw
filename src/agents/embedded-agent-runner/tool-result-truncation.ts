@@ -778,7 +778,6 @@ export function restoreCacheTtlToolResultProjections(
 ): void {
   const checkpoint = readCacheTtlCheckpoint(entries);
   projectionState.cacheTtlCheckpoint = checkpoint;
-  projectionState.cacheTtlRevision = (projectionState.cacheTtlRevision ?? 0) + 1;
   if (!checkpoint) {
     return;
   }

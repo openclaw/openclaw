@@ -1,6 +1,8 @@
+import { isPlainTextToolCallAttempt } from "../../../../packages/tool-call-repair/src/index.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
+import { extractAssistantTranscriptSourceText } from "../../../shared/chat-message-content.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
@@ -24,7 +26,10 @@ import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
+  resolveCurrentAttemptAssistant,
 } from "./attempt-terminal-evidence.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
+import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
 import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
 import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
 import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
@@ -272,7 +277,22 @@ export function completeEmbeddedAttemptResult(
     messagesSnapshot: state.messagesSnapshot,
     terminal: state.terminal,
   });
+  const assistant = resolveCurrentAttemptAssistant(state);
+  let textToolCallAttempt = false;
+  if (
+    state.terminal.kind === "ok" &&
+    assistant?.stopReason === "stop" &&
+    !assistant.content.some(isRunnerToolCallBlock)
+  ) {
+    const allowedToolNames = input.prepared.toolCatalog.toolSearchRunPlan.liveAllowedToolNames;
+    textToolCallAttempt =
+      allowedToolNames.size > 0 &&
+      isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>
+        Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
+      );
+  }
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
+    ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
     ...state,
     ...evidence,
     sandboxRuntime: input.setup.sandboxRuntime,

@@ -777,15 +777,18 @@ AFTER_CD
       );
 
     for (const name of [
-      "Mark stale unassigned issues and pull requests (primary)",
+      "Mark stale unassigned issues (primary)",
       "Mark stale assigned issues (primary)",
-      "Mark stale unassigned issues and pull requests (fallback)",
+      "Mark stale unassigned issues (fallback)",
       "Mark stale assigned issues (fallback)",
     ]) {
       const exemptLabels = String(stepNamed(name).with?.["exempt-issue-labels"])
         .split(",")
         .map((label) => label.trim());
       expect(exemptLabels, name).toContain("bug");
+      expect(String(stepNamed(name).with?.["days-before-pr-stale"]), name).toBe("-1");
+      expect(String(stepNamed(name).with?.["days-before-pr-close"]), name).toBe("-1");
+      expect(String(stepNamed(name).with?.["remove-pr-stale-when-updated"]), name).toBe("false");
     }
 
     const bugJob = staleWorkflow.jobs["stale-bug-verification"];
@@ -2599,6 +2602,33 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     },
   );
 
+  it.each([
+    ["current shard 1", {}, 24],
+    ["current shard 2", { matrix: { shard: 2 } }, 25],
+    ["frozen shard 1", { frozenTarget: true }, 20],
+    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 20],
+    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 20],
+    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 20],
+    ["hosted override", { runnerBackend: "github" }, 40],
+    ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
+    ["manual fallback", { eventName: "workflow_dispatch" }, 40],
+    ["PR retry", { eventName: "pull_request", runAttempt: 2 }, 40],
+    ["noncanonical fallback", { repository: "example/openclaw" }, 40],
+  ] as const)("bounds real-Gateway job time for %s", (_label, overrides, minutes) => {
+    const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+    expect(
+      evaluateWorkflowExpression(job["timeout-minutes"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        frozenTarget: false,
+        matrix: { shard: 1 },
+        ...overrides,
+      }),
+    ).toBe(minutes);
+  });
+
   it("gives breaker-routed hosted jobs their hosted timeout budgets", () => {
     const workflow = readCiWorkflow();
     const context = {
@@ -2925,6 +2955,23 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
     for (const { file, step, jobId, jobCondition } of directCaches) {
       if (step.uses?.startsWith("actions/cache/save@")) {
+        if (step.with?.path === ".cache/barnacle-pr-scan.json") {
+          expect(file).toBe(".github/workflows/stale.yml");
+          expect(jobId).toBe("stale-pull-requests");
+          expect(step.with).toEqual({
+            path: ".cache/barnacle-pr-scan.json",
+            key: "barnacle-pr-scan-v1-${{ github.run_id }}-${{ github.run_attempt }}",
+          });
+          expect(step.if).toBe(
+            "${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}",
+          );
+          const workflow = readWorkflow(file);
+          expect(workflow.jobs["stale-pull-requests"].concurrency).toEqual({
+            group: "barnacle-stale-pr-lifecycle",
+            "cancel-in-progress": false,
+          });
+          continue;
+        }
         if (step.with?.path === "full-release-execution-plan") {
           expect(file).toBe(".github/workflows/full-release-validation.yml");
           expect(jobId).toBe("release_execution_plan");

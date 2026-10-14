@@ -464,6 +464,23 @@ describe("Muse native MSP harness", () => {
     }
   });
 
+  it("runs a consented turn whose conversation tool policy is restricted", async () => {
+    const { harness, params } = setup();
+    const log = join(workspace, `${params.runId}.jsonl`);
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
+    try {
+      await harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true });
+      const requests = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.map((request) => request.method)).toContain("turn/start");
+    } finally {
+      await harness.dispose?.();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns the terminal observer's unresolved native tool error", async () => {
     const { harness, params } = setup();
     const lastToolError = { toolName: "read_file", error: "file unavailable" };
@@ -910,12 +927,9 @@ describe("Muse native MSP harness", () => {
     },
   );
 
-  it("rejects sandbox and restricted-tool attempts before starting native work", async () => {
+  it("rejects sandbox and workspace-only attempts before starting native work", async () => {
     const { harness, params, bindings } = setup();
     try {
-      await expect(
-        harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true }),
-      ).rejects.toThrow("cannot enforce");
       await expect(harness.runAttempt({ ...params, requireWorkspaceOnly: true })).rejects.toThrow(
         "cannot enforce",
       );

@@ -12,8 +12,6 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
-  captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
@@ -82,7 +80,6 @@ let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 let nativeRuntimeAdmissionSent = false;
-const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
 
 async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
   if (!sourceLoaderRegistered && sourceLoaderUrl) {
@@ -194,6 +191,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           actor: request.actor,
           context: {
             port: request.operationAdmission,
+            attachment: request.operationAttachment,
             requestCustody: request.requestCustody,
             executionAuthority: request.executionAuthority,
           },
@@ -566,9 +564,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     });
   }
   const complete = !reply.ok || (!pendingInput && !pendingResult);
-  if (complete) {
-    reply.databaseAdmissions = captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
-  }
   if (complete && nativeCleanupFailure) {
     reply.cleanupFailure = nativeCleanupFailure;
     nativeCleanupFailure = undefined;
