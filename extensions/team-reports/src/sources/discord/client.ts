@@ -1,11 +1,20 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import type { DiscordSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
-import { checkAbort, parseApiBase, wait } from "../http.js";
+import {
+  checkAbort,
+  parseApiBase,
+  readSourceResponseText,
+  SourceResponseTooLargeError,
+  wait,
+} from "../http.js";
 
 const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() });
 const timeoutMs = 30_000;
 export const ABORT_LABEL = "Discord collection aborted.";
+
+const exhaustedRequestError = () =>
+  new Error("Discord request failed after retries; check connectivity and API access.");
 
 export class DiscordHttpError extends Error {
   constructor(readonly status: number) {
@@ -51,7 +60,7 @@ export function createClient(
         response = result.response;
         release = result.release;
       }
-      const body = await response.text();
+      const body = await readSourceResponseText(response, "Discord", signal);
       checkAbort(runtime.signal, ABORT_LABEL);
       let data: unknown;
       try {
@@ -78,12 +87,13 @@ export function createClient(
         let result: Awaited<ReturnType<typeof request>>;
         try {
           result = await request(url.toString());
-        } catch {
+        } catch (error) {
           checkAbort(runtime.signal, ABORT_LABEL);
+          if (error instanceof SourceResponseTooLargeError) {
+            throw error;
+          }
           if (retries >= 2) {
-            throw new Error(
-              "Discord request failed after retries; check connectivity and API access.",
-            );
+            throw exhaustedRequestError();
           }
           await wait(1000 * 2 ** retries++, runtime.signal, ABORT_LABEL);
           continue;

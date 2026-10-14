@@ -1,5 +1,6 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
+import { oversizedResponse } from "../oversized-response.test-support.js";
 import { createGithubSource } from "./index.js";
 import { config, logger } from "./responses.fixtures.js";
 
@@ -34,3 +35,24 @@ it.each([true, false])(
     expect(new Headers(options?.init?.headers).get("Authorization")).toBe(`Bearer ${config.token}`);
   },
 );
+
+it("cancels and releases an oversized API response with actionable status", async () => {
+  const { response, cancellations } = oversizedResponse();
+  const release = vi.fn(async () => {
+    expect(response.bodyUsed).toBe(true);
+  });
+  vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+    response,
+    finalUrl: config.apiBaseUrl,
+    release,
+  });
+
+  const result = await createGithubSource({ logger }).loadRoster(config);
+
+  expect(result.status.ok).toBe(false);
+  expect(result.status.warnings).toEqual([
+    expect.stringMatching(/response exceeded the 16 MiB safety limit.*compatibility.*retry/i),
+  ]);
+  await vi.waitFor(() => expect(cancellations()).toBe(1));
+  expect(release).toHaveBeenCalledOnce();
+});
