@@ -78,7 +78,12 @@ describe("chat page close navigation", () => {
     const { context } = createChatPageNavigationContext();
     const routeModule = await import("./route-entry.ts");
     // SAFETY: These synthetic routes use the real Chat module and application context.
-    const router = createRouter({
+    const router = createRouter<
+      "chat" | "dashboard" | "sessions",
+      ApplicationContext,
+      typeof routeModule | { renderSolid: () => null },
+      ChatRouteData
+    >({
       routes: [
         ...(["chat", "dashboard"] as const).map((face) => ({
           id: face,

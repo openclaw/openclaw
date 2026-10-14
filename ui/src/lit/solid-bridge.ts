@@ -360,14 +360,15 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       spread(host, props, true, (key) => declarations.has(key));
       const absent = Symbol("absent bridge property");
       for (const [key, property] of properties) {
-        createRenderEffect(
-          () => (Reflect.has(props, key) ? Reflect.get(props, key) : absent),
-          (value) => {
-            if (value !== absent) {
-              Reflect.set(host, key, value === undefined ? property.default : value);
-            }
-          },
-        );
+        const read = () => (Reflect.has(props, key) ? Reflect.get(props, key) : absent);
+        const write = (value: unknown) => {
+          if (value !== absent) {
+            Reflect.set(host, key, value === undefined ? property.default : value);
+          }
+        };
+        // Host setup reads properties before the first render-effect commit.
+        write(untrack(read));
+        createRenderEffect(read, write);
       }
       host.#mount(() => props.children);
       onCleanup(() => host.#disposeRoot());
