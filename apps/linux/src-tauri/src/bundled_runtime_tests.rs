@@ -253,7 +253,11 @@ fn running_seed_is_retained_until_the_process_exits() {
     let bytes = fs::read(std::env::current_exe().unwrap()).unwrap();
     write_source(&fixture.source, &bytes);
     let mut manifest: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
-    manifest["files"][BUN_PATH] = format!("{:x}", Sha256::digest(&bytes)).into();
+    manifest["files"][BUN_PATH] = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        .into();
     fixture.manifest = manifest.to_string();
     let live = fixture.next_seed("live");
     let mut child = Command::new(&live.bun)
