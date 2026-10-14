@@ -174,10 +174,10 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
       }
       expect(result.sessions[0]).not.toHaveProperty("createdActor");
       expect(result.sharedFacts).toBeDefined();
-      const wire = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
-      expect(expandSessionRowFacts(wire.payload.sessions, wire.payload.sharedFacts)).toEqual(
-        JSON.parse(JSON.stringify(rows)),
-      );
+      const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(
+        JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
+      ).toBe(JSON.stringify(rows));
       expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
         Buffer.byteLength(JSON.stringify(compact)) * 0.5,
       );

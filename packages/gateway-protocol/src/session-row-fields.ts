@@ -115,10 +115,11 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
 
 /** Response-local facts: no cross-request catalog or invalidation protocol. */
 export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
-  type SharedFact = { fact: Partial<T>; rows: number[] };
+  type SharedFact = { fact: Partial<T>; rows: { index: number; row: T }[] };
   const candidates = new Map<string, SharedFact>();
   const rows = sessions.map((row) => ({ ...row }));
   rows.forEach((row, index) => {
+    const recipient = { index, row };
     for (const field in row) {
       const value = row[field];
       // Keep required fields and the projection marker readable without expanding the table.
@@ -133,9 +134,9 @@ export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
       const key = JSON.stringify(fact);
       const candidate = candidates.get(key);
       if (candidate) {
-        candidate.rows.push(index);
+        candidate.rows.push(recipient);
       } else {
-        candidates.set(key, { fact, rows: [index] });
+        candidates.set(key, { fact, rows: [recipient] });
       }
     }
   });
@@ -145,7 +146,7 @@ export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
     if (candidate.rows.length < 2) {
       continue;
     }
-    const key = candidate.rows.join(",");
+    const key = candidate.rows.map(({ index }) => index).join(",");
     const group = groups.get(key);
     if (group) {
       Object.assign(group.fact, candidate.fact);
@@ -157,8 +158,7 @@ export function shareSessionRowFacts<T extends SessionRow>(sessions: T[]) {
   for (const group of groups.values()) {
     const reference = sharedFacts.push(group.fact) - 1;
     const fields = Object.keys(group.fact);
-    for (const index of group.rows) {
-      const row = rows[index]!;
+    for (const { row } of group.rows) {
       for (const field of fields) {
         Reflect.deleteProperty(row, field);
       }
