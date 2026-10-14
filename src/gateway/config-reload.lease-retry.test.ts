@@ -83,7 +83,7 @@ it.each([false, true])(
     const harness = createReloaderHarness(async () => snapshot, { initialConfig: initial });
     await harness.reloader.ready;
     const application = createRuntimeConfigWriteApplication();
-    const unsubscribe = registerRuntimeConfigWriteListener(harness.emitWrite);
+    const unsubscribe = registerRuntimeConfigWriteListener((write) => harness.emitWrite(write));
     try {
       publishRuntimeConfigWrite({
         configPath: snapshot.path,
