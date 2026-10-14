@@ -2219,6 +2219,10 @@ select.input {
   margin-top: 8px;
 }
 
+.oc-modal-dialog .lazy-view-error__actions {
+  justify-self: stretch;
+}
+
 .lazy-view-error__details {
   max-width: 100%;
   color: var(--muted);
