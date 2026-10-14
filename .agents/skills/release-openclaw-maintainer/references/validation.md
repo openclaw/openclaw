@@ -13,9 +13,9 @@ tarball against its published `dist.integrity` before extraction, then run
 `pnpm update:compat:gen --release '<unpacked-dir>=<verified-integrity>'`, repeating
 `--release` for every supported version. Generation replaces the recorded set:
 keep empty entries, drop expired versions and their historical corrections, and
-never hand-edit recorded origins. Run `pnpm update:compat:check`; both npm
-`latest` and `beta` must be covered. Repeat the generation arguments with
-`--check` for an offline regeneration check.
+never hand-edit recorded origins. Run `pnpm update:compat:check`; npm
+`latest`, `beta`, and `extended-stable` (when published) must be covered.
+Repeat the generation arguments with `--check` for an offline regeneration check.
 
 Run every recorded `update-first-hop-compat*` lane and the upgrade survivor lane
 from the oldest supported release. Native Windows proof must invoke the old

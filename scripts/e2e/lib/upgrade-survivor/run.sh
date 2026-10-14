@@ -104,6 +104,7 @@ FAILURE_MESSAGE=""
 FAILURE_SIGNAL=""
 gateway_pid=""
 plugin_registry_pid=""
+candidate_selector_registry=0
 missing_plugin_registry_pid=""
 clawhub_fixture_pid=""
 mock_openai_pid=""
@@ -797,9 +798,6 @@ NODE
       registry_dist_tags="latest=$baseline_plugin_version,beta=$baseline_plugin_version,alpha=$baseline_plugin_version"
     else
       registry_dist_tags="latest=$candidate_version,beta=$candidate_version,alpha=$candidate_version"
-      if is_extended_stable_release_version "$candidate_version"; then
-        registry_dist_tags+=",extended-stable=$candidate_version"
-      fi
     fi
     # Published name/version pairs keep their archive across registry phases.
     if [ -n "$baseline_plugin_tarball" ]; then
@@ -809,6 +807,9 @@ NODE
       registry_args+=("@openclaw/codex" "$baseline_plugin_version" "$native_assignment_tarball")
     fi
     registry_args+=("openclaw" "$candidate_version" "$CANDIDATE_SPEC")
+  elif [ "$stage" = "candidate" ] && extended_stable_selector_update "$candidate_version"; then
+    prepare_candidate_tarball || return "$?"
+    registry_args+=("openclaw" "$candidate_version" "$candidate_tarball")
   fi
 
   if configured_plugin_installs_enabled; then
@@ -837,7 +838,17 @@ NODE
     fi
   fi
 
-  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Extended-stable updaters resolve the candidate through their own selector.
+  local selector_registry=0
+  if [ "$stage" = "candidate" ] && is_extended_stable_release_version "$candidate_version" &&
+    { [ "$SCENARIO" = "legacy-operator-state" ] || extended_stable_selector_update "$candidate_version"; }; then
+    selector_registry=1
+    if [ "$SCENARIO" != "legacy-operator-state" ] && [ -z "${OPENCLAW_NPM_REGISTRY_DIST_TAGS+x}" ]; then
+      registry_dist_tags="beta=$candidate_version"
+    fi
+    registry_dist_tags+="${registry_dist_tags:+,}extended-stable=$candidate_version"
+  fi
+  if [ "$SCENARIO" = "legacy-operator-state" ] || [ "$selector_registry" = "1" ]; then
     export OPENCLAW_NPM_REGISTRY_DIST_TAGS="$registry_dist_tags"
   fi
   openclaw_prepublish_plugin_registry_start \
@@ -847,7 +858,8 @@ NODE
     "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
     "$fixture_root" \
     plugin_registry_pid \
-    ${registry_args[@]+"${registry_args[@]}"}
+    ${registry_args[@]+"${registry_args[@]}"} || return "$?"
+  candidate_selector_registry="$selector_registry"
 }
 
 seed_legacy_runtime_deps_symlink() {
@@ -1496,6 +1508,27 @@ candidate_requires_stable_channel() {
     ! is_extended_stable_release_version "$1"
 }
 
+# Shipped extended-stable updaters refuse explicit targets, so an update between
+# extended-stable releases resolves the candidate through the real selector.
+extended_stable_selector_update() {
+  is_extended_stable_release_version "$baseline_version" &&
+    is_extended_stable_release_version "$1"
+}
+
+ensure_candidate_selector_registry() {
+  [ "$candidate_selector_registry" = "1" ] && return 0
+  if [ -n "$plugin_registry_pid" ]; then
+    echo "candidate registry does not serve the extended-stable selector" >&2
+    return 1
+  fi
+  prepare_candidate_tarball || return "$?"
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="extended-stable=$candidate_version" \
+    openclaw_prepublish_plugin_registry_start "" "" "$candidate_version" "" \
+    "$ARTIFACT_ROOT/candidate-selector-registry" plugin_registry_pid \
+    openclaw "$candidate_version" "$candidate_tarball" || return "$?"
+  candidate_selector_registry=1
+}
+
 update_candidate() {
   local after_repair="${1:-0}"
   local expected_version="${3:-$candidate_version}"
@@ -1517,7 +1550,13 @@ update_candidate() {
   if [ -z "$update_spec" ]; then
     update_spec="$(candidate_update_spec)"
   fi
-  echo "Updating baseline $baseline_spec to target $CANDIDATE_KIND:$update_spec ($expected_version)"
+  local selector_update=0
+  if [ "$after_repair" != "1" ] && [ -z "${2:-}" ] && extended_stable_selector_update "$expected_version"; then
+    selector_update=1
+    echo "Updating baseline $baseline_spec to extended-stable selector $expected_version"
+  else
+    echo "Updating baseline $baseline_spec to target $CANDIDATE_KIND:$update_spec ($expected_version)"
+  fi
   local update_start=""
   local update_end=""
   local previous_service_pid="" previous_systemctl_lines=0 verify_restart=0
@@ -1542,6 +1581,13 @@ update_candidate() {
     -u OPENCLAW_GATEWAY_PASSWORD
     -u OPENCLAW_ALLOW_ROOT
   )
+  if [ "$selector_update" = "1" ]; then
+    ensure_candidate_selector_registry || return "$?"
+    # Keep the inferred extended-stable channel; the bare package name admits
+    # the loopback registry to the old updater's selector lookup.
+    update_args=(update --yes --json)
+    update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
+  fi
   # Historical updaters can restart before reporting denied capabilities.
   # Prove migrations first; only the current updater performs the auth restart.
   if [ "$verify_restart" != "1" ]; then
