@@ -149,6 +149,19 @@ describe("yielded private settle outcomes", () => {
       expected: { delivered: false, reason: "completion_handoff_unavailable", terminal: true },
     },
     {
+      // The binding must reach the dispatch for the visible route too: the
+      // continuation resumes the exact requester incarnation under own-session
+      // admission rather than a private completion target.
+      name: "visible settlement resumes the bound requester incarnation",
+      public: true,
+      bound: true,
+      response: {
+        status: "ok",
+        result: { payloads: [{ text: "parent answer" }], deliveryStatus: sentDeliveryStatus },
+      },
+      expected: { delivered: true, requesterVisibleFinalDelivered: true },
+    },
+    {
       // A visible child's settlement now carries the requester incarnation
       // binding, so a replaced requester must be refused before dispatch just
       // like the private route.
@@ -204,8 +217,16 @@ describe("yielded private settle outcomes", () => {
         deliver: true,
         channel: "discord",
         to: "dm:U123",
-        ...("public" in testCase ? {} : { expectedExistingSessionId: "requester-session-dm" }),
+        // The visible route carries the same requester-incarnation CAS binding
+        // once the settlement is bound, and no private completion target.
+        ...("public" in testCase && !("bound" in testCase)
+          ? {}
+          : { expectedExistingSessionId: "requester-session-dm" }),
+        ...("public" in testCase
+          ? { inputProvenance: expect.objectContaining({ sourceTool: "subagent_settle" }) }
+          : {}),
       });
+      expect(agentParams).not.toHaveProperty("completionTarget");
       // The conversation's configured reply policy decides, not this handoff.
       expect(agentParams).not.toHaveProperty("sourceReplyDeliveryMode");
     }
