@@ -46,7 +46,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { agentModel: null });
+    const gateway = await installMockGateway(page, { agentModel: null, models: [] });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -59,6 +59,7 @@ suite.define(() => {
       const setupAction = page.getByRole("button", { name: "Connect an AI provider", exact: true });
       await expect.poll(() => setupAction.count()).toBe(1);
       await captureProof(page, "chat-home-desktop.png");
+      expect.soft(await page.locator("[data-chat-model-select]").count()).toBe(0);
       await setupAction.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
       expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
@@ -96,6 +97,8 @@ suite.define(() => {
         )
         .toEqual({ radiusMatches: true, shapeMatches: true, edgesMatch: true });
       await captureProof(page, "chat-help-desktop.png");
+      expect(await page.locator("[data-chat-model-select]").count()).toBe(0);
+      expect(await page.locator("[data-chat-permission-select]").count()).toBe(1);
       await setupAction.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
       expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
