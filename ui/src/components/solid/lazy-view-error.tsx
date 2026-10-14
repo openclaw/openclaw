@@ -94,7 +94,7 @@ export function LegacyPanelErrorState(
 
 export function PanelErrorState(props: {
   actions?: SolidJSX.Element;
-  className?: string;
+  class?: string;
   detail?: string;
   inline?: boolean;
   role?: "alert" | "status";
@@ -106,7 +106,7 @@ export function PanelErrorState(props: {
     <div
       class={[
         "lazy-view-error",
-        props.className,
+        props.class,
         { "lazy-view-error--inline": props.inline, "lazy-view-error--stale": props.stale },
       ]}
       role={props.role ?? "alert"}

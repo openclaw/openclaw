@@ -112,7 +112,11 @@ followed by its completed messages and the side question, preserving its system 
 settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
 payload data without re-running the parent's one-shot continuation hooks.
 Completed asynchronous tool calls, their outcomes, and the final answer remain in
-conversation order. The replay uses the current prepared model's proxy and TLS policy. Session read
+conversation order.
+If a published tool call is still running when the fork starts, the built-in
+runtime includes a non-error placeholder saying its result is not available yet.
+This does not cancel the parent call or persist a result in the parent session.
+The replay uses the current prepared model's proxy and TLS policy. Session read
 authority is checked immediately before every network send, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native

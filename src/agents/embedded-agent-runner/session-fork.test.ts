@@ -83,6 +83,7 @@ async function fork(requestModel = model) {
   return runEmbeddedSessionFork({
     ...identity,
     model: requestModel,
+    apiKey: "synthetic-key",
     question: "Review only",
     assertCurrent: () => {},
   });
@@ -210,6 +211,70 @@ describe("prepared session fork provider boundary", () => {
       ),
     };
   }
+
+  it.each([
+    ["openai-responses", false],
+    ["openai-responses", true],
+    ["anthropic-messages", false],
+    ["anthropic-messages", true],
+  ] as const)("represents an in-flight %s tool call as pending (async=%s)", async (api, async) => {
+    const { parent, physicalFetch } = guardedTransport(undefined, api);
+    const requestModel = {
+      ...model,
+      api,
+      provider: api === "anthropic-messages" ? "anthropic" : "openai",
+      baseUrl: api === "anthropic-messages" ? "https://api.anthropic.com" : model.baseUrl,
+    };
+    const assistant = await (
+      await parent(requestModel, context, { apiKey: "synthetic-key", transport: "sse" })
+    ).result();
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      ...assistant,
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "toolCall",
+          id: "pending_call",
+          name: "exec",
+          arguments: { command: "echo 3; sleep 10" },
+          ...(async ? { async: true } : {}),
+        },
+      ],
+    });
+    const runFork = () =>
+      runEmbeddedSessionFork({
+        ...identity,
+        model: requestModel,
+        apiKey: "synthetic-key",
+        question: "Review only",
+        assertCurrent: () => {},
+      });
+    await expect(runFork()).resolves.toBe("Answer");
+    const pendingCall = physicalFetch.mock.calls[1]!;
+    const pendingBody = await new Request(pendingCall[0], pendingCall[1]).text();
+    expect(pendingBody).toContain("pending_call");
+    expect(pendingBody).toContain("still running");
+    expect(pendingBody).toContain("result is not available yet");
+    expect(pendingBody).not.toContain("aborted");
+    expect(pendingBody).not.toContain('"is_error":true');
+
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      role: "toolResult",
+      toolCallId: "pending_call",
+      toolName: "exec",
+      content: [{ type: "text", text: "3" }],
+      isError: false,
+      timestamp: 3,
+    });
+    await expect(runFork()).resolves.toBe("Answer");
+    const completedCall = physicalFetch.mock.calls[2]!;
+    const completedBody = await new Request(completedCall[0], completedCall[1]).text();
+    expect(completedBody).not.toContain("still running");
+    expect(completedBody).not.toContain("aborted");
+    expect(completedBody).toContain(
+      api === "anthropic-messages" ? '"content":"3"' : '"output":"3"',
+    );
+  });
 
   it("blocks the physical send when access is withdrawn during guarded DNS preparation", async () => {
     let revoked = false;
@@ -449,8 +514,9 @@ describe("prepared session fork provider boundary", () => {
     await expect(fork()).rejects.toThrow("requires a parent turn");
   });
 
-  it("does not re-enter the parent's one-shot prepared payload hook", async () => {
-    const payloads: Record<string, unknown>[] = [];
+  it("isolates replayed wire data without re-entering the parent's one-shot payload hook", async () => {
+    const { parent, physicalFetch } = guardedTransport();
+    const metadata = { acknowledged: "review", unicode: "🦞" };
     const onPayload = vi.fn((payload: unknown) => {
       if (onPayload.mock.calls.length > 1) {
         throw new Error("Provider review continuation cannot rebuild or retry its request");
@@ -458,12 +524,20 @@ describe("prepared session fork provider boundary", () => {
       if (!isRecord(payload)) {
         throw new Error("Expected request");
       }
-      return { ...payload, client_metadata: { acknowledged: "review" } };
+      return { ...payload, client_metadata: metadata };
     });
-    const parent = wrapStreamFnWithSessionFork(transport(payloads, []), identity);
-    await (await parent(model, context, { onPayload })).result();
+    await (await parent(model, context, { apiKey: "synthetic-key", onPayload })).result();
+    metadata.acknowledged = "changed after parent send";
+    await expect(fork()).resolves.toBe("Answer");
     await expect(fork()).resolves.toBe("Answer");
     expect(onPayload).toHaveBeenCalledTimes(1);
-    expect(payloads[1]?.client_metadata).toEqual({ acknowledged: "review" });
+    const bodies = await Promise.all(
+      physicalFetch.mock.calls.map(([url, init]) => new Request(url, init).json()),
+    );
+    expect(bodies).toHaveLength(3);
+    for (const body of bodies) {
+      expect(body).toMatchObject({ client_metadata: { acknowledged: "review", unicode: "🦞" } });
+    }
+    expect(bodies[2]).toEqual(bodies[1]);
   });
 });
