@@ -40,8 +40,13 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import {
+  evictsLiveConversations,
+  readLiveEvictionPlan,
+  reclaimSessionPagesAfterEviction,
+  reclaimSqliteLiveSessionEntriesToHighWater,
+} from "./session-accessor.sqlite-maintenance-live-eviction.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
-import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   resolveSessionReclamationDatabaseOptions,
@@ -58,7 +63,6 @@ import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-work
 import {
   hasCanonicalSessionTranscriptArchives,
   pruneAllSessionTranscriptArchivesToHighWater,
-  reclaimSqliteFreePages,
 } from "./session-history-archive-pruning.js";
 import {
   budgetKickStateByStore,
@@ -148,10 +152,23 @@ export async function inspectSqliteSessionHistoryDiskBudget(
     limit: 1,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   });
-  return {
-    diskBudget,
-    wouldMutate: candidates.length > 0 || archivedCandidates.candidates.length > 0,
-  };
+  if (candidates.length > 0 || archivedCandidates.candidates.length > 0) {
+    return { diskBudget, wouldMutate: true };
+  }
+  if (!evictsLiveConversations(params.maintenance)) {
+    return { diskBudget, wouldMutate: false };
+  }
+  if (usage.totalBytes - usage.databaseWalBytes <= highWaterBytes) {
+    return { diskBudget, wouldMutate: false };
+  }
+  const preview = await readLiveEvictionPlan({
+    archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+    databaseOptions,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
+    readMode: params.reclamationMode,
+    storePath: params.storePath,
+  });
+  return { diskBudget, wouldMutate: preview.plan.entryRemovals.length > 0 };
 }
 
 /** Session ids owned by live runs or work admissions, without durable-reference protection. */
@@ -437,6 +454,16 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
     });
   };
+  const reclaimPagesAfterEviction = () =>
+    reclaimSessionPagesAfterEviction({
+      databaseOptions,
+      databasePath,
+      checkpointGate,
+      budget: params,
+      onIncomplete: (incomplete) => {
+        pruning = incomplete;
+      },
+    });
   let pruning = await pruneArchives("initial");
   let { usage, removedFiles } = pruning;
   let removedEntries = 0;
@@ -634,37 +661,9 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         }
         removedEntries += 1;
         deletedSessionEntries += 1;
-        const pageDiagnostics: SqliteSessionArchivePruningDiagnostics = {
-          trigger: "after-eviction",
-        };
-        checkpointGate.afterNs = process.hrtime.bigint();
-        const checkpointCompleted = await withSqliteSessionPageReclamation(
-          databaseOptions,
-          async (reclaimPages, assertCurrent, preparedOptions) => {
-            try {
-              return await reclaimSqliteFreePages(preparedOptions, pageDiagnostics, {
-                reclaimPages,
-                checkpointGate,
-                assertCurrent,
-                onCheckpointIncomplete: (checkpoint) =>
-                  deferPhysicalBudgetForCheckpoint(params, databasePath, checkpoint),
-              });
-            } catch {
-              // The durable deletion succeeded; a later pass can reclaim pages.
-              assertCurrent();
-              return true;
-            }
-          },
-        );
+        const checkpointCompleted = await reclaimPagesAfterEviction();
         usage = await measureSessionPhysicalDiskUsage(params.storePath);
         if (!checkpointCompleted) {
-          pruning = {
-            usage,
-            removedFiles: 0,
-            completed: false,
-            checkpointIncomplete: pageDiagnostics.checkpointIncomplete ?? 1,
-            checkpoint: pageDiagnostics.checkpoint,
-          };
           return finish();
         }
       }
@@ -673,6 +672,32 @@ async function enforceSessionHistoryMaintenanceForDatabase(
       }
     }
   }
+  // Historical generations and cap-archived sessions first. Idle durable live
+  // nodes are last-resort capacity victims so an explicit maxDiskBytes still
+  // bounds the store.
+  if (usage.totalBytes > highWaterBytes && evictsLiveConversations(params.maintenance)) {
+    const live = await reclaimSqliteLiveSessionEntriesToHighWater({
+      archiveDirectory,
+      highWaterBytes,
+      pruneArchivesToHighWater: async () => {
+        pruning = await pruneArchives("after-eviction");
+        return pruning;
+      },
+      readMode: params.reclamationMode,
+      reclaimFreePages: reclaimPagesAfterEviction,
+      resolved,
+      storePath: params.storePath,
+      usage,
+      preserveRecentMs: params.maintenance.preserveRecentMs,
+    });
+    removedEntries += live.removedEntries;
+    removedFiles += live.removedFiles;
+    usage = live.usage;
+    if (pruning.checkpointIncomplete) {
+      return finish();
+    }
+  }
+
   if (removedEntries > 0) {
     // Historical generations do not change entry cardinality. Whole-database
     // analysis after their eviction stalls foreground writers on large stores.

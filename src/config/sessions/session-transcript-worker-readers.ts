@@ -166,6 +166,11 @@ export function createSessionHistoryWorkerReaders(
       },
       (input) => ({ kind: "historical-eviction-candidates", ...input }),
     ),
+    readLiveEvictionPlan: reader(
+      "live-eviction",
+      (value) => value.live,
+      (input) => ({ kind: "live-eviction", ...input }),
+    ),
     readArchivePruning: reader("session-archive-pruning", (value) => value.result),
     readColdMetadata: reader("cold-metadata", (value) => value),
     readColdStorageInventory: reader("cold-storage-inventory", (value) => value),

@@ -362,6 +362,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
   options: {
     deletedEntriesBeforeMaintenance?: number;
     isCurrent?: () => boolean;
+    onEntryRemoved?: (sessionKey: string) => void;
     retainedExecution?: OpenClawAgentDatabaseExecution;
     publishArchives?: (
       requested: readonly SessionLifecycleArchivedTranscript[],
@@ -605,6 +606,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     deletedEntries +=
       batch.workItems - (batch.entryRemovals.length - committedEntryRemovals.length);
     for (const removal of committedEntryRemovals) {
+      options.onEntryRemoved?.(removal.sessionKey);
       if (removal.maintenanceReason === "model-run-pruned") {
         committedCounts.modelRunPruned += 1;
       } else if (removal.maintenanceReason === "pruned") {

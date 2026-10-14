@@ -10,6 +10,7 @@ import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-pr
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
+import type { LiveEvictionPlan, LiveInput } from "./session-history-eviction-worker.types.js";
 import type {
   PreparedSessionTranscriptHydration,
   SessionTranscriptReadSnapshot,
@@ -120,6 +121,7 @@ export type SessionTranscriptHydrationWorkerRequest =
   | SessionTranscriptLatestActiveMessageWorkerInput;
 
 export type SessionTranscriptHydrationWorkerValues = {
+  "live-eviction": { kind: "live-eviction"; live: LiveEvictionPlan };
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "transcript-maintenance": SessionTranscriptMaintenanceFacts;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
@@ -131,6 +133,7 @@ export type SessionTranscriptHydrationWorkerValues = {
 };
 
 export type SessionTranscriptHydrationReaders = {
+  readLiveEvictionPlan: (input: Omit<LiveInput, "kind" | "database">) => Promise<LiveEvictionPlan>;
   readTranscript: (
     input: Omit<SessionTranscriptHydrationWorkerInput, "kind" | "database">,
     signal?: AbortSignal,

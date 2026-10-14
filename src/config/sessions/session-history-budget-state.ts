@@ -17,7 +17,7 @@ export type SessionHistoryDiskBudgetParams = {
   reclamationMode?: "worker" | "in-process";
   storePath: string;
   maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes"> &
-    Partial<Pick<ResolvedSessionMaintenanceConfig, "preserveRecentMs">>;
+    Partial<Pick<ResolvedSessionMaintenanceConfig, "maxDiskBytesExplicit" | "preserveRecentMs">>;
 };
 
 export function createPhysicalBudgetResult(params: {
