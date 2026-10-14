@@ -1,26 +1,447 @@
-import { describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createApiKeyCredential,
   createOAuthRefreshCredential,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
-import type { ModelDefinitionConfig } from "../../config/types.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
-import {
-  mocks,
-  runStatus,
-  jsonStatus,
-  textStatus,
-  requireProvider,
-  expectResolveAgentDirCalledFor,
-  configureAgentScope,
-  statusConfig,
-  configureStatus,
-} from "./list.status.test-support.js";
+
+const mocks = vi.hoisted(() => {
+  const store: AuthProfileStore = { version: 1, profiles: {} };
+  const runtimeStore: { current?: AuthProfileStore } = {};
+
+  return {
+    store,
+    resolveAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
+    resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
+    resolveDefaultAgentId: vi.fn().mockReturnValue("main"),
+    resolveSessionAgentIds: vi.fn(({ agentId }: { agentId?: string } = {}) => ({
+      defaultAgentId: "main",
+      sessionAgentId: agentId ?? "main",
+    })),
+    resolveAgentNativeModelPrimary: vi.fn(),
+    resolveNativeModelPrimary: vi.fn(),
+    resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
+    resolveAgentConfig: vi.fn().mockReturnValue(undefined),
+    listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
+    listAgentEntries: vi.fn().mockReturnValue([{ id: "main" }, { id: "jeremiah" }]),
+    ensureAuthProfileStore: vi.fn().mockReturnValue(store),
+    getRuntimeAuthProfileStoreSnapshot: vi.fn(() => runtimeStore.current),
+    runtimeStore,
+    listProfilesForProvider: vi.fn((s: typeof store, provider: string) => {
+      return Object.entries(s.profiles)
+        .filter(([, cred]) => cred.provider === provider)
+        .map(([id]) => id);
+    }),
+    loadPersistedAuthProfileStore: vi.fn().mockReturnValue(store),
+    resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
+    resolveAuthStorePathForDisplay: vi.fn(
+      (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
+    ),
+    resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
+    resolveEnvApiKey: vi.fn((provider: string) => {
+      if (provider === "openai") {
+        return {
+          apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+          source: "shell env: OPENAI_API_KEY",
+        };
+      }
+      if (provider === "anthropic") {
+        return {
+          apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890", // pragma: allowlist secret
+          source: "env: ANTHROPIC_OAUTH_TOKEN",
+        };
+      }
+      return null;
+    }),
+    resolveProviderEnvAuthLookupMaps: vi.fn().mockReturnValue({
+      aliasMap: { "codex-cli": "openai" },
+      envCandidateMap: {
+        anthropic: ["ANTHROPIC_API_KEY"],
+        google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        openai: ["OPENAI_OAUTH_TOKEN", "OPENAI_API_KEY"],
+      },
+      authEvidenceMap: {},
+    }),
+    listProviderEnvAuthLookupKeys: vi
+      .fn()
+      .mockImplementation(() => ["anthropic", "google", "openai", "openai"]),
+    listKnownProviderEnvApiKeyNames: vi
+      .fn()
+      .mockReturnValue([
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_OAUTH_TOKEN",
+      ]),
+    hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
+    resolveUsableCustomProviderApiKey: vi.fn().mockReturnValue(null),
+    getCustomProviderApiKey: vi.fn().mockReturnValue(undefined),
+    getShellEnvAppliedKeys: vi.fn().mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
+    shouldEnableShellEnvFallback: vi.fn().mockReturnValue(true),
+    createConfigIO: vi.fn().mockReturnValue({
+      configPath: "/tmp/openclaw-dev/openclaw.json",
+    }),
+    loadConfig: vi.fn().mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+          models: { "anthropic/claude-opus-4-6": { alias: "Opus" } },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    }),
+    loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
+    runAuthProbes: vi
+      .fn<typeof import("./list.probe.js").runAuthProbes>()
+      .mockImplementation(async ({ options }) => ({
+        startedAt: 0,
+        finishedAt: 0,
+        durationMs: 0,
+        totalTargets: 0,
+        options,
+        results: [],
+      })),
+    resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
+    resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
+    resolveAgentHarnessOwnerPluginIds: vi.fn().mockReturnValue(["codex"]),
+    runPluginPayloadSmokeCheckForManifestRecords: vi
+      .fn()
+      .mockResolvedValue({ checked: ["codex"], failures: [] }),
+    resolveAgentHarnessRuntimeAvailability: vi.fn().mockReturnValue({
+      status: "available",
+      ownerPluginIds: ["codex"],
+    }),
+    loadModelCatalog: vi.fn().mockResolvedValue([]),
+    modelCatalogRouteVariants: undefined as unknown[] | undefined,
+    openAIModelRouteOverride: undefined as ((params: unknown) => unknown) | undefined,
+  };
+});
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await import("../../agents/agent-scope-config.js");
+  const { resolveAgentModelPrimaryValue } = await import("../../config/model-input.js");
+  return {
+    resolveAgentDir: mocks.resolveAgentDir,
+    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+    resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+    resolveSessionAgentIds: mocks.resolveSessionAgentIds,
+    resolveAgentNativeModelPrimary: mocks.resolveAgentNativeModelPrimary.mockImplementation(
+      actual.resolveAgentNativeModelPrimary,
+    ),
+    resolveNativeModelPrimary: mocks.resolveNativeModelPrimary.mockImplementation(
+      actual.resolveNativeModelPrimary,
+    ),
+    // Raw getters let caller reversions expose the original model-selection leak.
+    resolveAgentExplicitModelPrimary: (cfg: OpenClawConfig, agentId: string) =>
+      resolveAgentModelPrimaryValue(actual.resolveAgentConfig(cfg, agentId)?.model),
+    resolveAgentEffectiveModelPrimary: (cfg: OpenClawConfig, agentId: string) =>
+      resolveAgentModelPrimaryValue(actual.resolveAgentConfig(cfg, agentId)?.model) ??
+      resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
+    resolveAgentConfig: mocks.resolveAgentConfig,
+    listAgentIds: mocks.listAgentIds,
+    listAgentEntries: mocks.listAgentEntries,
+  };
+});
+vi.mock("../../agents/workspace.js", () => ({
+  resolveDefaultAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
+}));
+vi.mock("../../agents/auth-profiles/display.js", () => ({
+  resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
+}));
+vi.mock("../../agents/auth-profiles/paths.js", () => ({
+  resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
+}));
+vi.mock("../../agents/auth-profiles/persisted.js", () => ({
+  loadPersistedAuthProfileStore: mocks.loadPersistedAuthProfileStore,
+}));
+vi.mock("../../agents/auth-profiles/profiles.js", () => ({
+  listProfilesForProvider: mocks.listProfilesForProvider,
+}));
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
+}));
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
+  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
+}));
+vi.mock("../../agents/auth-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: mocks.getRuntimeAuthProfileStoreSnapshot,
+}));
+vi.mock("../../agents/auth-profiles/usage.js", () => ({
+  resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
+}));
+vi.mock("../../agents/auth-health.js", () => ({
+  DEFAULT_OAUTH_WARN_MS: 86_400_000,
+  buildAuthHealthSummary: vi.fn(
+    ({ store, warnAfterMs }: { store: typeof mocks.store; warnAfterMs: number }) => {
+      const profiles = Object.entries(store.profiles).map(([profileId, profile]) => ({
+        profileId,
+        provider: profile.provider,
+        type: profile.type ?? "api_key",
+        status: profile.type === "api_key" ? "static" : "ok",
+        source: "store",
+        label: profileId,
+      }));
+      return {
+        now: Date.now(),
+        warnAfterMs,
+        profiles,
+        providers: profiles.map((profile) => ({
+          provider: profile.provider,
+          status: profile.status,
+          profiles: [profile],
+        })),
+      };
+    },
+  ),
+  formatRemainingShort: vi.fn(() => "1h"),
+}));
+vi.mock("../../agents/model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-auth.js")>()),
+  resolveEnvApiKey: mocks.resolveEnvApiKey,
+  hasUsableCustomProviderApiKey: mocks.hasUsableCustomProviderApiKey,
+  resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
+  getCustomProviderApiKey: mocks.getCustomProviderApiKey,
+}));
+vi.mock("../../agents/model-auth-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-auth-env.js")>()),
+  resolveEnvApiKey: mocks.resolveEnvApiKey,
+}));
+vi.mock("../../agents/model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps: mocks.resolveProviderEnvAuthLookupMaps,
+  listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
+}));
+vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: vi.fn(() => ({ "codex-cli": "openai" })),
+  resolveProviderIdForAuth: vi.fn((provider: string) =>
+    provider === "codex-cli" ? "openai" : provider,
+  ),
+}));
+vi.mock("../../agents/model-selection-cli.js", () => ({
+  isCliProvider: vi.fn((provider: string) => provider === "claude-cli"),
+}));
+vi.mock("../../infra/shell-env.js", () => ({
+  getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
+  shouldEnableShellEnvFallback: mocks.shouldEnableShellEnvFallback,
+}));
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  createConfigIO: mocks.createConfigIO,
+}));
+vi.mock("./list.probe.js", () => ({ runAuthProbes: mocks.runAuthProbes }));
+vi.mock("./load-config.js", () => ({
+  loadModelsConfig: async () => mocks.loadConfig(),
+}));
+vi.mock("../../infra/provider-usage.js", () => ({
+  formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
+  loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+  resolveUsageProviderId: vi.fn((providerId: string) => providerId),
+}));
+vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
+}));
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  prepareProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
+}));
+vi.mock("../../agents/harness/runtime-plugin.js", () => ({
+  resolveAgentHarnessOwnerPluginIds: mocks.resolveAgentHarnessOwnerPluginIds,
+  resolveAgentHarnessRuntimeAvailability: mocks.resolveAgentHarnessRuntimeAvailability,
+}));
+vi.mock("../../plugins/payload-verification.js", () => ({
+  runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
+}));
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await mocks.loadModelCatalog(...args);
+    return { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
+  },
+}));
+vi.mock("../../agents/openai-model-routes.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/openai-model-routes.js")>();
+  return {
+    ...actual,
+    resolveOpenAIModelRoutes: (params: Parameters<typeof actual.resolveOpenAIModelRoutes>[0]) =>
+      mocks.openAIModelRouteOverride
+        ? mocks.openAIModelRouteOverride(params)
+        : actual.resolveOpenAIModelRoutes(params),
+    createOpenAIModelRoutesResolver: (
+      params: Parameters<typeof actual.createOpenAIModelRoutesResolver>[0],
+    ) => {
+      const resolveRoutes = actual.createOpenAIModelRoutesResolver(params);
+      return (ref: Parameters<ReturnType<typeof actual.createOpenAIModelRoutesResolver>>[0]) =>
+        mocks.openAIModelRouteOverride
+          ? mocks.openAIModelRouteOverride({ provider: "openai", ...ref })
+          : resolveRoutes(ref);
+    },
+  };
+});
+
+import { modelsStatusCommand } from "./list.status-command.js";
+
+const defaultStore: AuthProfileStore = {
+  version: 1,
+  profiles: {
+    "anthropic:default": createOAuthRefreshCredential({
+      provider: "anthropic",
+      access: "sk-ant-oat01-ACCESS-TOKEN-1234567890",
+      refresh: "sk-ant-ort01-REFRESH-TOKEN-1234567890", // pragma: allowlist secret
+      email: "peter@example.com",
+    }),
+    "anthropic:work": createApiKeyCredential(
+      "anthropic",
+      "sk-ant-api-0123456789abcdefghijklmnopqrstuvwxyz",
+    ), // pragma: allowlist secret
+    "openai:default": createOAuthRefreshCredential({
+      access: "eyJhbGciOi-ACCESS",
+      refresh: "oai-refresh-1234567890",
+    }),
+    "openai:api-key": createApiKeyCredential("openai", "abc123"),
+  },
+};
+Object.assign(mocks.store, structuredClone(defaultStore));
+const restoreMocks = Object.values(mocks).flatMap((mock) => {
+  if (!vi.isMockFunction(mock)) {
+    return [];
+  }
+  const implementation = mock.getMockImplementation();
+  return [
+    () => {
+      mock.mockReset();
+      if (implementation) {
+        mock.mockImplementation(implementation);
+      }
+    },
+  ];
+});
+afterEach(() => {
+  for (const restore of restoreMocks) {
+    restore();
+  }
+  for (const key of Object.keys(mocks.store)) {
+    Reflect.deleteProperty(mocks.store, key);
+  }
+  Object.assign(mocks.store, structuredClone(defaultStore));
+  mocks.runtimeStore.current = undefined;
+  mocks.modelCatalogRouteVariants = undefined;
+  mocks.openAIModelRouteOverride = undefined;
+});
+
+type StatusOptions = Parameters<typeof modelsStatusCommand>[0];
+async function jsonStatus(options: StatusOptions = {}) {
+  const runtime = createTestRuntime();
+  await modelsStatusCommand({ json: true, ...options }, runtime);
+  return { runtime, payload: JSON.parse(String(runtime.log.mock.calls[0]?.[0])) };
+}
+async function textStatus(options: StatusOptions = {}) {
+  const runtime = createTestRuntime();
+  await modelsStatusCommand(options, runtime);
+  return { runtime, text: runtime.log.mock.calls.flat().join("\n") };
+}
+
+const requireRecord = createRequireRecord("object", "label-not-object");
+
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value)).toBe(true);
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} was not an array`);
+  }
+  return value;
+}
+
+function requireProvider(providers: unknown, provider: string) {
+  const entry = requireArray(providers, "auth providers").find(
+    (candidate) => requireRecord(candidate, "auth provider").provider === provider,
+  );
+  if (!entry) {
+    throw new Error(`missing provider ${provider}`);
+  }
+  return requireRecord(entry, `provider ${provider}`);
+}
+
+function expectResolveAgentDirCalledFor(agentId: string) {
+  const hasCall = mocks.resolveAgentDir.mock.calls.some((call) => call[1] === agentId);
+  expect(hasCall).toBe(true);
+}
+
+function configureAgentScope(overrides: {
+  primary?: string;
+  fallbacks?: string[];
+  agentDir?: string;
+}) {
+  mocks.resolveAgentNativeModelPrimary.mockReturnValue(overrides.primary);
+  mocks.resolveNativeModelPrimary.mockReturnValue(overrides.primary);
+  mocks.resolveAgentModelFallbacksOverride.mockReturnValue(overrides.fallbacks);
+  if (overrides.agentDir) {
+    mocks.resolveAgentDir.mockReturnValue(overrides.agentDir);
+  }
+}
+
+function statusConfig(primary: string, fallbacks: string[] = [], shellEnv = false) {
+  return {
+    agents: {
+      defaults: {
+        model: { primary, fallbacks },
+        models: Object.fromEntries([primary, ...fallbacks].map((model) => [model, {}])),
+      },
+    },
+    models: { providers: {} },
+    env: { shellEnv: { enabled: shellEnv } },
+  };
+}
+
+function configureStatus(params: {
+  primary: string;
+  fallbacks?: string[];
+  profiles: typeof mocks.store.profiles;
+  routeOverride?: (params: unknown) => unknown;
+  authOrder?: string[];
+  providerBaseUrl?: string;
+  providerModels?: ModelDefinitionConfig[];
+  catalog?: unknown[];
+  routeVariants?: unknown[];
+  utilityModel?: string;
+  modelPolicyAllow?: string[];
+}) {
+  const config = statusConfig(params.primary, params.fallbacks);
+  mocks.loadConfig.mockReturnValue({
+    ...config,
+    agents: {
+      defaults: {
+        ...config.agents.defaults,
+        ...(params.modelPolicyAllow ? { modelPolicy: { allow: params.modelPolicyAllow } } : {}),
+        utilityModel: params.utilityModel ?? "",
+      },
+    },
+    ...(params.authOrder ? { auth: { order: { openai: params.authOrder } } } : {}),
+    models: {
+      providers: params.providerBaseUrl
+        ? { openai: { baseUrl: params.providerBaseUrl, models: params.providerModels ?? [] } }
+        : {},
+    },
+  });
+  mocks.store.profiles = params.profiles;
+  mocks.store.order = undefined;
+  mocks.resolveEnvApiKey.mockReturnValue(null);
+  mocks.openAIModelRouteOverride = params.routeOverride;
+  mocks.loadModelCatalog.mockResolvedValue(params.catalog ?? []);
+  mocks.modelCatalogRouteVariants = params.routeVariants;
+}
 
 describe("modelsStatusCommand auth overview", () => {
   it.each([
@@ -83,7 +504,7 @@ describe("modelsStatusCommand auth overview", () => {
       await releaseCatalog.promise;
       return [];
     });
-    const commandPromise = runStatus({ json: true }, createTestRuntime());
+    const commandPromise = modelsStatusCommand({ json: true }, createTestRuntime());
 
     try {
       await catalogStarted.promise;
@@ -107,9 +528,9 @@ describe("modelsStatusCommand auth overview", () => {
     async (opts, label) => {
       const localRuntime = createTestRuntime();
       mocks.runAuthProbes.mockClear();
-      await expect(runStatus({ json: true, probe: true, ...opts }, localRuntime)).rejects.toThrow(
-        label,
-      );
+      await expect(
+        modelsStatusCommand({ json: true, probe: true, ...opts }, localRuntime),
+      ).rejects.toThrow(label);
       expect(mocks.runAuthProbes).not.toHaveBeenCalled();
       expect(localRuntime.log).not.toHaveBeenCalled();
     },
@@ -636,9 +1057,10 @@ describe("modelsStatusCommand auth overview", () => {
 
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
-    await runStatus({ check: true, plain: true }, localRuntime);
+    await modelsStatusCommand({ check: true, plain: true }, localRuntime);
     expect(localRuntime.writeStdout).toHaveBeenCalledOnce();
     expect(localRuntime.log).not.toHaveBeenCalled();
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

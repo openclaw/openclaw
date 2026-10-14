@@ -483,7 +483,7 @@ export async function loadScopedModelCatalogAuth(
   return { authStore, authModes: Object.freeze(authModes) };
 }
 
-/** Rechecks native runtime logins on demand and publishes only a changed result. */
+/** Rechecks CLI backend logins on demand and publishes only a changed result. */
 export function createNativeLoginRecheck(
   owner: PreparedModelCatalogAuthOwner,
   params: {
@@ -496,12 +496,7 @@ export function createNativeLoginRecheck(
   const { owners, index } = owner.pluginGeneration.pluginMetadataSnapshot;
   const refs = new Set(listManifestSyntheticAuthProviderRefs(index).map(owner.normalizeProvider));
   const providerIds = eligibleProviders.filter(
-    (provider) =>
-      refs.has(provider) &&
-      (owners.cliBackends.has(provider) ||
-        index.plugins.some(
-          (plugin) => plugin.enabled && plugin.startup.agentHarnesses.includes(provider),
-        )),
+    (provider) => owners.cliBackends.has(provider) && refs.has(provider),
   );
   let checkedAt = Date.now();
   let pending = false;

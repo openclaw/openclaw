@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { raceWithAbortSignal } from "../agents/agent-tools.abort.js";
-import { fingerprintOpaqueRuntimeOwner } from "../agents/execution-auth-binding.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { PluginCache } from "../plugins/plugin-cache.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -17,19 +16,12 @@ import {
   type SystemAgentOwnerPluginArtifactSnapshot,
 } from "./verified-inference.js";
 
-/** Native readiness, deliberately distinct from proof that an inference turn executed. */
 export type SetupHarnessVerification = {
-  kind: "harness-setup";
+  ok: true;
   latencyMs: number;
-  binding: SystemAgentOwnerPluginArtifactSnapshot & {
-    runtimeOwnerId: string;
-    runtimeOwnerFingerprint: string;
-    runtimeArtifactId: string;
-    runtimeArtifactFingerprint: string;
-  };
+  binding: SystemAgentOwnerPluginArtifactSnapshot;
 };
 
-/** Optional setup-only path; absent hooks and credential-backed routes retain the turn probe. */
 export async function verifySetupHarness(params: {
   route: SystemAgentConfiguredRoute;
   deps: ActivateSetupInferenceDeps;
@@ -70,21 +62,8 @@ export async function verifySetupHarness(params: {
         deps,
       });
     const artifacts = capture();
-    const artifact = artifacts.ownerPluginArtifacts.find(
-      (entry) => entry.pluginId === ownerPluginId,
-    );
-    if (!artifact) {
+    if (!artifacts.ownerPluginArtifacts.some((entry) => entry.pluginId === ownerPluginId)) {
       throw new Error("The setup verification harness has no trusted runtime artifact.");
-    }
-    const fingerprint = fingerprintOpaqueRuntimeOwner({
-      kind: "plugin-harness",
-      runner: "embedded",
-      provider: route.provider,
-      backendId: runtime,
-      runtimeArtifactFingerprint: artifact.fingerprint,
-    });
-    if (!fingerprint) {
-      throw new Error("The setup verification harness owner could not be bound.");
     }
     const timeout = AbortSignal.timeout(deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS);
     const signal = params.signal ? AbortSignal.any([params.signal, timeout]) : timeout;
@@ -120,16 +99,10 @@ export async function verifySetupHarness(params: {
         );
       }
       return {
-        kind: "harness-setup" as const,
+        ok: true,
         latencyMs: Date.now() - started,
-        binding: {
-          ...artifacts,
-          runtimeOwnerId: runtime,
-          runtimeOwnerFingerprint: fingerprint,
-          runtimeArtifactId: ownerPluginId,
-          runtimeArtifactFingerprint: artifact.fingerprint,
-        },
-      };
+        binding: artifacts,
+      } satisfies SetupHarnessVerification;
     } finally {
       open = false;
     }

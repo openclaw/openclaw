@@ -960,8 +960,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/setup-inference-codex.authority.test.ts",
   "src/system-agent/setup-inference-credentials.authority.test.ts",
   "src/system-agent/setup-inference-credentials.lifecycle.test.ts",
-  "src/system-agent/setup-inference-harness.test.ts",
-  "src/system-agent/setup-inference-muse.test.ts",
   "src/system-agent/setup-inference.provider-install-owner.test.ts",
   "src/system-agent/setup-inference.groq-external.integration.test.ts",
   "src/system-agent/setup-inference-activate.test.ts",

@@ -3,57 +3,62 @@ import type { AgentHarnessSetupVerificationContext } from "openclaw/plugin-sdk/a
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { museEnvironment } from "./environment.js";
 
-export async function verifyMuseSetup(ctx: AgentHarnessSetupVerificationContext): Promise<void> {
-  ctx.signal.throwIfAborted();
-  ctx.assertCurrent();
-  const pluginConfig = ctx.config.plugins?.entries?.muse?.config;
-  const config = isRecord(pluginConfig) ? pluginConfig : {};
+type MuseCatalogEntry = { id: string; name: string; provider: string; nativeRuntime: string };
+
+export async function readMuseCatalog(
+  ctx: Pick<AgentHarnessSetupVerificationContext, "config" | "signal" | "assertCurrent">,
+): Promise<MuseCatalogEntry[]> {
+  const config = ctx.config.plugins?.entries?.muse?.config;
   const env = await museEnvironment();
   ctx.signal.throwIfAborted();
   ctx.assertCurrent();
-  const handshake = spawnMspConnection({
-    command: typeof config.binaryPath === "string" ? config.binaryPath : "muse",
+  const host = spawnMspConnection({
+    command: isRecord(config) && typeof config.binaryPath === "string" ? config.binaryPath : "muse",
     args: ["serve", "--no-session-log", "--disable-shell", "--disable-write"],
     env,
     shutdownTimeoutMs: 1000,
   });
   const abort = () => {
-    void handshake.close();
+    void host.close();
   };
-  const timeout = setTimeout(abort, 30_000);
-  timeout.unref();
-  ctx.signal?.addEventListener("abort", abort, { once: true });
-  if (ctx.signal?.aborted) {
-    abort();
-  }
+  ctx.signal.addEventListener("abort", abort, { once: true });
   try {
-    const host = await handshake.initialize({ clientInfo: { name: "openclaw", version: "1" } });
-    ctx.signal?.throwIfAborted();
+    const ready = await host.initialize({ clientInfo: { name: "openclaw", version: "1" } });
+    ctx.signal.throwIfAborted();
     ctx.assertCurrent();
-    // Starting a session does not validate auth. Only the live provider catalog
-    // proves Muse could authenticate without giving a model any tools to execute.
-    const catalog = await host.connection.request("model/list", {});
-    ctx.signal?.throwIfAborted();
+    const catalog = await ready.connection.request("model/list", {});
+    ctx.signal.throwIfAborted();
     ctx.assertCurrent();
     if (
       catalog.source !== "providerCatalog" ||
-      catalog.providerId !== ctx.provider ||
-      !Array.isArray(catalog.models) ||
-      !catalog.models.some(
-        (model: unknown) =>
-          isRecord(model) && model.providerId === ctx.provider && model.modelId === ctx.modelId,
-      )
+      catalog.providerId !== "meta" ||
+      !Array.isArray(catalog.models)
     ) {
-      throw new Error(
-        `Muse Code could not authenticate access to ${ctx.provider}/${ctx.modelId}. Sign in again, or select a model available to your Meta account.`,
-      );
+      throw new Error("Muse Code could not authenticate. Sign in again to access Meta models.");
     }
-  } catch (error) {
-    ctx.signal?.throwIfAborted();
-    throw error;
+    return catalog.models.flatMap((model: unknown) =>
+      isRecord(model) && model.providerId === "meta" && typeof model.modelId === "string"
+        ? [
+            {
+              id: model.modelId,
+              name: typeof model.displayLabel === "string" ? model.displayLabel : model.modelId,
+              provider: "meta",
+              nativeRuntime: "muse",
+            },
+          ]
+        : [],
+    );
   } finally {
-    clearTimeout(timeout);
-    ctx.signal?.removeEventListener("abort", abort);
-    await handshake.close();
+    ctx.signal.removeEventListener("abort", abort);
+    await host.close();
+  }
+}
+
+export async function verifyMuseSetup(ctx: AgentHarnessSetupVerificationContext): Promise<void> {
+  const models = await readMuseCatalog(ctx);
+  if (!models.some((model) => model.provider === ctx.provider && model.id === ctx.modelId)) {
+    throw new Error(
+      `Muse Code cannot access ${ctx.provider}/${ctx.modelId}. Select a model available to your Meta account.`,
+    );
   }
 }

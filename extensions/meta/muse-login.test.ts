@@ -13,7 +13,7 @@ afterEach(async () => {
   );
 });
 
-async function fixture(mode = "approve") {
+async function fixture() {
   const directory = await mkdtemp(path.join(tmpdir(), "muse-login-"));
   directories.push(directory);
   const binaryPath = path.join(directory, "muse");
@@ -25,10 +25,7 @@ const path = require('node:path');
 const dir = process.env.FAKE_MUSE_DIR;
 if (process.argv[2] !== 'login') process.exit(9);
 fs.appendFileSync(path.join(dir, 'attempts'), 'login\\n');
-if (process.env.FAKE_MUSE_MODE === 'keychain' && process.env.TBH_CREDENTIAL_BACKEND !== 'file') {
-  console.error('keychain write failed: os status -61');
-  process.exit(1);
-}
+if (process.env.TBH_CREDENTIAL_BACKEND !== 'file') process.exit(1);
 fs.writeFileSync(path.join(dir, 'environment'), JSON.stringify({ backend: process.env.TBH_CREDENTIAL_BACKEND, home: process.env.XDG_CONFIG_HOME, key: process.env.META_API_KEY }));
 const watcher = fs.watch(dir, (_, name) => { if (name === 'approve') { watcher.close(); process.exit(0); } });
 process.on('SIGTERM', () => { fs.writeFileSync(path.join(dir, 'cancelled'), 'yes'); watcher.close(); process.exit(0); });
@@ -41,7 +38,6 @@ process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth
     env: {
       ...process.env,
       FAKE_MUSE_DIR: directory,
-      FAKE_MUSE_MODE: mode,
       OPENCLAW_STATE_DIR: path.join(directory, "state"),
       META_API_KEY: "must-not-be-used",
       TBH_CREDENTIAL_BACKEND: undefined,
@@ -69,7 +65,7 @@ process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth
 }
 
 describe("Muse Code browser sign-in", () => {
-  it("shows the device code, waits for approval, and selects the Muse runtime without storing a token", async () => {
+  it("signs in with one browser approval using managed credentials", async () => {
     const { ctx, directory } = await fixture();
     const result = await runMuseLogin(ctx);
     expect(ctx.prompter.deviceCode).toHaveBeenCalledWith({
@@ -77,31 +73,14 @@ describe("Muse Code browser sign-in", () => {
       code: "ABCD-1234",
     });
     expect(ctx.openUrl).toHaveBeenCalledWith("https://auth.meta.com/oauth/device/?code=ABCD-1234");
-    expect(result).toMatchObject({
-      profiles: [],
-      defaultModel: "meta/muse-spark-1.3",
-      configPatch: {
-        plugins: { entries: { muse: { enabled: true } } },
-        agents: {
-          defaults: { models: { "meta/muse-spark-1.3": { agentRuntime: { id: "muse" } } } },
-        },
-      },
+    expect(result.profiles).toEqual([]);
+    expect(await readFile(path.join(directory, "attempts"), "utf8")).toBe("login\n");
+    expect(ctx.prompter.deviceCode).toHaveBeenCalledOnce();
+    expect(ctx.openUrl).toHaveBeenCalledOnce();
+    expect(JSON.parse(await readFile(path.join(directory, "environment"), "utf8"))).toEqual({
+      backend: "file",
+      home: path.join(directory, "state", "muse"),
     });
-    expect(result.configPatch?.models?.providers?.meta).toBeUndefined();
-    expect(
-      JSON.parse(await readFile(path.join(directory, "environment"), "utf8")),
-    ).not.toHaveProperty("key");
-  });
-
-  it("cancels the supervised process before returning", async () => {
-    const { ctx, directory } = await fixture();
-    const controller = new AbortController();
-    ctx.signal = controller.signal;
-    ctx.openUrl = vi.fn(async () => {
-      controller.abort(new Error("cancelled by user"));
-    });
-    await expect(runMuseLogin(ctx)).rejects.toThrow("cancelled by user");
-    expect(await readFile(path.join(directory, "cancelled"), "utf8")).toBe("yes");
   });
 
   it("terminates the child even when cancellation interrupts device-code presentation", async () => {
@@ -126,18 +105,5 @@ describe("Muse Code browser sign-in", () => {
       "curl -fsSL https://dev.meta.ai/install.sh | bash",
     );
     expect(ctx.openUrl).not.toHaveBeenCalled();
-  });
-
-  it("uses the file backend on the first and only approval without Keychain", async () => {
-    const { ctx, directory } = await fixture("keychain");
-    const result = await runMuseLogin(ctx);
-    expect(result.configPatch?.plugins?.entries?.muse).toEqual({ enabled: true });
-    expect(await readFile(path.join(directory, "attempts"), "utf8")).toBe("login\n");
-    expect(ctx.prompter.deviceCode).toHaveBeenCalledOnce();
-    expect(ctx.openUrl).toHaveBeenCalledOnce();
-    expect(JSON.parse(await readFile(path.join(directory, "environment"), "utf8"))).toEqual({
-      backend: "file",
-      home: path.join(directory, "state", "muse"),
-    });
   });
 });

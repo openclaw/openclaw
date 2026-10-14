@@ -65,33 +65,6 @@ export function createCliRuntimeModelAuthEvaluator(
             metadataSnapshot: params.metadataSnapshot,
             preparedAuthDirectories: params.preparedCliRuntimeAuthDirectories,
           }) ?? normalizeProviderId(provider));
-    if (
-      normalizeProviderId(provider) === "meta" &&
-      normalizeProviderId(runtimeProvider) === "muse"
-    ) {
-      // Muse consumes its own login; that fact never authorizes Meta's direct transport.
-      const native = params.preparedRuntimeAuthModes?.muse;
-      if (
-        !selectedProfileId &&
-        params.cfg.auth?.order?.meta === undefined &&
-        typeof native === "object" &&
-        native.source === "native"
-      ) {
-        return {
-          availability: true,
-          routeResolution: null,
-          selectedAuthMode: native.mode,
-          evidence: "runtime",
-          runtimeAuth: { id: "muse", source: "native" },
-        };
-      }
-      if (evaluation.availability === true || selectedProfileId) {
-        return evaluation;
-      }
-      return params.preparedSyntheticAuthComplete
-        ? { availability: false, routeResolution: null, unavailableReason: "missing-auth" }
-        : { availability: undefined, routeResolution: null };
-    }
     const binding = resolveCliRuntimeModelBackendBinding({ provider, runtime: runtimeProvider });
     const runtimeOwners = params.metadataSnapshot?.owners?.cliBackends.get(
       normalizeProviderId(runtimeProvider),

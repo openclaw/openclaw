@@ -12,14 +12,6 @@ it("offers Meta API keys and Muse device sign-in before the Muse runtime is inst
     throw new Error(loaded.error);
   }
   const manifest = loaded.manifest;
-  expect(
-    manifest.providerAuthChoices?.find((choice) => choice.choiceId === "muse-code")?.credentialOnly,
-  ).toBeUndefined();
-  const openaiRootDir = path.resolve("extensions/openai");
-  const loadedOpenai = loadPluginManifest(openaiRootDir, false);
-  if (!loadedOpenai.ok) {
-    throw new Error(loadedOpenai.error);
-  }
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
@@ -28,13 +20,6 @@ it("offers Meta API keys and Muse device sign-in before the Muse runtime is inst
         origin: "bundled",
         providers: manifest.providers,
         providerAuthChoices: manifest.providerAuthChoices,
-      },
-      {
-        id: loadedOpenai.manifest.id,
-        rootDir: openaiRootDir,
-        origin: "bundled",
-        providers: loadedOpenai.manifest.providers,
-        providerAuthChoices: loadedOpenai.manifest.providerAuthChoices,
       },
     ],
   });
@@ -61,9 +46,4 @@ it("offers Meta API keys and Muse device sign-in before the Muse runtime is inst
       }),
     ],
   });
-  const credentialOnly = capabilities
-    .find((entry) => entry.provider === "openai")
-    ?.loginOptions?.find((option) => option.id === "openai/openai");
-  expect(credentialOnly).toMatchObject({ id: "openai/openai", kind: "oauth" });
-  expect(credentialOnly).not.toHaveProperty("requiresSetup");
 });

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentHarnessAttemptParamsV2,
@@ -852,37 +852,64 @@ describe("Muse native MSP harness", () => {
     }
   });
 
-  it("starts Muse with the managed credential home used by browser sign-in", async () => {
-    const setupResult = setup();
-    const { params, sessionStore } = setupResult;
-    const log = join(workspace, `${params.runId}.jsonl`);
-    vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
-    vi.stubEnv("MUSE_REQUEST_LOG", log);
-    const managedHome = join(workspace, "state", "muse", "muse");
-    await mkdir(managedHome, { recursive: true });
-    await writeFile(join(managedHome, "auth.json"), JSON.stringify({ providers: { meta: {} } }));
-    const harness = createMuseAgentHarness({
-      binaryPath: fixture,
-      sessionStore,
-    });
-    try {
-      expect(terminal(await harness.runAttempt(params))).toMatchObject({ kind: "ok" });
-      const spawn = (await readFile(log, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-        .find((event) => event.event === "spawn");
-      expect(spawn).toMatchObject({
-        credentialBackend: "file",
-        configHome: join(workspace, "state", "muse"),
-      });
-    } finally {
-      await harness.dispose?.();
-      await setupResult.harness.dispose?.();
-      await rm(managedHome, { recursive: true, force: true });
-      vi.unstubAllEnvs();
-    }
-  });
+  it.runIf(process.platform !== "win32")(
+    "verifies native catalogs on inherited PATH without a workspace, and rejects bundled fallback",
+    async () => {
+      const { harness, params } = setup();
+      const log = join(workspace, `${params.runId}.jsonl`);
+      await writeFile(
+        join(workspace, "muse"),
+        `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const stateDir = join(workspace, "catalog-state");
+      await mkdir(join(stateDir, "muse", "muse"), { recursive: true });
+      await writeFile(join(stateDir, "muse", "muse", "auth.json"), "{}");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("PATH", `${workspace}${delimiter}${process.env.PATH ?? ""}`);
+      vi.stubEnv("MUSE_REQUEST_LOG", log);
+      vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "providerCatalog");
+      const scope = {
+        config: { plugins: { entries: { muse: { config: { binaryPath: "muse" } } } } },
+        agentId: "main",
+        agentDir: workspace,
+        workspaceDir: join(workspace, "absent"),
+      };
+      const verification = {
+        ...scope,
+        provider: "meta",
+        modelId: "muse-spark-1.3",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      };
+      if (!harness.verifySetup || !harness.loadModelCatalog || !harness.readModelCatalogReadiness) {
+        throw new Error("Muse must own its catalog readiness and setup verification");
+      }
+      try {
+        await harness.verifySetup(verification);
+        await harness.loadModelCatalog(scope);
+        expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
+        vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
+        await expect(harness.verifySetup(verification)).rejects.toThrow("authenticate");
+        await expect(harness.loadModelCatalog(scope)).rejects.toThrow("authenticate");
+        expect(harness.readModelCatalogReadiness(verification)).toBeUndefined();
+        const requests = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(requests[0]).toMatchObject({
+          path: process.env.PATH,
+          credentialBackend: "file",
+          configHome: join(stateDir, "muse"),
+        });
+        expect(requests.map((request) => request.method)).not.toContain("turn/start");
+        expect(requests.map((request) => request.method)).not.toContain("session/start");
+      } finally {
+        await harness.dispose?.();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("rejects sandbox and restricted-tool attempts before starting native work", async () => {
     const { harness, params, bindings } = setup();
