@@ -74,7 +74,7 @@ describe("Workboard archived session recovery", () => {
           expect(await store.get(active.id)).toMatchObject({ status: cardStatus });
         } finally {
           service.onGatewayStop();
-          await service.stop();
+          service.stop();
         }
       } finally {
         vi.useRealTimers();
