@@ -253,7 +253,7 @@ type PendingApprovalInput = {
 
 export function readPendingOperatorApprovalsInDatabase(
   params: PendingApprovalInput,
-  db: DatabaseSync,
+  db: EngineConnection,
 ) {
   const nowMs = params.nowMs ?? Date.now();
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
@@ -307,7 +307,7 @@ export function readPendingOperatorApprovalsInDatabase(
   return { records, corrupt };
 }
 
-export function hasDueOperatorApprovalsInDatabase(nowMs: number, db: DatabaseSync): boolean {
+export function hasDueOperatorApprovalsInDatabase(nowMs: number, db: EngineConnection): boolean {
   return (
     executeSqliteQueryTakeFirstSync(
       db,
