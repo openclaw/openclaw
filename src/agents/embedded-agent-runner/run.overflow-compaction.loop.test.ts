@@ -369,6 +369,21 @@ describe("embedded run retry dispatch", () => {
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
 
+  it("forwards the protected MCP metadata factory through production dispatch", async () => {
+    const createMcpProtectedRequestMeta = vi.fn();
+    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    input.runInput.runParams.createMcpProtectedRequestMeta = createMcpProtectedRequestMeta;
+
+    const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
+
+    expect(dispatchedAttempt.preparedAttempt.createMcpProtectedRequestMeta).toBe(
+      createMcpProtectedRequestMeta,
+    );
+    expect(mocks.runAttempt.mock.calls[0]?.[0].createMcpProtectedRequestMeta).toBe(
+      createMcpProtectedRequestMeta,
+    );
+  });
+
   it.each([
     { contextTokens: 40_000, nativeModelOwned: true, sessionKey: "agent:main:session-1" },
     { contextTokens: undefined, nativeModelOwned: true, sessionKey: "agent:main:session-1" },

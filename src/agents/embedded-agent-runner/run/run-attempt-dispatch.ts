@@ -422,6 +422,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
+    createMcpProtectedRequestMeta: params.createMcpProtectedRequestMeta,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     conversationRoutePeerId: params.conversationRoutePeerId,
