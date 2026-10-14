@@ -95,8 +95,10 @@ describe("Node Code Mode executor", () => {
           source: 'for (let i = 0; i < 20000; i++) json({ i, value: "x".repeat(4096) }); return 42;',
         }, { timeoutMs: 7000 }));
         registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url).href)}));
+        // Leave room for the source loader's old-space fragmentation on Linux CI.
+        const pressureConfig = { ...config, timeoutMs: 10000, memoryLimitBytes: 256 * 1024 * 1024 };
         const lowPressure = await host.run(() => nodeCodeModeExecutor.execute({
-          kind: "exec", config: { ...config, memoryLimitBytes: 128 * 1024 * 1024 }, catalog: [], namespaces: [],
+          kind: "exec", config: pressureConfig, catalog: [], namespaces: [],
           source: 'const until = Date.now() + 1100; while (Date.now() < until) { collectGarbage(); await yield_control(); } return 1;',
         }, { timeoutMs: 7000, inlineHost: {
           onBoundary: async (boundary, context) => ({
@@ -106,7 +108,7 @@ describe("Node Code Mode executor", () => {
         } }));
         const pressureStarted = performance.now();
         const pressure = await host.run(() => nodeCodeModeExecutor.execute({
-          kind: "exec", config: { ...config, timeoutMs: 10000, memoryLimitBytes: 128 * 1024 * 1024 }, catalog: [], namespaces: [],
+          kind: "exec", config: pressureConfig, catalog: [], namespaces: [],
           source: 'const data = []; while (heapStatistics().used_heap_size < heapStatistics().heap_size_limit * 0.87) data.push(new Array(131072).fill(1)); for (;;) { collectGarbage(); await yield_control(); }',
         }, { timeoutMs: 10000, inlineHost: {
           onBoundary: async (boundary, context) => ({
