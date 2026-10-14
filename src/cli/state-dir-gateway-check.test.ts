@@ -6,8 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   probeGateway: vi.fn(),
-  readGatewayServiceState: vi.fn(),
-  resolveGatewayService: vi.fn(() => ({})),
+  readServiceCommand: vi.fn(),
+  resolveGatewayService: vi.fn(),
 }));
 
 vi.mock("../gateway/call.js", async (importOriginal) => ({
@@ -19,12 +19,9 @@ vi.mock("../gateway/probe.js", async (importOriginal) => ({
   probeGateway: mocks.probeGateway,
 }));
 vi.mock("../daemon/service.js", () => ({
-  readGatewayServiceState: mocks.readGatewayServiceState,
   resolveGatewayService: mocks.resolveGatewayService,
 }));
 
-const { GatewayCredentialsRequiredError } =
-  await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
 import { checkCliGatewayStateDir, compareCliGatewayStateDirs } from "./state-dir-gateway-check.js";
 
 describe("state-dir-gateway-check", () => {
@@ -42,11 +39,10 @@ describe("state-dir-gateway-check", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", cliConfigPath);
     mocks.callGateway.mockReset().mockRejectedValue(new Error("ECONNREFUSED"));
     mocks.probeGateway.mockReset().mockResolvedValue({ ok: false });
-    mocks.readGatewayServiceState.mockReset().mockResolvedValue({
-      installed: false,
-      env: {},
-    });
-    mocks.resolveGatewayService.mockClear();
+    mocks.resolveGatewayService
+      .mockReset()
+      .mockReturnValue({ readCommand: mocks.readServiceCommand });
+    mocks.readServiceCommand.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -73,89 +69,34 @@ describe("state-dir-gateway-check", () => {
     ).toEqual({ kind: "allow" });
   });
 
-  it.each([true, false, undefined])(
-    "refuses an installed service mismatch when running is %s",
-    async (running) => {
-      const gatewayStateDir = path.join(root, "service");
-      const gatewayConfigPath = path.join(gatewayStateDir, "openclaw.json");
-      await fs.mkdir(gatewayStateDir);
-      mocks.readGatewayServiceState.mockImplementation(
-        async (_service: unknown, options: { env: NodeJS.ProcessEnv }) => ({
-          installed: true,
-          running,
-          env: {
-            ...options.env,
-            OPENCLAW_STATE_DIR: gatewayStateDir,
-            OPENCLAW_CONFIG_PATH: gatewayConfigPath,
-          },
-        }),
-      );
-
-      await expect(
-        checkCliGatewayStateDir({ command: "openclaw channels add", config: {} }),
-      ).resolves.toMatchObject({ kind: "refuse" });
-      const inspectedEnv = mocks.readGatewayServiceState.mock.calls[0]?.[1]?.env;
-      expect(inspectedEnv).not.toHaveProperty("OPENCLAW_STATE_DIR");
-      expect(inspectedEnv).not.toHaveProperty("OPENCLAW_CONFIG_PATH");
-    },
-  );
-
-  it("allows a matching installed service without probing", async () => {
-    mocks.readGatewayServiceState.mockResolvedValue({
-      installed: true,
-      running: false,
-      env: {
-        OPENCLAW_STATE_DIR: cliStateDir,
-        OPENCLAW_CONFIG_PATH: cliConfigPath,
+  it("refuses an offline home mismatch using the recorded service environment", async () => {
+    const canonicalRoot = await fs.realpath(root);
+    const serviceHome = path.join(canonicalRoot, "service-home");
+    const cliHome = path.join(canonicalRoot, "cli-home");
+    const serviceRuntimeHome = path.join(serviceHome, "runtime");
+    await fs.mkdir(serviceHome);
+    await fs.mkdir(cliHome);
+    vi.stubEnv("HOME", serviceHome);
+    vi.stubEnv("OPENCLAW_HOME", cliHome);
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+    mocks.readServiceCommand.mockResolvedValue({
+      programArguments: ["node", "gateway.js"],
+      environment: {
+        HOME: serviceHome,
+        OPENCLAW_HOME: serviceRuntimeHome,
       },
     });
 
     await expect(
-      checkCliGatewayStateDir({ command: "openclaw models auth", config: {} }),
-    ).resolves.toEqual({ kind: "allow" });
-    expect(mocks.probeGateway).not.toHaveBeenCalled();
-  });
-
-  it("refuses paths from an authenticated hello without service fallback", async () => {
-    const gatewayStateDir = path.join(root, "gateway");
-    const gatewayConfigPath = path.join(gatewayStateDir, "openclaw.json");
-    await fs.mkdir(gatewayStateDir);
-    mocks.callGateway.mockImplementation(
-      async (options: {
-        onHelloOk?: (hello: { snapshot: { stateDir?: string; configPath?: string } }) => void;
-      }) => {
-        options.onHelloOk?.({
-          snapshot: { stateDir: gatewayStateDir, configPath: gatewayConfigPath },
-        });
-        return {};
-      },
-    );
-
-    await expect(
-      checkCliGatewayStateDir({ command: "openclaw channels add", config: {} }),
-    ).resolves.toMatchObject({ kind: "refuse" });
-    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
-  });
-
-  it("warns only when a credential-blocked protocol probe reaches an unowned Gateway", async () => {
-    mocks.callGateway.mockRejectedValue(
-      new GatewayCredentialsRequiredError({ method: "status", configPath: cliConfigPath }),
-    );
-    mocks.probeGateway.mockResolvedValue({ ok: false, gatewayReached: true });
-
-    await expect(
-      checkCliGatewayStateDir({
-        command: "openclaw models auth",
-        config: { gateway: { auth: { mode: "token" } } },
-      }),
-    ).resolves.toMatchObject({ kind: "warn" });
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeDetails: false,
-        suppressStoredDeviceAuth: true,
-        timeoutMs: 3_000,
-      }),
-    );
+      checkCliGatewayStateDir({ command: "openclaw configure", config: {} }),
+    ).resolves.toMatchObject({
+      kind: "refuse",
+      message: expect.stringContaining(path.join(serviceRuntimeHome, ".openclaw")),
+    });
+    const inspectedEnv = mocks.readServiceCommand.mock.calls[0]?.[0];
+    expect(inspectedEnv).not.toHaveProperty("OPENCLAW_HOME");
+    expect(mocks.readServiceCommand.mock.calls[0]?.[1]).toMatchObject({ requireEffective: true });
   });
 
   it("allows an offline command and does not probe an ordinary transport failure", async () => {
@@ -165,14 +106,44 @@ describe("state-dir-gateway-check", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
-  it("warns for a remote Gateway without local inspection", async () => {
+  it("warns when service inspection is unavailable without exposing its error", async () => {
+    const error = new Error("private-service-inspection-canary");
+    mocks.readServiceCommand.mockRejectedValue(error);
+
+    const result = await checkCliGatewayStateDir({ command: "openclaw configure", config: {} });
+    expect(result).toMatchObject({
+      kind: "warn",
+      message: expect.stringContaining("could not be verified"),
+    });
+    expect(JSON.stringify(result)).not.toContain("private-service-inspection-canary");
+  });
+
+  it("does not infer service paths from the CLI environment", async () => {
+    mocks.readServiceCommand.mockResolvedValue({
+      programArguments: ["node", "gateway.js"],
+      environment: { PATH: "/synthetic/bin" },
+    });
+
     await expect(
-      checkCliGatewayStateDir({
-        command: "openclaw configure",
-        config: { gateway: { mode: "remote", remote: { url: "wss://gateway.example" } } },
-      }),
+      checkCliGatewayStateDir({ command: "openclaw configure", config: {} }),
     ).resolves.toMatchObject({ kind: "warn" });
+  });
+
+  it("redacts credentials in remote target warnings", async () => {
+    const result = await checkCliGatewayStateDir({
+      command: "openclaw configure",
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://private-url-user:private-url-password@gateway.example?token=private-url-token",
+          },
+        },
+      },
+    });
+    expect(result.kind).toBe("warn");
+    expect(JSON.stringify(result)).not.toContain("private-url-");
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
+    expect(mocks.readServiceCommand).not.toHaveBeenCalled();
   });
 });

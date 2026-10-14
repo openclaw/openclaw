@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const tempDirs: string[] = [];
@@ -11,24 +16,40 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+const addedTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function makeWorkspace(label: string): Promise<string> {
+  return await fs.realpath(addedTempDirs.make(`openclaw-${label}-`));
+}
+
 describe("prepareEmbeddedAttemptBootstrap", () => {
-  async function prepare(params: { agentWorkspace: string; sessionWorkspace: string }) {
+  async function prepare(params: {
+    agentWorkspace: string;
+    sessionWorkspace: string;
+    contextInjection?: "always" | "continuation-skip" | "never";
+  }) {
     return await prepareEmbeddedAttemptBootstrap({
       attempt: {
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
         trigger: "user",
+        bootstrapWorkspaceDir: params.agentWorkspace,
         isCanonicalWorkspace: params.agentWorkspace === params.sessionWorkspace,
-        config: { agents: { defaults: { workspace: params.agentWorkspace } } },
+        config: {
+          agents: {
+            defaults: {
+              workspace: params.agentWorkspace,
+              ...(params.contextInjection ? { contextInjection: params.contextInjection } : {}),
+            },
+          },
+        },
       } as EmbeddedRunAttemptParams,
-      bootstrapWorkspaceDir: params.agentWorkspace,
-      effectiveWorkspace: params.sessionWorkspace,
+      setup: createAttemptSetupFixture({
+        effectiveWorkspace: params.sessionWorkspace,
+        resolvedWorkspace: params.sessionWorkspace,
+      }),
       hasReadTool: true,
       isRawModelRun: false,
-      markStage: () => undefined,
-      resolvedWorkspace: params.sessionWorkspace,
-      sessionAgentId: "main",
-      sessionLabel: "agent:main:session-1",
     });
   }
 
@@ -71,6 +92,146 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     );
   });
 
+  it("withholds the completion marker when the execution project AGENTS.md was unreadable", async () => {
+    const agentWorkspace = await makeWorkspace("agent-workspace");
+    const sessionWorkspace = await makeWorkspace("session-workspace");
+    await fs.writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions");
+    await fs.writeFile(
+      path.join(sessionWorkspace, "AGENTS.md"),
+      "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1),
+    );
+
+    const result = await prepare({
+      agentWorkspace,
+      sessionWorkspace,
+      contextInjection: "continuation-skip",
+    });
+
+    expect(result.bootstrapMode).toBe("none");
+    expect(result.contextFiles).toContainEqual(
+      expect.objectContaining({
+        path: path.join(sessionWorkspace, "AGENTS.md"),
+        content: expect.stringMatching(/^\[UNREADABLE: File exceeds/),
+      }),
+    );
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+
+    await fs.writeFile(path.join(sessionWorkspace, "AGENTS.md"), "Recovered project instructions");
+    const recovered = await prepare({
+      agentWorkspace,
+      sessionWorkspace,
+      contextInjection: "continuation-skip",
+    });
+    expect(recovered.shouldRecordCompletedBootstrapTurn).toBe(true);
+    expect(recovered.contextFiles).toContainEqual(
+      expect.objectContaining({ content: "Recovered project instructions" }),
+    );
+  });
+
+  it("withholds the completion marker when a full bootstrap turn carried an unreadable file", async () => {
+    const workspace = await makeWorkspace("onboarding-workspace");
+    await fs.writeFile(path.join(workspace, "BOOTSTRAP.md"), "Finish the workspace setup.");
+    await fs.writeFile(
+      path.join(workspace, "AGENTS.md"),
+      "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1),
+    );
+
+    const result = await prepare({
+      agentWorkspace: workspace,
+      sessionWorkspace: workspace,
+      contextInjection: "continuation-skip",
+    });
+
+    expect(result.bootstrapMode).toBe("full");
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
+  it("remaps injected paths into the prompt workspace while accounting keeps source paths", async () => {
+    // Sandbox runs show the model the copy path; injection accounting still has
+    // to recognize the host file it loaded, or its bytes read as never injected.
+    const workspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-remap-workspace-")),
+    );
+    const promptWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-remap-prompt-")),
+    );
+    tempDirs.push(workspace, promptWorkspace);
+    const agents = "Sandboxed agent instructions";
+    await fs.writeFile(path.join(workspace, "AGENTS.md"), agents);
+
+    const result = await prepareEmbeddedAttemptBootstrap({
+      attempt: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        trigger: "user",
+        bootstrapWorkspaceDir: workspace,
+        isCanonicalWorkspace: true,
+        config: { agents: { defaults: { workspace } } },
+      } as EmbeddedRunAttemptParams,
+      setup: createAttemptSetupFixture({
+        effectiveWorkspace: promptWorkspace,
+        resolvedWorkspace: workspace,
+      }),
+      hasReadTool: true,
+      isRawModelRun: false,
+    });
+
+    expect(result.contextFiles).toContainEqual(
+      expect.objectContaining({
+        path: path.join(promptWorkspace, "AGENTS.md"),
+        content: agents,
+      }),
+    );
+    expect(result.bootstrapInjectionStats).toContainEqual(
+      expect.objectContaining({
+        path: path.join(workspace, "AGENTS.md"),
+        rawChars: agents.length,
+        injectedChars: agents.length,
+        truncated: false,
+      }),
+    );
+  });
+
+  it("selects the current person's agent-workspace overlay across attempt switches", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const workspace = state.statePath("workspace");
+      const alice = ensureProfileForEmail("alice@example.test");
+      const bob = ensureProfileForEmail("bob@example.test");
+      for (const profile of [alice, bob]) {
+        const dir = path.join(workspace, "users", profile.id);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "USER.md"),
+          profile.id === alice.id ? "Alice guidance" : "Bob guidance",
+        );
+      }
+      await fs.writeFile(path.join(workspace, "USER.md"), "Shared guidance");
+      for (const profile of [alice, bob, undefined]) {
+        const result = await prepareEmbeddedAttemptBootstrap({
+          attempt: {
+            sessionId: "same-session",
+            sessionKey: "agent:main:same-session",
+            trigger: "user",
+            bootstrapUserProfileId: profile?.id,
+            bootstrapWorkspaceDir: workspace,
+            isCanonicalWorkspace: true,
+            config: { agents: { defaults: { workspace } } },
+          } as EmbeddedRunAttemptParams,
+          setup: createAttemptSetupFixture({
+            effectiveWorkspace: workspace,
+            resolvedWorkspace: workspace,
+          }),
+          hasReadTool: true,
+          isRawModelRun: false,
+        });
+        const context = result.contextFiles.map((file) => file.content).join("\n");
+        expect(context).toContain("Shared guidance");
+        expect(context.includes("Alice guidance")).toBe(profile === alice);
+        expect(context.includes("Bob guidance")).toBe(profile === bob);
+      }
+    });
+  });
+
   it("keeps same-workspace bootstrap output byte-identical", async () => {
     const workspace = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-same-workspace-")),
@@ -88,13 +249,12 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         isCanonicalWorkspace: true,
         config: { agents: { defaults: { workspace } } },
       } as EmbeddedRunAttemptParams,
-      effectiveWorkspace: workspace,
+      setup: createAttemptSetupFixture({
+        effectiveWorkspace: workspace,
+        resolvedWorkspace: workspace,
+      }),
       hasReadTool: true,
       isRawModelRun: false,
-      markStage: () => undefined,
-      resolvedWorkspace: workspace,
-      sessionAgentId: "main",
-      sessionLabel: "agent:main:session-1",
     });
 
     expect(explicit).toEqual(omitted);

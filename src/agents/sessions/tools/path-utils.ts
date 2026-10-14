@@ -7,6 +7,7 @@ import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
 import { preserveAtPrefixedRelativePath } from "../../path-policy.js";
+import { normalizeFileReferencePrefix } from "../../sandbox-paths.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -16,10 +17,6 @@ function normalizeUnicodeSpaces(str: string): string {
 
 function tryMacOSScreenshotPath(filePath: string): string {
   return filePath.replace(/ (?=(?:AM|PM)(?:\b|\.))/gi, NARROW_NO_BREAK_SPACE);
-}
-
-function normalizeAtPrefix(filePath: string): string {
-  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
 /** Expand OS-home syntax without treating a POSIX backslash as a separator. */
@@ -36,7 +33,7 @@ export function expandOsHomePrefix(filePath: string): string {
 }
 
 function expandPath(filePath: string): string {
-  const normalized = normalizeAtPrefix(filePath);
+  const normalized = normalizeFileReferencePrefix(filePath);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);

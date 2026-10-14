@@ -1,4 +1,3 @@
-/** Doctor note for workspace bootstrap file size and truncation risk. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentIds,
@@ -8,12 +7,14 @@ import {
 import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
+  isFixedUserCapFile,
 } from "../agents/bootstrap-budget.js";
-import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
+import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.
@@ -40,36 +41,38 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
 
-/**
- * Analyzes configured bootstrap files and emits warnings when injection will truncate content.
- *
- * Returns the raw budget analysis for tests and callers that need structured evidence.
- */
+export async function collectBootstrapFileSize(
+  cfg: OpenClawConfig,
+  workspaceDir: string,
+  agentId?: string,
+) {
+  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
+    workspaceDir,
+    config: cfg,
+    agentId,
+  });
+  return {
+    bootstrapTotalMaxChars,
+    analysis: analyzeBootstrapBudget({
+      files: buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles: contextFiles }),
+      bootstrapMaxChars,
+      bootstrapTotalMaxChars,
+    }),
+  };
+}
+
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const agentIds = listAgentIds(cfg);
-  const workspaces = agentIds.map((agentId) => ({
-    agentId,
-    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-  }));
   let defaultAnalysis: ReturnType<typeof analyzeBootstrapBudget> | undefined;
-  for (const { agentId, workspaceDir } of workspaces) {
-    const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
-    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
-      workspaceDir,
-      config: cfg,
+  for (const agentId of agentIds) {
+    const { analysis, bootstrapTotalMaxChars } = await collectBootstrapFileSize(
+      cfg,
+      resolveAgentWorkspaceDir(cfg, agentId),
       agentId,
-    });
-    const stats = buildBootstrapInjectionStats({
-      bootstrapFiles,
-      injectedFiles: contextFiles,
-    });
-    const analysis = analyzeBootstrapBudget({
-      files: stats,
-      bootstrapMaxChars,
-      bootstrapTotalMaxChars,
-    });
+    );
     if (agentId === defaultAgentId) {
       defaultAnalysis = analysis;
     }
@@ -94,13 +97,10 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       lines.push("Workspace bootstrap files are near configured limits:");
     }
 
-    const nonTruncatedNearLimit = analysis.nearLimitFiles.filter((file) => !file.truncated);
-    if (nonTruncatedNearLimit.length > 0) {
-      for (const file of nonTruncatedNearLimit) {
-        lines.push(
-          `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, bootstrapMaxChars)} of max/file ${formatInt(bootstrapMaxChars)})`,
-        );
-      }
+    for (const file of analysis.nearLimitFiles.filter((entry) => !entry.truncated)) {
+      lines.push(
+        `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, file.effectiveFileLimit)} of max/file ${formatInt(file.effectiveFileLimit)})`,
+      );
     }
 
     lines.push(
@@ -110,24 +110,29 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
-    const needsPerFileTip =
-      analysis.truncatedFiles.some((file) => file.causes.includes("per-file-limit")) ||
-      analysis.nearLimitFiles.length > 0;
+    // Report USER.md's fixed cap separately from tunable per-file limits.
+    const perFileWarnings = [
+      ...analysis.truncatedFiles.filter((file) => file.causes.includes("per-file-limit")),
+      ...analysis.nearLimitFiles,
+    ];
+    const fixedUserCapRelevant = perFileWarnings.some(isFixedUserCapFile);
+    const needsPerFileTip = perFileWarnings.some((file) => !isFixedUserCapFile(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;
-    if (needsPerFileTip || needsTotalTip) {
-      lines.push("");
-    }
-    if (needsPerFileTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      );
-    }
-    if (needsTotalTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
-      );
+    const tips = [
+      fixedUserCapRelevant
+        ? `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`
+        : "",
+      needsPerFileTip
+        ? "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits."
+        : "",
+      needsTotalTip
+        ? "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits."
+        : "",
+    ].filter(Boolean);
+    if (tips.length > 0) {
+      lines.push("", ...tips);
     }
 
     note(lines.join("\n"), "Bootstrap file size");

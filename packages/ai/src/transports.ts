@@ -1,7 +1,11 @@
 /** Provider transport implementations and transport-specific compatibility helpers. */
-export type { OpenAIResponsesCompactionRejection } from "./provider-options.js";
+export type {
+  CompactionReplayRejection,
+  OpenAIResponsesCompactionRejection,
+} from "./provider-options.js";
 export * from "./transports/anthropic-payload-policy.js";
 export * from "./transports/anthropic-transport-stream.js";
+export { resolveCompletionTokenReservation } from "./transports/anthropic-transport-options.js";
 export * from "./transports/deepseek-text-filter.js";
 export * from "./transports/google-thinking-level.js";
 export * from "./transports/json-unsafe-integers.js";
@@ -10,11 +14,16 @@ export * from "./transports/model-transport-debug.js";
 export * from "./transports/model-transport-url.js";
 export * from "./transports/openai-compatible-conversation-turn.js";
 export * from "./transports/openai-completions-compat.js";
+export { applyCompletionsAnthropicCacheControl } from "./transports/openai-completions-cache-control.js";
 export * from "./transports/openai-completions-string-content.js";
-export * from "./transports/openai-completions-transport.js";
+export {
+  buildOpenAICompletionsParams,
+  createOpenAICompletionsTransportStreamFn,
+} from "./transports/openai-completions-transport.js";
 export * from "./transports/openai-reasoning-compat.js";
 export * from "./transports/openai-responses-payload-policy.js";
 export * from "./transports/openai-responses-replay.js";
+export * from "./transports/openai-responses-tool-call-id-shape.js";
 export * from "./transports/openai-responses-transport.js";
 export * from "./transports/openai-transport-params.js";
 export * from "./transports/openai-transport-shared.js";
@@ -27,3 +36,12 @@ export {
   isCodeModeModelVisibleToolName,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
 } from "./transports/transport-utils.js";
+export {
+  consumeGoogleGenerateContentStream,
+  type GoogleStreamChunk,
+} from "./providers/google-stream.js";
+export {
+  convertGoogleTools,
+  projectGoogleMessages,
+  requiresGoogleToolCallId,
+} from "./providers/google-messages.js";

@@ -1,4 +1,3 @@
-// Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
 /** Detects C0 and DEL without rejecting C1 or other Unicode text. */
@@ -21,7 +20,7 @@ export function filterStringEntries(value: unknown): string[] {
 
 /** Coerces entries to strings, trims them, and drops empty results. */
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
-  return (list ?? []).map((entry) => normalizeOptionalString(String(entry)) ?? "").filter(Boolean);
+  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 /** Normalizes string entries and lowercases each retained value. */
@@ -39,11 +38,10 @@ export function uniqueStrings(values: Iterable<string>): string[] {
   return uniqueValues(values);
 }
 
-/** Returns unique strings sorted with stable ASCII comparison. */
+/** Returns a fresh array of unique strings in UTF-16 code-unit order. */
 export function sortUniqueStrings(values: Iterable<string>): string[] {
-  return uniqueStrings(values).toSorted((left, right) =>
-    left < right ? -1 : left > right ? 1 : 0,
-  );
+  // oxlint-disable-next-line unicorn/no-array-sort -- uniqueStrings creates a private array.
+  return uniqueStrings(values).sort();
 }
 
 /** Normalizes entries, removes duplicates, and preserves first-seen order. */
@@ -116,10 +114,7 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
     return normalizeStringEntries(value);
   }
   if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(value.split(","));
   }
   return [];
 }
@@ -133,9 +128,6 @@ function normalizeSlugInput(raw?: string | null) {
 /** Normalizes user-facing names into permissive lowercase slugs that may keep #/@/._+. */
 export function normalizeHyphenSlug(raw?: string | null) {
   const trimmed = normalizeSlugInput(raw);
-  if (!trimmed) {
-    return "";
-  }
   const dashed = trimmed.replace(/\s+/g, "-");
   const cleaned = dashed.replace(/[^\p{L}\p{M}\p{N}#@._+-]+/gu, "-");
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
@@ -144,9 +136,6 @@ export function normalizeHyphenSlug(raw?: string | null) {
 /** Normalizes @/#-prefixed channel names into strict lowercase hyphen slugs without the prefix. */
 export function normalizeAtHashSlug(raw?: string | null) {
   const trimmed = normalizeSlugInput(raw);
-  if (!trimmed) {
-    return "";
-  }
   const withoutPrefix = trimmed.replace(/^[@#]+/, "");
   const dashed = withoutPrefix.replace(/[\s_]+/g, "-");
   const cleaned = dashed.replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-");

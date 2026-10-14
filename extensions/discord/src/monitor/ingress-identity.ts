@@ -30,10 +30,7 @@ function normalizeDiscordNameEntry(entry: string): string | null {
   if (!text || text === "*" || normalizeDiscordIdEntry(text) || /#\d{4}$/.test(text)) {
     return null;
   }
-  const nameSlug = normalizeDiscordAllowList([text], DISCORD_ALLOW_LIST_PREFIXES)
-    ?.names.values()
-    .next().value;
-  return typeof nameSlug === "string" && nameSlug ? nameSlug : null;
+  return normalizeDiscordNameSubject(text);
 }
 
 function normalizeDiscordTagEntry(entry: string): string | null {

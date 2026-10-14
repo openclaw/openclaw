@@ -1,14 +1,20 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessages,
   appendTranscriptMessageSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
@@ -20,15 +26,17 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import {
+  cleanupSessionStateForTest,
+  drainSessionStateForTest,
+} from "../../test-utils/session-state-cleanup.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { isCodeModeExecTool } from "../code-mode-control-tools.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "../code-mode.test-support.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { registerHeadlessToolSearchCatalog } from "../tool-search.js";
-import { wrapStreamFnCodeModeSource } from "../transcript-code-mode-source.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -40,9 +48,37 @@ import { createResourceLoader } from "./agent-session-loop-resource-loader.test-
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
+let fixtureDir: string;
+let sessionSequence = 0;
+function createSessionScope(label: string, config: OpenClawConfig = {}) {
+  fixtureDir ??= tempDirs.make("openclaw-code-source-projection-");
+  setRuntimeConfigSnapshot(config);
+  const sessionId = `${label}-${++sessionSequence}`;
+  return {
+    dir: fixtureDir,
+    scope: {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath: path.join(fixtureDir, "sessions.json"),
+    },
+  };
+}
+afterEach(async () => {
+  await drainSessionStateForTest({ stateDir: fixtureDir });
+});
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   resetDiagnosticRunActivityForTest();
   resetGlobalHookRunner();
@@ -56,43 +92,23 @@ describe("AgentSession runtime and transcript projections", () => {
   const registeredLiteral = "fixture-registered-source-value";
   const vendorLiteral = "sk-fixturesyntheticcredential1234567890";
   const customLiteral = "fixture-custom-source-value";
-  const maskedSource = `const API_TOKEN = "${genericLiteral}"; const vendor = "${vendorLiteral}"; const registered = "${registeredLiteral}"; const custom = "${customLiteral}";\n${source.replaceAll("API_TOKEN", "OTHER_TOKEN")}`;
+  const credentialSource = `const API_TOKEN = "${genericLiteral}"; const vendor = "${vendorLiteral}"; const registered = "${registeredLiteral}"; const custom = "${customLiteral}";\n${source.replaceAll("API_TOKEN", "OTHER_TOKEN")}`;
   const sourceCases = [
     { label: "JavaScript code", args: { code: source }, outcome: "completed" },
     {
-      label: "explicit JavaScript",
+      label: "retired JavaScript option",
       args: { code: source, language: "javascript" },
-      outcome: "completed",
+      outcome: "error",
     },
-    {
-      label: "boolean state",
-      args: { code: "const HAS_API_TOKEN = false; return HAS_API_TOKEN ? 0 : 42;" },
-      outcome: "completed",
-    },
-    {
-      label: "null state",
-      args: { code: "let API_TOKEN = null; return API_TOKEN ?? 42;" },
-      outcome: "completed",
-    },
-    ...["bash", "", null, 7].map((language) => ({
+    ...["bash", null].map((language) => ({
       label: `invalid language ${JSON.stringify(language)}`,
       args: { code: "API_TOKEN=fixtureUnquotedLiteral;", language },
-      outcome: "validation",
+      outcome: "error",
     })),
     {
-      label: "TypeScript annotation",
-      args: { code: source.replace("API_TOKEN =", "API_TOKEN: number ="), language: "typescript" },
-      outcome: "completed",
-    },
-    {
-      label: "computed expression",
-      args: { code: "const API_TOKEN = (40 + 2); return API_TOKEN;" },
-      outcome: "completed",
-    },
-    {
-      label: "ordinary total",
-      args: { code: "const total = 40 + 2; return total;" },
-      outcome: "completed",
+      label: "retired TypeScript option",
+      args: { code: source, language: "typescript" },
+      outcome: "error",
     },
     { label: "command only", args: { command: source }, outcome: "validation" },
     { label: "paired aliases", args: { code: source, command: source }, outcome: "completed" },
@@ -108,26 +124,21 @@ describe("AgentSession runtime and transcript projections", () => {
       outcome: "error",
     },
     { label: "both blank", args: { code: " ", command: "" }, outcome: "error" },
-    { label: "credential masking", args: { code: maskedSource }, outcome: "completed" },
+    { label: "credential-shaped literals", args: { code: credentialSource }, outcome: "completed" },
   ];
 
   it.each(sourceCases)(
     "preserves $label through SQLite close, reopen, and the next provider context",
     async ({ args, outcome, label }) => {
-      const dir = tempDirs.make("openclaw-code-source-projection-");
-      const scope = {
-        agentId: "main",
-        sessionId: "source-projection",
-        sessionKey: "agent:main:source-projection",
-        storePath: path.join(dir, "sessions.json"),
-      };
       const config = { logging: { redactPatterns: ["fixture-custom-source-value"] } };
+      const { dir, scope } = createSessionScope("source-projection", config);
       registerSecretValueForRedaction(registeredLiteral);
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const manager = SessionManager.open(scope, dir);
       guardSessionManager(manager, { config, allowedToolNames: ["exec", "wait"] });
       const originalArgs = {
         ...args,
+        title: "Compute the harmless number",
         note: source,
         nested: { code: source, command: source },
         apiKey: "fixture-structured-secret",
@@ -162,15 +173,15 @@ describe("AgentSession runtime and transcript projections", () => {
         });
         const model = session.agent.state.model!;
         let modelCallSeq = 0;
-        session.agent.streamFn = wrapStreamFnCodeModeSource(
-          wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn!, {
+        session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
+          session.agent.streamFn!,
+          {
             runId: scope.sessionId,
             provider: model.provider,
             model: model.id,
             trace: createDiagnosticTraceContext(),
             nextCallId: () => `${scope.sessionId}:${++modelCallSeq}`,
-          }),
-          new Set(tools.filter(isCodeModeExecTool).map((tool) => tool.name)),
+          },
         );
         await session.prompt("Compute the harmless number.");
         expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
@@ -198,7 +209,7 @@ describe("AgentSession runtime and transcript projections", () => {
         const cached = manager.buildSessionContext();
         session.dispose();
         const databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         const reopened = SessionManager.open(scope, dir);
         expect(reopened.buildSessionContext()).toEqual(cached);
         const { session: nextSession } = await createTestSession({
@@ -207,75 +218,31 @@ describe("AgentSession runtime and transcript projections", () => {
         });
         await nextSession.prompt("Recall the earlier calculation.");
         const providerContext = streamMocks.streamSimple.mock.calls.at(-1)![1];
-        const assistant = providerContext.messages.find(
-          (message: { role: string }) => message.role === "assistant",
-        );
+        const assistant = providerContext.messages.find((message) => message.role === "assistant");
         expect(assistant).toMatchObject({
           content: [
-            { text: expect.not.stringContaining("API_TOKEN = computeToken()") },
-            {
-              type: "toolCall",
-              id: "call_source",
-              name: "exec",
-              arguments: {
-                apiKey: expect.not.stringContaining("fixture-structured-secret"),
-                note: expect.not.stringContaining("API_TOKEN = computeToken()"),
-                nested: {
-                  code: expect.not.stringContaining("API_TOKEN = computeToken()"),
-                  command: expect.not.stringContaining("API_TOKEN = computeToken()"),
-                },
-              },
-            },
+            { text: source },
+            { type: "toolCall", id: "call_source", name: "exec", arguments: originalArgs },
           ],
         });
-        const persistedArgs = assistant.content[1].arguments;
-        for (const field of ["code", "command"] as const) {
-          const value = field === "code" ? args.code : "command" in args ? args.command : undefined;
-          if (typeof value !== "string") {
-            expect(persistedArgs).not.toHaveProperty(field);
-            continue;
-          }
-          if (label.startsWith("invalid language")) {
-            expect(persistedArgs[field]).not.toContain("fixtureUnquotedLiteral");
-          } else if (label === "credential masking") {
-            expect(persistedArgs[field]).toContain(
-              "OTHER_TOKEN = computeToken(); return OTHER_TOKEN;",
-            );
-            for (const literal of [
-              genericLiteral,
-              registeredLiteral,
-              vendorLiteral,
-              customLiteral,
-            ]) {
-              expect(persistedArgs[field]).not.toContain(literal);
-            }
-          } else {
-            expect(persistedArgs[field]).toBe(value);
-          }
-        }
-        const replayResult = providerContext.messages.find(
-          (message: { role: string }) => message.role === "toolResult",
-        );
+        assert(assistant?.content[1]?.type === "toolCall");
+        expect(assistant.content[1].arguments).toEqual(originalArgs);
+        const replayResult = providerContext.messages.find((item) => item.role === "toolResult");
+        assert(replayResult);
         expect(replayResult.toolCallId).toBe(assistant.content[1].id);
         expect(providerContext.messages.indexOf(replayResult)).toBe(
           providerContext.messages.indexOf(assistant) + 1,
         );
       } finally {
-        resetCodeModeTestState();
+        await resetCodeModeTestState();
       }
     },
   );
 
   it.each(["message_end", "before_message_write"] as const)(
-    "revalidates source ownership after %s replacements",
+    "preserves hook-supplied source bytes after %s replacements",
     async (hook) => {
-      const dir = tempDirs.make("openclaw-source-hooks-");
-      const scope = {
-        agentId: "main",
-        sessionId: "source-hooks",
-        sessionKey: "agent:main:source-hooks",
-        storePath: path.join(dir, "sessions.json"),
-      };
+      const { dir, scope } = createSessionScope("source-hooks");
       const { tools, catalogRef } = createCodeModeHarness();
       registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
       const other: ToolDefinition = {
@@ -341,7 +308,15 @@ describe("AgentSession runtime and transcript projections", () => {
           case "collision":
             return { ...message, content: [call, { ...call }] };
           case "replace-with-literal":
-            return { ...message, content: [{ ...call, arguments: { code: maskedSource } }] };
+            return {
+              ...message,
+              content: [
+                {
+                  ...call,
+                  arguments: { title: "Compute the harmless number", code: credentialSource },
+                },
+              ],
+            };
           default:
             return { ...message, content: [{ type: "text", text: "Hook preserved call." }, call] };
         }
@@ -381,10 +356,6 @@ describe("AgentSession runtime and transcript projections", () => {
         customTools: [...toToolDefinitions(tools), other],
         resourceLoader,
       });
-      session.agent.streamFn = wrapStreamFnCodeModeSource(
-        session.agent.streamFn!,
-        new Set(tools.filter(isCodeModeExecTool).map((tool) => tool.name)),
-      );
       try {
         for (const nextAction of cases) {
           action = nextAction;
@@ -398,6 +369,7 @@ describe("AgentSession runtime and transcript projections", () => {
                     id: `hook_${action}`,
                     name: "exec",
                     arguments: {
+                      title: "Compute the harmless number",
                       code: source,
                       ...(action === "javascript-to-default" ? { language: "javascript" } : {}),
                     },
@@ -431,18 +403,15 @@ describe("AgentSession runtime and transcript projections", () => {
             if (block.type !== "toolCall") {
               throw new Error("unexpected stored block");
             }
-            if (
-              action === "unchanged" ||
-              action === "default-to-javascript" ||
-              action === "javascript-to-default"
-            ) {
-              expect(block.arguments.code).toBe(source);
-            } else {
-              expect(block.arguments.code).not.toContain("API_TOKEN = computeToken()");
-            }
-            expect(block.arguments.code).not.toContain(genericLiteral);
+            const expectedSource =
+              action === "mutate-source"
+                ? source.replaceAll("42", "43")
+                : action === "replace-with-literal"
+                  ? credentialSource
+                  : source;
+            expect(block.arguments.code).toBe(expectedSource);
           }
-          // Retaining or copying a completed response cannot reuse its append authority.
+          // A later ordinary append has the same source fidelity as a live model response.
           const late = structuredClone(original!);
           late.content = [
             { type: "toolCall", id: `late_${action}`, name: "exec", arguments: { code: source } },
@@ -452,35 +421,27 @@ describe("AgentSession runtime and transcript projections", () => {
           const lateStored = manager.getLeafEntry();
           expect(lateStored).toMatchObject({
             message: {
-              content: [
-                { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-              ],
+              content: [{ arguments: { code: source } }],
             },
           });
         }
         const cached = manager.buildSessionContext();
         session.dispose();
         expect(
-          closeOpenClawAgentDatabaseByPath(
+          await closeOpenClawAgentDatabaseByPathAsync(
             resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
           ),
         ).toBe(true);
         expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
       } finally {
-        resetCodeModeTestState();
+        await resetCodeModeTestState();
         resetGlobalHookRunner();
       }
     },
   );
 
-  it("keeps mixed outer calls separate from a reentrant direct SQLite append", async () => {
-    const dir = tempDirs.make("openclaw-source-mixed-");
-    const scope = {
-      agentId: "main",
-      sessionId: "source-mixed",
-      sessionKey: "agent:main:source-mixed",
-      storePath: path.join(dir, "sessions.json"),
-    };
+  it("preserves mixed tool arguments through a reentrant direct SQLite append", async () => {
+    const { dir, scope } = createSessionScope("source-mixed");
     const { tools, catalogRef } = createCodeModeHarness();
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
     let reentrant: AgentMessage | undefined;
@@ -491,7 +452,7 @@ describe("AgentSession runtime and transcript projections", () => {
           handler: (event: unknown) => {
             const { message } = event as { message: AgentMessage };
             if (message.role === "assistant" && message.stopReason === "toolUse" && !reentrant) {
-              // Even the exact live object cannot borrow its outer append's private options.
+              // A direct append during the hook must preserve the same source bytes.
               const outcome = appendTranscriptMessageSync(scope, {
                 message,
                 eventId: "reentrant_source",
@@ -523,7 +484,12 @@ describe("AgentSession runtime and transcript projections", () => {
             model,
             [
               { type: "toolCall", id: "mixed_rejected", name: "unavailable", arguments: {} },
-              { type: "toolCall", id: "mixed_code", name: "exec", arguments: { code: source } },
+              {
+                type: "toolCall",
+                id: "mixed_code",
+                name: "exec",
+                arguments: { title: "Compute the harmless number", code: source },
+              },
               { type: "toolCall", id: "mixed_other", name: "other", arguments: { code: source } },
             ],
             "toolUse",
@@ -538,10 +504,6 @@ describe("AgentSession runtime and transcript projections", () => {
         sessionManager: manager,
         customTools: [...toToolDefinitions(tools), other],
       });
-      session.agent.streamFn = wrapStreamFnCodeModeSource(
-        session.agent.streamFn!,
-        new Set(tools.filter(isCodeModeExecTool).map((tool) => tool.name)),
-      );
       await session.prompt("Run both independent calls.");
       expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
       expect(
@@ -552,10 +514,7 @@ describe("AgentSession runtime and transcript projections", () => {
         { toolCallId: "mixed_other", details: { receivedOriginal: true } },
       ]);
       expect(reentrant).toMatchObject({
-        content: [
-          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-        ],
+        content: [{ arguments: { code: source } }, { arguments: { code: source } }],
       });
       const stored = manager
         .getEntries()
@@ -572,7 +531,7 @@ describe("AgentSession runtime and transcript projections", () => {
             { id: "mixed_code", arguments: { code: source } },
             {
               id: "mixed_other",
-              arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") },
+              arguments: { code: source },
             },
           ],
         },
@@ -580,25 +539,20 @@ describe("AgentSession runtime and transcript projections", () => {
       const cached = manager.buildSessionContext();
       session.dispose();
       expect(
-        closeOpenClawAgentDatabaseByPath(
+        await closeOpenClawAgentDatabaseByPathAsync(
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);
       expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
     } finally {
       resetGlobalHookRunner();
-      resetCodeModeTestState();
+      await resetCodeModeTestState();
     }
   });
 
-  it("does not lend a previous run's source ownership to a reused manager or ordinary append batches", async () => {
-    const dir = tempDirs.make("openclaw-source-reuse-");
-    const scope = {
-      agentId: "main",
-      sessionId: "source-reuse",
-      sessionKey: "agent:main:source-reuse",
-      storePath: path.join(dir, "sessions.json"),
-    };
+  it("preserves source across reused managers and ordinary append batches", async () => {
+    setRuntimeConfigSnapshot({});
+    const { dir, scope } = createSessionScope("source-reuse");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope, dir);
     const { tools, catalogRef } = createCodeModeHarness();
@@ -627,7 +581,10 @@ describe("AgentSession runtime and transcript projections", () => {
                     type: "toolCall",
                     id: "reused_id",
                     name: "exec",
-                    arguments: mode === "code" ? { code: source } : { command: source },
+                    arguments:
+                      mode === "code"
+                        ? { title: "Compute the harmless number", code: source }
+                        : { command: source },
                   },
                 ],
                 "toolUse",
@@ -641,10 +598,6 @@ describe("AgentSession runtime and transcript projections", () => {
           sessionManager: manager,
           customTools: mode === "code" ? toToolDefinitions(tools) : [shell],
         });
-        session.agent.streamFn = wrapStreamFnCodeModeSource(
-          session.agent.streamFn!,
-          new Set(mode === "code" ? tools.filter(isCodeModeExecTool).map((tool) => tool.name) : []),
-        );
         await session.prompt(`Use ${mode} mode.`);
         const latestCall = manager
           .buildSessionContext()
@@ -660,7 +613,7 @@ describe("AgentSession runtime and transcript projections", () => {
         if (mode === "code") {
           expect(latestCall.arguments.code).toBe(source);
         } else {
-          expect(latestCall.arguments.command).not.toContain("API_TOKEN = computeToken()");
+          expect(latestCall.arguments.command).toBe(source);
         }
         session.dispose();
       }
@@ -697,7 +650,7 @@ describe("AgentSession runtime and transcript projections", () => {
         first.map((result) => result.messageId),
       );
       expect(
-        closeOpenClawAgentDatabaseByPath(
+        await closeOpenClawAgentDatabaseByPathAsync(
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);
@@ -710,18 +663,18 @@ describe("AgentSession runtime and transcript projections", () => {
             toolCallId: "nested_shell",
             parentToolCallId: "reused_id",
             input: {
-              command: expect.not.stringContaining("API_TOKEN = computeToken()"),
-              code: expect.not.stringContaining("API_TOKEN = computeToken()"),
-              nested: { code: expect.not.stringContaining("API_TOKEN = computeToken()") },
+              command: source,
+              code: source,
+              nested: { code: source },
             },
             result: {
-              content: [{ text: expect.not.stringContaining("API_TOKEN = computeToken()") }],
+              content: [{ text: source }],
             },
           },
         },
       });
     } finally {
-      resetCodeModeTestState();
+      await resetCodeModeTestState();
     }
   });
 });

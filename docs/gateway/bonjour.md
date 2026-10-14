@@ -27,7 +27,7 @@ If the node and gateway are on different networks, multicast mDNS can't cross th
 }
 ```
 
-Setting `discovery.wideArea.domain` enables wide-area discovery. OpenClaw also accepts the `OPENCLAW_WIDE_AREA_DOMAIN` env var as a fallback when the config key is unset.
+Setting `discovery.wideArea.domain` enables Gateway wide-area publishing. The `OPENCLAW_WIDE_AREA_DOMAIN` environment variable supplies a default for CLI discovery and DNS setup; it does not enable Gateway publishing by itself.
 
 ### One-time DNS server setup (gateway host, macOS only)
 
@@ -89,10 +89,12 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 Security notes:
 
 - Bonjour/mDNS TXT records are **unauthenticated**. Clients must not treat TXT as authoritative routing.
-- Clients should route using the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
-- SSH auto-targeting should likewise use the resolved service host, not TXT-only hints.
+- Clients that offer discovery-based routing should use the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
+- Where supported, SSH auto-targeting should likewise use the resolved service host, not TXT-only hints.
 - TLS pinning must never let an advertised `gatewayTlsSha256` override a previously stored pin.
 - iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require explicit user confirmation before trusting a first-time fingerprint.
+
+The macOS app treats the resolved endpoint as a hint too. Selecting **Nearby Gateways** opens the connection editor; it does not authenticate to the advertised destination, change a saved route, or import SSH details or a certificate pin. Supply a trusted address, SSH target, or owner-provided setup code, then save the connection. See [Configure in the app](/platforms/mac/remote#configure-in-the-app).
 
 ## Debugging on macOS
 
@@ -116,9 +118,9 @@ The gateway writes a rolling log file (printed on startup as `gateway log file: 
 - `bonjour: suppressing ciao netmask assertion ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 
-OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log.
+OpenClaw starts each Bonjour service once and leaves checking, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-check messages are suppressed so they cannot flood the gateway log, as are transient `ENODEV` MDNS socket warnings that occur when a network interface (for example a short-lived Docker bridge) is removed between the responder's interface polls.
 
-When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution and do not indicate duplicate OCM supervision.
+When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution.
 
 Bonjour uses the system hostname for the advertised `.local` host when it's a valid DNS label. If the system hostname contains spaces, underscores, or another invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set `OPENCLAW_MDNS_HOSTNAME=<name>` before starting the gateway when you need an explicit host label.
 
@@ -145,6 +147,11 @@ When enabled, Bonjour uses `discovery.mdns.mode` to decide how much TXT metadata
 | `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.                                                                            |
 | `full`              | Adds `sshPort`, `cliPath`, `tailnetDns` — use when clients need those hints.                                                             |
 | `off`               | Suppresses LAN multicast without changing plugin enablement; wide-area DNS-SD can still publish when `discovery.wideArea.domain` is set. |
+
+Mode changes hot-apply without restarting the Gateway or disconnecting clients.
+The discovery owner stops the prior advertisements before publishing the new
+mode. Reducing disclosure also updates TXT hints in any configured wide-area
+DNS-SD zone. Changing the mode does not enable a disabled Bonjour plugin.
 
 ## When to disable Bonjour
 
@@ -201,13 +208,13 @@ If a node no longer auto-discovers the gateway after Docker setup:
    dns-sd -B _openclaw-gw._tcp local.
    ```
 
-   If browsing is empty, or Gateway logs show repeated ciao probe failures, restore `OPENCLAW_DISABLE_BONJOUR=1` and use a direct or Tailnet route.
+   If browsing is empty, or Gateway logs show repeated ciao check failures, restore `OPENCLAW_DISABLE_BONJOUR=1` and use a direct or Tailnet route.
 
 ## Common failure modes
 
 - **Bonjour doesn't cross networks**: use Tailnet or SSH.
 - **Multicast blocked**: some Wi-Fi networks disable mDNS.
-- **Advertiser stuck in probing/announcing**: hosts with blocked multicast, container bridges, WSL, or interface churn can leave the responder in a non-announced state. The gateway remains available through direct, SSH, Tailnet, or wide-area DNS-SD routes; disable LAN Bonjour with `discovery.mdns.mode: "off"` or `OPENCLAW_DISABLE_BONJOUR=1` when multicast is unavailable.
+- **Advertiser stuck in checking/announcing**: hosts with blocked multicast, container bridges, WSL, or interface churn can leave the responder in a non-announced state. The gateway remains available through direct, SSH, Tailnet, or wide-area DNS-SD routes; disable LAN Bonjour with `discovery.mdns.mode: "off"` or `OPENCLAW_DISABLE_BONJOUR=1` when multicast is unavailable.
 - **Docker bridge networking**: Bonjour auto-disables in detected containers. Set `OPENCLAW_DISABLE_BONJOUR=0` only for host, macvlan, or another mDNS-capable network.
 - **Sleep/interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or punctuation), then restart the gateway. The service instance name derives from the host name, so overly complex names can confuse some resolvers.
@@ -236,3 +243,4 @@ macOS hosts auto-start the bundled LAN discovery plugin by default. When the Bon
 
 - Discovery policy and transport selection: [Discovery](/gateway/discovery)
 - Node pairing + approvals: [Gateway pairing](/gateway/pairing)
+- Wide-area DNS-SD setup helper: [`openclaw dns`](/cli/dns)

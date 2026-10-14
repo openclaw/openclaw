@@ -53,7 +53,7 @@ For a clock time, the agent should use the existing scheduled-task path instead 
 
 ## How matching works
 
-On an eligible user turn, OpenClaw performs a deterministic FTS keyword prefilter over armed intents. A candidate fires only when every term in at least one configured trigger entry appears in the turn. OpenClaw also rechecks channel scope, sender scope, expiry, cooldown, and fire budget against the authoritative SQLite rows in one synchronous transaction. Matching scans at most 256 scoped FTS candidates per turn so a noisy trigger set cannot stall the reply path.
+On an eligible user turn, OpenClaw performs a rule-based FTS keyword prefilter over armed intents. A candidate fires only when every term in at least one configured trigger entry appears in the turn. OpenClaw also rechecks channel scope, sender scope, expiry, cooldown, and fire budget against the authoritative SQLite rows in one synchronous transaction. Matching scans at most 256 scoped FTS candidates per turn so a noisy trigger set cannot stall the reply path.
 
 No model call occurs in the matching path. On a hit, the main reply receives a bounded hidden context block:
 
@@ -61,7 +61,15 @@ No model call occurs in the matching path. On a hit, the main reply receives a b
 Standing intent (created 2026-07-27): Confirm the rollback owner.
 ```
 
-The matcher increments `fire_count`, records `last_fired_at`, and moves the intent through its explicit lifecycle. A fired intent becomes armed again only after its cooldown. It becomes `done` when its fire budget is exhausted and `expired` when its expiry passes. Expiry and cooldown maintenance also piggyback on existing heartbeat and cron reply hooks; OpenClaw does not add another timer subsystem.
+The matcher increments `fire_count`, records `last_fired_at`, and moves the intent through its explicit lifecycle. A fired intent becomes armed again only after its cooldown. It becomes `done` when its fire budget is exhausted and `expired` when its expiry passes. The Gateway's plugin scheduler runs expiry and cooldown maintenance at the next known deadline. Creating or changing an intent refreshes that deadline; no periodic database checks run when no active intents remain. Startup processes overdue deadlines after a restart.
+
+If the prompt hook times out while matching awaits database admission, its late
+completion cannot consume a fire. Memory Core requires the host's per-handler
+`hookInvocation` capability and checks it before the standing-intent write. An
+unsupported host skips matching without consuming an intent and logs
+`prompt hook invocation support is required; intent matching skipped` through
+the existing hook error policy. The shared database open and other active
+callers continue normally.
 
 TriggerBench finds that prospective recall decays as context grows and can drift into an always-remind heuristic ([arXiv:2606.23459](https://arxiv.org/abs/2606.23459)). Structural matching and fire budgets keep recall independent of conversational context while bounding false alarms.
 
@@ -87,5 +95,6 @@ Standing intents live in `agents/<agentId>/agent/openclaw-agent.sqlite`. They ad
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [User model](/concepts/user-model)
 - [Scheduled tasks](/automation/cron-jobs)

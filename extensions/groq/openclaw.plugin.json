@@ -1,9 +1,11 @@
 {
   "id": "groq",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["groq"],
   "providerEndpoints": [
     {
@@ -44,6 +46,9 @@
     }
   ],
   "modelCatalog": {
+    "modelsDev": {
+      "groq": "groq"
+    },
     "providers": {
       "groq": {
         "baseUrl": "https://api.groq.com/openai/v1",

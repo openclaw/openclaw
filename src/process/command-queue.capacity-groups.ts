@@ -1,19 +1,18 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-// Capacity groups: a shared, hard aggregate budget across several command
-// lanes, with per-member reservations. Split out of command-queue.ts to keep
-// that file within its size budget; the queue supplies its own `drainLane` so
-// this module never has to import the queue runtime.
-import { getQueueState, normalizeLane, peekLaneQueue } from "./command-queue.state.js";
+// The queue supplies `drainLane` so capacity policy never imports the queue runtime.
+import {
+  compareQueueEntries,
+  getQueueState,
+  normalizeLane,
+  peekLaneQueue,
+  type LaneGroupState,
+  type QueueEntry,
+} from "./command-queue.state.js";
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
 
-/** Drains a single lane. Supplied by command-queue.ts to avoid a cycle. */
-type DrainLaneFn = (lane: string) => void;
-
-/** Internal bounded drain contract used by the group arbiter. */
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
 
-/** Declares a group's shared budget and its members' hard reservations. */
 export type CommandLaneGroupSpec = {
   /** Hard aggregate cap across all members. */
   budget: number;
@@ -30,13 +29,6 @@ export type CommandLaneGroupSpec = {
   reservations?: Readonly<Record<string, number>>;
 };
 
-export type LaneGroupState = {
-  group: string;
-  budget: number;
-  members: Set<string>;
-  reservations: Map<string, number>;
-};
-
 /** Shared across fresh module instances so one group cannot re-enter its arbiter. */
 const DRAINING_GROUPS = resolveGlobalSingleton(
   Symbol.for("openclaw.commandQueueDrainingGroups"),
@@ -50,16 +42,24 @@ const DRAINING_GROUPS = resolveGlobalSingleton(
  *
  * Known wait edges at this base: outer `cron` -> `cron-nested`
  * (`server-cron.ts` passes lane "cron"; `agents/lanes.ts` remaps inner work),
- * and `session:<key>` -> global lane (embedded-agent-runner run + compaction).
+ * `main` -> `system-agent` -> `session:<key>` -> `system-agent-inference`
+ * (delegated expert inference), and `session:<key>` -> global lane
+ * (embedded-agent-runner run + compaction).
  */
 const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
   CommandLane.Cron,
   CommandLane.Main,
+  CommandLane.SystemAgent,
   CommandLane.Subagent,
   CommandLane.Nested,
 ]);
 
-const GROUP_INELIGIBLE_PREFIXES = ["session:", "nested:", "context-engine-turn-maintenance:"];
+const GROUP_INELIGIBLE_PREFIXES = [
+  "session:",
+  "nested:",
+  SUBAGENT_LANE_PREFIX,
+  "context-engine-turn-maintenance:",
+];
 
 function assertGroupEligibleLane(lane: string): void {
   if (GROUP_INELIGIBLE_LANES.has(lane)) {
@@ -76,29 +76,8 @@ function assertGroupEligibleLane(lane: string): void {
   }
 }
 
-/** Group registry, keyed by group id and by member lane name. */
-export function getGroupRegistry(): {
-  groups: Map<string, LaneGroupState>;
-  groupByLane: Map<string, string>;
-} {
-  const state: ReturnType<typeof getQueueState> & {
-    laneGroups?: Map<string, LaneGroupState>;
-    laneGroupByLane?: Map<string, string>;
-  } = getQueueState();
-  // Migration: an older singleton (pre-upgrade, inherited via globalThis after
-  // a SIGUSR1 in-process restart) has neither field. Active counts are derived,
-  // so a late-initialized registry cannot desynchronize from lane state.
-  if (!state.laneGroups) {
-    state.laneGroups = new Map<string, LaneGroupState>();
-  }
-  if (!state.laneGroupByLane) {
-    state.laneGroupByLane = new Map<string, string>();
-  }
-  return { groups: state.laneGroups, groupByLane: state.laneGroupByLane };
-}
-
 export function getLaneGroup(lane: string): LaneGroupState | undefined {
-  const { groups, groupByLane } = getGroupRegistry();
+  const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
   const groupId = groupByLane.get(lane);
   return groupId ? groups.get(groupId) : undefined;
 }
@@ -111,29 +90,10 @@ function getMemberActiveCount(lane: string): number {
   return getQueueState().lanes.get(lane)?.activeTaskIds.size ?? 0;
 }
 
-/**
- * Why `lane` cannot admit another task, or null if it can.
- *
- * Group capacity is always DERIVED from members' `activeTaskIds`, never tracked
- * in a separate counter. That is what makes timeout, abort, clear, reset and
- * stale-generation completion release capacity for free: they all remove the
- * task id, so the next admission decision simply sees a smaller number. The
- * only remaining obligation is that those paths re-drain the group.
- */
-function resolveLaneBlockReason(lane: string): CommandLaneBlockReason {
-  const state = getQueueState().lanes.get(lane);
-  if (state && state.activeTaskIds.size >= state.maxConcurrent) {
-    return "lane";
-  }
-  const group = getLaneGroup(lane);
-  if (!group) {
-    return null;
-  }
-  return resolveGroupBlockReason(group, lane, readGroupCapacity(group));
-}
-
 type GroupCapacity = { active: number; reserved: number };
 
+// Derive capacity from active task IDs so timeout, reset, and stale completion
+// handling share the queue's existing ownership accounting.
 function readGroupCapacity(group: LaneGroupState): GroupCapacity {
   let active = 0;
   let reserved = 0;
@@ -180,13 +140,11 @@ export function applyCommandLaneCapacity(snapshot: CommandLaneSnapshot): void {
 }
 
 export function canAdmitInGroup(lane: string): boolean {
-  const reason = resolveLaneBlockReason(lane);
-  return reason === null || reason === "lane";
+  const group = getLaneGroup(lane);
+  return !group || resolveGroupBlockReason(group, lane, readGroupCapacity(group)) === null;
 }
 
 /**
- * Define or replace a capacity group.
- *
  * Membership is held here, keyed by lane name, and deliberately NOT inside
  * `LaneState`: `setCommandLaneConcurrency` must not be able to detach a lane
  * from its group, or session suspend/resume would silently restore a member to
@@ -196,7 +154,7 @@ export function validateCommandLaneGroupSpec(
   group: string,
   spec: CommandLaneGroupSpec,
 ): LaneGroupState {
-  const members = spec.members.map((member) => normalizeLane(member));
+  const members = new Set(spec.members.map((member) => normalizeLane(member)));
   for (const member of members) {
     assertGroupEligibleLane(member);
   }
@@ -204,7 +162,7 @@ export function validateCommandLaneGroupSpec(
   let reservedTotal = 0;
   for (const [rawLane, count] of Object.entries(spec.reservations ?? {})) {
     const member = normalizeLane(rawLane);
-    if (!members.includes(member)) {
+    if (!members.has(member)) {
       throw new Error(`command lane group "${group}" reserves for non-member lane "${member}"`);
     }
     const reserved = Math.max(0, Math.floor(count));
@@ -219,12 +177,12 @@ export function validateCommandLaneGroupSpec(
       `command lane group "${group}" reserves ${reservedTotal} slots but its budget is ${budget}`,
     );
   }
-  return { group, budget, members: new Set(members), reservations };
+  return { group, budget, members, reservations };
 }
 
 /** Install a validated group, detaching its members from any previous owner. */
 export function installCommandLaneGroup(next: LaneGroupState): void {
-  const { groups, groupByLane } = getGroupRegistry();
+  const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
   const previous = groups.get(next.group);
   if (previous) {
     for (const member of previous.members) {
@@ -247,14 +205,13 @@ export function installCommandLaneGroup(next: LaneGroupState): void {
 }
 
 /**
- * Select the highest-priority, oldest currently admissible member head.
+ * Select the earliest eligible head under the queue's bounded priority order.
  */
 function resolveNextGroupLane(group: LaneGroupState): string | undefined {
   let selected:
     | {
         lane: string;
-        priority: number;
-        sequence: number;
+        head: QueueEntry;
       }
     | undefined;
   let capacity: GroupCapacity | undefined;
@@ -270,14 +227,8 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
     if (resolveGroupBlockReason(group, lane, capacity) !== null) {
       continue;
     }
-    if (
-      !selected ||
-      head.priority > selected.priority ||
-      (head.priority === selected.priority &&
-        (head.sequence < selected.sequence ||
-          (head.sequence === selected.sequence && lane < selected.lane)))
-    ) {
-      selected = { lane, priority: head.priority, sequence: head.sequence };
+    if (!selected || compareQueueEntries(head, selected.head) < 0) {
+      selected = { lane, head };
     }
   }
   return selected?.lane;
@@ -286,18 +237,18 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
 /**
  * Drain a capacity group one admission at a time.
  *
- * Per-lane queues already order entries by priority and global sequence. The
+ * Per-lane queues already apply bounded priority and global sequence. The
  * group applies the same order across member queue heads so a completing lane
  * cannot synchronously reclaim shared capacity ahead of an older sibling.
  */
-function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): void {
+export function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): void {
   const group = getLaneGroup(lane);
   if (!group || DRAINING_GROUPS.has(group)) {
     return;
   }
   DRAINING_GROUPS.add(group);
   try {
-    while (getGroupRegistry().groups.get(group.group) === group) {
+    while (getQueueState().laneGroups.get(group.group) === group) {
       const selectedLane = resolveNextGroupLane(group);
       if (!selectedLane || drainLane(selectedLane, 1) === 0) {
         return;
@@ -306,14 +257,4 @@ function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): voi
   } finally {
     DRAINING_GROUPS.delete(group);
   }
-}
-
-/**
- * Re-drain the owning capacity group after a member changes state.
- *
- * The legacy exported name and callback surface stay stable for internal SDK
- * consumers; the supplied queue drain also supports the private bounded call.
- */
-export function drainGroupSiblings(lane: string, drainLane: DrainLaneFn): void {
-  drainCommandLaneGroup(lane, drainLane);
 }

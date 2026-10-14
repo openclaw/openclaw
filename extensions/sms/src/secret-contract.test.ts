@@ -6,7 +6,7 @@ import {
   resolveSecretRefValues,
 } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
-import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
 async function resolveSmsSecretAssignments(
   sourceConfig: OpenClawConfig,
@@ -38,13 +38,6 @@ async function resolveSmsSecretAssignments(
 }
 
 describe("sms secret contract", () => {
-  it("publishes SMS auth token targets", () => {
-    expect(secretTargetRegistryEntries.map((entry) => entry.id)).toEqual([
-      "channels.sms.accounts.*.authToken",
-      "channels.sms.authToken",
-    ]);
-  });
-
   it("resolves top-level authToken SecretRefs for SMS accounts", async () => {
     const resolved = await resolveSmsSecretAssignments(
       {

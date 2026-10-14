@@ -1,9 +1,17 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
+import {
+  expectTranscriptLayoutCommitted,
+  hostGroupedNativeCatalogs,
+  resumableClaudeCatalog,
+} from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectVirtualRowPaintProbeLifecycle } from "./virtual-row-anchor.lifecycle.test-support.ts";
 import {
   captureTopVisibleVirtualRow,
   expectPaintedVirtualRowAnchor,
@@ -18,80 +26,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
-function resumableClaudeCatalog() {
-  return {
-    catalogs: [
-      {
-        id: "claude",
-        label: "Claude Code",
-        capabilities: { continueSession: true, archive: false },
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: "Local Mac",
-            kind: "local",
-            connected: true,
-            sessions: [
-              {
-                threadId: "claude-terminal-session",
-                name: "Native Claude terminal",
-                status: "stored",
-                source: "claude-cli",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-                canOpenTerminal: true,
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function hostGroupedNativeCatalogs() {
-  const catalog = (id: "claude" | "codex", label: string) => ({
-    id,
-    label,
-    capabilities: { continueSession: true, archive: false },
-    hosts: [
-      {
-        hostId: "gateway:local",
-        label: "Gateway Mac",
-        kind: "gateway",
-        connected: true,
-        sessions: [
-          {
-            threadId: `${id}-local`,
-            name: `${label} local plan`,
-            status: "stored",
-            canContinue: true,
-            canArchive: false,
-          },
-        ],
-      },
-      {
-        hostId: "node:build",
-        label: "Build Node",
-        kind: "node",
-        connected: true,
-        nodeId: "build",
-        sessions: [
-          {
-            threadId: `${id}-remote`,
-            name: `${label} remote review`,
-            status: "stored",
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      },
-    ],
-  });
-  return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
-}
 
 async function catalogHeaderAffordances(header: Locator) {
   return header.evaluate((element) => {
@@ -160,7 +94,10 @@ async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boole
     hasText: "Native Claude terminal",
   });
   await row.click({ button: "right", force: options.force });
-  await page.locator('wa-dropdown-item[value="terminal"]').click({ force: options.force });
+  await page
+    .locator("openclaw-catalog-session-menu")
+    .getByRole("menuitem", { name: "Open in terminal", exact: true })
+    .click({ force: options.force });
 }
 
 async function openClaudeCatalogTerminal(page: Page) {
@@ -416,10 +353,11 @@ suite.define(() => {
         title: "claude --resume claude-termi…",
       });
       await expect.poll(() => connecting.count()).toBe(1);
+      const terminalOutput = "Claude Code ready\r\n";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "claude-terminal-e2e",
-        seq: 17,
-        data: "Claude Code ready\r\n",
+        seq: terminalOutput.length,
+        data: terminalOutput,
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
@@ -493,6 +431,10 @@ suite.define(() => {
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
     await page.clock.install();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
+      : undefined;
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -523,6 +465,22 @@ suite.define(() => {
         },
       ],
     });
+    const firstCatalogPage = catalogResponse(
+      "remote-thread",
+      "Remote architecture review",
+      "catalog-page-2",
+    );
+    const firstHost = firstCatalogPage.catalogs[0]!.hosts[0]!;
+    firstCatalogPage.catalogs[0]!.hosts.push({
+      ...firstHost,
+      hostId: "node:exhausted",
+      nodeId: "exhausted",
+      label: "Exhausted host",
+      nextCursor: undefined,
+      sessions: [
+        { ...firstHost.sessions[0]!, threadId: "retained-thread", name: "Retained remote session" },
+      ],
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
@@ -538,11 +496,7 @@ suite.define(() => {
             },
             {
               match: {},
-              response: catalogResponse(
-                "remote-thread",
-                "Remote architecture review",
-                "catalog-page-2",
-              ),
+              response: firstCatalogPage,
             },
           ],
         },
@@ -579,11 +533,27 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
     const catalog = page.locator('[data-session-section="catalog:claude"]');
+    await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
+    const initialCatalogRequest = (await gateway.getRequests("sessions.catalog.list"))[0]?.params;
+    expect(initialCatalogRequest).toMatchObject({ agentId: "main", limitPerHost: 40 });
+    expect(initialCatalogRequest).not.toHaveProperty("hostIds");
+    if (artifactDir) {
+      await page.screenshot({ path: path.join(artifactDir, "catalog-initial-discovery.png") });
+    }
     await page.locator('[data-session-catalog-load-more="claude"]').click();
     await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+    await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
+    if (artifactDir) {
+      await page.screenshot({ path: path.join(artifactDir, "catalog-after-pagination.png") });
+      await writeFile(
+        path.join(artifactDir, "catalog-pagination-requests.json"),
+        JSON.stringify(await gateway.getRequests("sessions.catalog.list"), null, 2),
+      );
+    }
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
       catalogId: "claude",
+      hostIds: ["node:devbox"],
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
@@ -595,6 +565,24 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    const catalogPageMatch = {
+      catalogId: "claude",
+      cursors: { "node:devbox": "catalog-page-2" },
+    };
+    await expect
+      .poll(
+        async () => (await gateway.getRequests("sessions.catalog.list", catalogPageMatch)).length,
+      )
+      .toBeGreaterThanOrEqual(2);
+    for (const request of await gateway.getRequests("sessions.catalog.list", catalogPageMatch)) {
+      expect(request.params).toEqual({
+        agentId: "main",
+        catalogId: "claude",
+        hostIds: ["node:devbox"],
+        cursors: { "node:devbox": "catalog-page-2" },
+      });
+    }
+    await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
     await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     const remote = catalog.getByRole("link", { name: /^Remote architecture review$/ });
     await remote.hover();
@@ -622,9 +610,7 @@ suite.define(() => {
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
-    const showEarlier = catalogPane.getByRole("button", { name: "Show earlier" });
-    await showEarlier.waitFor();
-    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
+    await expectHistoryBoundaryState(catalogPane, true);
     const anchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, anchor);
     let paintResult: VirtualRowPaintResult;
@@ -639,7 +625,7 @@ suite.define(() => {
         )
         .toBe(41);
       await page.clock.runFor(100);
-      await waitForPaintedVirtualRowAnchor(thread, anchor);
+      await waitForPaintedVirtualRowAnchor(thread);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
@@ -650,16 +636,22 @@ suite.define(() => {
     await expect
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())
       .toBe(1);
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-      : undefined;
     const expectCenteredLayout = async (screenshotName: string) => {
-      const [workbenchBox, threadBox, composerBox] = await Promise.all([
-        catalogPane.locator(".chat-workbench").boundingBox(),
-        catalogPane.locator(".chat-thread-inner").boundingBox(),
-        catalogPane.locator(".agent-chat__composer-shell").boundingBox(),
-      ]);
+      await expectTranscriptLayoutCommitted(thread);
+      // Sample all centers in one browser turn so they describe the same layout.
+      const [workbenchBox, threadBox, composerBox] = await catalogPane.evaluate((element) =>
+        [".chat-workbench", ".chat-thread-inner", ".agent-chat__composer-shell"].map((selector) => {
+          const target = element.querySelector(selector);
+          const box = target?.getBoundingClientRect();
+          return target &&
+            getComputedStyle(target).visibility === "visible" &&
+            box &&
+            box.width > 0 &&
+            box.height > 0
+            ? { x: box.x, width: box.width }
+            : null;
+        }),
+      );
       expect(workbenchBox).not.toBeNull();
       expect(threadBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
@@ -697,161 +689,7 @@ suite.define(() => {
     await page.close();
   });
 
-  it("auto-pages an underfilled native transcript until it becomes scrollable", async () => {
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("claude-sessions", artifactRoot)
-      : undefined;
-    const viewport = { width: 1280, height: 900 };
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport,
-      ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const historyMessage = (seq: number, role: "assistant" | "user", text: string) => ({
-      __openclaw: { seq },
-      content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
-      role,
-      timestamp: 1_800_000_000_000 + seq,
-    });
-    const recent = [
-      historyMessage(21, "user", "Recent question"),
-      historyMessage(22, "assistant", "Recent answer"),
-    ];
-    // Consecutive assistant records collapse into one rendered group, so this
-    // page advances the raw offset without filling the real transcript viewport.
-    const firstOlderPage = Array.from({ length: 4 }, (_, index) =>
-      historyMessage(index + 17, "assistant", `Short older answer ${index + 17}`),
-    );
-    const secondOlderPage = Array.from({ length: 16 }, (_, index) => {
-      const seq = index + 1;
-      const role = seq % 2 === 0 ? "assistant" : "user";
-      return historyMessage(
-        seq,
-        role,
-        `Scrollable older ${role} message ${seq}\n${"Transcript detail line\n".repeat(3)}`,
-      );
-    });
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.history"],
-      featureMethods: ["chat.metadata", "chat.startup"],
-      methodResponses: {
-        "chat.startup": {
-          messages: recent,
-          hasMore: true,
-          nextOffset: 2,
-          totalMessages: 30,
-          sessionId: "native-underfill-pagination",
-          thinkingLevel: null,
-        },
-        "chat.history": {
-          cases: [
-            {
-              match: { offset: 2 },
-              response: {
-                messages: firstOlderPage,
-                hasMore: true,
-                nextOffset: 6,
-                totalMessages: 30,
-                sessionId: "native-underfill-pagination",
-                thinkingLevel: null,
-              },
-            },
-            {
-              match: { offset: 6 },
-              response: {
-                messages: secondOlderPage,
-                hasMore: true,
-                nextOffset: 22,
-                totalMessages: 30,
-                sessionId: "native-underfill-pagination",
-                thinkingLevel: null,
-              },
-            },
-          ],
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const thread = pane.locator(".chat-thread");
-      await page.getByText("Recent answer", { exact: true }).waitFor();
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("chat.history")).map(
-            (request) => (request.params as { offset?: number } | undefined)?.offset,
-          ),
-        )
-        .toEqual([2]);
-      await pane.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
-      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
-        true,
-      );
-      if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
-          fullPage: true,
-        });
-      }
-
-      await gateway.deferNext("chat.history", { offset: 6 });
-      await gateway.resolveDeferred("chat.history");
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("chat.history")).map(
-            (request) => (request.params as { offset?: number } | undefined)?.offset,
-          ),
-        )
-        .toEqual([2, 6]);
-      await pane.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
-      expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
-        true,
-      );
-      if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "01-native-history-continued-auto-load.png"),
-          fullPage: true,
-        });
-      }
-
-      await gateway.resolveDeferred("chat.history");
-      await expect
-        .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
-        .toBe(true);
-      await expect
-        .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
-        .toBe(0);
-      expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
-      if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "02-native-history-final-scrollable.png"),
-          fullPage: true,
-        });
-      }
-      // The second applied page staged one background prefetch (offset 22);
-      // the now-scrollable transcript must not consume or chain beyond it.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 300);
-      });
-      expect(
-        (await gateway.getRequests("chat.history")).map(
-          (request) => (request.params as { offset?: number } | undefined)?.offset,
-        ),
-      ).toEqual([2, 6, 22]);
-    } finally {
-      await suite.closeBrowserContext(context);
-      if (artifactDir && proofVideo) {
-        await proofVideo.saveAs(path.join(artifactDir, "native-history-auto-pagination.webm"));
-      }
-    }
-  });
-
-  it("keeps the earlier-history action fixed while loading and reveals the fetched page", async () => {
+  it("keeps the earlier-history action vertically stable while loading and preserves the reader after retry", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
@@ -935,23 +773,12 @@ suite.define(() => {
       element.scrollTop = 0;
       element.dispatchEvent(new Event("scroll"));
     });
-    await showEarlier.waitFor();
-    const idleHistoryAction = await showEarlier.boundingBox();
-    expect(idleHistoryAction).not.toBeNull();
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "00-native-history-available.png"),
-        fullPage: true,
-      });
-    }
-    await thread.evaluate((element) => {
-      element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
-    });
     // Pin each wait past the earlier chat.history traffic so a slow runner
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
-    const loadingHistoryAction = await showEarlier.boundingBox();
+    const loadingEarlier = await expectHistoryBoundaryState(page, true);
+    const loadingHistoryAction = await loadingEarlier.boundingBox();
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
@@ -959,45 +786,68 @@ suite.define(() => {
       });
     }
     expect(loadingHistoryAction).not.toBeNull();
-    expect(loadingHistoryAction?.x).toBeCloseTo(idleHistoryAction?.x ?? 0, 0);
-    expect(loadingHistoryAction?.width).toBeCloseTo(idleHistoryAction?.width ?? 0, 0);
     await gateway.rejectDeferred("chat.history", {
       code: "UNAVAILABLE",
       message: "history unavailable",
       retryable: true,
     });
     await expect.poll(() => showEarlier.getAttribute("aria-busy")).toBe("false");
+    await expectHistoryBoundaryState(page, false);
+    // Upward scrolling already starts the load; rejection provides a stable
+    // idle action in the same viewport for the geometry comparison.
+    const idleHistoryAction = await showEarlier.boundingBox();
+    expect(idleHistoryAction).not.toBeNull();
+    expect(loadingHistoryAction?.y).toBeCloseTo(idleHistoryAction?.y ?? 0, 0);
+    expect(loadingHistoryAction?.height).toBeCloseTo(idleHistoryAction?.height ?? 0, 0);
+    expect((loadingHistoryAction?.x ?? 0) + (loadingHistoryAction?.width ?? 0) / 2).toBeCloseTo(
+      (idleHistoryAction?.x ?? 0) + (idleHistoryAction?.width ?? 0) / 2,
+      0,
+    );
+    if (artifactDir) {
+      await page.screenshot({
+        path: path.join(artifactDir, "02-native-history-retry-ready.png"),
+        fullPage: true,
+      });
+    }
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
     await showEarlier.click();
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
+    await expectHistoryBoundaryState(page, true);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
-    await gateway.resolveDeferred("chat.history", {
-      messages: older,
-      hasMore: true,
-      nextOffset: 1100,
-      totalMessages: 1140,
-      sessionId: "native-scrollback",
-      thinkingLevel: null,
-    });
-    await expect
-      .poll(() =>
-        page
-          .locator("openclaw-chat-pane")
-          .evaluate(
-            (element) =>
-              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                .length,
-          ),
-      )
-      .toBe(1100);
-    const firstOlderMessage = page.getByText(/^older native message 1\n/);
-    await firstOlderMessage.waitFor();
-    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+    const readerAnchor = await captureTopVisibleVirtualRow(thread);
+    await startVirtualRowPaintProbe(thread, readerAnchor);
+    let paintResult: VirtualRowPaintResult;
+    try {
+      await gateway.resolveDeferred("chat.history", {
+        messages: older,
+        hasMore: true,
+        nextOffset: 1100,
+        totalMessages: 1140,
+        sessionId: "native-scrollback",
+        thinkingLevel: null,
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                  .length,
+            ),
+        )
+        .toBe(1100);
+      await expectHistoryBoundaryState(page, false);
+      await waitForPaintedVirtualRowAnchor(thread);
+    } finally {
+      paintResult = await stopVirtualRowPaintProbe(thread);
+    }
+    expectPaintedVirtualRowAnchor(readerAnchor, paintResult);
     if (artifactDir) {
       await page.screenshot({
-        path: path.join(artifactDir, "02-native-history-prepended-visible.png"),
+        path: path.join(artifactDir, "03-native-history-prepended-visible.png"),
         fullPage: true,
       });
     }
@@ -1018,11 +868,20 @@ suite.define(() => {
     // Single staging slot: the parked page must not chain further prefetches.
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     // Consuming the staged page needs no round trip: the exhausted empty page
-    // applies instantly and removes the boundary and its sentinel.
-    await showEarlier.click();
+    // applies instantly and removes the boundary and its sentinel. Invoke the
+    // action without scrolling: renewed upward intent can itself consume it.
+    await thread.evaluate((element) => {
+      element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
+    });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     await page.close();
+  });
+
+  it("seals completed paint evidence and retains queued anchor jumps", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      await expectVirtualRowPaintProbeLifecycle(page);
+    });
   });
 });

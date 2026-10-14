@@ -5,6 +5,11 @@ export const STATE_SCHEMA_INLINE_PLUGIN_NAME = "openclaw:inline-state-schemas";
 
 const STATE_SCHEMA_MODULES = [
   {
+    modulePath: "extensions/workboard/src/workboard-postgres-schema.ts",
+    schemaPath: "extensions/workboard/src/workboard-schema.postgres.sql",
+    exportName: "WORKBOARD_POSTGRES_SCHEMA_SQL",
+  },
+  {
     modulePath: "src/state/openclaw-state-schema.ts",
     schemaPath: "src/state/openclaw-state-schema.sql",
     exportName: "OPENCLAW_STATE_SCHEMA_SQL",
@@ -33,9 +38,9 @@ export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
   return {
     name: STATE_SCHEMA_INLINE_PLUGIN_NAME,
     configureVitest(context: {
-      experimental_defineCacheKeyGenerator(callback: typeof cacheKeyForSchema): void;
+      defineCacheKeyGenerator(callback: typeof cacheKeyForSchema): void;
     }) {
-      context.experimental_defineCacheKeyGenerator(cacheKeyForSchema);
+      context.defineCacheKeyGenerator(cacheKeyForSchema);
     },
     load(this: { addWatchFile(id: string): void }, id: string) {
       const schema = schemasByModulePath.get(path.resolve(id));

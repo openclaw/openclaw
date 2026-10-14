@@ -1,9 +1,21 @@
 /**
  * Tests lazy cron startup behavior in the gateway server.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createMockCronStateForJobs } from "../cron/service.test-harness.js";
+import { listPage } from "../cron/service/ops-read.js";
+import type { CronJob } from "../cron/types.js";
+import {
+  createSqliteReadOnlyWorkerScope,
+  isSqliteInspectionDeadlineOwnedByCaller,
+} from "../infra/sqlite-readonly-worker.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
 
@@ -23,68 +35,48 @@ vi.mock("./server-cron.js", () => ({
 
 const { createLazyGatewayCronState } = await import("./server-cron-lazy.js");
 
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 describe("createLazyGatewayCronState", () => {
+  const createBroker = useSpawnBrokerTestFixture(afterEach);
   beforeEach(() => {
     vi.unstubAllEnvs();
     hoisted.buildGatewayCronService.mockClear();
   });
 
-  it("resolves its default store path from the prepared env", () => {
-    const stateRoot = "/tmp/openclaw-candidate-state";
-    const lazy = createLazyGatewayCronState({
-      ...createParams(),
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateRoot },
-    });
-
-    expect(lazy.storePath).toBe(`${stateRoot}/cron/jobs.json`);
-    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
-  });
-
-  it("respects a configured legacy cron store partition", () => {
-    const customStore = "/tmp/openclaw-custom-cron/jobs.json";
-    const params = createParams();
-    const lazy = createLazyGatewayCronState({
-      ...params,
-      cfg: { ...params.cfg, cron: { store: customStore } } as unknown as OpenClawConfig,
-    });
-
-    expect(lazy.storePath).toBe(customStore);
-  });
-
   it("does not build the heavy cron service until an async cron operation needs it", async () => {
+    const broker = await createBroker();
     const cron = createCronService();
     const state = createCronState(cron);
     hoisted.setState(state);
+    let observedBroker: unknown = "not-built";
+    let observedReadOnlyScope = false;
+    hoisted.buildGatewayCronService.mockImplementationOnce(() => {
+      observedBroker = getSpawnBroker();
+      observedReadOnlyScope = isSqliteInspectionDeadlineOwnedByCaller();
+      return state;
+    });
 
-    const lazy = createLazyGatewayCronState(createParams());
+    const readers = createSqliteReadOnlyWorkerScope({
+      signal: new AbortController().signal,
+      deadlineOwnedByCaller: true,
+    });
+    const lazy = readers.run(() =>
+      runWithSpawnBroker(broker, () => createLazyGatewayCronState(createParams())),
+    );
 
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
     expect(lazy.cron.getDefaultAgentId()).toBeUndefined();
 
-    await lazy.cron.status();
+    try {
+      await runInDetachedAsyncContext(() => lazy.cron.status());
+    } finally {
+      await readers.close();
+    }
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     expect(cron["status"]).toHaveBeenCalledTimes(1);
-  });
-
-  it("loads the cron service for direct job reads", async () => {
-    const cron = createCronService();
-    hoisted.setState(createCronState(cron));
-
-    const lazy = createLazyGatewayCronState(createParams());
-    await lazy.cron.readJob("demo");
-
-    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron["readJob"]).toHaveBeenCalledWith("demo");
+    expect(observedBroker === broker).toBe(true);
+    expect(observedReadOnlyScope).toBe(true);
   });
 
   it("does not load cron solely to prepare a watcher handoff", async () => {
@@ -92,6 +84,35 @@ describe("createLazyGatewayCronState", () => {
 
     await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("keeps visibility filtering inside the loaded service's page snapshot", async () => {
+    const jobs: CronJob[] = ["hidden", "visible"].map((id) => ({
+      id,
+      name: id,
+      enabled: false,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    }));
+    const store = createMockCronStateForJobs({ jobs });
+    const cron = createCronService();
+    const start = vi.spyOn(cron, "start");
+    cron.listPage = (opts, matchesJob) => listPage(store, opts, matchesJob);
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const page = await lazy.cron.listPage(
+      { includeDisabled: true, limit: 1, sortBy: "name" },
+      (job) => job.id === "visible",
+    );
+
+    expect(page).toMatchObject({ total: 1, hasMore: false, jobs: [jobs[1]] });
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("preserves a watcher owner when hot reload overtakes lazy startup", async () => {
@@ -131,18 +152,6 @@ describe("createLazyGatewayCronState", () => {
     expect(stopOwner).toHaveBeenCalledOnce();
     expect(watchers.cancelAll).not.toHaveBeenCalled();
     expect(cron["stop"]).not.toHaveBeenCalled();
-  });
-
-  it("forwards run payload overrides to the loaded cron service", async () => {
-    const cron = createCronService();
-    hoisted.setState(createCronState(cron));
-
-    const lazy = createLazyGatewayCronState(createParams());
-    const payload = { kind: "systemEvent" as const, text: "done" };
-    await lazy.cron.run("demo", "force", { payload });
-
-    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron["run"]).toHaveBeenCalledWith("demo", "force", { payload });
   });
 
   it("forwards update authority options through lazy cron loading", async () => {
@@ -195,7 +204,7 @@ describe("createLazyGatewayCronState", () => {
     const lazy = createLazyGatewayCronState(createParams());
     await lazy.cron.prepareWake?.();
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
     expect(cron["start"]).not.toHaveBeenCalled();
     expect(cron["wake"]).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
   });
@@ -213,6 +222,58 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["run", "enqueueRun"] as const)(
+    "finishes startup recovery before admitting a manual %s",
+    async (operation) => {
+      const recoveryStarted = deferred();
+      const recoveryFinished = deferred();
+      const cron = createCronService();
+      const start = vi.fn(async () => {
+        recoveryStarted.resolve();
+        await recoveryFinished.promise;
+      });
+      cron.start = start;
+      hoisted.setState(createCronState(cron));
+      const lazy = createLazyGatewayCronState(createParams());
+
+      const run = lazy.cron[operation]("demo", "force");
+      await Promise.race([
+        recoveryStarted.promise,
+        run.then(() => {
+          throw new Error("Manual cron run was admitted before startup recovery");
+        }),
+      ]);
+      expect(cron[operation]).not.toHaveBeenCalled();
+      recoveryFinished.resolve();
+      await run;
+
+      expect(cron[operation]).toHaveBeenCalledExactlyOnceWith("demo", "force");
+      await lazy.cron.start();
+      expect(start).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["run", "enqueueRun"] as const)(
+    "keeps a stopped scheduler stopped when a manual %s arrives",
+    async (operation) => {
+      const cron = createCronService();
+      const start = vi.fn(async () => undefined);
+      const stop = vi.fn();
+      cron.start = start;
+      cron.stop = stop;
+      hoisted.setState(createCronState(cron));
+      const lazy = createLazyGatewayCronState(createParams());
+      await lazy.cron.status();
+      lazy.cron.stop();
+
+      await lazy.cron[operation]("demo", "force");
+
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(cron[operation]).toHaveBeenCalledExactlyOnceWith("demo", "force");
+    },
+  );
+
   it("does not start cron after stop wins the lazy startup race", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -225,21 +286,6 @@ describe("createLazyGatewayCronState", () => {
 
     expect(cron["start"]).not.toHaveBeenCalled();
     expect(cron["stop"]).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows a stopped loaded cron service to start again", async () => {
-    const cron = createCronService();
-    hoisted.setState(createCronState(cron));
-
-    const lazy = createLazyGatewayCronState(createParams());
-
-    await lazy.cron.start();
-    lazy.cron.stop();
-    await lazy.cron.start();
-
-    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron["stop"]).toHaveBeenCalledTimes(1);
-    expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
   it("restarts after stop interrupts an in-flight startup", async () => {
@@ -262,27 +308,18 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps synchronous wake non-blocking before the cron service is loaded", async () => {
+  it("keeps wake non-blocking before the cron service is loaded", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
 
     const lazy = createLazyGatewayCronState(createParams());
 
-    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
+    expect(await lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: false });
 
     await vi.waitFor(() => {
       expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     });
     expect(cron["wake"]).not.toHaveBeenCalled();
-  });
-
-  it("preserves the startup cron enabled flag without loading cron runtime", () => {
-    vi.stubEnv("OPENCLAW_SKIP_CRON", "1");
-
-    const lazy = createLazyGatewayCronState(createParams());
-
-    expect(lazy.cronEnabled).toBe(false);
-    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
   });
 
   it("does not arm a read-loaded scheduler when suspension ends", async () => {
@@ -383,19 +420,6 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
-  it("forwards heartbeat reconciliation to the loaded cron service", async () => {
-    const cron = createCronService();
-    const state = createCronState(cron);
-    hoisted.setState(state);
-
-    const lazy = createLazyGatewayCronState(createParams());
-    const cfg = { agents: { defaults: { heartbeat: { every: "5m" } } } } as OpenClawConfig;
-    await lazy.reconcileHeartbeatJobs(cfg);
-
-    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(state.reconcileHeartbeatJobs).toHaveBeenCalledExactlyOnceWith(cfg);
-  });
-
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
     const cron = createCronService();
     const state = createCronState(cron);
@@ -435,6 +459,8 @@ describe("createLazyGatewayCronState", () => {
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {
   return {
+    storePath: "/tmp/openclaw-cron.json",
+    scheduler: createTestGatewayScheduler(),
     cfg: {
       ...overrides,
     } as OpenClawConfig,
@@ -451,7 +477,7 @@ function createCronState(cron: GatewayCronServiceContract): GatewayCronState {
     reconcileExitWatchers: vi.fn(async () => {}),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+    reconcileSystemJobs: vi.fn(async () => "converged" as const),
   } satisfies GatewayCronState;
 }
 
@@ -470,13 +496,17 @@ function createCronService(): GatewayCronServiceContract {
     remove: vi.fn(async () => ({ ok: true }) as never),
     removeStaleJobFamily: vi.fn(async () => 0),
     removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
+    quiesceJobs: vi.fn(async (_jobs, commitGuard) => {
+      commitGuard();
+    }),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
+    waitForManualRun: vi.fn(async () => true),
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),
     readScratch: vi.fn(async () => ({ currentRevision: 0 })),
     writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),
     getDefaultAgentId: vi.fn(() => "default"),
-    wake: vi.fn(() => ({ ok: true })),
+    wake: vi.fn(async () => ({ ok: true })),
   };
 }

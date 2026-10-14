@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createQaBusState,
   createQaChannelTransport,
@@ -23,7 +23,6 @@ import {
   PROOF_TIMEOUT_MS,
   waitFor,
 } from "./cloud-worker-midturn-loss-fixture.js";
-import workerGenerationProviderFixture from "./fixtures/worker-inference-generation-provider/index.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -50,7 +49,7 @@ const GENERATION_C_REPLY = "WORKER-GENERATION-C-OK";
 const OWNERSHIP_STAGES = ["factory", "policy", "wrapper", "execution"] as const;
 
 type Generation = "A" | "B" | "C" | "D";
-type ProducerOptions = { artifactBase: string; repoRoot: string };
+type ProducerOptions = Readonly<{ artifactBase: string; repoRoot: string }>;
 type TraceEvent = {
   event: string;
   generation: Generation;
@@ -152,6 +151,26 @@ async function startAuthInspectingProxy(targetBaseUrl: string) {
   };
 }
 
+function generationCredentialRef(generation: Generation) {
+  // Keep config authoritative: literal credentials can migrate into sticky auth profiles.
+  return { source: "env" as const, provider: "default", id: `QA_WORKER_SOURCE_${generation}` };
+}
+
+async function waitForConfigPublication(gateway: WireGateway, previousHash: string | undefined) {
+  await waitFor("worker generation config publication", async () => {
+    const current = (await gateway.call("config.get", {})) as {
+      hash?: string;
+      appliedConfigHash?: string;
+      configRevisionHash?: string;
+    };
+    return current.hash !== previousHash &&
+      current.appliedConfigHash !== undefined &&
+      current.appliedConfigHash === current.configRevisionHash
+      ? current
+      : undefined;
+  });
+}
+
 function buildGenerationConfig(params: {
   config: OpenClawConfig;
   generation: Generation;
@@ -193,7 +212,7 @@ function buildGenerationConfig(params: {
         [PROVIDER_ID]: {
           ...providerConfig,
           api: "openai-responses",
-          apiKey: `${SOURCE_CREDENTIAL_PREFIX}-${generation}`,
+          apiKey: generationCredentialRef(generation),
           baseUrl: mockProviderBaseUrl,
           request: { ...providerConfig?.request, allowPrivateNetwork: true },
           models: [
@@ -237,6 +256,7 @@ async function hotPublishGeneration(params: {
   generation: Exclude<Generation, "A">;
 }): Promise<{ pidBefore: number; pidAfter: number }> {
   const before = (await params.gateway.call("system.info", {})) as { pid?: number };
+  const previous = (await params.gateway.call("config.get", {})) as { hash?: string };
   const config = JSON.parse(await fs.readFile(params.gateway.configPath, "utf8")) as OpenClawConfig;
   const pluginEntry = config.plugins?.entries?.[PLUGIN_ID];
   const providerConfig = config.models?.providers?.[PROVIDER_ID];
@@ -261,12 +281,13 @@ async function hotPublishGeneration(params: {
         ...config.models?.providers,
         [PROVIDER_ID]: {
           ...providerConfig,
-          apiKey: `${SOURCE_CREDENTIAL_PREFIX}-${params.generation}`,
+          apiKey: generationCredentialRef(params.generation),
         },
       },
     },
   };
   await fs.writeFile(params.gateway.configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await waitForConfigPublication(params.gateway, previous.hash);
   await waitFor(`generation ${params.generation} provider registration`, async () => {
     const registrations = (await readTrace(params.tracePath)).filter(
       (event) => event.event === "registered" && event.generation === params.generation,
@@ -301,23 +322,13 @@ async function hotPublishChannelCredential(params: {
         ...config.models?.providers,
         [PROVIDER_ID]: {
           ...providerConfig,
-          apiKey: `${SOURCE_CREDENTIAL_PREFIX}-${params.generation}`,
+          apiKey: generationCredentialRef(params.generation),
         },
       },
     },
   };
   await fs.writeFile(params.gateway.configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  await waitFor(`generation ${params.generation} credential publication`, async () => {
-    const current = (await params.gateway.call("config.get", {})) as {
-      hash?: string;
-      appliedConfigHash?: string;
-      configRevisionHash?: string;
-    };
-    return current.hash !== previous.hash &&
-      current.appliedConfigHash === current.configRevisionHash
-      ? current
-      : undefined;
-  });
+  await waitForConfigPublication(params.gateway, previous.hash);
   const after = (await params.gateway.call("system.info", {})) as { pid?: number };
   if (!Number.isSafeInteger(before.pid) || after.pid !== before.pid) {
     throw new Error(`credential hot publish replaced the Gateway: ${before.pid} -> ${after.pid}`);
@@ -437,9 +448,6 @@ async function readMockRequests(baseUrl: string) {
 }
 
 async function runProof(options: ProducerOptions) {
-  if (workerGenerationProviderFixture.id !== PLUGIN_ID) {
-    throw new Error("worker generation fixture id does not match its configured plugin id");
-  }
   // openclaw-temp-dir: standalone QA producer owns and removes this fixture root.
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-generation-"));
   const tracePath = path.join(options.artifactBase, `${SCENARIO_ID}-trace.jsonl`);
@@ -472,7 +480,14 @@ async function runProof(options: ProducerOptions) {
         cwd: options.repoRoot,
         usePackagedPlugins: true,
       },
+      runtimeEnvPatch: Object.fromEntries(
+        (["A", "B", "C", "D"] as const).map((generation) => [
+          generationCredentialRef(generation).id,
+          `${SOURCE_CREDENTIAL_PREFIX}-${generation}`,
+        ]),
+      ),
       providerBaseUrl: `${authProxy.baseUrl}/v1`,
+      mockSessionObserverUrl: mock.sessionObserverUrl,
       providerMode: "mock-openai",
       primaryModel: MODEL_REF,
       alternateModel: DEFAULT_MOCK_MODEL_REF,
@@ -500,6 +515,11 @@ async function runProof(options: ProducerOptions) {
         session: { ...config.session, dmScope: "per-peer" },
       }),
     });
+    const { default: workerGenerationProviderFixture } =
+      await import("./fixtures/worker-inference-generation-provider/index.js");
+    if (workerGenerationProviderFixture.id !== PLUGIN_ID) {
+      throw new Error("worker generation fixture id does not match its configured plugin id");
+    }
     await waitFor("generation A provider registration", async () => {
       const registrations = (await readTrace(tracePath)).filter(
         (event) => event.event === "registered" && event.generation === "A",
@@ -737,7 +757,9 @@ async function runProof(options: ProducerOptions) {
   return verdict;
 }
 
-async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+export async function runWorkerInferenceGeneration(
+  options: ProducerOptions,
+): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${SCENARIO_ID}.log`,
@@ -788,7 +810,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
 
 async function main(argv: readonly string[]) {
   const options = parseOptions(argv);
-  const evidence = await runProducer(options);
+  const evidence = await runWorkerInferenceGeneration(options);
   const status = evidence.entries[0]?.result.status;
   console.log(`Worker inference generation evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(

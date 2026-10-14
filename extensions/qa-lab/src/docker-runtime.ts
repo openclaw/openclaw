@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements docker runtime behavior.
 import {
   createQaDockerRuntime,
   type QaDockerFetchLike as FetchLike,

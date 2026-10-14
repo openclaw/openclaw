@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCleanupSummary } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runLocalSessionsCleanup } from "./sessions-cleanup.runtime.js";
 
 const runSessionsCleanup = vi.hoisted(() => vi.fn());
@@ -69,31 +70,40 @@ describe("runLocalSessionsCleanup", () => {
   });
 
   it("keeps prior store summaries when a later target returns a failure", async () => {
-    const mainSummary = summary("main");
-    runSessionsCleanup
-      .mockResolvedValueOnce({
-        mode: "enforce",
-        previewResults: [],
-        appliedSummaries: [mainSummary],
-      })
-      .mockRejectedValueOnce(new Error("injected later-store failure"));
+    await withOpenClawTestState({ label: "cleanup-partial" }, async (state) => {
+      const mainSummary = summary("main");
+      runSessionsCleanup
+        .mockResolvedValueOnce({
+          mode: "enforce",
+          previewResults: [],
+          appliedSummaries: [mainSummary],
+        })
+        .mockRejectedValueOnce(new Error("injected later-store failure"));
 
-    const result = await runLocalSessionsCleanup(
-      {
-        cfg: {},
-        opts: { enforce: true },
-        targets: [
-          { agentId: "main", storePath: "/tmp/main/sessions.json" },
-          { agentId: "work", storePath: "/tmp/work/sessions.json" },
-        ],
-      },
-      runtime,
-    );
+      const result = await runLocalSessionsCleanup(
+        {
+          cfg: {},
+          opts: { enforce: true },
+          targets: [
+            { agentId: "main", storePath: state.statePath("agents/main/sessions/sessions.json") },
+            { agentId: "work", storePath: state.statePath("agents/work/sessions/sessions.json") },
+          ],
+        },
+        runtime,
+      );
 
-    expect(result.appliedSummaries).toEqual([mainSummary]);
-    expect(result.failure).toMatchObject({
-      target: { agentId: "work", storePath: "/tmp/work/sessions.json" },
-      lifecycleCommitted: false,
+      expect(result.appliedSummaries).toEqual([mainSummary]);
+      expect(runSessionsCleanup.mock.calls.map(([params]) => params.reclamationMode)).toEqual([
+        "in-process",
+        "in-process",
+      ]);
+      expect(result.failure).toMatchObject({
+        target: {
+          agentId: "work",
+          storePath: state.statePath("agents/work/sessions/sessions.json"),
+        },
+        lifecycleCommitted: false,
+      });
     });
   });
 });

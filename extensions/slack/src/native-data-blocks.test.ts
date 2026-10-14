@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackNativeDataFallbackText,
   buildSlackNativeDataAccessibilityText,
-  hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
   isSlackInvalidBlocksResponse,
   isSlackNativeResponseUrlRejection,
@@ -38,12 +37,6 @@ const table = {
 };
 
 describe("Slack native data blocks", () => {
-  it("detects charts and current data tables", () => {
-    expect(hasSlackNativeDataBlock([{ type: "section" }])).toBe(false);
-    expect(hasSlackNativeDataBlock([chart])).toBe(true);
-    expect(hasSlackNativeDataBlock([table])).toBe(true);
-  });
-
   it("matches structural invalid_blocks error responses", () => {
     expect(isSlackInvalidBlocksError({ data: { error: "invalid_blocks" } })).toBe(true);
     expect(isSlackInvalidBlocksError({ data: "invalid_blocks" })).toBe(true);

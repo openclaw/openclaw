@@ -1,4 +1,3 @@
-// Single agent-turn command registration; delegates execution to the Gateway-backed agent command.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
@@ -7,12 +6,8 @@ import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
+import { collectOption } from "./helpers.js";
 
-function collectFallback(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
-/** Register `openclaw agent` for one Gateway-backed agent turn. */
 export function registerAgentTurnCommand(
   program: Command,
   args: { agentChannelOptions: string },
@@ -126,7 +121,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option(
       "--fallback <provider/model>",
       "Add an ordered fallback model (repeatable; requires --model)",
-      collectFallback,
+      collectOption,
       [],
     )
     .option("--auth-env-only", "Use provider credentials from environment variables only", false)
@@ -143,7 +138,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
             "Read a prompt file and set the workspace.",
           ],
           [
-            'openclaw agent exec "Summarize this repo" --model openai/gpt-5.6-sol --fallback anthropic/claude-sonnet-4-6 --json',
+            'openclaw agent exec "Summarize this repo" --model openai/gpt-6-astra --fallback anthropic/claude-sonnet-4-6 --json',
             "Use an explicit fallback chain and JSON output.",
           ],
           [

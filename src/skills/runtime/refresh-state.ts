@@ -1,15 +1,38 @@
-// Skill refresh state types describe change notifications emitted by runtime reloads.
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
+
 type SkillsChangeEvent = {
   workspaceDir?: string;
-  reason: "watch" | "watch-targets" | "manual" | "remote-node" | "config-change" | "workshop";
+  reason:
+    | "watch"
+    | "watch-unavailable"
+    | "watch-available"
+    | "manual"
+    | "remote-node"
+    | "config-change"
+    | "workshop";
   changedPath?: string;
+  sourceScope?: SkillsSourceScope;
+};
+
+export type SkillsSourceScope = {
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
+type SourceVersions = {
+  workspace: Map<string, number>;
+  scopes: Map<string, Map<string, number>>;
+};
+const discoveryVersions: SourceVersions = { workspace: new Map(), scopes: new Map() };
+const supportingFileVersions: SourceVersions = { workspace: new Map(), scopes: new Map() };
 const INITIAL_SKILLS_SNAPSHOT_VERSION = Date.now();
+let versionClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
 let globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
-let listenerErrorHandler: ((err: unknown) => void) | undefined;
+let sourceClock = INITIAL_SKILLS_SNAPSHOT_VERSION;
+let globalSourceVersion = sourceClock;
 
 function bumpVersion(current: number): number {
   const now = Date.now();
@@ -17,61 +40,121 @@ function bumpVersion(current: number): number {
 }
 
 function emit(event: SkillsChangeEvent) {
-  for (const listener of listeners) {
-    try {
-      listener(event);
-    } catch (err) {
-      listenerErrorHandler?.(err);
-    }
-  }
+  notifyListeners(listeners, event);
 }
 
-export function setSkillsChangeListenerErrorHandler(handler?: (err: unknown) => void): void {
-  listenerErrorHandler = handler;
+function publishChange(event: SkillsChangeEvent): number {
+  versionClock = bumpVersion(versionClock);
+  if (event.workspaceDir) {
+    workspaceVersions.set(event.workspaceDir, versionClock);
+  } else {
+    globalVersion = versionClock;
+  }
+  emit(event);
+  return versionClock;
 }
 
 export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return registerListener(listeners, listener);
 }
 
+/** Coverage recovery follows content reconciliation; it never creates a source revision. */
+export function notifySkillsWatchAvailable(params: {
+  workspaceDir: string;
+  sourceScope: SkillsSourceScope;
+}): void {
+  emit({ ...params, reason: "watch-available" });
+}
+
+function sourceScopeKey(workspaceDir: string, scope: SkillsSourceScope = {}): string {
+  const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
+    agentWorkspaceDir: workspaceDir,
+    executionWorkspaceDir: scope.executionWorkspaceDir,
+    executionWorkspaceFileHost: scope.executionWorkspaceFileHost,
+  });
+  // Files in an execution root are shared by every agent and inventory consumer of that root.
+  return executionWorkspaceDir
+    ? JSON.stringify([executionWorkspaceDir, scope.executionWorkspaceFileHost])
+    : "";
+}
+
+/** Publish completed discovery facts without doing filesystem work. */
 export function bumpSkillsSnapshotVersion(params?: {
   workspaceDir?: string;
   reason?: SkillsChangeEvent["reason"];
   changedPath?: string;
+  sourceScopes?: SkillsSourceScope[];
 }): number {
-  const reason = params?.reason ?? "manual";
-  const changedPath = params?.changedPath;
-  if (params?.workspaceDir) {
-    const current = Math.max(globalVersion, workspaceVersions.get(params.workspaceDir) ?? 0);
-    const next = bumpVersion(current);
-    workspaceVersions.set(params.workspaceDir, next);
-    emit({ workspaceDir: params.workspaceDir, reason, changedPath });
-    return next;
+  const event: SkillsChangeEvent = {
+    workspaceDir: params?.workspaceDir,
+    reason: params?.reason ?? "manual",
+    changedPath: params?.changedPath,
+  };
+  sourceClock = bumpVersion(sourceClock);
+  if (!params?.workspaceDir) {
+    globalSourceVersion = sourceClock;
+  } else {
+    recordSourceVersion(discoveryVersions, params.workspaceDir, params.sourceScopes);
   }
-  globalVersion = bumpVersion(globalVersion);
-  emit({ reason, changedPath });
-  return globalVersion;
+  return publishChange(event);
+}
+
+function recordSourceVersion(
+  versions: SourceVersions,
+  workspaceDir: string,
+  scopes?: SkillsSourceScope[],
+): void {
+  if (!scopes) {
+    versions.workspace.set(workspaceDir, sourceClock);
+    return;
+  }
+  let revisions = versions.scopes.get(workspaceDir);
+  if (!revisions) {
+    revisions = new Map();
+    versions.scopes.set(workspaceDir, revisions);
+  }
+  for (const scope of scopes) {
+    revisions.set(sourceScopeKey(workspaceDir, scope), sourceClock);
+  }
+}
+
+function readSourceVersion(
+  versions: SourceVersions,
+  workspaceDir: string,
+  scope?: SkillsSourceScope,
+): number {
+  return Math.max(
+    versions.workspace.get(workspaceDir) ?? 0,
+    versions.scopes.get(workspaceDir)?.get(sourceScopeKey(workspaceDir, scope)) ?? 0,
+  );
+}
+
+/** Supporting-file changes refresh copies without rebuilding discovery or publishing snapshots. */
+export function markSkillsSupportingFilesChanged(params: {
+  workspaceDir: string;
+  sourceScopes?: SkillsSourceScope[];
+}): void {
+  sourceClock = bumpVersion(sourceClock);
+  recordSourceVersion(supportingFileVersions, params.workspaceDir, params.sourceScopes);
+}
+
+/** Source revisions invalidate discovery and in-flight reads, never consumer generation facts. */
+export function getSkillsSourceVersion(workspaceDir: string, scope?: SkillsSourceScope): number {
+  return Math.max(globalSourceVersion, readSourceVersion(discoveryVersions, workspaceDir, scope));
+}
+
+export function getSkillsResourceVersion(workspaceDir: string, scope?: SkillsSourceScope): number {
+  return Math.max(
+    getSkillsSourceVersion(workspaceDir, scope),
+    readSourceVersion(supportingFileVersions, workspaceDir, scope),
+  );
 }
 
 export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   if (!workspaceDir) {
     return globalVersion;
   }
-  const local = workspaceVersions.get(workspaceDir) ?? 0;
-  return Math.max(globalVersion, local);
-}
-
-export function clearSkillsSnapshotVersionForWorkspace(workspaceDir: string): void {
-  const local = workspaceVersions.get(workspaceDir);
-  if (typeof local === "number" && local > globalVersion) {
-    // Keep pending workspace invalidation visible after dropping the workspace
-    // key; otherwise teardown can hide a skill change from cached snapshots.
-    globalVersion = local;
-  }
-  workspaceVersions.delete(workspaceDir);
+  return Math.max(globalVersion, workspaceVersions.get(workspaceDir) ?? 0);
 }
 
 export function shouldRefreshSnapshotForVersion(
@@ -86,6 +169,12 @@ export function shouldRefreshSnapshotForVersion(
 export function resetSkillsRefreshStateForTest(): void {
   listeners.clear();
   workspaceVersions.clear();
+  for (const versions of [discoveryVersions, supportingFileVersions]) {
+    versions.workspace.clear();
+    versions.scopes.clear();
+  }
   globalVersion = INITIAL_SKILLS_SNAPSHOT_VERSION;
-  listenerErrorHandler = undefined;
+  versionClock = globalVersion;
+  sourceClock = bumpVersion(sourceClock);
+  globalSourceVersion = sourceClock;
 }

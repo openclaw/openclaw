@@ -1,31 +1,22 @@
-// Normalizes Chrome MCP profile options and subprocess arguments.
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createRequire } from "node:module";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import parseArgs from "yargs-parser";
 import type {
   ChromeMcpOptionsInput,
-  ChromeMcpProfileOptions,
   NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
-const DEFAULT_CHROME_MCP_COMMAND = "npx";
-// Endpoint policy below must match the launched CLI's argument grammar.
-const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@1.8.0"];
+const require = createRequire(import.meta.url);
 const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
-  "--experimental-page-id-routing",
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
-
-function normalizeChromeMcpStringList(values?: string[]): string[] {
-  return Array.isArray(values)
-    ? values.filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0,
-      )
-    : [];
-}
 
 export function normalizeChromeMcpOptions(
   input?: ChromeMcpOptionsInput,
@@ -33,9 +24,12 @@ export function normalizeChromeMcpOptions(
   if (typeof input === "object" && input && "command" in input && "args" in input) {
     return input;
   }
-  const options = typeof input === "string" ? { userDataDir: input } : (input ?? {});
-  const command = normalizeOptionalString(options.mcpCommand) ?? DEFAULT_CHROME_MCP_COMMAND;
-  const extraArgs = normalizeChromeMcpStringList(options.mcpArgs);
+  const options = input ?? {};
+  const configuredCommand = normalizeOptionalString(options.mcpCommand);
+  // Explicit npx has always selected OpenClaw's pinned server, including its package prefix.
+  const customCommand = configuredCommand === "npx" ? undefined : configuredCommand;
+  const managedServer = customCommand === undefined;
+  const extraArgs = Array.isArray(options.mcpArgs) ? options.mcpArgs.filter(hasNonEmptyString) : [];
   // Match Chrome MCP's Yargs grammar, including short groups and camel-case
   // aliases. Policy and direct CDP operations must use the endpoint it launches.
   const { argv, error } = parseArgs.detailed(extraArgs, {
@@ -79,13 +73,23 @@ export function normalizeChromeMcpOptions(
     ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
     : DEFAULT_CHROME_MCP_FEATURE_ARGS;
   return {
-    command,
+    // The pinned server runs on the Gateway's own runtime, Node or Bun.
+    command: customCommand ?? process.execPath,
+    // Its update check shells out to npm, which Bun-only installs lack; custom servers keep theirs.
+    env: managedServer ? { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" } : undefined,
     userDataDir,
     browserUrl,
     args: [
-      ...(command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : []),
+      ...(managedServer
+        ? [
+            require.resolve("chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js"),
+            "--experimentalVision",
+          ]
+        : []),
       ...connectionArgs,
       ...defaultFeatureArgs,
+      // Stable custom launchers may still need the opt-in flag; the pinned server enables it by default.
+      ...(managedServer ? [] : ["--experimental-page-id-routing"]),
       ...(!overridesConnection && !browserUrl && userDataDir && argv.userDataDir === undefined
         ? ["--userDataDir", userDataDir]
         : []),
@@ -105,20 +109,4 @@ export function buildChromeMcpSessionCacheKey(
     options.command,
     options.args,
   ]);
-}
-
-export function chromeMcpProfileOptionsFromParams(params: {
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-}): string | ChromeMcpProfileOptions | undefined {
-  return params.profile ?? params.userDataDir;
-}
-
-export function cacheKeyMatchesProfileName(cacheKey: string, profileName: string): boolean {
-  try {
-    const parsed = JSON.parse(cacheKey);
-    return Array.isArray(parsed) && parsed[0] === profileName;
-  } catch {
-    return false;
-  }
 }

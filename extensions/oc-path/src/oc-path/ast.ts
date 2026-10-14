@@ -2,7 +2,7 @@
  * Markdown AST — addressing index for workspace files.
  *
  * Pure addressing structure; no per-file opinions (those live in lint
- * rules). Byte-fidelity: `emitMd(parse(raw)) === raw`; `raw` on the
+ * rules). Byte-fidelity: `parseMd(raw).ast.raw === raw`; `raw` on the
  * root preserves the original bytes for round-trip.
  *
  * @module @openclaw/oc-path/ast

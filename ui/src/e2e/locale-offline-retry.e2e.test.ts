@@ -8,7 +8,11 @@ import {
   startControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI offline locale retry",
@@ -21,20 +25,11 @@ const suite = createControlUiE2eSuite({
 const frenchLocaleModule = /\/src\/i18n\/locales\/fr\.ts(?:\?.*)?$/;
 
 async function createContext(): Promise<BrowserContext> {
-  return suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  return suite.browser.newContext(createControlUiE2eContextOptions());
 }
 
 async function gatewayPhase(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-    };
-    return app.runtime?.context.gateway.snapshot.phase;
-  });
+  return page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase ?? undefined);
 }
 
 async function documentMarker(page: Page): Promise<string | undefined> {
@@ -71,15 +66,12 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      const picker = page.locator("#settings-language wa-select");
+      const picker = page.locator("#settings-language openclaw-select-picker");
       await picker.waitFor();
       expect(requests.size).toBe(0);
 
       for (const locale of SUPPORTED_LOCALES.slice(1)) {
-        await picker.evaluate((element, value) => {
-          (element as HTMLElement & { value: string }).value = value;
-          element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        }, locale);
+        await selectPickerValue(picker, locale);
         await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
         expect(requests.get(locale)).toBe(1);
       }
@@ -117,13 +109,8 @@ suite.define(() => {
           "same-document";
       });
 
-      const languageSelect = page
-        .locator(".settings-row", { hasText: "Language" })
-        .locator("wa-select");
-      await languageSelect.evaluate((element) => {
-        (element as HTMLElement & { value: string }).value = "fr";
-        element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-      });
+      const languageSelect = page.locator("#settings-language openclaw-select-picker");
+      await selectPickerValue(languageSelect, "fr");
 
       await expect.poll(() => abortedLocaleRequests).toBe(1);
       await page.locator(".settings-row__title", { hasText: "Language" }).waitFor();

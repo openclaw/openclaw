@@ -1,13 +1,17 @@
-import { clearSidebarAttentionDismissal } from "../components/sidebar-attention-dismissals.ts";
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
-  buildScopeUpgradeInboxEntry,
+  clearSidebarAttentionDismissal,
+  resolveSidebarAttentionKey,
+  resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
-  type SidebarInboxEntry,
-} from "../components/sidebar-attention-entries.ts";
+} from "../components/sidebar-attention-dismissals.ts";
+import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type { MentionsCapability } from "./mentions.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
@@ -16,10 +20,12 @@ export type SidebarAttentionStoreSources = {
   agents: AgentCapability;
   overlays: ApplicationOverlays;
   scopeUpgrade: ScopeUpgradeCapability;
+  connectionBootstrap?: ConnectionBootstrapCoordinator;
 };
 
 export type SidebarAttentionStoreController = {
   readonly entries: readonly SidebarInboxEntry[];
+  readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   syncDismissals(): void;
   dispose(): void;
@@ -30,17 +36,9 @@ type SidebarAttentionStoreControllerConstructor = new (
   onChange: () => void,
 ) => SidebarAttentionStoreController;
 
-export type SidebarAttentionStore = {
-  readonly entries: readonly SidebarInboxEntry[];
-  activate(Controller: SidebarAttentionStoreControllerConstructor): void;
-  dismiss(dismissal: SidebarAttentionDismissal): void;
-  subscribe(listener: () => void): () => void;
-  dispose(): void;
-};
+export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStore>;
 
-export function createSidebarAttentionStore(
-  sources: SidebarAttentionStoreSources,
-): SidebarAttentionStore {
+export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
   const listeners = new Set<() => void>();
   let controller: SidebarAttentionStoreController | null = null;
   const publish = () => {
@@ -55,9 +53,9 @@ export function createSidebarAttentionStore(
     if (
       snapshot.phase === "connected" &&
       scopes &&
-      !buildScopeUpgradeInboxEntry({ scopes, state: sources.scopeUpgrade.state })?.dismissal
+      !resolveScopeUpgradeDismissal({ scopes, state: sources.scopeUpgrade.state })
     ) {
-      clearSidebarAttentionDismissal(sources.gateway.connection.gatewayUrl, "scopeUpgrade");
+      clearSidebarAttentionDismissal(resolveSidebarAttentionKey(sources.gateway), "scopeUpgrade");
     }
     controller?.syncDismissals();
   };
@@ -68,16 +66,14 @@ export function createSidebarAttentionStore(
     get entries() {
       return controller?.entries ?? [];
     },
-    activate(Controller) {
+    activate(Controller: SidebarAttentionStoreControllerConstructor) {
       controller ??= new Controller(sources, publish);
+      return controller.mentions;
     },
-    dismiss(dismissal) {
+    dismiss(dismissal: SidebarAttentionDismissal) {
       controller?.dismiss(dismissal);
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     dispose() {
       stopGateway();
       stopScopeUpgrade();

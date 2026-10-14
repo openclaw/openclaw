@@ -34,8 +34,10 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/vydra-provider
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
   </Step>
   <Step title="Run interactive onboarding">

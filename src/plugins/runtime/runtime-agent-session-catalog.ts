@@ -41,7 +41,7 @@ export function resolveAgentCatalogCreateTarget(
       catalog: [],
       raw: model,
       defaultProvider: defaultModel.provider,
-      defaultModel: defaultModel.model,
+      defaultModel,
       agentId,
     });
     if (!("error" in allowed)) {

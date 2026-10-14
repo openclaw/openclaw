@@ -1,9 +1,7 @@
 import path from "node:path";
-import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-  type SqliteFileGeneration,
-} from "./sqlite-file-generation.js";
+import { isPathInside } from "./path-guards.js";
+import { readSqliteFileGenerationSync } from "./sqlite-file-generation-worker.js";
+import { sameSqliteFileGeneration, type SqliteFileGeneration } from "./sqlite-file-generation.js";
 
 type TerminalOpenFailure = {
   error: Error;
@@ -12,7 +10,7 @@ type TerminalOpenFailure = {
 
 function generationMatchesPath(pathname: string, expected: SqliteFileGeneration): boolean {
   try {
-    return sameSqliteFileGeneration(expected, readStableSqliteFileGeneration(pathname));
+    return sameSqliteFileGeneration(expected, readSqliteFileGenerationSync(pathname));
   } catch {
     return false;
   }
@@ -24,11 +22,13 @@ function generationMatchesPath(pathname: string, expected: SqliteFileGeneration)
  * every later open fails fast until doctor repairs the file and clears it.
  */
 export function createSqliteTerminalOpenLatch(options: {
-  closeByPath: (pathname: string) => void;
+  closeByPath: (pathname: string, error: Error) => void;
 }) {
   const failures = new Map<string, TerminalOpenFailure>();
 
   return {
+    /** Read the owner's recorded fact without running filesystem or database inspection. */
+    peek: (pathname: string): Error | undefined => failures.get(path.resolve(pathname))?.error,
     get: (pathname: string): Error | undefined => {
       const resolvedPath = path.resolve(pathname);
       const failure = failures.get(resolvedPath);
@@ -41,25 +41,36 @@ export function createSqliteTerminalOpenLatch(options: {
       }
       return failure.error;
     },
+    async getAsync(
+      pathname: string,
+      isCurrentGeneration: (pathname: string, generation: SqliteFileGeneration) => Promise<boolean>,
+    ): Promise<Error | undefined> {
+      const resolvedPath = path.resolve(pathname);
+      const failure = failures.get(resolvedPath);
+      if (failure?.generation && !(await isCurrentGeneration(resolvedPath, failure.generation))) {
+        failures.delete(resolvedPath);
+        return undefined;
+      }
+      return failure?.error;
+    },
     record: (pathname: string, error: Error, generation?: SqliteFileGeneration): boolean => {
       const resolvedPath = path.resolve(pathname);
       if (generation && !generationMatchesPath(resolvedPath, generation)) {
         return false;
       }
       failures.set(resolvedPath, { error, ...(generation ? { generation } : {}) });
-      // Latch first. Close hooks may reenter.
-      options.closeByPath(resolvedPath);
-      if (generation && !generationMatchesPath(resolvedPath, generation)) {
-        failures.delete(resolvedPath);
-        return false;
-      }
+      options.closeByPath(resolvedPath, error);
       return true;
     },
     clear: (pathname: string): void => {
       failures.delete(path.resolve(pathname));
     },
-    clearAll: (): void => {
-      failures.clear();
+    clearAll: (rootPath?: string): void => {
+      for (const pathname of failures.keys()) {
+        if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+          failures.delete(pathname);
+        }
+      }
     },
   };
 }

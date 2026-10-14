@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { handleA2uiHttpRequestWithRootResolver } from "./a2ui-route.js";
 import { A2UI_PATH } from "./a2ui-shared.js";
 
@@ -63,6 +63,28 @@ async function capture(
 }
 
 describe("Canvas A2UI renderer asset route", () => {
+  it("retries renderer root resolution after a transient filesystem failure", async () => {
+    vi.resetModules();
+    const { readPublicA2uiResource } = await import("./a2ui.js");
+    const originalArgv = process.argv;
+    process.argv = [process.execPath, path.join(fixtureRoot, "entry.mjs")];
+    const realpath = vi
+      .spyOn(fs, "realpath")
+      .mockRejectedValueOnce(new Error("renderer root temporarily unavailable"))
+      .mockResolvedValueOnce(fixtureRootReal);
+    try {
+      await expect(readPublicA2uiResource(`${A2UI_PATH}/a2ui.bundle.js`)).rejects.toThrow(
+        "renderer root temporarily unavailable",
+      );
+      const resource = await readPublicA2uiResource(`${A2UI_PATH}/a2ui.bundle.js`);
+      expect(Buffer.from(resource?.body ?? []).toString()).toBe("window.v08 = true;");
+    } finally {
+      process.argv = originalArgv;
+      realpath.mockRestore();
+      vi.resetModules();
+    }
+  });
+
   it.each(["a2ui.bundle.js", "a2ui-v0.9.bundle.js"])(
     "serves %s for GET and HEAD",
     async (fileName) => {

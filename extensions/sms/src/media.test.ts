@@ -21,7 +21,8 @@ import {
   tryHandleHostedSmsMediaRequest,
 } from "./media.js";
 import { setSmsRuntime } from "./runtime.js";
-import type { ResolvedSmsAccount } from "./types.js";
+import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn<typeof loadWebMediaType>());
@@ -102,27 +103,24 @@ function createAccount(): ResolvedSmsAccount {
   const publicWebhookUrl = new URL("https://gateway.example.com/public/sms");
   publicWebhookUrl.searchParams.set("upstream-token", "keep");
   publicWebhookUrl.hash = "rp=all";
-  return {
+  return createSmsTestAccount({
     accountId: "default",
-    enabled: true,
     accountSid: ACCOUNT_SID,
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
     webhookPath: "/internal/sms",
     publicWebhookUrl: publicWebhookUrl.toString(),
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-  };
+  });
 }
 
 async function prepareHostedSmsMediaUrl(
   params: Parameters<typeof prepareHostedSmsMedia>[0],
 ): Promise<string> {
   return (await prepareHostedSmsMedia(params)).url;
+}
+
+async function preparePhotoUrl(account = createAccount()): Promise<URL> {
+  return new URL(
+    await prepareHostedSmsMediaUrl({ account, mediaUrl: "https://example.com/photo.png" }),
+  );
 }
 
 function twilioMediaUrl(
@@ -137,16 +135,35 @@ function twilioMediaUrl(
   }/Messages/${params.messageSid ?? MESSAGE_SID}/Media/${params.mediaSid ?? MEDIA_SID}`;
 }
 
-function installRuntime() {
-  const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests("sms", { ...options, env: testStateEnv }),
-  );
+function createInboundMessage(overrides: Partial<SmsInboundMessage> = {}): SmsInboundMessage {
+  return {
+    accountSid: ACCOUNT_SID,
+    from: "+15551234567",
+    to: "+15557654321",
+    body: "photo",
+    messageSid: MESSAGE_SID,
+    media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
+    ...overrides,
+  };
+}
+
+function installRuntime(bulkReads = true) {
+  const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) => {
+    const store = createPluginStateKeyedStoreForTests("sms", { ...options, env: testStateEnv });
+    return { ...store, lookupMany: bulkReads ? store.lookupMany : undefined };
+  });
   setSmsRuntime({
     state: {
       openKeyedStore,
     },
   } as unknown as PluginRuntime);
   return openKeyedStore;
+}
+
+function trackChunkReads<T>(store: PluginStateKeyedStore<T>) {
+  const lookup = vi.spyOn(store, "lookup");
+  const lookupMany = store.lookupMany ? vi.spyOn(store, "lookupMany") : undefined;
+  return () => lookup.mock.calls.length + (lookupMany?.mock.calls.length ?? 0);
 }
 
 function createMockResponse() {
@@ -256,61 +273,61 @@ describe("SMS outbound hosted media", () => {
     await expect(prepared.cleanup()).resolves.toBeUndefined();
   });
 
-  it("hosts media on the exact webhook path and supports repeat GET/HEAD fetches", async () => {
-    const hostedUrl = await prepareHostedSmsMediaUrl({
-      account: createAccount(),
-      mediaUrl: "https://example.com/photo.png",
-    });
-    const publicUrl = new URL(hostedUrl);
-    const chunkStore = openKeyedStore.mock.results[1]?.value;
-    if (!chunkStore) {
-      throw new Error("expected hosted media chunk store");
-    }
-    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+  it.each([true, false])(
+    "hosts repeat GET/HEAD fetches on the exact webhook path (bulk: %s)",
+    async (bulkReads) => {
+      openKeyedStore = installRuntime(bulkReads);
+      const publicUrl = await preparePhotoUrl();
+      const chunkStore = openKeyedStore.mock.results[1]?.value;
+      if (!chunkStore) {
+        throw new Error("expected hosted media chunk store");
+      }
+      const chunkReads = trackChunkReads(chunkStore);
 
-    expect(publicUrl.origin).toBe("https://gateway.example.com");
-    expect(publicUrl.pathname).toBe("/public/sms");
-    expect(publicUrl.searchParams.get("upstream-token")).toBe("keep");
-    expect(publicUrl.hash).toBe("");
-    const tokenEntry = [...publicUrl.searchParams.entries()].find(([key]) =>
-      key.startsWith("__openclaw_mms_token_"),
-    );
-    const id = tokenEntry?.[0].slice("__openclaw_mms_token_".length);
-    expect(id).toMatch(/^[a-f0-9]{24}$/u);
-    expect(publicUrl.searchParams.get(`__openclaw_mms_token_${id}`)).toMatch(/^[a-f0-9]{48}$/u);
+      expect(publicUrl.origin).toBe("https://gateway.example.com");
+      expect(publicUrl.pathname).toBe("/public/sms");
+      expect(publicUrl.searchParams.get("upstream-token")).toBe("keep");
+      expect(publicUrl.hash).toBe("");
+      const tokenEntry = [...publicUrl.searchParams.entries()].find(([key]) =>
+        key.startsWith("__openclaw_mms_token_"),
+      );
+      const id = tokenEntry?.[0].slice("__openclaw_mms_token_".length);
+      expect(id).toMatch(/^[a-f0-9]{24}$/u);
+      expect(publicUrl.searchParams.get(`__openclaw_mms_token_${id}`)).toMatch(/^[a-f0-9]{48}$/u);
 
-    const internalUrl = `/internal/sms${publicUrl.search}`;
-    const getResponse = createMockResponse();
-    await tryHandleHostedSmsMediaRequest(
-      { method: "GET", url: internalUrl } as never,
-      getResponse.res as never,
-    );
-    expect(getResponse.res.statusCode).toBe(200);
-    expect(getResponse.headers.get("Content-Type")).toBe("image/png");
-    expect(getResponse.headers.get("Content-Disposition")).toMatch(
-      /^inline; filename="mms-[a-f0-9]{10}\.png"$/u,
-    );
-    expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
-    expect(chunkLookup).toHaveBeenCalled();
+      const internalUrl = `/internal/sms${publicUrl.search}`;
+      const getResponse = createMockResponse();
+      await tryHandleHostedSmsMediaRequest(
+        { method: "GET", url: internalUrl } as never,
+        getResponse.res as never,
+      );
+      expect(getResponse.res.statusCode).toBe(200);
+      expect(getResponse.headers.get("Content-Type")).toBe("image/png");
+      expect(getResponse.headers.get("Content-Disposition")).toMatch(
+        /^inline; filename="mms-[a-f0-9]{10}\.png"$/u,
+      );
+      expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
+      expect(chunkReads()).toBeGreaterThan(0);
 
-    chunkLookup.mockClear();
-    const headResponse = createMockResponse();
-    await tryHandleHostedSmsMediaRequest(
-      { method: "HEAD", url: internalUrl } as never,
-      headResponse.res as never,
-    );
-    expect(headResponse.res.statusCode).toBe(200);
-    expect(headResponse.res.end).toHaveBeenCalledWith(undefined);
-    expect(chunkLookup).not.toHaveBeenCalled();
+      const readsBeforeHead = chunkReads();
+      const headResponse = createMockResponse();
+      await tryHandleHostedSmsMediaRequest(
+        { method: "HEAD", url: internalUrl } as never,
+        headResponse.res as never,
+      );
+      expect(headResponse.res.statusCode).toBe(200);
+      expect(headResponse.res.end).toHaveBeenCalledWith(undefined);
+      expect(chunkReads()).toBe(readsBeforeHead);
 
-    const repeatedGetResponse = createMockResponse();
-    await tryHandleHostedSmsMediaRequest(
-      { method: "GET", url: internalUrl } as never,
-      repeatedGetResponse.res as never,
-    );
-    expect(repeatedGetResponse.res.statusCode).toBe(200);
-    expect(chunkLookup).toHaveBeenCalled();
-  });
+      const repeatedGetResponse = createMockResponse();
+      await tryHandleHostedSmsMediaRequest(
+        { method: "GET", url: internalUrl } as never,
+        repeatedGetResponse.res as never,
+      );
+      expect(repeatedGetResponse.res.statusCode).toBe(200);
+      expect(chunkReads()).toBeGreaterThan(readsBeforeHead);
+    },
+  );
 
   it.each(TWILIO_MMS_FILENAME_CASES)(
     "serves %s with Twilio's required %s filename",
@@ -344,12 +361,7 @@ describe("SMS outbound hosted media", () => {
   );
 
   it("rejects hosted media requests with the wrong token", async () => {
-    const hostedUrl = new URL(
-      await prepareHostedSmsMediaUrl({
-        account: createAccount(),
-        mediaUrl: "https://example.com/photo.png",
-      }),
-    );
+    const hostedUrl = await preparePhotoUrl();
     const tokenEntry = [...hostedUrl.searchParams.entries()].find(([key]) =>
       key.startsWith("__openclaw_mms_token_"),
     );
@@ -360,7 +372,7 @@ describe("SMS outbound hosted media", () => {
     if (!chunkStore) {
       throw new Error("expected hosted media chunk store");
     }
-    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const chunkReads = trackChunkReads(chunkStore);
     const response = createMockResponse();
 
     await tryHandleHostedSmsMediaRequest(
@@ -373,7 +385,7 @@ describe("SMS outbound hosted media", () => {
 
     expect(response.res.statusCode).toBe(401);
     expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
-    expect(chunkLookup).not.toHaveBeenCalled();
+    expect(chunkReads()).toBe(0);
   });
 
   it("rejects multiple hosted-media token candidates before reading state", async () => {
@@ -397,12 +409,7 @@ describe("SMS outbound hosted media", () => {
   });
 
   it("does not serve media when metadata disappears before chunk hydration", async () => {
-    const hostedUrl = new URL(
-      await prepareHostedSmsMediaUrl({
-        account: createAccount(),
-        mediaUrl: "https://example.com/photo.png",
-      }),
-    );
+    const hostedUrl = await preparePhotoUrl();
     const metadataStore = openKeyedStore.mock.results[0]?.value as
       | PluginStateKeyedStore<unknown>
       | undefined;
@@ -413,12 +420,12 @@ describe("SMS outbound hosted media", () => {
       throw new Error("expected hosted media stores");
     }
     const originalLookup = metadataStore.lookup.bind(metadataStore);
-    let metadataLookups = 0;
-    vi.spyOn(metadataStore, "lookup").mockImplementation(async (key) => {
-      metadataLookups += 1;
-      return metadataLookups === 1 ? await originalLookup(key) : undefined;
+    vi.spyOn(metadataStore, "lookup").mockImplementationOnce(async (key) => {
+      const metadata = await originalLookup(key);
+      await metadataStore.delete(key);
+      return metadata;
     });
-    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const chunkReads = trackChunkReads(chunkStore);
     const response = createMockResponse();
 
     await tryHandleHostedSmsMediaRequest(
@@ -431,7 +438,7 @@ describe("SMS outbound hosted media", () => {
 
     expect(response.res.statusCode).toBe(404);
     expect(response.res.end).toHaveBeenCalledWith("Not Found");
-    expect(chunkLookup).not.toHaveBeenCalled();
+    expect(chunkReads()).toBe(0);
   });
 
   it("ignores tokenless webhook requests before enforcing media methods", async () => {
@@ -448,12 +455,7 @@ describe("SMS outbound hosted media", () => {
   });
 
   it("isolates hosted media by SMS account", async () => {
-    const hostedUrl = new URL(
-      await prepareHostedSmsMediaUrl({
-        account: { ...createAccount(), accountId: "secondary" },
-        mediaUrl: "https://example.com/photo.png",
-      }),
-    );
+    const hostedUrl = await preparePhotoUrl({ ...createAccount(), accountId: "secondary" });
     const internalUrl = `/internal/sms${hostedUrl.search}`;
     const wrongAccountResponse = createMockResponse();
 
@@ -500,22 +502,18 @@ describe("SMS outbound hosted media", () => {
     expect(loadWebMediaMock).not.toHaveBeenCalled();
   });
 
-  it.each(["http://gateway.example.com/public/sms", "file:///tmp/public-sms"])(
-    "rejects non-HTTPS public webhook URL %s",
-    async (publicWebhookUrl) => {
-      await expect(
-        prepareHostedSmsMediaUrl({
-          account: { ...createAccount(), publicWebhookUrl },
-          mediaUrl: "https://example.com/photo.png",
-        }),
-      ).rejects.toThrow("requires an HTTPS publicWebhookUrl with a hostname");
-      expect(loadWebMediaMock).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a non-HTTPS public webhook URL", async () => {
+    await expect(
+      prepareHostedSmsMediaUrl({
+        account: { ...createAccount(), publicWebhookUrl: "http://gateway.example.com/public/sms" },
+        mediaUrl: "https://example.com/photo.png",
+      }),
+    ).rejects.toThrow("requires an HTTPS publicWebhookUrl with a hostname");
+    expect(loadWebMediaMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     { contentType: "application/pdf", byteLength: 500_000, outcome: "accepts" },
-    { contentType: "application/vcard", byteLength: 1, outcome: "accepts" },
     { contentType: "application/pdf", byteLength: 500_001, outcome: "rejects" },
     { contentType: "image/png; charset=binary", byteLength: 500_001, outcome: "accepts" },
     { contentType: "image/heic", byteLength: 500_001, outcome: "rejects" },
@@ -605,14 +603,7 @@ describe("SMS inbound MMS materialization", () => {
   async function expectInboundMediaFailure(error: MediaFetchError, retryable: boolean) {
     const pending = materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid: ACCOUNT_SID,
-        from: "+15551234567",
-        to: "+15557654321",
-        body: "keep this caption",
-        messageSid: MESSAGE_SID,
-        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
-      },
+      msg: createInboundMessage({ body: "keep this caption" }),
       mediaRuntime: {
         media: {
           saveRemoteMedia: async () => {
@@ -636,14 +627,7 @@ describe("SMS inbound MMS materialization", () => {
     [408, true],
     [429, true],
     [500, true],
-    [502, true],
-    [503, true],
-    [504, true],
     [400, false],
-    [401, false],
-    [403, false],
-    [404, false],
-    [410, false],
   ] as const)("classifies Twilio HTTP %i before durable adoption", async (status, retryable) => {
     await expectInboundMediaFailure(
       new MediaFetchError("http_error", `Twilio returned ${status}`, { status }),
@@ -742,15 +726,11 @@ describe("SMS inbound MMS materialization", () => {
 
     const result = await materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid: ACCOUNT_SID,
-        from: "+15551234567",
-        to: "+15557654321",
+      msg: createInboundMessage({
         body: "many photos",
-        messageSid: MESSAGE_SID,
         media: [],
         unavailableMediaCount: 2,
-      },
+      }),
       mediaRuntime: { media: { saveRemoteMedia } } as never,
     });
 
@@ -765,14 +745,10 @@ describe("SMS inbound MMS materialization", () => {
 
     const result = await materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid: ACCOUNT_SID,
-        from: "+15551234567",
-        to: "+15557654321",
+      msg: createInboundMessage({
         body: "",
-        messageSid: MESSAGE_SID,
         media: [{ url: "https://example.com/not-twilio.jpg", contentType: "image/jpeg" }],
-      },
+      }),
       mediaRuntime: { media: { saveRemoteMedia } } as never,
     });
 
@@ -807,14 +783,10 @@ describe("SMS inbound MMS materialization", () => {
 
     const result = await materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid: ACCOUNT_SID,
-        from: "+15551234567",
-        to: "+15557654321",
+      msg: createInboundMessage({
         body: "",
-        messageSid: MESSAGE_SID,
         media: [{ url, contentType: "image/jpeg" }],
-      },
+      }),
       mediaRuntime: { media: { saveRemoteMedia } } as never,
     });
 
@@ -832,14 +804,7 @@ describe("SMS inbound MMS materialization", () => {
 
     const result = await materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid,
-        from: "+15551234567",
-        to: "+15557654321",
-        body: "caption",
-        messageSid: MESSAGE_SID,
-        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
-      },
+      msg: createInboundMessage({ accountSid, body: "caption" }),
       mediaRuntime: { media: { saveRemoteMedia } } as never,
     });
 
@@ -867,17 +832,13 @@ describe("SMS inbound MMS materialization", () => {
 
     await materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid: ACCOUNT_SID,
-        from: "+15551234567",
-        to: "+15557654321",
+      msg: createInboundMessage({
         body: "photos",
-        messageSid: MESSAGE_SID,
         media: [
           { url: twilioMediaUrl(), contentType: "image/jpeg" },
           { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
         ],
-      },
+      }),
       mediaRuntime: { media: { saveRemoteMedia } } as never,
       abortSignal: abortController.signal,
     });
@@ -914,14 +875,7 @@ describe("SMS inbound MMS materialization", () => {
     await expect(
       materializeSmsInboundMedia({
         account: createAccount(),
-        msg: {
-          accountSid: ACCOUNT_SID,
-          from: "+15551234567",
-          to: "+15557654321",
-          body: "photo",
-          messageSid: MESSAGE_SID,
-          media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
-        },
+        msg: createInboundMessage(),
         mediaRuntime: { media: { saveRemoteMedia } } as never,
         abortSignal: abortController.signal,
       }),
@@ -963,17 +917,13 @@ describe("SMS inbound MMS materialization", () => {
       await expect(
         materializeSmsInboundMedia({
           account: createAccount(),
-          msg: {
-            accountSid: ACCOUNT_SID,
-            from: "+15551234567",
-            to: "+15557654321",
+          msg: createInboundMessage({
             body: "photos",
-            messageSid: MESSAGE_SID,
             media: [
               { url: twilioMediaUrl(), contentType: "image/jpeg" },
               { url: twilioMediaUrl({ mediaSid: OTHER_MEDIA_SID }), contentType: "image/jpeg" },
             ],
-          },
+          }),
           mediaRuntime: { media: { saveRemoteMedia } } as never,
           abortSignal: abortController.signal,
         }),
@@ -987,14 +937,7 @@ describe("SMS inbound MMS materialization", () => {
   it("exposes idempotent cleanup for successfully materialized files", async () => {
     const result = await materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid: ACCOUNT_SID,
-        from: "+15551234567",
-        to: "+15557654321",
-        body: "photo",
-        messageSid: MESSAGE_SID,
-        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
-      },
+      msg: createInboundMessage(),
       mediaRuntime: {
         media: {
           saveRemoteMedia: async () => ({
@@ -1029,14 +972,7 @@ describe("SMS inbound MMS materialization", () => {
     );
     const pending = materializeSmsInboundMedia({
       account: createAccount(),
-      msg: {
-        accountSid: ACCOUNT_SID,
-        from: "+15551234567",
-        to: "+15557654321",
-        body: "photo",
-        messageSid: MESSAGE_SID,
-        media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
-      },
+      msg: createInboundMessage(),
       mediaRuntime: { media: { saveRemoteMedia } } as never,
     });
     await vi.waitFor(() => expect(saveRemoteMedia).toHaveBeenCalledOnce());

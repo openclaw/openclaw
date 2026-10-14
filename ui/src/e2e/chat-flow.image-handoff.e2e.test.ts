@@ -1,6 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
@@ -9,11 +14,13 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const orders = ["receipt-first", "event-first"] as const;
 
 suite.define(() => {
-  it("keeps a submitted image visible through custody and canonical history loading", async () => {
+  it.each(orders)("keeps image previews through the history handoff (%s)", async (order) => {
     const proofDir = captureUiProofEnabled ? suite.artifactDir : undefined;
     const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
     await suite.withPage(
@@ -64,15 +71,28 @@ suite.define(() => {
         const initialHistory = {
           messages: [],
           sessionId,
-          sessionInfo: { key: sessionKey, kind: "direct", hasActiveRun: false, status: "done" },
+          sessionInfo: {
+            key: sessionKey,
+            sessionId,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+          },
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [initialHistory.sessionInfo],
           historyMessages: [],
           methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
         });
         const capture = async (stage: string) => {
           if (proofDir) {
-            await page.screenshot({ path: path.join(proofDir, `${stage}.png`), fullPage: true });
+            await writeFile(
+              path.join(proofDir, `${stage}.png`),
+              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+                page.locator(".chat-group.user img.chat-message-image"),
+              ]),
+            );
           }
         };
 
@@ -86,6 +106,7 @@ suite.define(() => {
             buffer: imageBytes,
           });
           await page.getByRole("img", { name: "stable-preview.png" }).waitFor();
+          await gateway.deferNext("chat.history", { limit: 1000 });
           await gateway.deferNext("chat.send");
           await page.getByRole("button", { name: "Send message" }).click();
           const request = await gateway.waitForRequest("chat.send");
@@ -107,7 +128,7 @@ suite.define(() => {
             .toBe(180);
           expect(await userImage.getAttribute("src")).toMatch(/^blob:/u);
           const displayed = expectDefined(await userImage.elementHandle(), "submitted image");
-          const initialPixels = await userImage.screenshot({ animations: "disabled" });
+          const initialPixels = await takeControlUiElementScreenshot(page, userImage, [userImage]);
           const continuity = await displayed.evaluateHandle((image) => {
             const frames: boolean[] = [];
             const initialBounds = image.getBoundingClientRect();
@@ -140,10 +161,23 @@ suite.define(() => {
             expect(await userImage.count()).toBe(1);
             // Native pending sources may report zero dimensions while the browser
             // still paints the current decoded image. Compare the actual pixels.
-            expect(
-              (await userImage.screenshot({ animations: "disabled" })).equals(initialPixels),
-              `${stage} preserves the displayed image pixels`,
-            ).toBe(true);
+            const currentPixels = await takeControlUiElementScreenshot(page, userImage, [
+              userImage,
+            ]);
+            const unchanged = currentPixels.equals(initialPixels);
+            if (!unchanged) {
+              await Promise.all([
+                writeFile(
+                  path.join(suite.artifactDir, `image-handoff-${order}-${stage}-initial.png`),
+                  initialPixels,
+                ),
+                writeFile(
+                  path.join(suite.artifactDir, `image-handoff-${order}-${stage}-current.png`),
+                  currentPixels,
+                ),
+              ]);
+            }
+            expect(unchanged, `${stage} preserves the displayed image pixels`).toBe(true);
             expect(await page.locator(".chat-group.user [aria-busy='true']").count()).toBe(0);
           };
           await expectImageStillVisible("01-submitted");
@@ -160,12 +194,21 @@ suite.define(() => {
               __openclaw: {
                 id: "pending:accepted-image-input",
                 mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
-                media: [{ path: source, contentType: "image/png", fileName: "stable-preview.png" }],
+                media: [
+                  {
+                    path: source,
+                    contentType: "image/png",
+                    fileName: "stable-preview.png",
+                    width: 180,
+                    height: 180,
+                  },
+                ],
               },
             },
           };
           const sessionInfo = {
             key: sessionKey,
+            sessionId,
             kind: "direct",
             activeRunIds: [runId],
             hasActiveRun: true,
@@ -187,9 +230,31 @@ suite.define(() => {
             session: sessionInfo,
           });
           await gateway.waitForRequest("chat.history", { after: histories });
-          await expect.poll(() => page.locator(".chat-send-status").count()).toBe(0);
+          // Custody starts the canonical media read while the send acknowledgment is held.
+          await expect.poll(() => metadataRequested).toBe(true);
           await expectImageStillVisible("02-custody");
           await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+          await waitForCommittedState(
+            page,
+            ({ runId: expectedRunId }) => {
+              const state = document.querySelector<HTMLElement & { state: ChatHost }>(
+                "openclaw-chat-pane",
+              )?.state;
+              return state !== undefined && state.chatRunId === expectedRunId && !state.chatSending;
+            },
+            { runId },
+          );
+          // The owning run's lifecycle update wakes its custody reconciliation.
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey,
+            sessionId,
+            agentId: "main",
+            runId,
+            reason: "agent.run.started",
+            hasActiveRun: true,
+            session: sessionInfo,
+          });
+          await gateway.waitForRequest("chat.history", { match: { limit: 1000 } });
 
           const canonical = {
             ...pendingInput.message,
@@ -200,11 +265,20 @@ suite.define(() => {
               idempotencyKey: `${runId}:user`,
             },
           };
-          await gateway.setMethodResponse("chat.history", {
+          const canonicalHistory = {
             ...custodyHistory,
             messages: [canonical],
             pendingInputs: { items: [], total: 0 },
-          });
+          };
+          await gateway.setMethodResponse("chat.history", canonicalHistory);
+          if (order === "receipt-first") {
+            const followups = (await gateway.getRequests("chat.history", { limit: 80 })).length;
+            await gateway.resolveDeferred("chat.history", canonicalHistory);
+            await gateway.waitForRequest("chat.history", {
+              match: { limit: 80 },
+              after: followups,
+            });
+          }
           await gateway.emitGatewayEvent("session.message", {
             sessionKey,
             sessionId,
@@ -214,6 +288,9 @@ suite.define(() => {
             message: canonical,
           });
           await page.locator('.chat-bubble[data-entry-id="accepted-image-input"]').waitFor();
+          if (order === "event-first") {
+            await gateway.resolveDeferred("chat.history", canonicalHistory);
+          }
           await expect.poll(() => metadataRequested).toBe(true);
           await expectImageStillVisible("03-canonical-metadata-loading");
           releaseMetadata();
@@ -233,6 +310,40 @@ suite.define(() => {
           await continuity.dispose();
           expect(frames.length).toBeGreaterThan(1);
           expect(frames.every(Boolean)).toBe(true);
+        } catch (error) {
+          const images = await page
+            .locator(".chat-group.user img.chat-message-image")
+            .evaluateAll((imageElements) =>
+              imageElements.map((image) => {
+                const ancestors = [];
+                for (let node: Element | null = image; node; node = node.parentElement) {
+                  const bounds = node.getBoundingClientRect();
+                  const style = getComputedStyle(node);
+                  ancestors.push({
+                    tag: node.tagName,
+                    className: node.getAttribute("class"),
+                    inlineStyle: node.getAttribute("style"),
+                    display: style.display,
+                    visibility: style.visibility,
+                    contentVisibility: style.contentVisibility,
+                    width: bounds.width,
+                    height: bounds.height,
+                    clientHeight: node.clientHeight,
+                    measuringRows: node.hasAttribute("data-measuring-rows"),
+                    connected: node.isConnected,
+                  });
+                }
+                return {
+                  src: image.getAttribute("src"),
+                  naturalWidth: image instanceof HTMLImageElement ? image.naturalWidth : null,
+                  naturalHeight: image instanceof HTMLImageElement ? image.naturalHeight : null,
+                  ancestors,
+                };
+              }),
+            )
+            .catch((captureError: unknown) => ({ captureError: String(captureError) }));
+          console.info("IMAGE_HANDOFF_FAILURE", JSON.stringify({ order, images }));
+          throw error;
         } finally {
           releaseMetadata();
           releaseImage();

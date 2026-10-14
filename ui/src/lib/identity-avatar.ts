@@ -2,10 +2,8 @@ import {
   buildControlUiResourcePath,
   parseControlUiResourcePath,
 } from "../../../src/gateway/control-ui-resource-routes.js";
-import {
-  buildControlUiUserAvatarPath,
-  canonicalizeControlUiUserAvatarPath,
-} from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { canonicalizeControlUiUserAvatarPath } from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { configuredUiDevGateway, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
 import { takeGraphemes } from "./graphemes.ts";
@@ -29,7 +27,19 @@ export function resolveTrustedAvatarUrl(
   resourceBasePath = readAvatarGatewayContext().resourceBasePath,
 ): string | null {
   try {
-    const parsed = new URL(value, ORIGIN_PROBE);
+    let parsed = new URL(value, ORIGIN_PROBE);
+    const devGateway = configuredUiDevGateway();
+    if (devGateway) {
+      // User-profile routes can omit the Gateway mount; add it before the transport prefix.
+      const gatewayBasePath = new URL(devGateway.gatewayUrl).pathname.replace(/\/$/u, "");
+      const userPath = canonicalizeControlUiUserAvatarPath(parsed.pathname, gatewayBasePath);
+      if (userPath) {
+        parsed.pathname = `${gatewayBasePath}${userPath}`;
+      }
+      const avatarUrl =
+        parsed.origin === ORIGIN_PROBE ? `${parsed.pathname}${parsed.search}` : parsed.href;
+      parsed = new URL(uiDevGatewayResourceUrl(avatarUrl), ORIGIN_PROBE);
+    }
     const relativeRoute = parsed.origin === ORIGIN_PROBE;
     const userPath = canonicalizeControlUiUserAvatarPath(parsed.pathname, resourceBasePath);
     const agentPath = parseControlUiResourcePath("agentAvatar", parsed.pathname, resourceBasePath);
@@ -107,16 +117,6 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
           resourceBasePath,
         ).matched)
     ) {
-      return { kind: "profile", url: trusted };
-    }
-  }
-
-  if (identity?.type === "profile") {
-    const trusted = resolveTrustedAvatarUrl(
-      buildControlUiUserAvatarPath(identity.id),
-      gatewayOrigin,
-    );
-    if (trusted) {
       return { kind: "profile", url: trusted };
     }
   }

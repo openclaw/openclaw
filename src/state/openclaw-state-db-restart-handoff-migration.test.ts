@@ -34,6 +34,8 @@ describe("gateway restart handoff state migration", () => {
     ).sql;
     const flexibleCreateSql = strictCreateSql.replace(/\s+STRICT$/u, "");
     expect(flexibleCreateSql).not.toBe(strictCreateSql);
+    // The synthetic pre-STRICT database predates this placement index.
+    legacy.exec("DROP INDEX idx_worker_session_placements_environment;");
     legacy.exec(`
       DROP INDEX idx_gateway_restart_handoff_expiry;
       ALTER TABLE gateway_restart_handoff RENAME TO gateway_restart_handoff_strict;
@@ -87,6 +89,8 @@ describe("gateway restart handoff state migration", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "creator-namespace-v14", path: databasePath },
+      { kind: "predicate-columns-v21", path: databasePath },
+      { kind: "portable-identity-columns-v22", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);

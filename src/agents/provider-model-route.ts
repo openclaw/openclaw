@@ -1,14 +1,23 @@
 /** Generic core consumers for provider-owned model route facts. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
+import {
+  findConfiguredProviderModel,
+  projectModelProviderConfig,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "../plugins/plugin-metadata-snapshot-required.js";
 import {
   resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
   resolveProviderModelRoutes,
 } from "../plugins/provider-model-routes.js";
+import { listProviderPolicyOwners } from "../plugins/provider-policy-owners.js";
 import type { ModelCatalogRoutePolicy } from "./model-catalog-route.js";
+import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
 /** Canonicalizes a model id only when its provider owns catalog equivalence. */
@@ -17,14 +26,64 @@ export function canonicalizeProviderModelId(providerId: string, modelId: string)
   return (provider && resolveProviderModelCatalogId({ provider, modelId })) || modelId;
 }
 
-function normalizeRouteBaseUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.replace(/\/+$/u, "");
+/** Provider and authored custom-row equivalence do not change the selected OpenClaw route. */
+export function isProviderModelRerouted(
+  requested: { provider: string; model: string },
+  effective: { provider: string; model: string; responseModel?: string },
+  config?: OpenClawConfig,
+): boolean {
+  const provider = normalizeProviderId(requested.provider);
+  if (provider !== normalizeProviderId(effective.provider)) {
+    return true;
   }
+  const surface = provider ? resolveProviderModelPolicySurface(provider) : null;
+  const canonicalize = (modelId: string) =>
+    resolveProviderModelCatalogId({ provider, modelId, surface }) ?? modelId;
+  const model = canonicalize(requested.model);
+  if (canonicalize(effective.model) !== model) {
+    return true;
+  }
+  const responseModel = effective.responseModel;
+  if (responseModel === undefined || canonicalize(responseModel) === model) {
+    return false;
+  }
+  if (
+    surface?.isResponseModelEquivalent?.({
+      provider,
+      requestedModelId: requested.model,
+      responseModelId: responseModel,
+    }) === true
+  ) {
+    return false;
+  }
+  if (surface || !config) {
+    return true;
+  }
+  const source = projectConfigOntoRuntimeSourceSnapshot(config);
+  const row = findConfiguredProviderModel(
+    resolveMergedModelProviderConfig(source, provider),
+    provider,
+    requested.model,
+    canonicalize,
+  );
+  if (row?.responseModelEquivalent !== true || row.metadataSource === "models-add") {
+    return true;
+  }
+  // Official ownership remains authoritative even when it supplies no policy artifact.
+  const metadata = getCurrentPluginMetadataSnapshotRequiredRuntime({
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  if (!metadata) {
+    return false;
+  }
+  return (
+    listProviderPolicyOwners(provider, metadata).length > 0 ||
+    (metadata.owners.modelCatalogProviders.get(provider) ?? []).some((pluginId) => {
+      const owner = metadata.byPluginId.get(pluginId);
+      return owner?.origin === "bundled" || owner?.trustedOfficialInstall === true;
+    })
+  );
 }
 
 function routeTupleMatches(
@@ -34,7 +93,8 @@ function routeTupleMatches(
   return (
     source.api === route.api &&
     typeof source.baseUrl === "string" &&
-    normalizeRouteBaseUrl(source.baseUrl) === normalizeRouteBaseUrl(route.baseUrl)
+    (normalizeCatalogRouteBaseUrl(source.baseUrl) ?? "") ===
+      (normalizeCatalogRouteBaseUrl(route.baseUrl) ?? "")
   );
 }
 
@@ -110,31 +170,9 @@ export function projectProviderModelRouteConfig(params: {
   config?: OpenClawConfig;
   route: ProviderModelRouteCandidate;
 }): OpenClawConfig {
-  const provider = normalizeProviderId(params.provider);
-  const providers = params.config?.models?.providers ?? {};
-  const providerEntry = resolveMergedModelProviderEntry(params.config, provider);
-  const providerKey = providerEntry?.providerKey ?? provider;
-  const providerConfig = providerEntry?.providerConfig ?? { models: [] };
-  // Materialization exposes one selected-key owner so a normalized duplicate
-  // cannot resurrect a different route after selection.
-  const routeProviders = Object.fromEntries(
-    Object.entries(providers).filter(
-      ([candidate]) => normalizeProviderId(candidate) !== provider || candidate === providerKey,
-    ),
-  );
-  return {
-    ...params.config,
-    models: {
-      ...params.config?.models,
-      providers: {
-        ...routeProviders,
-        [providerKey]: {
-          ...providerConfig,
-          auth: params.route.authRequirement === "subscription" ? "oauth" : "api-key",
-          api: params.route.api,
-          baseUrl: params.route.baseUrl,
-        },
-      },
-    },
-  };
+  return projectModelProviderConfig(params.config, params.provider, {
+    auth: params.route.authRequirement === "subscription" ? "oauth" : "api-key",
+    api: params.route.api,
+    baseUrl: params.route.baseUrl,
+  });
 }

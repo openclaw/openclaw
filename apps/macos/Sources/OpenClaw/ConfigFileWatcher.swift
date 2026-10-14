@@ -1,23 +1,15 @@
 import Foundation
 
-final class ConfigFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
-    private let url: URL
-    private let watchedDir: URL
-    private let targetPath: String
-    private let targetName: String
-    let watcher: SimpleFileWatcher
+final class ConfigFileWatcher: @unchecked Sendable {
+    private let watcher: CoalescingFSEventsWatcher
 
     init(url: URL, onChange: @escaping () -> Void) {
-        self.url = url
-        self.watchedDir = url.deletingLastPathComponent()
-        self.targetPath = url.path
-        self.targetName = url.lastPathComponent
-        let watchedDirPath = self.watchedDir.path
-        let targetPath = self.targetPath
-        let targetName = self.targetName
-        self.watcher = SimpleFileWatcher(CoalescingFSEventsWatcher(
+        let watchedDirPath = url.deletingLastPathComponent().path
+        let targetPath = url.path
+        let targetName = url.lastPathComponent
+        self.watcher = CoalescingFSEventsWatcher(
             paths: [watchedDirPath],
-            queueLabel: "ai.openclaw.configwatcher",
+            queue: DispatchQueue(label: "ai.openclaw.configwatcher"),
             shouldNotify: { _, eventPaths in
                 guard let eventPaths else { return true }
                 let paths = unsafeBitCast(eventPaths, to: NSArray.self)
@@ -28,6 +20,14 @@ final class ConfigFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
                 }
                 return false
             },
-            onChange: onChange))
+            onChange: onChange)
+    }
+
+    func start() {
+        self.watcher.start()
+    }
+
+    func stop() {
+        self.watcher.stop()
     }
 }

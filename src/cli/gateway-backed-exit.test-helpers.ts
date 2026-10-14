@@ -1,6 +1,7 @@
 // Shared process-test harness: mock Gateway servers used by CLI exit-code proofs.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import { isLoopbackIpAddress, isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { expect } from "vitest";
 import { WebSocketServer } from "ws";
@@ -11,12 +12,14 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
-import {
-  pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
-} from "../infra/network-interfaces.js";
+import { pickMatchingExternalInterfaceAddress } from "../infra/network-interfaces.js";
 
 const activeServers = new Set<WebSocketServer>();
+
+// Cached device credentials must not also claim shared auth and suppress human identity.
+type ExpectedGatewayAuth =
+  | { token: string; deviceToken?: never }
+  | { token?: never; deviceToken: string };
 
 export const EMPTY_STABILITY_SNAPSHOT = {
   capacity: 100,
@@ -26,7 +29,7 @@ export const EMPTY_STABILITY_SNAPSHOT = {
   summary: { byType: {} },
 };
 
-export async function startCronListGateway(token: string): Promise<{ url: string }> {
+export async function startCliReadGateway(token?: string): Promise<{ url: string }> {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
@@ -42,8 +45,86 @@ export async function startCronListGateway(token: string): Promise<{ url: string
           ws,
           frame.id,
           buildMinimalGatewayHelloOkPayload({
-            methods: ["cron.list"],
+            methods: ["cron.list", "cron.status", "message.action"],
             auth: { role: "operator", scopes: ["operator.admin"] },
+          }),
+        );
+        return;
+      }
+      if (frame.method === "cron.list") {
+        sendMinimalGatewayResponse(ws, frame.id, {
+          jobs: [],
+          snapshotRevision: "test-revision",
+          total: 0,
+          offset: 0,
+          limit: 50,
+          hasMore: false,
+          nextOffset: null,
+          deliveryPreviews: {},
+        });
+      }
+      if (frame.method === "cron.status") {
+        sendMinimalGatewayResponse(ws, frame.id, { enabled: true, jobs: 0 });
+      }
+      if (frame.method === "message.action") {
+        expect(frame.params).toMatchObject({
+          channel: "discord",
+          action: "read",
+          params: { target: "123456789012345678", limit: "1" },
+          conversationReadOrigin: "direct-operator",
+        });
+        sendMinimalGatewayResponse(ws, frame.id, { messages: [] });
+      }
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  return { url: `ws://127.0.0.1:${address.port}` };
+}
+
+/** Fake Gateway whose automation store never contains the requested job id. */
+export async function startCronLookupMissGateway(
+  token: string,
+  jobId: string,
+): Promise<{ calls: string[]; url: string }> {
+  const calls: string[] = [];
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      if (frame.method === "connect") {
+        expect(frame.params?.auth?.token).toBe(token);
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            methods: ["cron.get", "cron.list"],
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          }),
+        );
+        return;
+      }
+      if (typeof frame.method !== "string") {
+        return;
+      }
+      calls.push(frame.method);
+      if (frame.method === "cron.get") {
+        // The typed lookup miss a real Gateway emits for an unknown automation id.
+        ws.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: `cron job not found: ${jobId}`,
+              details: { code: "CRON_JOB_NOT_FOUND", jobId },
+            },
           }),
         );
         return;
@@ -64,7 +145,7 @@ export async function startCronListGateway(token: string): Promise<{ url: string
   });
   await once(wss, "listening");
   const address = wss.address() as AddressInfo;
-  return { url: `ws://127.0.0.1:${address.port}` };
+  return { calls, url: `ws://127.0.0.1:${address.port}` };
 }
 
 export async function startRateLimitedGateway(): Promise<{ url: string }> {
@@ -105,7 +186,7 @@ export async function startRateLimitedGateway(): Promise<{ url: string }> {
 }
 
 export async function startNodePairingGateway(
-  token: string,
+  expectedAuth: ExpectedGatewayAuth,
   issuedDeviceToken?: string,
 ): Promise<{
   calls: string[];
@@ -125,7 +206,7 @@ export async function startNodePairingGateway(
         return;
       }
       if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
+        expect(frame.params?.auth).toEqual(expectedAuth);
         sendMinimalGatewayResponse(
           ws,
           frame.id,
@@ -172,14 +253,14 @@ export async function startNodePairingGateway(
 }
 
 export async function startGatewayStabilityRpcServer(
-  token: string,
+  expectedAuth: ExpectedGatewayAuth,
   issuedDeviceToken: string,
 ): Promise<{
-  authTokens: Array<string | undefined>;
+  authInputs: unknown[];
   calls: string[];
   url: string;
 }> {
-  const authTokens: Array<string | undefined> = [];
+  const authInputs: unknown[] = [];
   const calls: string[] = [];
   const wss = new WebSocketServer({ host: "0.0.0.0", port: 0 });
   activeServers.add(wss);
@@ -191,8 +272,8 @@ export async function startGatewayStabilityRpcServer(
         return;
       }
       if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        authTokens.push(frame.params?.auth?.token);
+        expect(frame.params?.auth).toEqual(expectedAuth);
+        authInputs.push(frame.params?.auth);
         sendMinimalGatewayResponse(
           ws,
           frame.id,
@@ -226,7 +307,7 @@ export async function startGatewayStabilityRpcServer(
   await once(wss, "listening");
   const address = wss.address() as AddressInfo;
   // A private non-loopback target keeps shared-secret auth from bypassing device identity.
-  const host = pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+  const host = pickMatchingExternalInterfaceAddress(os.networkInterfaces(), {
     family: "IPv4",
     matches: (candidate) =>
       isPrivateOrLoopbackIpAddress(candidate) && !isLoopbackIpAddress(candidate),
@@ -234,7 +315,7 @@ export async function startGatewayStabilityRpcServer(
   if (!host) {
     throw new Error("test host has no non-loopback private IPv4 address");
   }
-  return { authTokens, calls, url: `ws://${host}:${address.port}` };
+  return { authInputs, calls, url: `ws://${host}:${address.port}` };
 }
 
 export async function startStateDirStatusGateway(target: {

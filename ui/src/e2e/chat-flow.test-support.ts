@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Page } from "playwright";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   controlUiSessionPath,
@@ -43,8 +43,11 @@ export async function captureUiProof(
   });
 }
 
-export function createChatFlowE2eSuite() {
+export function createChatFlowE2eSuite(
+  browserLaunchOptions?: Parameters<typeof createControlUiE2eSuite>[0]["browserLaunchOptions"],
+) {
   return createControlUiE2eSuite({
+    browserLaunchOptions,
     name: "Control UI mocked Gateway E2E",
     trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
@@ -81,10 +84,11 @@ export async function waitForRequests(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   method: string,
   count: number,
+  match?: Record<string, unknown>,
 ): Promise<MockGatewayRequest[]> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const requests = await gateway.getRequests(method);
+    const requests = await gateway.getRequests(method, match);
     if (requests.length >= count) {
       return requests;
     }
@@ -100,10 +104,11 @@ export async function expectRequestCountStable(
   method: string,
   count: number,
   durationMs = 500,
+  match?: Record<string, unknown>,
 ): Promise<void> {
   const deadline = Date.now() + durationMs;
   do {
-    expect(await gateway.getRequests(method)).toHaveLength(count);
+    expect(await gateway.getRequests(method, match)).toHaveLength(count);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
     });
@@ -149,21 +154,32 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
             scrollHeight: thread.scrollHeight,
             scrollTop: Math.round(thread.scrollTop),
           });
-          const before = readGeometry();
-          await new Promise<void>((resolve) => {
-            globalThis.setTimeout(resolve, 180);
-          });
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => resolve());
+          // Returning to the same offset can still leave a virtualizer idle callback pending.
+          let scrolled = false;
+          const onScroll = () => {
+            scrolled = true;
+          };
+          thread.addEventListener("scroll", onScroll, { passive: true });
+          try {
+            const before = readGeometry();
+            await new Promise<void>((resolve) => {
+              globalThis.setTimeout(resolve, 180);
             });
-          });
-          const after = readGeometry();
-          return (
-            before.clientHeight === after.clientHeight &&
-            before.scrollHeight === after.scrollHeight &&
-            before.scrollTop === after.scrollTop
-          );
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => resolve());
+              });
+            });
+            const after = readGeometry();
+            return (
+              !scrolled &&
+              before.clientHeight === after.clientHeight &&
+              before.scrollHeight === after.scrollHeight &&
+              before.scrollTop === after.scrollTop
+            );
+          } finally {
+            thread.removeEventListener("scroll", onScroll);
+          }
         }),
       { timeout: 10_000 },
     )
@@ -171,11 +187,11 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
 }
 
 export async function scrollChatThreadToTop(page: Page): Promise<void> {
-  await page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
-    const thread = element as HTMLElement;
-    thread.scrollTop = 0;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+  // Reader input retires pending end-follow; a raw offset write can be maintenance.
+  await thread.hover();
+  await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+  await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
 }
 
 export async function captureSessionAccessibilityProof(

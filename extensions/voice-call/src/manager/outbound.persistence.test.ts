@@ -21,19 +21,27 @@ it.each([
   "preserves callback-owned identity when initiation settles after the call is $phase ($payload)",
   async ({ phase, requestUuid }) => {
     const placement = createDeferred<InitiateCallResult>();
+    const placementStarted = createDeferred<void>();
     const playback = vi.fn(async () => {});
     const ctx = createContext({
-      provider: createProvider({ initiateCall: () => placement.promise, playTts: playback }),
+      provider: createProvider({
+        initiateCall: () => {
+          placementStarted.resolve();
+          return placement.promise;
+        },
+        playTts: playback,
+      }),
       webhookUrl: "https://example.com/voice/webhook",
     });
     const parser = new PlivoProvider({ authId: "MA-fixture", authToken: "synthetic-token" });
     const pending = initiateCall(ctx, "+15550000001");
     try {
+      await Promise.race([placementStarted.promise, pending]);
       const call = [...ctx.activeCalls.values()][0];
       if (!call) {
         throw new Error("expected the pending outbound call");
       }
-      const deliver = (fields: Record<string, string>) => {
+      const deliver = async (fields: Record<string, string>) => {
         const parsed = parser.parseWebhookEvent({
           headers: {},
           method: "POST",
@@ -48,13 +56,13 @@ it.each([
         });
         expect(parsed.events).toHaveLength(1);
         for (const event of parsed.events) {
-          processEvent(ctx, event);
+          await processEvent(ctx, event);
         }
       };
-      deliver({ CallStatus: "in-progress" });
+      await deliver({ CallStatus: "in-progress" });
       expect(call.providerCallId).toBe("canonical-call-uuid");
       if (phase === "ended") {
-        deliver({ CallStatus: "completed" });
+        await deliver({ CallStatus: "completed" });
       }
       const beforeResult = await getCallHistoryFromStore(ctx.storePath);
 
@@ -63,7 +71,7 @@ it.each([
       expect(call.providerCallId).toBe("canonical-call-uuid");
 
       if (phase === "active") {
-        deliver({ CallStatus: "in-progress", Speech: "Continue the connected call." });
+        await deliver({ CallStatus: "in-progress", Speech: "Continue the connected call." });
         await expect(speak(ctx, call.callId, "Still connected.")).resolves.toEqual({
           success: true,
         });
@@ -85,7 +93,11 @@ it.each([
 
 it("keeps outbound capacity available after storage failure without dialing", async () => {
   const placement = createDeferred<InitiateCallResult>();
-  const dial = vi.fn(() => placement.promise);
+  const placementStarted = createDeferred<void>();
+  const dial = vi.fn(() => {
+    placementStarted.resolve();
+    return placement.promise;
+  });
   const ctx = createContext({
     provider: createProvider({ initiateCall: dial }),
     webhookUrl: "https://example.com/voice/webhook",
@@ -108,6 +120,7 @@ it("keeps outbound capacity available after storage failure without dialing", as
       success: false,
       error: "Maximum concurrent calls (1) reached",
     });
+    await Promise.race([placementStarted.promise, recovered]);
     expect(dial).toHaveBeenCalledOnce();
   } finally {
     placement.resolve({ providerCallId: "provider-recovered", status: "initiated" });
@@ -117,8 +130,77 @@ it("keeps outbound capacity available after storage failure without dialing", as
   expect(result.success).toBe(true);
   expect(ctx.activeCalls.size).toBe(1);
   expect(ctx.providerCallIdMap.get("provider-recovered")).toBe(result.callId);
-  expect(loadActiveCallsFromStore(ctx.storePath).activeCalls.get(result.callId)).toMatchObject({
+  expect(
+    (await loadActiveCallsFromStore(ctx.storePath)).activeCalls.get(result.callId),
+  ).toMatchObject({
     providerCallId: "provider-recovered",
     state: "initiated",
   });
 });
+
+it.each([
+  { phase: "terminal", playbackFails: false },
+  { phase: "terminal", playbackFails: true },
+  { phase: "replaced", playbackFails: false },
+  { phase: "replaced", playbackFails: true },
+] as const)(
+  "does not rewrite a $phase call after delayed playback (failure=$playbackFails)",
+  async ({ phase, playbackFails }) => {
+    const playbackStarted = createDeferred<void>();
+    const playback = createDeferred<void>();
+    const ctx = createContext({
+      provider: createProvider({
+        playTts: () => {
+          playbackStarted.resolve();
+          return playback.promise;
+        },
+      }),
+      webhookUrl: "https://example.com/voice/webhook",
+    });
+    const started = await initiateCall(ctx, "+15550000001");
+    expect(started.success).toBe(true);
+    const call = ctx.activeCalls.get(started.callId);
+    if (!call) {
+      throw new Error("expected the connected outbound call");
+    }
+    const pending = speak(ctx, call.callId, "Pending playback");
+    const replacement = { ...structuredClone(call), state: "active" as const };
+    let historyBeforeSettlement: Awaited<ReturnType<typeof getCallHistoryFromStore>>;
+    try {
+      await Promise.race([playbackStarted.promise, pending]);
+      if (phase === "terminal") {
+        await processEvent(ctx, {
+          id: "ended-during-playback",
+          type: "call.ended",
+          callId: call.callId,
+          providerCallId: call.providerCallId,
+          timestamp: Date.now(),
+          reason: "completed",
+        });
+      } else {
+        ctx.activeCalls.set(call.callId, replacement);
+      }
+      historyBeforeSettlement = await getCallHistoryFromStore(ctx.storePath);
+    } finally {
+      if (playbackFails) {
+        playback.reject(new Error("playback interrupted"));
+      } else {
+        playback.resolve();
+      }
+      await pending;
+    }
+    await expect(pending).resolves.toEqual({
+      success: false,
+      error: playbackFails ? "playback interrupted" : "Call has ended",
+    });
+    expect(await getCallHistoryFromStore(ctx.storePath)).toEqual(historyBeforeSettlement);
+    if (phase === "terminal") {
+      expect(ctx.activeCalls.has(call.callId)).toBe(false);
+      expect(call.state).toBe("completed");
+    } else {
+      expect(ctx.activeCalls.get(call.callId)).toBe(replacement);
+      expect(replacement.state).toBe("active");
+      expect(replacement.transcript).toEqual([]);
+    }
+  },
+);

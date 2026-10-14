@@ -19,7 +19,7 @@ import {
   resolveNodeClaudeRecord,
 } from "./session-catalog-listing.js";
 import { MAX_TRANSCRIPT_LIMIT, readTranscriptParams } from "./session-catalog-parsing.js";
-import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
+import { type BoundClaudeSession, listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import { configuredClaudeConfigDir, gatewayClaudeScanOptions } from "./session-catalog-scan.js";
 import { ClaudeCatalogParamsError } from "./session-catalog-shared.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
@@ -99,7 +99,7 @@ function toGenericClaudeItems(item: ClaudeTranscriptItem): SessionCatalogTranscr
 
 function toGenericClaudeHost(
   host: ClaudeSessionCatalogHost,
-  adopted: ReadonlyMap<string, string>,
+  bound: ReadonlyMap<string, BoundClaudeSession>,
   cliAvailable: boolean,
 ): SessionCatalogHost {
   return {
@@ -109,36 +109,46 @@ function toGenericClaudeHost(
     connected: host.connected,
     canStartTerminal: host.kind === "gateway" ? cliAvailable : host.canStartTerminal === true,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
-    sessions: host.sessions.map((session) => {
+    sessions: host.sessions.flatMap((session) => {
+      const boundSession = bound.get(adoptedSourceKey(host.hostId, session.threadId));
+      // An OpenClaw session that merely routes its turns through the Claude CLI
+      // writes a thread here, but it is not a Claude Code conversation: it owns a
+      // sidebar row of its own. Listing it would hide that row inside this catalog
+      // and pull the session out of the group the operator filed it under.
+      if (boundSession && !boundSession.adopted) {
+        return [];
+      }
       const terminal = catalogTerminal.terminalEligibility(host, session.source, cliAvailable);
       const nodeCli =
         host.kind === "node" && host.canContinueClaude === true && session.source === "claude-cli";
-      const existingSessionKey = adopted.get(adoptedSourceKey(host.hostId, session.threadId));
+      const existingSessionKey = boundSession?.sessionKey;
       // Already-adopted rows stay continuable even if node policy later denies
       // the run command: continue only returns the existing session key, and
       // the turn itself still fails closed at invoke time.
       const continuable = terminal.localResumable || nodeCli || Boolean(existingSessionKey);
-      return {
-        threadId: session.threadId,
-        ...(session.name ? { name: session.name } : {}),
-        ...(session.color ? { color: session.color } : {}),
-        ...(session.cwd ? { cwd: session.cwd } : {}),
-        status: session.status,
-        ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
-        ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
-        ...(session.recencyAt != null ? { recencyAt: session.recencyAt } : {}),
-        source: session.source,
-        modelProvider: session.modelProvider,
-        ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
-        ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
-        ...(session.customGroup ? { customGroup: session.customGroup } : {}),
-        ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-        archived: session.archived,
-        ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
-        canContinue: continuable,
-        canArchive: false,
-        canOpenTerminal: terminal.canOpenTerminal,
-      };
+      return [
+        {
+          threadId: session.threadId,
+          ...(session.name ? { name: session.name } : {}),
+          ...(session.color ? { color: session.color } : {}),
+          ...(session.cwd ? { cwd: session.cwd } : {}),
+          status: session.status,
+          ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
+          ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
+          ...(session.recencyAt != null ? { recencyAt: session.recencyAt } : {}),
+          source: session.source,
+          modelProvider: session.modelProvider,
+          ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
+          ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
+          ...(session.customGroup ? { customGroup: session.customGroup } : {}),
+          ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
+          archived: session.archived,
+          ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
+          canContinue: continuable,
+          canArchive: false,
+          canOpenTerminal: terminal.canOpenTerminal,
+        },
+      ];
     }),
     ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
     ...(host.error ? { error: host.error } : {}),
@@ -162,23 +172,28 @@ export function createClaudeSessionCatalogRuntime(
 ): ClaudeSessionCatalogRuntime {
   return {
     list: async (query) => {
-      const adopted = listBoundClaudeSessions(api, query.agentId, query.sessionEntries);
+      const bound = listBoundClaudeSessions(api, query.agentId, query.sessionEntries);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
       const {
         allowProcessHomeFallback,
+        allowPartialResults: _allowPartialResults,
         agentId: _agentId,
         listNodes,
         onHost,
+        waitUntil,
+        signal,
         sessionEntries: _sessionEntries,
         ...gatewayQuery
       } = query;
       const mapHost = (host: ClaudeSessionCatalogHost) =>
-        toGenericClaudeHost(host, adopted, localCliAvailable);
+        toGenericClaudeHost(host, bound, localCliAvailable);
       const result = await listClaudeSessionCatalog({
         runtime: api.runtime,
         query: gatewayQuery,
         allowProcessHomeFallback,
         listNodes,
+        waitUntil,
+        signal,
         ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
       });
       return result.hosts.map(mapHost);

@@ -1,4 +1,3 @@
-// Temp State Dir script supports OpenClaw repository automation.
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

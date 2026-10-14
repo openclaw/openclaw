@@ -5,11 +5,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withMockedWindowsAclVerificationUnavailable } from "../test-utils/vitest-spies.js";
 import {
-  resolveConfiguredSecretInputWithFallback,
-  resolveRequiredConfiguredSecretRefInputString,
+  resolveCanonicalConfiguredSecretInputString,
+  resolveCanonicalConfiguredSecretInputWithFallback,
+  resolveCanonicalRequiredConfiguredSecretRefInputString,
 } from "./resolve-configured-secret-input-string.js";
 
 let fixtureRoot = "";
@@ -57,9 +60,9 @@ async function createWindowsAclUnavailableConfig() {
   };
 }
 
-describe("resolveConfiguredSecretInputWithFallback", () => {
+describe("resolveCanonicalConfiguredSecretInputWithFallback", () => {
   it("returns plaintext config value when present", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: createConfig("config-token"),
       env: {} as NodeJS.ProcessEnv,
       value: "config-token",
@@ -74,24 +77,8 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
-  it("returns fallback value when config is empty and no SecretRef is configured", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig(""),
-      env: {} as NodeJS.ProcessEnv,
-      value: "",
-      path: "gateway.auth.token",
-      readFallback: () => "env-token",
-    });
-
-    expect(resolved).toEqual({
-      value: "env-token",
-      source: "fallback",
-      secretRefConfigured: false,
-    });
-  });
-
   it("ignores blank fallback values when no SecretRef is configured", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: createConfig(""),
       env: {} as NodeJS.ProcessEnv,
       value: "",
@@ -105,7 +92,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
   });
 
   it("normalizes fallback values when no SecretRef is configured", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: createConfig(""),
       env: {} as NodeJS.ProcessEnv,
       value: "",
@@ -121,7 +108,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
   });
 
   it("returns resolved SecretRef value with fallback metadata", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: createConfig("${CUSTOM_GATEWAY_TOKEN}"),
       env: { CUSTOM_GATEWAY_TOKEN: "resolved-token" } as NodeJS.ProcessEnv,
       value: "${CUSTOM_GATEWAY_TOKEN}",
@@ -146,7 +133,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     async (ref) => {
       const fallbackCredential = "fallback-secret-must-not-be-read-or-disclosed";
       const readFallback = vi.fn(() => fallbackCredential);
-      const resolved = await resolveConfiguredSecretInputWithFallback({
+      const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
         config: createConfig(ref),
         env: {} as NodeJS.ProcessEnv,
         value: ref,
@@ -168,7 +155,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
       path.join(fixtureRoot, "missing-windows-system-root"),
       async () => {
         const { config } = await createWindowsAclUnavailableConfig();
-        const resolved = await resolveConfiguredSecretInputWithFallback({
+        const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
           config,
           env: {} as NodeJS.ProcessEnv,
           value: config.gateway?.auth?.token,
@@ -187,7 +174,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
       path.join(fixtureRoot, "missing-windows-system-root"),
       async () => {
         const { config, filePath } = await createWindowsAclUnavailableConfig();
-        const resolved = await resolveConfiguredSecretInputWithFallback({
+        const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
           config,
           env: {} as NodeJS.ProcessEnv,
           value: config.gateway?.auth?.token,
@@ -204,7 +191,7 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
   });
 
   it("keeps unrelated detailed provider failures unchanged", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
+    const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
       config: createConfig("${MISSING_GATEWAY_TOKEN}"),
       env: {} as NodeJS.ProcessEnv,
       value: "${MISSING_GATEWAY_TOKEN}",
@@ -218,9 +205,9 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
   });
 });
 
-describe("resolveRequiredConfiguredSecretRefInputString", () => {
+describe("resolveCanonicalRequiredConfiguredSecretRefInputString", () => {
   it("returns undefined when no SecretRef is configured", async () => {
-    const value = await resolveRequiredConfiguredSecretRefInputString({
+    const value = await resolveCanonicalRequiredConfiguredSecretRefInputString({
       config: createConfig("plain-token"),
       env: {} as NodeJS.ProcessEnv,
       value: "plain-token",
@@ -231,7 +218,7 @@ describe("resolveRequiredConfiguredSecretRefInputString", () => {
   });
 
   it("returns resolved SecretRef value when required", async () => {
-    const value = await resolveRequiredConfiguredSecretRefInputString({
+    const value = await resolveCanonicalRequiredConfiguredSecretRefInputString({
       config: createConfig("${CUSTOM_GATEWAY_TOKEN}"),
       env: { CUSTOM_GATEWAY_TOKEN: "resolved-token" } as NodeJS.ProcessEnv,
       value: "${CUSTOM_GATEWAY_TOKEN}",
@@ -243,7 +230,7 @@ describe("resolveRequiredConfiguredSecretRefInputString", () => {
 
   it("throws when SecretRef cannot be resolved", async () => {
     await expect(
-      resolveRequiredConfiguredSecretRefInputString({
+      resolveCanonicalRequiredConfiguredSecretRefInputString({
         config: createConfig("${MISSING_GATEWAY_TOKEN}"),
         env: {} as NodeJS.ProcessEnv,
         value: "${MISSING_GATEWAY_TOKEN}",
@@ -251,4 +238,87 @@ describe("resolveRequiredConfiguredSecretRefInputString", () => {
       }),
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN/i);
   });
+});
+
+describe("resolveCanonicalConfiguredSecretInputString target identity", () => {
+  it.each([
+    { path: 'plugins.entries.fixture.config["simple"]', id: "SIMPLE_TOKEN" },
+    { path: 'plugins.entries.fixture.config["constructor"]', id: "CONSTRUCTOR_TOKEN" },
+    { path: 'plugins.entries.fixture.config["prototype"]', id: "PROTOTYPE_TOKEN" },
+    { path: 'plugins.entries.fixture.config["0"]', id: "OBJECT_TOKEN" },
+    { path: "plugins.entries.fixture.config.0", id: "OBJECT_TOKEN" },
+    { path: "plugins.entries.fixture.config.list[0]", id: "ARRAY_TOKEN" },
+    { path: "plugins.entries.fixture.config.list.0", id: "ARRAY_TOKEN" },
+  ])("resolves the actual config target at $path", async ({ path: configPath, id }) => {
+    const read = resolveConfigForRead(
+      {
+        plugins: {
+          entries: {
+            fixture: {
+              config: {
+                simple: "${SIMPLE_TOKEN}",
+                constructor: "${CONSTRUCTOR_TOKEN}",
+                prototype: "${PROTOTYPE_TOKEN}",
+                "0": "${OBJECT_TOKEN}",
+                list: ["${ARRAY_TOKEN}"],
+              },
+            },
+          },
+        },
+      },
+      {},
+    );
+    const config = coerceConfig(read.resolvedConfigRaw);
+    setConfigResolutionFacts(config, read.resolutionFacts);
+
+    const resolved = await resolveCanonicalConfiguredSecretInputString({
+      config,
+      env: {},
+      value: `\${${id}}`,
+      path: configPath,
+    });
+
+    expect(resolved.value).toBeUndefined();
+    expect(resolved.unresolvedRefReason).toContain(`env:default:${id}`);
+  });
+
+  it.each([true, false])(
+    "keeps a literal target separate from a neighboring reference (available: %s)",
+    async (available) => {
+      const read = resolveConfigForRead(
+        {
+          plugins: {
+            entries: {
+              "foo.config.bar": { config: { token: "${SOURCE_A}" } },
+              foo: { config: { bar: { config: { token: "B_LITERAL" } } } },
+            },
+          },
+        },
+        {},
+      );
+      const config = coerceConfig(read.resolvedConfigRaw);
+      setConfigResolutionFacts(config, read.resolutionFacts);
+      const env = available ? { SOURCE_A: "A_REFERENCE" } : {};
+      const reference = await resolveCanonicalConfiguredSecretInputString({
+        config,
+        env,
+        value: "${SOURCE_A}",
+        path: 'plugins.entries["foo.config.bar"].config.token',
+      });
+      const literal = await resolveCanonicalConfiguredSecretInputString({
+        config,
+        env,
+        value: "B_LITERAL",
+        path: "plugins.entries.foo.config.bar.config.token",
+      });
+
+      expect(literal).toEqual({ value: "B_LITERAL" });
+      if (available) {
+        expect(reference).toEqual({ value: "A_REFERENCE" });
+      } else {
+        expect(reference.value).toBeUndefined();
+        expect(reference.unresolvedRefReason).toContain("env:default:SOURCE_A");
+      }
+    },
+  );
 });

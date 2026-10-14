@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { hasErrnoCode } from "../../src/infra/errno.ts";
 import { writeJson } from "../../src/infra/json-files.ts";
-import { collectPackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
+import {
+  collectPackageDistContentInventory,
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  collectPackageDistInventory,
+} from "../../src/infra/package-dist-inventory.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory-contract.mts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
 
@@ -33,76 +39,24 @@ export function isLegacyPluginDependencyInstallStagePath(relativePath: string): 
 async function collectLegacyPluginDependencyStagingDebrisPaths(
   packageRoot: string,
 ): Promise<string[]> {
-  const distDirs: string[] = [];
-  try {
-    const packageRootEntries = await fs.readdir(packageRoot, { withFileTypes: true });
-    for (const entry of packageRootEntries) {
-      if (entry.isDirectory() && entry.name.toLowerCase() === "dist") {
-        distDirs.push(path.join(packageRoot, entry.name));
-      }
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
+  const { entries, failedDirs } = await walkDirectory(packageRoot, {
+    maxDepth: 4,
+    symlinks: "include",
+    descend: ({ depth, name }) =>
+      depth === 1
+        ? name.toLowerCase() === "dist"
+        : depth === 2
+          ? name.toLowerCase() === "extensions"
+          : depth === 3,
+    include: ({ depth, name }) => depth === 4 && isInstallStageDirName(name),
+  });
+  const failure = failedDirs.find(({ error }) => !hasErrnoCode(error, "ENOENT"));
+  if (failure) {
+    throw failure.error;
   }
-
-  const debris: string[] = [];
-  for (const distDir of distDirs) {
-    let distEntries: import("node:fs").Dirent[];
-    try {
-      distEntries = await fs.readdir(distDir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-
-    for (const distEntry of distEntries) {
-      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
-        continue;
-      }
-      const extensionsDir = path.join(distDir, distEntry.name);
-      let extensionEntries: import("node:fs").Dirent[];
-      try {
-        extensionEntries = await fs.readdir(extensionsDir, { withFileTypes: true });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-
-      for (const extensionEntry of extensionEntries) {
-        if (!extensionEntry.isDirectory()) {
-          continue;
-        }
-        const extensionPath = path.join(extensionsDir, extensionEntry.name);
-        let stagingEntries: import("node:fs").Dirent[];
-        try {
-          stagingEntries = await fs.readdir(extensionPath, { withFileTypes: true });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            continue;
-          }
-          throw error;
-        }
-        for (const stagingEntry of stagingEntries) {
-          if (!isInstallStageDirName(stagingEntry.name)) {
-            continue;
-          }
-          debris.push(
-            normalizeRelativePath(
-              path.relative(packageRoot, path.join(extensionPath, stagingEntry.name)),
-            ),
-          );
-        }
-      }
-    }
-  }
-  return debris.toSorted((left, right) => left.localeCompare(right));
+  return entries
+    .map((entry) => normalizeRelativePath(entry.relativePath))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 async function assertNoLegacyPluginDependencyStagingDebris(packageRoot: string): Promise<void> {
@@ -119,7 +73,13 @@ async function writePackageDistInventoryFile(
   packageRoot: string,
   entries: string[],
 ): Promise<string[]> {
-  const inventory = sortUniqueStrings(entries);
+  const files = entries.filter((entry) => entry !== PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
+  const content = await collectPackageDistContentInventory(packageRoot, files);
+  await writeJson(path.join(packageRoot, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH), content, {
+    mode: 0o644,
+    trailingNewline: true,
+  });
+  const inventory = sortUniqueStrings([...files, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH]);
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await writeJson(inventoryPath, inventory, { mode: 0o644, trailingNewline: true });
   return inventory;

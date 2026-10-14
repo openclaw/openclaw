@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
-import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -57,6 +56,9 @@ describe("plugin api lifecycle", () => {
       id: "",
       sessionKey,
     });
+    await expect(
+      api.session.workflow.steerActiveRun({ sessionKey, text: "guidance" }),
+    ).resolves.toEqual({ steered: false, reason: "not wired" });
     await expect(
       api.sendSessionAttachment({ sessionKey, files: [{ path: "/tmp/attachment.txt" }] }),
     ).resolves.toEqual({ ok: false, error: "not wired" });
@@ -148,6 +150,20 @@ describe("plugin api lifecycle", () => {
     });
   });
 
+  it("keeps workflow steering callable after registration", async () => {
+    const steerActiveRun = vi.fn<OpenClawPluginApi["steerActiveRun"]>(async () => ({
+      steered: true,
+      runId: "active-run",
+    }));
+    const api = captureRegisteredPluginApi({ steerActiveRun });
+    const input = { sessionKey: "agent:main:main", text: "guidance", idempotencyKey: "review-1" };
+    await expect(api.session.workflow.steerActiveRun(input)).resolves.toEqual({
+      steered: true,
+      runId: "active-run",
+    });
+    expect(steerActiveRun).toHaveBeenCalledExactlyOnceWith(input);
+  });
+
   it("blocks registration-phase methods after registration", () => {
     const registerSessionExtension = vi.fn();
     const api = captureRegisteredPluginApi({ registerSessionExtension });
@@ -165,6 +181,7 @@ describe("plugin api lifecycle", () => {
     ["clearRunContext", true],
     ["emitAgentEvent", true],
     ["enqueueNextTurnInjection", true],
+    ["steerActiveRun", true],
     ["getRunContext", true],
     ["sendSessionAttachment", true],
     ["scheduleSessionTurn", true],
@@ -177,7 +194,13 @@ describe("plugin api lifecycle", () => {
     ["constructor", false],
     ["toString", false],
     ["__proto__", false],
-  ])("classifies late-call eligibility for %j as %s", (methodName, expected) => {
-    expect(isLateCallablePluginApiMethod(methodName)).toBe(expected);
+  ])("enforces post-registration call eligibility for %j as %s", (methodName, expected) => {
+    const handler = vi.fn();
+    const api = captureRegisteredPluginApi({ [methodName]: handler });
+    const method = Reflect.get(api, methodName);
+    const result = typeof method === "function" ? Reflect.apply(method, api, []) : undefined;
+
+    expect(handler).toHaveBeenCalledTimes(expected ? 1 : 0);
+    expect(result).toBeUndefined();
   });
 });

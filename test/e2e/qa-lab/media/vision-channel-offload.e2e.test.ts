@@ -10,6 +10,7 @@ import {
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const ACTIVE_MODEL_ID = "gpt-5.6-luna";
@@ -134,7 +135,7 @@ describe("QA-channel vision offload", () => {
     cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
     const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
+      command: createQaPreparedRepoCliCommand(REPO_ROOT),
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: ACTIVE_MODEL_REF,
@@ -209,6 +210,9 @@ describe("QA-channel vision offload", () => {
     expect(imageRequest.cursor, requestDiagnostics).toBeLessThan(activeModelRequest.cursor);
     expect(imageRequest.allInputText, requestDiagnostics).toContain(IMAGE_PROMPT);
     expect(activeModelRequest.allInputText, requestDiagnostics).toContain(PROVIDER_SUMMARY);
+    expect(activeModelRequest.allInputText, requestDiagnostics).toContain(
+      "OpenClaw runtime context:\n",
+    );
 
     const visibleOutbound = state
       .getSnapshot()

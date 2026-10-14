@@ -1,6 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
+
+vi.hoisted(() => vi.resetModules());
+vi.unmock("openclaw/plugin-sdk/provider-http");
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -13,17 +17,6 @@ const resolveApiKeyForProviderMock = vi.hoisted(() =>
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
-
-let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
-
-beforeAll(async () => {
-  vi.resetModules();
-  vi.doUnmock("openclaw/plugin-sdk/provider-http");
-  vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-    resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-  }));
-  ({ buildXaiVideoGenerationProvider } = await import("./video-generation-provider.js"));
-});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");

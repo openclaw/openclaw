@@ -1,9 +1,8 @@
-// Shared type contracts for dispatch-from-config runtime execution.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { FormatAbortReplyText, TryFastAbortFromMessage } from "./abort.runtime-types.js";
+import type { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { InternalGetReplyFromConfig, InternalGetReplyOptions } from "./get-reply.types.js";
 import type {
@@ -33,19 +32,16 @@ export type DispatchFromConfigParams = {
   /** Full runtime config captured by the channel; reply resolution refreshes it per turn. */
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<InternalGetReplyOptions, "onBlockReply">;
+  replyOptions?: Omit<InternalGetReplyOptions, "onBlockReply" | "onPreparedBlockReply">;
   replyResolver?: InternalGetReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-  fastAbortResolver?: TryFastAbortFromMessage;
-  formatAbortReplyTextResolver?: FormatAbortReplyText;
+  fastAbortResolver?: typeof tryFastAbortFromMessage;
+  formatAbortReplyTextResolver?: typeof formatAbortReplyText;
   /** Optional patch applied to the current runtime config before reply resolution. */
   configOverride?: OpenClawConfig;
   /** Gateway-owned worker services for archive recovery outside a request scope. */
   sessionWorkerPlacementContext?: SessionWorkerPlacementContext;
-  /**
-   * Channel turns consume the Gateway's committed model-runtime owner even when the global
-   * config snapshot is unavailable during startup or durable ingress replay.
-   */
+  /** @deprecated Always enabled in the Gateway; remove in the next Plugin SDK major. */
   usePublishedModelRuntime?: boolean;
 };
 

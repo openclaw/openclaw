@@ -9,7 +9,7 @@ title: "Geolocation plugin"
 
 The bundled `geolocation` plugin turns a connecting client's IP address into a coarse city. It ships with OpenClaw, downloads its database on first use, and answers entirely from that local copy, so a lookup never sends an address to a third party.
 
-It owns exactly one thing: address to place. It does not decide which addresses get looked up, does not store results, and is not an authorization input. The Control UI uses it to label the devices on a person's [Activity](/concepts/presence) card; anything else that needs a place can call the same route.
+It owns exactly one thing: address to place. It does not decide which addresses get looked up, does not store results, and is not an authorization input. The Control UI uses it to label the devices on a person's [Activity](/concepts/presence) card. The core `presence` tool uses the same lookup owner when the agent requests `include: ["location"]`.
 
 ## Quickstart
 
@@ -48,6 +48,20 @@ are absent from the database and answer `{"found": false}`:
 
 The first call also downloads the database, so expect it to take up to a minute
 while later calls answer from the local copy.
+
+### Gateway lookup
+
+Authenticated callers with `operator.read` can use `geolocation.lookup` with
+`{"ips":["8.8.8.8"]}`. A request accepts at most 200 IPv4 or IPv6 addresses and
+returns one entry per distinct address in `results`. Each entry includes `ip`,
+`status` (`found`, `not-found`, or `unavailable`), the available place fields, and
+`attribution`.
+
+The `presence` tool calls this method only when location is requested. Disabling
+the plugin or a database outage leaves presence and network details available;
+location is reported as unavailable. A lookup uses the recorded connection IP,
+never requests GPS, and does not send the IP to an external service. Client time
+zones remain separate reported facts.
 
 ## Why some clients never show a location
 
@@ -118,7 +132,7 @@ Expect city-level accuracy in the 55-80% range, and worse for the mobile, VPN, a
 
 ## How the database is managed
 
-The download is lazy and demand-driven. It happens on the first lookup of a **public** address, which in practice requires all of the following: an authenticated identity exists, an operator opened that person's Activity view, and that client connected from a routable address. A Gateway nobody inspects — or one reached only over loopback, a tunnel, a LAN, or a tailnet — never downloads anything.
+The download is lazy and demand-driven. It happens on the first authorized lookup of a **public** address, such as opening a person's Activity view or asking the agent for presence with location details. A Gateway nobody inspects — or one reached only over loopback, a tunnel, a LAN, or a tailnet — never downloads anything.
 
 On that first qualifying lookup the plugin fetches the database into `<state-dir>/geolocation/`, parses it before publishing it, and keeps it until it ages past `refreshDays`.
 
@@ -126,8 +140,8 @@ Four behaviors are worth knowing because they decide what you see during a failu
 
 - The response is read against a compressed ceiling and inflated against an on-disk ceiling, both enforced while reading. A replaced source cannot allocate an unbounded body, and a compression bomb cannot inflate past the limit.
 - A body that does not parse as an MMDB is discarded without replacing a working database. A rate-limit page or truncated download cannot break a Gateway that was working a minute ago.
-- A failed refresh serves the cached copy and logs a warning. Stale data beats no data.
-- Concurrent first lookups share one download rather than each starting their own.
+- A failed download or invalid database serves the cached copy and logs a warning. If a valid download cannot be saved to disk, lookups use it from memory and log the cache-write failure.
+- Concurrent first lookups in one Gateway share one download. Separate Gateways stage their downloads independently and close the complete file before replacing the cache, so another Gateway never reads a partially written download.
 
 ## Troubleshooting
 

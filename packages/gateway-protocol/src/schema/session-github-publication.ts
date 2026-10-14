@@ -41,6 +41,7 @@ export const GitHubPublicationBodySchema = Type.String({ minLength: 1, maxLength
 
 export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
@@ -111,13 +112,20 @@ export const SessionGitHubPublicationResultSchema = Type.Union([
   SessionGitHubPublicationNeedsConfirmationSchema,
 ]);
 
-export const SessionGitHubOptionsParamsSchema = closedObject({ sessionKey: NonEmptyString });
+export const SessionGitHubOptionsParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  // Narrows shared receipt recovery to the original invocation after a lost acknowledgement.
+  idempotencyKey: Type.Optional(NonEmptyString),
+});
 export const SessionGitHubStatusParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   requestId: PersonalGitHubGenerationSchema,
 });
 export const SessionGitHubConfirmParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   requestId: PersonalGitHubGenerationSchema,
   generation: PersonalGitHubGenerationSchema,
   account: PersonalGitHubAccountSchema,
@@ -143,14 +151,26 @@ export const SessionGitHubStatusResultSchema = closedObject({
 });
 
 export const SessionGitHubOptionsResultSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   personal: Type.Union([PersonalGitHubStatusSchema, Type.Null()]),
   shared: Type.Union([SharedGitHubPublicationPublisherSchema, Type.Null()]),
+  sharedUnavailableReason: Type.Optional(
+    Type.Union([
+      Type.Literal("unavailable"),
+      Type.Literal("changed"),
+      Type.Literal("rate_limited"),
+      Type.Literal("unverified"),
+      Type.Literal("unsupported_workspace"),
+    ]),
+  ),
   pendingPersonal: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
+  latestShared: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
 });
 
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationSelection = Static<typeof GitHubPublicationSelectionSchema>;
 export type SessionGitHubConfirmParams = Static<typeof SessionGitHubConfirmParamsSchema>;
+export type SessionGitHubOptionsResult = Static<typeof SessionGitHubOptionsResultSchema>;
 export type SessionGitHubStatusResult = Static<typeof SessionGitHubStatusResultSchema>;
 
 export type SessionGitHubPublishParams = Static<typeof SessionGitHubPublishParamsSchema>;

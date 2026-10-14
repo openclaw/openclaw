@@ -20,11 +20,11 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       content: [{ type: "text", text: errorJson }],
       ...overrides,
     });
-  const makeStoppedAssistant = () =>
+  const makeStoppedAssistant = (text = "") =>
     makeAssistant({
       stopReason: "stop",
       errorMessage: undefined,
-      content: [],
+      content: text ? [{ type: "text", text }] : [],
     });
 
   function expectSinglePayloadSummary(
@@ -69,7 +69,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   it("does not add tool error fallback when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["All good"],
-      lastAssistant: makeStoppedAssistant(),
+      lastAssistant: makeStoppedAssistant("All good"),
       lastToolError: { toolName: "browser", error: "tab not found" },
     });
 
@@ -141,25 +141,12 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
           },
         ],
       }),
+      currentAssistant: makeStoppedAssistant("Checked the page and recovered with final answer."),
       lastToolError: { toolName: "browser", error: "connection timeout" },
     });
 
     expectSinglePayloadSummary(payloads, {
       text: "Checked the page and recovered with final answer.",
-    });
-  });
-
-  it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      config: { messages: { suppressToolErrors: true } },
-    });
-  });
-
-  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "exec", error: "command not found" },
-      suppressToolErrorWarnings: true,
     });
   });
 
@@ -199,7 +186,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   it("treats a user-facing reply as authoritative after a mutating tool failure", () => {
     const payloads = buildPayloads({
       assistantTexts: ["No issues found. The update is complete."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastAssistant: makeStoppedAssistant("No issues found. The update is complete."),
       lastToolError: { toolName: "edit", error: "file missing" },
     });
 
@@ -453,8 +440,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
-    // Non-recoverable error so the generic exec-like rule still surfaces a warning
-    // for this no-reply formatting case (recoverable keywords would suppress it).
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "bash",

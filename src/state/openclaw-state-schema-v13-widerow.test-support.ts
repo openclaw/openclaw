@@ -1,3 +1,5 @@
+import type { DatabaseSync } from "node:sqlite";
+
 // Historical readers compare complete column definitions, so ALTER ADD defaults
 // cannot restore v12's NOT NULL columns; rebuild both exact original contracts.
 export const STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL = `
@@ -467,3 +469,44 @@ COMMIT;
 PRAGMA foreign_keys = ON;
 PRAGMA foreign_key_check;
 `;
+
+export function seedLegacyWideRowSubagentRun(
+  db: DatabaseSync,
+  params: {
+    payload: {
+      runId: string;
+      childSessionKey: string;
+      requesterSessionKey: string;
+      task: string;
+    };
+    requesterStorePath: string | null;
+    controllerStorePath: string | null;
+  },
+): void {
+  const { payload, requesterStorePath, controllerStorePath } = params;
+  db.prepare(
+    `INSERT INTO subagent_runs (
+       run_id, child_session_key, controller_session_key, requester_session_key,
+       created_at, payload_json, task, requester_display_key, cleanup
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    payload.runId,
+    payload.childSessionKey,
+    "agent:controller:legacy",
+    payload.requesterSessionKey,
+    200,
+    JSON.stringify(payload),
+    payload.task,
+    "legacy-requester",
+    "keep",
+  );
+  if (requesterStorePath !== null || controllerStorePath !== null) {
+    db.exec(`
+      ALTER TABLE subagent_runs ADD COLUMN requester_store_path TEXT;
+      ALTER TABLE subagent_runs ADD COLUMN controller_store_path TEXT;
+    `);
+    db.prepare(
+      "UPDATE subagent_runs SET requester_store_path = ?, controller_store_path = ? WHERE run_id = ?",
+    ).run(requesterStorePath, controllerStorePath, payload.runId);
+  }
+}

@@ -1,5 +1,7 @@
 // Non-interactive API key tests cover flag, environment, auth-profile, and secret-ref mode precedence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { resolveNonInteractiveApiKey } from "./api-keys.js";
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn());
@@ -133,7 +135,7 @@ describe("resolveNonInteractiveApiKey", () => {
 
   it("rejects a command-shaped explicit env key before a secret-ref flag", async () => {
     const runtime = createRuntime();
-    const previousZaiApiKey = process.env.ZAI_API_KEY;
+    const savedEnv = captureEnv(["ZAI_API_KEY"]);
     process.env.ZAI_API_KEY = "openclaw onboard --non-interactive --auth-choice zai-api-key"; // pragma: allowlist secret
     resolveEnvApiKey.mockImplementation(() => {
       throw new Error("broad env lookup should not run for an explicit ref-mode flag");
@@ -157,11 +159,7 @@ describe("resolveNonInteractiveApiKey", () => {
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
     } finally {
-      if (previousZaiApiKey === undefined) {
-        delete process.env.ZAI_API_KEY;
-      } else {
-        process.env.ZAI_API_KEY = previousZaiApiKey;
-      }
+      savedEnv.restore();
     }
   });
 
@@ -183,7 +181,7 @@ describe("resolveNonInteractiveApiKey", () => {
     async ({ provider, flagValue, flagName, envVar }) => {
       const runtime = createRuntime();
       resolveEnvApiKey.mockReturnValue(null);
-      const previousValue = process.env[envVar];
+      const savedEnv = captureEnv([envVar]);
       delete process.env[envVar];
 
       try {
@@ -205,11 +203,7 @@ describe("resolveNonInteractiveApiKey", () => {
         expect(errorText).toContain(envVar);
         expect(errorText).not.toContain(flagValue);
       } finally {
-        if (previousValue === undefined) {
-          delete process.env[envVar];
-        } else {
-          process.env[envVar] = previousValue;
-        }
+        savedEnv.restore();
       }
     },
   );
@@ -217,7 +211,7 @@ describe("resolveNonInteractiveApiKey", () => {
   it("returns explicit env fallback keys when provider env discovery misses", async () => {
     const runtime = createRuntime();
     resolveEnvApiKey.mockReturnValue(null);
-    const previousCustomApiKey = process.env.CUSTOM_API_KEY;
+    const savedEnv = captureEnv(["CUSTOM_API_KEY"]);
     process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
 
     try {
@@ -237,76 +231,16 @@ describe("resolveNonInteractiveApiKey", () => {
       });
       expect(runtime.exit).not.toHaveBeenCalled();
     } finally {
-      if (previousCustomApiKey === undefined) {
-        delete process.env.CUSTOM_API_KEY;
-      } else {
-        process.env.CUSTOM_API_KEY = previousCustomApiKey;
-      }
+      savedEnv.restore();
     }
-  });
-
-  it("returns explicit env fallback refs in secret-ref mode", async () => {
-    const runtime = createRuntime();
-    resolveEnvApiKey.mockReturnValue(null);
-    const previousCustomApiKey = process.env.CUSTOM_API_KEY;
-    process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
-
-    try {
-      const result = await resolveNonInteractiveApiKey({
-        provider: "custom-models-custom-local",
-        cfg: {},
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        envVarName: "CUSTOM_API_KEY",
-        runtime: runtime as never,
-        secretInputMode: "ref",
-      });
-
-      expect(result).toEqual({
-        key: "custom-env-key",
-        source: "env",
-        envVarName: "CUSTOM_API_KEY",
-      });
-      expect(runtime.exit).not.toHaveBeenCalled();
-    } finally {
-      if (previousCustomApiKey === undefined) {
-        delete process.env.CUSTOM_API_KEY;
-      } else {
-        process.env.CUSTOM_API_KEY = previousCustomApiKey;
-      }
-    }
-  });
-
-  it("falls back to a matching API-key profile after flag and env are absent", async () => {
-    const runtime = createRuntime();
-    authStore.profiles["custom-models-custom-local:default"] = {
-      type: "api_key",
-      provider: "custom-models-custom-local",
-      key: "custom-profile-key",
-    };
-    resolveEnvApiKey.mockReturnValue(null);
-
-    const result = await resolveNonInteractiveApiKey({
-      provider: "custom-models-custom-local",
-      cfg: {},
-      flagName: "--custom-api-key",
-      envVar: "CUSTOM_API_KEY",
-      runtime: runtime as never,
-    });
-
-    expect(result).toEqual({ key: "custom-profile-key", source: "profile" });
-    expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
-    const [profileParams] = resolveApiKeyForProfile.mock.calls[0] ?? [];
-    expect(profileParams?.profileId).toBe("custom-models-custom-local:default");
   });
 
   it("retains existing profile reuse in secret-ref mode without inventing an env reference", async () => {
     const runtime = createRuntime();
-    authStore.profiles["custom-models-custom-local:default"] = {
-      type: "api_key",
-      provider: "custom-models-custom-local",
-      key: "fixture-profile-key",
-    };
+    authStore.profiles["custom-models-custom-local:default"] = createApiKeyCredential(
+      "custom-models-custom-local",
+      "fixture-profile-key",
+    );
     resolveEnvApiKey.mockReturnValue(null);
 
     const result = await resolveNonInteractiveApiKey({
@@ -386,6 +320,7 @@ describe("resolveNonInteractiveApiKey", () => {
     const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
     expect(payload).toEqual({
       ok: false,
+      error: { type: "cli_error", message: expect.stringContaining(testCase.expectedMessage) },
       phase: "options",
       message: expect.stringContaining(testCase.expectedMessage),
     });

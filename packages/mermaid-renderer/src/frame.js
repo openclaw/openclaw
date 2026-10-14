@@ -2,32 +2,16 @@
 // same-origin ES modules without relaxing the host's asset CORS policy.
 (() => {
   const mermaid = globalThis.mermaid;
-  const properties = [
-    "fill",
-    "fill-opacity",
-    "fill-rule",
-    "stroke",
-    "stroke-width",
-    "stroke-opacity",
-    "stroke-linecap",
-    "stroke-linejoin",
-    "stroke-dasharray",
-    "stroke-dashoffset",
-    "opacity",
-    "font-family",
-    "font-size",
-    "font-weight",
-    "font-style",
-    "text-anchor",
-    "dominant-baseline",
-    "alignment-baseline",
-    "baseline-shift",
-    "text-decoration",
-    "letter-spacing",
-    "word-spacing",
-    "visibility",
-    "display",
-  ];
+  const truncateUtf16Safe = (value, maxLength) => {
+    if (value.length <= maxLength) {
+      return value;
+    }
+    const boundary =
+      /[\uD800-\uDBFF]/u.test(value[maxLength - 1]) && /[\uDC00-\uDFFF]/u.test(value[maxLength])
+        ? maxLength - 1
+        : maxLength;
+    return value.slice(0, boundary);
+  };
   // Both application scripts are already loaded. Diagram input can now cause
   // no script, image, stylesheet, font, fetch, or nested-frame network requests.
   const policy = document.createElement("meta");
@@ -47,6 +31,7 @@
     }
     window.removeEventListener("message", initialize);
     const port = event.ports[0];
+    const properties = event.data.presentationAttributes;
     let busy = false;
     const render = async ({ data: { id, source, config, maxSvgLength, maxSvgElements } }) => {
       if (busy) {
@@ -102,7 +87,7 @@
       } catch (error) {
         port.postMessage({
           id,
-          error: String(error instanceof Error ? error.message : error).slice(0, 1_000),
+          error: truncateUtf16Safe(String(error instanceof Error ? error.message : error), 1_000),
         });
       } finally {
         document.body.replaceChildren();

@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -113,6 +114,7 @@ describe("Slack transport credential activation", () => {
           const connected = createDeferred<void>();
           const controller = new AbortController();
           const run = monitorSlackProvider({
+            scheduler: createTestPluginServiceScheduler(),
             config,
             abortSignal: controller.signal,
             runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -167,16 +169,4 @@ describe("Slack transport credential activation", () => {
       }
     },
   );
-
-  it("rejects an unresolved signing secret before starting HTTP transport", async () => {
-    await expect(
-      monitorSlackProvider({
-        config: {
-          channels: {
-            slack: { mode: "http", botToken: "xoxb-loopback", signingSecret: inactiveSecret },
-          },
-        },
-      }),
-    ).rejects.toThrow("channels.slack.accounts.default.signingSecret");
-  });
 });

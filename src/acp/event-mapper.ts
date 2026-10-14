@@ -1,4 +1,3 @@
-/** Converts ACP prompt and tool-event shapes into Gateway-friendly text, files, and metadata. */
 import type {
   ContentBlock,
   ToolCallContent,
@@ -66,37 +65,11 @@ const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
 };
 
 function escapeInlineControlChars(value: string): string {
-  let escaped = "";
-  for (const char of value) {
-    const codePoint = char.codePointAt(0);
-    if (codePoint === undefined) {
-      escaped += char;
-      continue;
-    }
-
-    const isInlineControl =
-      codePoint <= 0x1f ||
-      (codePoint >= 0x7f && codePoint <= 0x9f) ||
-      codePoint === 0x2028 ||
-      codePoint === 0x2029;
-    if (!isInlineControl) {
-      escaped += char;
-      continue;
-    }
-
-    const mapped = INLINE_CONTROL_ESCAPE_MAP[char];
-    if (mapped) {
-      escaped += mapped;
-      continue;
-    }
-
-    // Keep escaped control bytes readable and stable in logs/prompts.
-    escaped +=
-      codePoint <= 0xff
-        ? `\\x${codePoint.toString(16).padStart(2, "0")}`
-        : `\\u${codePoint.toString(16).padStart(4, "0")}`;
-  }
-  return escaped;
+  return value.replace(
+    /[\p{Cc}\u2028\u2029]/gu,
+    (char) =>
+      INLINE_CONTROL_ESCAPE_MAP[char] || `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
+  );
 }
 
 function escapeResourceTitle(value: string): string {
@@ -244,10 +217,9 @@ function collectToolLocations(
   }
 }
 
-/** Extracts bounded text content from an ACP prompt block list. */
 export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
   const parts: string[] = [];
-  // Track accumulated byte count per block to catch oversized prompts before full concatenation
+  // Enforce the byte budget before allocating the joined prompt.
   let totalBytes = 0;
   for (const block of prompt) {
     let blockText: string | undefined;
@@ -261,7 +233,6 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
       blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
     }
     if (blockText !== undefined) {
-      // Guard: reject before allocating the full concatenated string
       if (maxBytes !== undefined) {
         const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
         totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
@@ -275,7 +246,6 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
   return parts.join("\n");
 }
 
-/** Extracts image/file prompt blocks into Gateway attachment payloads. */
 export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAttachment[] {
   const attachments: GatewayAttachment[] = [];
   for (const block of prompt) {
@@ -294,7 +264,6 @@ export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAtt
   return attachments;
 }
 
-/** Builds the display title used for ACP tool-call events. */
 export function formatToolTitle(
   name: string | undefined,
   args: Record<string, unknown> | undefined,
@@ -304,7 +273,7 @@ export function formatToolTitle(
     return base;
   }
   const parts = Object.entries(args).map(([key, value]) => {
-    const raw = typeof value === "string" ? value : JSON.stringify(value);
+    const raw = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
     const safe = raw.length > 100 ? `${truncateUtf16Safe(raw, 100)}...` : raw;
     return `${key}: ${safe}`;
   });
@@ -313,97 +282,52 @@ export function formatToolTitle(
   return escapeInlineControlChars(`${base}: ${parts.join(", ")}`);
 }
 
-/** Infers ACP tool kind from a normalized tool name. */
+const TOOL_KIND_PATTERNS: ReadonlyArray<readonly [ToolKind, RegExp]> = [
+  ["read", /read/],
+  ["edit", /write|edit/],
+  ["delete", /delete|remove/],
+  ["move", /move|rename/],
+  ["search", /search|find/],
+  ["execute", /exec|run|bash/],
+  ["fetch", /fetch|http/],
+];
+
 export function inferToolKind(name?: string): ToolKind {
-  if (!name) {
-    return "other";
-  }
   const normalized = normalizeLowercaseStringOrEmpty(name);
-  if (normalized.includes("read")) {
-    return "read";
-  }
-  if (normalized.includes("write") || normalized.includes("edit")) {
-    return "edit";
-  }
-  if (normalized.includes("delete") || normalized.includes("remove")) {
-    return "delete";
-  }
-  if (normalized.includes("move") || normalized.includes("rename")) {
-    return "move";
-  }
-  if (normalized.includes("search") || normalized.includes("find")) {
-    return "search";
-  }
-  if (normalized.includes("exec") || normalized.includes("run") || normalized.includes("bash")) {
-    return "execute";
-  }
-  if (normalized.includes("fetch") || normalized.includes("http")) {
-    return "fetch";
-  }
-  return "other";
+  return TOOL_KIND_PATTERNS.find(([, pattern]) => pattern.test(normalized))?.[0] ?? "other";
 }
 
-/** Extracts textual ACP tool-call content from unknown runtime payloads. */
 export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
+  const texts: string[] = [];
   if (hasNonEmptyString(value)) {
-    return value.trim()
-      ? [
-          {
-            type: "content",
-            content: {
-              type: "text",
-              text: value,
-            },
-          },
-        ]
-      : undefined;
-  }
-
-  const record = asRecord(value);
-  if (!record) {
-    return undefined;
-  }
-
-  const contents: ToolCallContent[] = [];
-  const blocks = Array.isArray(record.content) ? record.content : [];
-  for (const block of blocks) {
-    const entry = asRecord(block);
-    if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
-      contents.push({
-        type: "content",
-        content: {
-          type: "text",
-          text: entry.text,
-        },
-      });
+    texts.push(value);
+  } else {
+    const record = asRecord(value);
+    if (!record) {
+      return undefined;
+    }
+    const blocks = Array.isArray(record.content) ? record.content : [];
+    for (const block of blocks) {
+      const entry = asRecord(block);
+      if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
+        texts.push(entry.text);
+      }
+    }
+    if (texts.length === 0) {
+      const fallbackText =
+        readStringValue(record.text) ??
+        readStringValue(record.message) ??
+        readStringValue(record.error);
+      if (hasNonEmptyString(fallbackText)) {
+        texts.push(fallbackText);
+      }
     }
   }
-
-  if (contents.length > 0) {
-    return contents;
-  }
-
-  const fallbackText =
-    readStringValue(record.text) ??
-    readStringValue(record.message) ??
-    readStringValue(record.error);
-
-  if (!hasNonEmptyString(fallbackText)) {
-    return undefined;
-  }
-
-  return [
-    {
-      type: "content",
-      content: {
-        type: "text",
-        text: fallbackText,
-      },
-    },
-  ];
+  return texts.length > 0
+    ? texts.map((text) => ({ type: "content", content: { type: "text", text } }))
+    : undefined;
 }
 
-/** Extracts bounded file locations from nested tool-call payloads. */
 export function extractToolCallLocations(...values: unknown[]): ToolCallLocation[] | undefined {
   const locations = new Map<string, ToolCallLocation>();
   for (const value of values) {

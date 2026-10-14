@@ -16,11 +16,10 @@ Defined in `ui/src/styles/base.css`:
 
 Non-token durations in use (document when adding new ones):
 
-| Context                 | Value                          | File              |
-| ----------------------- | ------------------------------ | ----------------- |
-| Theme circle transition | `400ms`                        | `base.css`        |
-| Shimmer animation       | `1500ms`                       | `base.css`        |
-| Composer border/shadow  | `var(--duration-fast)` = 100ms | `chat/layout.css` |
+| Context                | Value                          | File              |
+| ---------------------- | ------------------------------ | ----------------- |
+| Shimmer animation      | `1500ms`                       | `base.css`        |
+| Composer border/shadow | `var(--duration-fast)` = 100ms | `chat/layout.css` |
 
 ---
 
@@ -56,7 +55,7 @@ Every animation or transition **must** be suppressed when the user has requested
 }
 ```
 
-Light-DOM components get the `.skeleton` primitive and reduced-motion gate from `base.css`. A component rendered inside shadow roots, such as the panel loading skeleton hosted by the terminal, desktop, and browser panels, carries a declaration-identical copy of the primitive plus its own reduced-motion guard. `ui/src/components/panel-loading-skeleton.test.ts` guards the primitive against drift.
+Light-DOM components get the `.skeleton` primitive and reduced-motion gate from `base.css`. Skeleton sweeps use `animation: none` under reduced motion, with the highlight parked offscreen; even a collapsed animation would briefly run during startup. A component rendered inside shadow roots, such as the panel loading skeleton hosted by the terminal, desktop, and browser panels, carries a declaration-identical copy of the primitive plus its own reduced-motion guard. `ui/src/components/panel-loading-skeleton.test.ts` guards the primitive against drift.
 
 Opt-in decorative motion that should vanish entirely, such as text shimmers, belongs inside `@media (prefers-reduced-motion: no-preference)`. Reduced-motion users keep plain static text.
 
@@ -64,15 +63,14 @@ Opt-in decorative motion that should vanish entirely, such as text shimmers, bel
 
 ## Animation Inventory
 
-| Name                      | File                       | Duration                              | Purpose                                                                                                          |
-| ------------------------- | -------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `shimmer`                 | `base.css`                 | 1500ms, infinite                      | `.skeleton::after` transform; compositor-only, locked by `ui/src/styles/shimmer.browser.test.ts`                 |
-| `text-shimmer`            | `base.css`                 | 2.2s tool row; 2s dictation, infinite | Background-position sweep on a text-clipped gradient: running tool-row verb/command and dictation listening text |
-| `compaction-shimmer`      | `chat/composer-status.css` | 3.2s, infinite                        | Text-clipped gradient sweep with hold frames                                                                     |
-| `theme-circle-transition` | `base.css`                 | 400ms, `--ease-out`                   | Dark/light mode circle wipe                                                                                      |
-| Composer border/shadow    | `chat/layout.css`          | 100ms (`--duration-fast`)             | Focus ring on input area                                                                                         |
-| Workboard card glass      | `workboard.css`            | —                                     | Static (no animation)                                                                                            |
-| Dreams diary reveal       | `dreams.css`               | 1.4s, cubic-bezier                    | Entry reveal keyframe with blur-to-clear effect                                                                  |
+| Name                   | File                       | Duration                              | Purpose                                                                                                          |
+| ---------------------- | -------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `shimmer`              | `base.css`                 | 1500ms, infinite                      | `.skeleton::after` transform; compositor-only, locked by `ui/src/styles/shimmer.browser.test.ts`                 |
+| `text-shimmer`         | `base.css`                 | 2.2s tool row; 2s dictation, infinite | Background-position sweep on a text-clipped gradient: running tool-row verb/command and dictation listening text |
+| `compaction-shimmer`   | `chat/composer-status.css` | 3.2s, infinite                        | Text-clipped gradient sweep with hold frames                                                                     |
+| Composer border/shadow | `chat/layout.css`          | 100ms (`--duration-fast`)             | Focus ring on input area                                                                                         |
+| Workboard card glass   | `workboard.css`            | —                                     | Static (no animation)                                                                                            |
+| Dreams diary reveal    | `dreams.css`               | 1.4s, cubic-bezier                    | Entry reveal keyframe with blur-to-clear effect                                                                  |
 
 ---
 

@@ -1,6 +1,4 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-// Matrix helper module supports formatting behavior.
-import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   markdownToMatrixBody,
@@ -12,36 +10,12 @@ import {
 import type { MatrixClient } from "../sdk.js";
 import {
   MsgType,
-  RelationType,
   type MatrixFormattedContent,
   type MatrixMediaMsgType,
   type MatrixRelation,
-  type MatrixReplyRelation,
   type MatrixTextContent,
   type MatrixTextMsgType,
-  type MatrixThreadRelation,
 } from "./types.js";
-
-async function renderMatrixFormattedContent(params: {
-  client: MatrixClient;
-  markdown?: string | null;
-  preparedBody?: string;
-  includeMentions?: boolean;
-  tableMode?: MarkdownTableMode;
-}): Promise<{ body: string; html?: string; mentions?: MatrixMentions }> {
-  const markdown = params.markdown ?? "";
-  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
-  if (params.includeMentions === false) {
-    const html = markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd();
-    return { body, html: html || undefined };
-  }
-  const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
-    markdown,
-    client: params.client,
-    tableMode: params.tableMode,
-  });
-  return { body, html, mentions };
-}
 
 export function buildTextContent(
   body: string,
@@ -50,17 +24,11 @@ export function buildTextContent(
     msgtype?: MatrixTextMsgType;
   } = {},
 ): MatrixTextContent {
-  const msgtype = opts.msgtype ?? MsgType.Text;
-  return relation
-    ? {
-        msgtype,
-        body,
-        "m.relates_to": relation,
-      }
-    : {
-        msgtype,
-        body,
-      };
+  return {
+    msgtype: opts.msgtype ?? MsgType.Text,
+    body,
+    ...(relation ? { "m.relates_to": relation } : {}),
+  };
 }
 
 export async function enrichMatrixFormattedContent(params: {
@@ -71,13 +39,14 @@ export async function enrichMatrixFormattedContent(params: {
   includeMentions?: boolean;
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { body, html, mentions } = await renderMatrixFormattedContent({
-    client: params.client,
-    markdown: params.markdown,
-    preparedBody: params.preparedBody,
-    includeMentions: params.includeMentions,
-    tableMode: params.tableMode,
-  });
+  const markdown = params.markdown ?? "";
+  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
+  const { html, mentions } = await (params.includeMentions === false
+    ? {
+        html: markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd(),
+        mentions: undefined,
+      }
+    : renderMarkdownToMatrixHtmlWithMentions({ ...params, markdown }));
   params.content.body = body || params.content.body;
   if (mentions) {
     params.content["m.mentions"] = mentions;
@@ -144,29 +113,7 @@ export function diffMatrixMentions(
   return delta;
 }
 
-export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined {
-  const trimmed = replyToId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return { "m.in_reply_to": { event_id: trimmed } };
-}
-
-export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
-  const trimmed = threadId.trim();
-  const relation: MatrixThreadRelation = {
-    rel_type: RelationType.Thread,
-    event_id: trimmed,
-  };
-  const fallbackReplyToId = replyToId?.trim();
-  if (fallbackReplyToId) {
-    relation.is_falling_back = true;
-    relation["m.in_reply_to"] = { event_id: fallbackReplyToId };
-  }
-  return relation;
-}
-
-export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
+export function resolveMatrixMsgType(contentType?: string): MatrixMediaMsgType {
   const kind = getMatrixRuntime().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
@@ -178,27 +125,4 @@ export function resolveMatrixMsgType(contentType?: string, _fileName?: string): 
     default:
       return MsgType.File;
   }
-}
-
-export function resolveMatrixVoiceDecision(opts: {
-  wantsVoice: boolean;
-  contentType?: string;
-  fileName?: string;
-}): { useVoice: boolean } {
-  if (!opts.wantsVoice) {
-    return { useVoice: false };
-  }
-  if (isMatrixVoiceCompatibleAudio(opts)) {
-    return { useVoice: true };
-  }
-  return { useVoice: false };
-}
-
-function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
-  // Matrix currently shares the core voice compatibility policy.
-  // Keep this wrapper as the seam if Matrix policy diverges later.
-  return isVoiceMessageCompatibleAudio({
-    contentType: opts.contentType,
-    fileName: opts.fileName,
-  });
 }

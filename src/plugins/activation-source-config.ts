@@ -1,4 +1,5 @@
 /** Resolves the source config snapshot used for plugin activation policy decisions. */
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -12,6 +13,10 @@ export function resolvePluginActivationSourceConfig(params: {
 }): OpenClawConfig {
   if (params.activationSourceConfig !== undefined) {
     return params.activationSourceConfig;
+  }
+  const captured = getRuntimeConfigCapture(params.config);
+  if (captured) {
+    return captured.source;
   }
   const sourceSnapshot = getRuntimeConfigSourceSnapshot();
   if (sourceSnapshot && params.config === getRuntimeConfigSnapshot()) {

@@ -1,5 +1,6 @@
 {
   "id": "nvidia",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -20,6 +21,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "nvidia": "nvidia"
+    },
     "providers": {
       "nvidia": {
         "baseUrl": "https://integrate.api.nvidia.com/v1",

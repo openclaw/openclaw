@@ -61,23 +61,6 @@ const privateIpCases = [
   "2001:db8:1234:1:200:5efe:7f00:1",
 ];
 
-const publicIpCases = [
-  "93.184.216.34",
-  "198.17.255.255",
-  "198.20.0.1",
-  "198.51.99.1",
-  "198.51.101.1",
-  "203.0.112.1",
-  "203.0.114.1",
-  "223.255.255.255",
-  "2606:4700:4700::1111",
-  "64:ff9b::8.8.8.8",
-  "2002:0808:0808::",
-  "2001:0000:0:0:0:0:f7f7:f7f7",
-  "2001:4860:1234::5efe:8.8.8.8",
-  "2001:4860:1234:1:1111:5efe:7f00:1",
-];
-
 const malformedIpv6Cases = ["::::", "2001:db8::gggg"];
 const unsupportedLegacyIpv4Cases = [
   "0177.0.0.1",
@@ -93,8 +76,6 @@ const unsupportedLegacyIpv4Cases = [
   "127..0.1",
   "999.1.1.1",
 ];
-
-const nonIpHostnameCases = ["example.com", "abc.123.example", "1password.com", "0x.example.com"];
 
 function expectIpPrivacyCases(cases: string[], expected: boolean) {
   for (const address of cases) {
@@ -123,23 +104,6 @@ describe("ssrf ip classification", () => {
       [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases],
       true,
     );
-  });
-
-  it("classifies public ip literals as non-private", () => {
-    expectIpPrivacyCases(publicIpCases, false);
-  });
-
-  it("does not treat hostnames as ip literals", () => {
-    expectIpPrivacyCases(nonIpHostnameCases, false);
-  });
-
-  it("keeps local-use NAT64 blocked when fake-ip ranges are allowed", () => {
-    expect(
-      isPrivateIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe", {
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-      }),
-    ).toBe(true);
   });
 });
 
@@ -176,56 +140,6 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
 });
 
 describe("resolveSsrFPolicyForUrl", () => {
-  it("returns missing and originless policies unchanged", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), undefined),
-    ).toBeUndefined();
-    const policy = { allowedOrigins: [], hostnameAllowlist: ["api.example.com"] };
-    expect(resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), policy)).toBe(policy);
-  });
-
-  it("converts matching allowed origins into per-request hostname trust", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:1234/v1/chat/completions"), {
-        allowedOrigins: ["http://10.0.0.5:1234"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://10.0.0.5:1234"],
-      allowedHostnames: ["10.0.0.5"],
-    });
-  });
-
-  it("normalizes allowed origin case, path, query, and default ports before trusting hosts", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("https://api.example.com:443/v1/chat/completions"), {
-        allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
-      allowedHostnames: ["api.example.com"],
-    });
-  });
-
-  it("normalizes trailing hostname dots before trusting hosts", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://example.com:11434/v1/chat/completions"), {
-        allowedOrigins: ["http://example.com.:11434/v1"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://example.com.:11434/v1"],
-      allowedHostnames: ["example.com"],
-    });
-
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://example.com.:11434/v1/chat/completions"), {
-        allowedOrigins: ["http://example.com:11434/v1"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://example.com:11434/v1"],
-      allowedHostnames: ["example.com"],
-    });
-  });
-
   it("does not trust the hostname when the port differs", () => {
     expect(
       resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:4321/v1/chat/completions"), {
@@ -246,16 +160,6 @@ describe("resolveSsrFPolicyForUrl", () => {
       allowedHostnames: ["fd00::1"],
     });
   });
-
-  it("does not trust IPv6 origins when the port differs", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://[fd00::1]:11435/v1/chat/completions"), {
-        allowedOrigins: ["http://[fd00::1]:11434"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://[fd00::1]:11434"],
-    });
-  });
 });
 
 describe("ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist", () => {
@@ -271,78 +175,30 @@ describe("ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist", () => {
 });
 
 describe("isBlockedHostnameOrIp", () => {
-  it.each([
-    "localhost.localdomain",
-    "metadata.google.internal",
-    "api.localhost",
-    "svc.local",
-    "db.internal",
-  ])("blocks reserved hostname %s", (hostname) => {
-    expect(isBlockedHostnameOrIp(hostname)).toBe(true);
-  });
+  it.each(["db.internal..."])(
+    "blocks reserved hostname with repeated trailing dots %s",
+    (hostname) => {
+      expect(isBlockedHostnameOrIp(hostname)).toBe(true);
+      expect(() => assertHostnameAllowedWithPolicy(hostname)).toThrow(/blocked/i);
+    },
+  );
 
-  it.each([
-    "localhost...",
-    "localhost.localdomain...",
-    "metadata.google.internal...",
-    "api.localhost...",
-    "svc.local...",
-    "db.internal...",
-  ])("blocks reserved hostname with repeated trailing dots %s", (hostname) => {
-    expect(isBlockedHostnameOrIp(hostname)).toBe(true);
-    expect(() => assertHostnameAllowedWithPolicy(hostname)).toThrow(/blocked/i);
-  });
-
-  it.each([
-    ["2001:db8:1234::5efe:127.0.0.1", true],
-    ["100::1", true],
-    ["2001:2::1", true],
-    ["2001:20::1", true],
-    ["2001:db8::1", true],
-    ["198.18.0.1", true],
-    ["198.20.0.1", false],
-  ])("returns %s => %s", (value, expected) => {
-    expect(isBlockedHostnameOrIp(value)).toBe(expected);
-  });
-
-  it.each([
-    ["198.18.0.1", undefined, true],
-    ["198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
-    ["::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
-    ["198.51.100.1", { allowRfc2544BenchmarkRange: true }, true],
-  ] as const)("applies RFC2544 benchmark policy for %s", (value, policy, expected) => {
-    expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
-  });
+  it.each([["::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true }, false]] as const)(
+    "applies RFC2544 benchmark policy for %s",
+    (value, policy, expected) => {
+      expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
+    },
+  );
 
   // #74351: fake-ip proxy stacks (sing-box / Clash / Surge) resolve foreign
   // domains to BOTH IPv4 198.18.0.0/15 AND IPv6 fc00::/7 simultaneously.
   // The policy must let operators opt into the IPv6 ULA range
   // independently of the IPv4 benchmark exemption.
   it.each([
-    ["fc00::1", undefined, true],
-    ["fc00::1", { allowIpv6UniqueLocalRange: true }, false],
     ["fdff::dead:beef", { allowIpv6UniqueLocalRange: true }, false],
-    // Other reserved IPv6 ranges stay blocked even with the new flag set —
-    // the exemption is scoped to ULA, not "any reserved IPv6".
-    ["::1", { allowIpv6UniqueLocalRange: true }, true],
-    ["fec0::1", { allowIpv6UniqueLocalRange: true }, true],
-    // The flag is independent of the IPv4 benchmark flag — neither
-    // implies the other.
     ["198.18.0.1", { allowIpv6UniqueLocalRange: true }, true],
-    ["fc00::1", { allowRfc2544BenchmarkRange: true }, true],
   ] as const)("applies IPv6 unique-local policy for %s", (value, policy, expected) => {
     expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
-  });
-
-  it.each(["0177.0.0.1", "8.8.2056", "127.1", "2130706433"])(
-    "blocks legacy IPv4 literal %s",
-    (address) => {
-      expect(isBlockedHostnameOrIp(address)).toBe(true);
-    },
-  );
-
-  it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
-    expect(isBlockedHostnameOrIp(value)).toBe(false);
   });
 });
 

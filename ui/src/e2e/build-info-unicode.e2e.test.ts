@@ -4,7 +4,12 @@ import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+
+const BUILD_ID = "build-info-unicode-e2e";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Unicode build identity mocked Gateway E2E",
@@ -17,7 +22,7 @@ const suite = createControlUiE2eSuite({
       branch: RAW_BRANCH,
       dirty: true,
       release: false,
-      buildId: "build-info-unicode-e2e",
+      buildId: BUILD_ID,
     }),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
@@ -55,7 +60,10 @@ function containsBrokenSurrogate(value: string): boolean {
 async function openBuildDetails(page: Page) {
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
-  const buildLink = sidebar.getByRole("link", { name: "Control UI build details", exact: true });
+  const buildLink = sidebar.getByRole("menuitem", {
+    name: "Control UI build details",
+    exact: true,
+  });
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);
@@ -63,8 +71,12 @@ async function openBuildDetails(page: Page) {
   expect(containsBrokenSurrogate(compactText)).toBe(false);
 
   await buildLink.hover();
-  const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
-  await expect.poll(() => tooltip.evaluate((element) => element.hasAttribute("open"))).toBe(true);
+  const tooltip = sidebar.locator(
+    "openclaw-sidebar-build-chip openclaw-tooltip .tooltip-surface[popover]",
+  );
+  await expect
+    .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+    .toBe(true);
   const buildLinkHandle = await buildLink.elementHandle();
   if (!buildLinkHandle) {
     throw new Error("Expected the identity-menu build link to be attached");
@@ -72,7 +84,7 @@ async function openBuildDetails(page: Page) {
   const afterHideMarker = "data-openclaw-test-after-hide";
   await tooltip.evaluate((element, marker) => {
     element.removeAttribute(marker);
-    element.addEventListener("wa-after-hide", () => element.setAttribute(marker, ""), {
+    element.addEventListener("overlay-after-hide", () => element.setAttribute(marker, ""), {
       once: true,
     });
   }, afterHideMarker);
@@ -101,51 +113,44 @@ async function assertFullBranchLabel(page: Page) {
 
 suite.define(() => {
   it("keeps slow build-link navigation intact across Unicode boundaries and reload", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page);
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page, { serverBuildId: BUILD_ID, serverVersion: "2026.7.10" });
 
-        const response = await page.goto(`${suite.server.baseUrl}chat`);
-        expect(response?.status()).toBe(200);
-        const identityCard = page.locator(".sidebar-identity-card");
-        await expect
-          .poll(async () => {
-            // The compact build identity lives in the identity button's
-            // aria-label; the visible subtitle span was removed as dead markup.
-            const ariaLabel = (await identityCard.getAttribute("aria-label")) ?? "";
-            const detail = ariaLabel.split(": ").slice(1).join(": ");
-            const [gitIdentity, relativeAge] = detail.trim().split(" · ", 2);
-            return { gitIdentity, hasRelativeAge: Boolean(relativeAge?.trim()) };
-          })
-          .toEqual({
-            gitIdentity: `${COMPACT_BRANCH}@0123456*`,
-            hasRelativeAge: true,
-          });
+      const response = await page.goto(`${suite.server.baseUrl}chat`);
+      expect(response?.status()).toBe(200);
+      const identityCard = page.locator(".sidebar-identity-card");
+      await expect
+        .poll(async () => {
+          // The compact build identity lives in the identity button's
+          // aria-label; the visible subtitle span was removed as dead markup.
+          const ariaLabel = (await identityCard.getAttribute("aria-label")) ?? "";
+          const detail = ariaLabel.split(": ").slice(1).join(": ");
+          const [gitIdentity, relativeAge] = detail.trim().split(" · ", 2);
+          return { gitIdentity, hasRelativeAge: Boolean(relativeAge?.trim()) };
+        })
+        .toEqual({
+          gitIdentity: `${COMPACT_BRANCH}@0123456*`,
+          hasRelativeAge: true,
+        });
 
-        if (captureUiProofEnabled) {
-          await identityCard.screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "00-footer-custom-build-identity.png"),
-          });
-        }
+      if (captureUiProofEnabled) {
+        await identityCard.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "00-footer-custom-build-identity.png"),
+        });
+      }
 
-        await openBuildDetails(page);
-        await assertFullBranchLabel(page);
-        await page.reload();
-        await assertFullBranchLabel(page);
+      await openBuildDetails(page);
+      await assertFullBranchLabel(page);
+      await page.reload();
+      await assertFullBranchLabel(page);
 
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "01-about-build-identity.png"),
-          });
-        }
-      },
-    );
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "01-about-build-identity.png"),
+        });
+      }
+    });
   });
 });

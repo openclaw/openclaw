@@ -1,107 +1,32 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
-import { type AddressInfo, createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
-import type { Readable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   resolvePlaywrightChromiumExecutablePath,
+  type ControlUiMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  startFixtureServer,
+  stopFixtureServer,
+  type FixtureServer,
+} from "./board-fixture-server.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-type FixtureProcess = ChildProcessByStdio<null, Readable, Readable>;
-
-type FixtureServer = {
-  child: FixtureProcess;
-  url: string;
-  output: () => string;
-};
-
-async function reservePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
-}
-
-async function startFixtureServer(fixture?: "attachments"): Promise<FixtureServer> {
-  const port = await reservePort();
-  const url = `http://127.0.0.1:${port}/__fixtures/board/`;
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-mock-dev.ts",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      ...(fixture ? ["--fixture", fixture] : []),
-    ],
-    {
-      cwd: repoRoot,
-      env: { ...process.env, CI: "1" },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  let output = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
-    output += chunk;
-  });
-  child.stderr.on("data", (chunk: string) => {
-    output += chunk;
-  });
-  const mockServer = { child, url, output: () => output };
-
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`Control UI mock server exited before startup\n${output}`);
-    }
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return mockServer;
-      }
-    } catch {}
-    await delay(100);
-  }
-
-  await stopFixtureServer(mockServer);
-  throw new Error(`timed out waiting for Control UI mock server\n${output}`);
-}
-
-async function stopFixtureServer(server: FixtureServer | undefined): Promise<void> {
-  if (server) {
-    await stopChildProcess(server.child, 5_000);
-  }
-}
 
 function colorChannelToLinear(channel: number): number {
   const value = channel / 255;
@@ -134,14 +59,13 @@ async function openWidgetMenu(page: Page): Promise<void> {
   const widget = page.locator('[data-test-id="board-widget"]').first();
   await widget.focus();
   await widget.locator(".board-widget__menu-trigger").click();
-  await page.locator(".board-widget__menu[open]").waitFor();
+  await widget.locator(".board-widget__menu-panel:popover-open").waitFor();
 }
 
 async function readMenuColors(page: Page): Promise<{ background: string; foreground: string }> {
   return page.evaluate(() => {
-    const dropdown = document.querySelector(".board-widget__menu");
-    const item = dropdown?.querySelector("wa-dropdown-item:not(.board-widget__menu-danger)");
-    const menu = dropdown?.shadowRoot?.querySelector('[part~="menu"]');
+    const menu = document.querySelector(".board-widget__menu-panel:popover-open");
+    const item = menu?.querySelector('[role="menuitem"]:not(.board-widget__menu-danger)');
     if (!(item instanceof HTMLElement) || !(menu instanceof HTMLElement)) {
       throw new Error("board fixture menu did not expose its surface and first item");
     }
@@ -159,16 +83,17 @@ async function requestPreviewGateway(
   page: Page,
   requests: Array<{ method: string; params?: unknown }>,
 ): Promise<unknown[]> {
-  return page.evaluate((batch) => {
-    const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-      "openclaw-app",
-    );
-    const client = app?.runtime?.context.gateway.snapshot.client;
-    if (!client) {
-      throw new Error("Preview Gateway client is unavailable");
-    }
-    return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
-  }, requests);
+  return evaluateControlUiContext(
+    page,
+    (context, batch) => {
+      const client = context.gateway.snapshot.client;
+      if (!client) {
+        throw new Error("Preview Gateway client is unavailable");
+      }
+      return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
+    },
+    requests,
+  );
 }
 
 describeStandaloneMockServer("standalone Control UI mock server", () => {
@@ -227,42 +152,67 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   });
 
   it.each([
-    { task: 1, user: "Map the run-status", assistant: "Tracing task events" },
-    { task: 2, user: "Audit the gateway", assistant: "Comparing requester" },
+    {
+      sessionKey: "agent:main:tax-research",
+      user: "Inspect this session.",
+      assistant: "The current state is available in the session controls.",
+    },
   ])(
-    "serves background task $task through both chat entry points",
-    async ({ task, user, assistant }) => {
+    "serves preview session $sessionKey through both chat entry points",
+    async ({ sessionKey, user, assistant }) => {
       const page = await browser.newPage();
       try {
         await page.goto(new URL("/chat", fixtureServer.url).toString());
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
+        const sampledAt = 1_790_598_431_356;
+        await page.clock.setFixedTime(sampledAt);
         const [description] = (await requestPreviewGateway(page, [
           { method: "sessions.describe", params: { key: sessionKey } },
-        ])) as Array<{ session: { sessionId: string } }>;
+        ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
         expect(description).toMatchObject({
-          session: { key: sessionKey, sessionId: expect.any(String) },
+          session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
         });
-        const replies = await requestPreviewGateway(
-          page,
-          ["chat.history", "chat.startup"].map((method) => ({
-            method,
-            params: { sessionKey },
-          })),
-        );
-        for (const reply of replies) {
+        // Each projection samples its read clock, not the stored row. Advance
+        // Date without delaying timers so descriptor/history/startup cannot
+        // accidentally pass by sharing one millisecond.
+        const replies: unknown[] = [];
+        for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
+          await page.clock.setFixedTime(sampledAt + index + 1);
+          const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
+          replies.push(reply);
+        }
+        const userMessage = expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: expect.stringContaining(user) }],
+        });
+        const assistantMessage = expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: expect.stringContaining(assistant) }],
+        });
+        for (const [index, reply] of replies.entries()) {
           expect(reply).toMatchObject({
             sessionId: description!.session.sessionId,
-            sessionInfo: description!.session,
-            messages: [
-              { role: "user", content: [{ text: expect.stringContaining(user) }] },
-              {
-                role: "assistant",
-                content: [{ text: expect.stringContaining(assistant) }],
-              },
-            ],
+            sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
+            messages: expect.arrayContaining([userMessage, assistantMessage]),
           });
+          const messages = asNullableRecord(reply)?.messages;
+          if (!Array.isArray(messages)) {
+            throw new Error("Background task history must contain messages");
+          }
+          const userIndex = messages.findIndex((message) => userMessage.asymmetricMatch(message));
+          const assistantIndex = messages.findIndex((message) =>
+            assistantMessage.asymmetricMatch(message),
+          );
+          expect(userIndex).toBeLessThan(assistantIndex);
         }
+        const history = asNullableRecord(replies[0]);
+        expect(replies[1]).toMatchObject({
+          ...history,
+          sessionInfo: {
+            ...asNullableRecord(history?.sessionInfo),
+            snapshotAt: sampledAt + 2,
+          },
+        });
       } finally {
         await page.close();
       }
@@ -305,7 +255,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       expect(replies).toMatchObject([
         {
           sessions: expect.arrayContaining([
-            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5.6-luna" }),
+            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5-mini" }),
           ]),
         },
         {
@@ -343,7 +293,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           avatarRequests.push(request.url());
         }
       });
-      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator&nav=collapsed`);
+      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator`);
       for (const reload of [false, true]) {
         if (reload) {
           avatarRequests.length = 0;
@@ -369,7 +319,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const context = await browser.newContext({
       serviceWorkers: "block",
       viewport: { width: 1440, height: 1000 },
-      recordVideo: { dir: artifacts },
+      recordVideo: captureUiProof ? { dir: artifacts } : undefined,
     });
     await runQaGatewayFixture(
       async () => {
@@ -385,6 +335,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         });
         const page = await context.newPage();
         await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        // The fixture viewer is Riley; this shared checkout belongs to Peter.
+        await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
         await page.getByRole("button", { name: "Write a message to send." }).waitFor();
         await page.screenshot({ path: path.join(artifacts, "chat.png") });
@@ -454,8 +406,32 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             }
           });
         });
-        const response = await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
-        expect(response?.headers()["content-security-policy"]).toContain("worker-src 'none'");
+        await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+        const localWorkerOutput = await page.evaluate(async () => {
+          const canvas = new OffscreenCanvas(1, 1);
+          canvas.getContext("2d")?.fillRect(0, 0, 1, 1);
+          const image = new File([await canvas.convertToBlob({ type: "image/png" })], "dot.png", {
+            type: "image/png",
+          });
+          const worker = new Worker(
+            "/src/pages/chat/components/chat-attachment-image.worker.ts?worker_file&type=module",
+            { type: "module" },
+          );
+          try {
+            return await new Promise<string | null>((resolve, reject) => {
+              worker.addEventListener("message", ({ data }: MessageEvent<File | null>) =>
+                resolve(data?.type ?? null),
+              );
+              worker.addEventListener("error", () =>
+                reject(new Error("The local image worker could not run.")),
+              );
+              worker.postMessage({ file: image, maxBytes: 1024 * 1024 }, []);
+            });
+          } finally {
+            worker.terminate();
+          }
+        });
+        expect(localWorkerOutput).toBe("image/png");
         await expect.poll(() => hmr.length).toBeGreaterThan(0);
         expect(hmr.every((url) => new URL(url).host === new URL(origin).host)).toBe(true);
         outcomes.hmr = hmr;
@@ -470,6 +446,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
               results[name] = "blocked";
             }
           };
+          const localForm = document.createElement("form");
+          localForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            results.formHandler = "handled";
+          });
+          document.body.append(localForm);
+          localForm.requestSubmit();
+          localForm.remove();
           await rejected("fetch", () => fetch(`${sinkOrigin}/fetch`));
           await rejected("rtc", () => new RTCPeerConnection());
           const workerUrl = URL.createObjectURL(
@@ -507,6 +491,26 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             });
             results[name] = "blocked";
           };
+          // The navigation guard cancels this POST before CSP evaluates it.
+          const form = document.createElement("form");
+          form.action = `${sinkOrigin}/form`;
+          form.method = "POST";
+          document.body.append(form);
+          await new Promise<void>((resolve) => {
+            window.navigation.addEventListener(
+              "navigate",
+              (event) => {
+                results.form =
+                  event.destination.url === form.action && event.defaultPrevented
+                    ? "blocked"
+                    : "allowed";
+                resolve();
+              },
+              { once: true },
+            );
+            form.submit();
+          });
+          form.remove();
           await policy("xhr", "connect-src", () => {
             const xhr = new XMLHttpRequest();
             xhr.open("GET", `${sinkOrigin}/xhr`);
@@ -584,6 +588,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           return results;
         }, sinkUrl);
         expect(outcomes.top).toEqual({
+          formHandler: "handled",
+          form: "blocked",
           fetch: "blocked",
           rtc: "blocked",
           worker: "blocked",
@@ -688,7 +694,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         });
         expect(result.type).toBe("image/svg+xml");
         expect(result.width).toBe(640);
-        expect(result.policy).toContain("worker-src 'none'");
+        expect(result.policy).toContain("worker-src 'self'");
         await page.screenshot({ path: path.join(artifacts, "attachments.png") });
         expect(escaped).toEqual([]);
         await writeFile(
@@ -759,12 +765,12 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
       await openWidgetMenu(page);
       const presentation = await page
-        .locator(".board-widget__menu[open] .board-widget__menu-danger")
+        .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
         .evaluate((action) => {
           const menu = action.parentElement;
-          const move = menu?.querySelector('wa-dropdown-item[value^="move:"]');
+          const move = menu?.querySelector('[role="menuitem"][data-value^="move:"]');
           const preset = menu?.querySelector(".board-widget__preset");
-          const icon = action.querySelector('[slot="icon"]');
+          const icon = action.querySelector(".board-widget__menu-icon");
           if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
             throw new Error("board fixture menu did not expose move and resize options");
           }
@@ -812,6 +818,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      // External catalog sessions have no human owner.
+      await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();
 
       const transcript = [
@@ -842,6 +850,11 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      expect(await page.locator(".community-invite-card").count()).toBe(0);
+      expect(
+        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite:v2")),
+      ).not.toBeNull();
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
@@ -850,21 +863,21 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
         .evaluate(async (pane) => {
           const chatPane = pane as HTMLElement & {
-            hasUpdated?: boolean;
-            updateComplete?: Promise<boolean>;
+            transcriptReady: boolean;
+            updateComplete: Promise<unknown>;
           };
           await chatPane.updateComplete;
           const constructor = customElements.get("openclaw-chat-pane");
           return {
             connected: chatPane.isConnected,
-            hasUpdated: chatPane.hasUpdated,
+            transcriptReady: chatPane.transcriptReady,
             registered: constructor !== undefined,
             upgraded: constructor !== undefined && chatPane instanceof constructor,
           };
         });
       expect(paneState).toEqual({
         connected: true,
-        hasUpdated: true,
+        transcriptReady: true,
         registered: true,
         upgraded: true,
       });
@@ -878,6 +891,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
 
@@ -895,6 +909,71 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       expect(await composer.inputValue()).toBe("");
     } finally {
       await page.close();
+    }
+  });
+});
+
+describeStandaloneMockServer("standalone native plugin preview", () => {
+  let server: FixtureServer;
+  let previewBrowser: Browser;
+
+  beforeAll(async () => {
+    server = await startFixtureServer("workboard");
+    previewBrowser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+  });
+
+  afterAll(async () => {
+    await previewBrowser?.close();
+    await stopFixtureServer(server);
+  });
+
+  it("loads native plugin pages and dashboard widgets in the standalone preview", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("standalone-native-plugin-preview");
+    const context = await previewBrowser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      recordVideo: captureUiProof
+        ? { dir: artifactDir, size: { width: 1440, height: 1000 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    try {
+      await page.goto(new URL("/workboard", server.url).toString());
+      await page.getByText("Capture customer feedback themes", { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const gateway = (
+              window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
+            ).openclawControlUiE2eGateway;
+            return gateway?.requests
+              .filter((request) => request.method === "plugins.controlUi.report")
+              .map((request) => request.params);
+          }),
+        )
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+          ]),
+        );
+      await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+
+      await page.goto(
+        controlUiSessionUrl(
+          new URL("/", server.url).toString(),
+          "agent:main:workboard-proof",
+          "dashboard",
+        ),
+      );
+      const widget = page.locator('[data-test-id="workboard-board-widget"]');
+      await widget.getByText("Capture customer feedback themes", { exact: true }).waitFor();
+      expect(await page.getByText("Unknown plugin widget", { exact: false }).count()).toBe(0);
+      await page.screenshot({ path: path.join(artifactDir, "native-widget.png"), fullPage: true });
+    } finally {
+      await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
+      await context.close();
     }
   });
 });

@@ -3,7 +3,10 @@ import type {
   AgentHarnessAttemptParamsV2,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import {
+  createContractToolTerminalObserver,
+  setHostToolFactoryForTest,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -28,9 +31,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   let aborts = 0;
   let nestedSignal: AbortSignal | undefined;
   type ToolOptions = NonNullable<
-    Parameters<
-      NonNullable<Parameters<typeof createCopilotToolBridge>[0]["createOpenClawCodingTools"]>
-    >[0]
+    Parameters<NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurface"]>>[0]
   >;
   let catalog: ToolOptions["toolSearchCatalogRef"];
   let contextSignal: AbortSignal | undefined;
@@ -105,18 +106,16 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
   const constructBridge = vi
     .spyOn(toolBridgeModule, "createCopilotToolBridge")
     .mockImplementation(async (input) => {
-      const bridge = await realCreateToolBridge({
-        ...input,
-        createOpenClawCodingTools: (options) => {
-          catalog = options?.toolSearchCatalogRef;
-          contextSignal = options?.abortSignal;
-          return [fixtureTool];
-        },
-      });
+      const bridge = await realCreateToolBridge(input);
       retained = bridge.sourceTools;
       return bridge;
     });
   try {
+    await setHostToolFactoryForTest({ runId }, (options) => {
+      catalog = options?.toolSearchCatalogRef;
+      contextSignal = options?.abortSignal;
+      return [fixtureTool];
+    });
     await state.writeConfig(config);
     await upsertSessionEntry({ ...target, entry: { sessionId, updatedAt: Date.now() } });
     const authStorage = AuthStorage.inMemory();
@@ -182,7 +181,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       message: providerFailure,
       errorType: "model_error",
     });
-    await peer.destroying;
+    await peer.detaching;
     expect(catalog?.current).toBeUndefined();
     host.hostCapabilities.assertActive();
     expect(callController.signal.aborted).toBe(false);
@@ -206,7 +205,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
       aborts,
       waitResult,
     };
-    peer.releaseDestroy();
+    peer.releaseDetach();
     const attemptResult = await attempt;
     if (!("terminal" in attemptResult)) {
       throw new Error("Expected a canonical Copilot attempt terminal");
@@ -273,7 +272,7 @@ it("cancels a resumed Code Mode cell during real SDK session.error cleanup befor
     });
   } finally {
     gate.resolve();
-    peer.releaseDestroy();
+    peer.releaseDetach();
     await attempt;
     host.closeHost();
     host.closeAdmission();

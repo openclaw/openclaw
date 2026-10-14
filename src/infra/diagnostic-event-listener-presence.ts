@@ -1,4 +1,5 @@
 /** Process-wide listener counts used to avoid telemetry work without consumers. */
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
@@ -13,39 +14,39 @@ type DiagnosticEventListenerPresence = {
 };
 
 function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY];
-  if (
-    existing &&
-    typeof existing === "object" &&
-    (existing as Partial<DiagnosticEventListenerPresence>).marker ===
-      DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY
-  ) {
-    const state = existing as DiagnosticEventListenerPresence;
-    state.broadInterestCount ??= 0;
-    state.eventInterestDeltas ??= new Map();
-    return state;
-  }
-  const state: DiagnosticEventListenerPresence = {
-    broadInterestCount: 0,
-    eventInterestDeltas: new Map(),
-    marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
-    internalCount: 0,
-    trustedCount: 0,
-  };
-  Object.defineProperty(globalThis, DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY, {
-    configurable: true,
-    enumerable: false,
-    value: state,
-    writable: false,
-  });
+  const state = resolveGlobalSingleton<DiagnosticEventListenerPresence>(
+    DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
+    () => ({
+      broadInterestCount: 0,
+      eventInterestDeltas: new Map(),
+      marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
+      internalCount: 0,
+      trustedCount: 0,
+    }),
+  );
+  state.broadInterestCount ??= 0;
+  state.eventInterestDeltas ??= new Map();
   return state;
 }
 
 export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
   include?: readonly EventType[];
   exclude?: readonly EventType[];
+  /** Restricts trusted events only; untrusted events still use include/exclude. */
+  includeTrusted?: readonly EventType[];
 }>;
+
+export function isInternalDiagnosticEventInterested<EventType extends string>(
+  interest: InternalDiagnosticEventInterest<EventType> | undefined,
+  type: EventType,
+  trusted: boolean,
+): boolean {
+  return (
+    (!interest?.include || interest.include.includes(type)) &&
+    !interest?.exclude?.includes(type) &&
+    (!trusted || !interest?.includeTrusted || interest.includeTrusted.includes(type))
+  );
+}
 
 function updateEventInterestDelta(
   state: DiagnosticEventListenerPresence,
@@ -65,17 +66,15 @@ export function updateInternalDiagnosticEventInterest(
   delta: 1 | -1,
 ): void {
   const state = getDiagnosticEventListenerPresence();
-  if (interest?.include) {
-    for (const type of new Set(interest.include)) {
-      if (!interest.exclude?.includes(type)) {
-        updateEventInterestDelta(state, type, delta);
-      }
-    }
-    return;
+  const usesIncludeList = Boolean(interest?.include);
+  if (!usesIncludeList) {
+    state.broadInterestCount += delta;
   }
-  state.broadInterestCount += delta;
-  for (const type of new Set(interest?.exclude ?? [])) {
-    updateEventInterestDelta(state, type, -delta);
+  const types = usesIncludeList ? interest?.include : (interest?.exclude ?? []);
+  for (const type of new Set(types)) {
+    if (!usesIncludeList || !interest?.exclude?.includes(type)) {
+      updateEventInterestDelta(state, type, usesIncludeList ? delta : -delta);
+    }
   }
 }
 

@@ -1,9 +1,11 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Reuse temporary source transforms while each child keeps its own scenario state.
+const childTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-cron-child-tmp-");
 const summaryBytes = 128 * 1024;
 const sentinel = "\nEND-CRON-SUMMARY\n";
 const summary = "x".repeat(summaryBytes - sentinel.length) + sentinel;
@@ -87,8 +89,9 @@ describe("cron process output", () => {
         ...process.env,
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-        TMPDIR: root,
-        TSX_DISABLE_CACHE: "1",
+        TMPDIR: childTempDir,
+        TEMP: childTempDir,
+        TMP: childTempDir,
         NODE_DISABLE_COMPILE_CACHE: "1",
         NO_COLOR: "1",
       };

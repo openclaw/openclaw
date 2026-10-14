@@ -8,6 +8,10 @@ export const SessionsResolveParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  /** Discover a visible exact key first, then an optional display-name slug. */
+  reference: Type.Optional(
+    closedObject({ key: NonEmptyString, slug: Type.Optional(NonEmptyString) }),
+  ),
   /** Bare 8-32 character hexadecimal prefix of a session key's trailing UUID. */
   shortId: Type.Optional(NonEmptyString),
   /** Optional display-name slug used only to narrow ambiguous shortId matches. */
@@ -27,6 +31,7 @@ export const SessionsResolveCandidateSchema = closedObject({
   agentId: NonEmptyString,
   displayName: Type.Optional(Type.String()),
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
 });
 
 export const SessionsResolveResultSchema = Type.Union([

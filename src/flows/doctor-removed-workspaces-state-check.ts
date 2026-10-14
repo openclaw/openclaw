@@ -63,7 +63,7 @@ async function configuredAgentWorkspaceCollisions(
   const configured: Array<{ label: string; workspace: string | undefined }> = [
     { label: "agents.defaults.workspace", workspace: cfg.agents?.defaults?.workspace },
     ...listAgentEntries(cfg).map((agent) => ({
-      label: `agents.list.${agent.id}.workspace`,
+      label: `agents.entries.${agent.id}.workspace`,
       workspace: agent.workspace,
     })),
   ];
@@ -118,23 +118,18 @@ export const removedWorkspacesStateCheck: HealthCheck = {
       return [];
     }
     const collisions = await configuredAgentWorkspaceCollisions(ctx.cfg, target);
-    if (collisions.length > 0) {
-      return [
-        {
-          checkId: CHECK_ID,
-          severity: "warning",
-          message: collisionWarning(target, collisions),
-          path: target,
-        },
-      ];
-    }
     return [
       {
         checkId: CHECK_ID,
         severity: "warning",
-        message: `Retired Workspaces plugin state remains at ${target}.`,
+        message:
+          collisions.length > 0
+            ? collisionWarning(target, collisions)
+            : `Retired Workspaces plugin state remains at ${target}.`,
         path: target,
-        fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state.",
+        ...(collisions.length > 0
+          ? {}
+          : { fixHint: "Run `openclaw doctor --fix` to remove the stale plugin state." }),
       },
     ];
   },

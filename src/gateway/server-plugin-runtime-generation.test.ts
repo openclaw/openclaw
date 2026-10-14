@@ -2,15 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 
+function createOwner() {
+  let currentServices: PluginServicesHandle | null = null;
+  return createGatewayPluginRuntimeGeneration({
+    getServices: () => currentServices,
+    setServices: (services) => {
+      currentServices = services;
+    },
+  });
+}
+
 describe("Gateway plugin runtime generation", () => {
   it("blocks stale publication during reservation, restores rejected claims, and commits winners", async () => {
-    let currentServices: PluginServicesHandle | null = null;
-    const owner = createGatewayPluginRuntimeGeneration({
-      getServices: () => currentServices,
-      setServices: (services) => {
-        currentServices = services;
-      },
-    });
+    const owner = createOwner();
     const startupClaim = owner.currentClaim();
     const published = vi.fn();
 
@@ -37,7 +41,10 @@ describe("Gateway plugin runtime generation", () => {
     expect(acceptedReplacement.claim.publish(published)).toBe(true);
     expect(published).toHaveBeenCalledTimes(2);
 
-    const winningServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+    const winningServices: PluginServicesHandle = {
+      reload: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
     expect(owner.publishServices(startupClaim, winningServices)).toBe(false);
     expect(owner.publishServices(acceptedReplacement.claim, winningServices)).toBe(true);
     expect(owner.currentServices()).toBe(winningServices);
@@ -49,18 +56,15 @@ describe("Gateway plugin runtime generation", () => {
   ])(
     "settles a pending successor that $successor before deciding discovery and service ownership",
     async ({ survives }) => {
-      let currentServices: PluginServicesHandle | null = null;
-      const owner = createGatewayPluginRuntimeGeneration({
-        getServices: () => currentServices,
-        setServices: (services) => {
-          currentServices = services;
-        },
-      });
+      const owner = createOwner();
       const committed = owner.reserve();
       committed.commit();
       const pendingSuccessor = owner.reserve();
       const discoveryStop = vi.fn();
-      const services: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+      const services: PluginServicesHandle = {
+        reload: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      };
       let settled = false;
       const publication = committed.claim.waitForUnblocked().then((isCurrent) => {
         settled = true;

@@ -1,0 +1,239 @@
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+// Machine-state mutations own serialization and the shared write transaction.
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  normalizeConfigMachineStateKey,
+  publishConfigMachineStateRow,
+  type ConfigMachineStateDatabase,
+} from "./config-machine-state-row.js";
+import {
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "./openclaw-state-db.js";
+import { withAuthProfileCredentialWrite } from "./user-model-account-authority.js";
+
+function serializeStateValue(value: unknown): string {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new Error("config machine state value must be JSON-serializable");
+  }
+  return serialized;
+}
+
+function publishMachineStateWrite<T>(
+  database: EngineConnection,
+  stateKey: string,
+  valueJson: string | undefined,
+  write: () => T,
+  didWrite?: (result: T) => boolean,
+): T {
+  return stateKey === "authProfiles.store"
+    ? withAuthProfileCredentialWrite(
+        database,
+        valueJson === undefined ? undefined : JSON.parse(valueJson),
+        write,
+        didWrite,
+      )
+    : write();
+}
+
+function upsertConfigMachineState(
+  database: EngineConnection,
+  stateKey: string,
+  valueJson: string,
+  now: number,
+): void {
+  publishMachineStateWrite(database, stateKey, valueJson, () =>
+    executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<ConfigMachineStateDatabase>(database)
+        .insertInto("config_machine_state")
+        .values({ state_key: stateKey, value_json: valueJson, updated_at_ms: now })
+        .onConflict((conflict) =>
+          conflict.column("state_key").doUpdateSet({ value_json: valueJson, updated_at_ms: now }),
+        ),
+    ),
+  );
+  publishConfigMachineStateRow(database, stateKey, { value_json: valueJson, updated_at_ms: now });
+}
+
+export function writeConfigMachineState(
+  key: string,
+  value: unknown,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const stateKey = normalizeConfigMachineStateKey(key);
+  const valueJson = serializeStateValue(value);
+  const now = Date.now();
+  runOpenClawStateWriteTransaction(
+    ({ db }) => upsertConfigMachineState(db, stateKey, valueJson, now),
+    options,
+    { operationLabel: "config-machine-state.write" },
+  );
+}
+
+/** Write an owner-held value on its existing admitted transaction connection. */
+export function writeConfigMachineStateInDatabase(
+  database: EngineConnection,
+  key: string,
+  value: unknown,
+): number {
+  const now = Date.now();
+  upsertConfigMachineState(
+    database,
+    normalizeConfigMachineStateKey(key),
+    serializeStateValue(value),
+    now,
+  );
+  return now;
+}
+
+/** Atomically update one machine-state value from its current database value. */
+export function updateConfigMachineState<T>(
+  key: string,
+  update: (current: T | undefined) => T,
+  options?: OpenClawStateDatabaseOptions,
+): T;
+/** Returning undefined removes the key within the same compare-and-update transaction. */
+export function updateConfigMachineState<T>(
+  key: string,
+  update: (current: T | undefined) => T | undefined,
+  options?: OpenClawStateDatabaseOptions,
+): T | undefined;
+export function updateConfigMachineState<T>(
+  key: string,
+  update: (current: T | undefined) => T | undefined,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  const stateKey = normalizeConfigMachineStateKey(key);
+  const now = Date.now();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => updateConfigMachineStateInDatabase(db, stateKey, update, now),
+    options,
+    { operationLabel: "config-machine-state.update" },
+  );
+}
+
+/** Update an already-normalized key on the caller's admitted transaction connection. */
+export function updateConfigMachineStateInDatabase<T>(
+  database: EngineConnection,
+  stateKey: string,
+  update: (current: T | undefined) => T,
+  now: number,
+): T;
+export function updateConfigMachineStateInDatabase<T>(
+  database: EngineConnection,
+  stateKey: string,
+  update: (current: T | undefined) => T | undefined,
+  now: number,
+): T | undefined;
+export function updateConfigMachineStateInDatabase<T>(
+  database: EngineConnection,
+  stateKey: string,
+  update: (current: T | undefined) => T | undefined,
+  now: number,
+): T | undefined {
+  const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("config_machine_state").select("value_json").where("state_key", "=", stateKey),
+  );
+  // SAFETY: Each key's owner supplies its JSON shape; this generic store only decodes it.
+  const value = update(row ? (JSON.parse(row.value_json) as T) : undefined);
+  if (value === undefined) {
+    if (row) {
+      publishMachineStateWrite(database, stateKey, undefined, () =>
+        executeSqliteQuerySync(
+          database,
+          db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+        ),
+      );
+    }
+    publishConfigMachineStateRow(database, stateKey, undefined);
+    return undefined;
+  }
+  upsertConfigMachineState(database, stateKey, serializeStateValue(value), now);
+  return value;
+}
+
+/** Delete one machine-state value, reporting whether a stored value existed. */
+export function deleteConfigMachineState(
+  key: string,
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  const stateKey = normalizeConfigMachineStateKey(key);
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database.db);
+      const result = publishMachineStateWrite(database.db, stateKey, undefined, () =>
+        executeSqliteQuerySync(
+          database.db,
+          db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
+        ),
+      );
+      publishConfigMachineStateRow(database.db, stateKey, undefined);
+      return (result.numAffectedRows ?? 0n) > 0n;
+    },
+    options,
+    { operationLabel: "config-machine-state.delete" },
+  );
+}
+
+/** Import retired config values without replacing newer canonical database state. */
+export function importConfigMachineState(
+  entries: ReadonlyArray<readonly [key: string, value: unknown]>,
+  options: OpenClawStateDatabaseOptions = {},
+): { imported: string[]; kept: string[] } {
+  if (entries.length === 0) {
+    return { imported: [], kept: [] };
+  }
+  const normalized = entries.map(([key, value]) => ({
+    key: normalizeConfigMachineStateKey(key),
+    valueJson: serializeStateValue(value),
+  }));
+  const now = Date.now();
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database.db);
+      const imported: string[] = [];
+      const kept: string[] = [];
+      for (const entry of normalized) {
+        const inserted = publishMachineStateWrite(
+          database.db,
+          entry.key,
+          entry.valueJson,
+          () =>
+            executeSqliteQueryTakeFirstSync(
+              database.db,
+              db
+                .insertInto("config_machine_state")
+                .values({
+                  state_key: entry.key,
+                  value_json: entry.valueJson,
+                  updated_at_ms: now,
+                })
+                .onConflict((conflict) => conflict.column("state_key").doNothing())
+                .returning("state_key"),
+            ),
+          (result) => result !== undefined,
+        );
+        if (!inserted) {
+          kept.push(entry.key);
+          continue;
+        }
+        publishConfigMachineStateRow(database.db, entry.key, {
+          value_json: entry.valueJson,
+          updated_at_ms: now,
+        });
+        imported.push(entry.key);
+      }
+      return { imported, kept };
+    },
+    options,
+    { operationLabel: "config-machine-state.import" },
+  );
+}

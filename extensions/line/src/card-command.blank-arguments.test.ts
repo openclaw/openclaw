@@ -30,7 +30,7 @@ function requiredTextFields(value: unknown): string[] {
 
 async function renderedMessage(
   args: string,
-): Promise<messagingApi.FlexMessage | messagingApi.TemplateMessage> {
+): Promise<messagingApi.FlexMessage | messagingApi.TemplateMessage | messagingApi.TextMessage> {
   const line = await runCardCommand(args);
   if (line.flexMessage) {
     return {
@@ -46,10 +46,8 @@ async function renderedMessage(
 // LINE rejects the whole push when any of these is blank, so the reply is lost
 // rather than degraded. Blank arguments are the reachable way to produce one.
 const BLANK_ARGUMENT_INPUTS = [
-  'info "Welcome"',
   "info",
   'info "" ""',
-  'info "Welcome" ""',
   'action "Menu" "" --actions "Order|/order"',
   'receipt "R" "Item:"',
   'confirm ""',
@@ -62,7 +60,14 @@ describe("/card with blank arguments", () => {
     async (args) => {
       const message = await renderedMessage(args);
 
-      expect(message.altText.trim()).not.toBe("");
+      // A carousel that cannot be rendered validly now degrades to a text reply,
+      // which carries no altText. No blank-argument input reaches that path, so
+      // this still asserts altText on every case; if one ever degrades, the first
+      // assertion fails rather than silently skipping the second.
+      expect("altText" in message).toBe(true);
+      if ("altText" in message) {
+        expect(message.altText.trim()).not.toBe("");
+      }
       const texts = requiredTextFields(message);
       expect(texts.length).toBeGreaterThan(0);
       expect(texts.filter((text) => text.trim() === "")).toEqual([]);

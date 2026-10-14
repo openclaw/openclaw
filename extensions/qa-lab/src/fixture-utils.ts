@@ -1,9 +1,9 @@
-// Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 export type QaFixtureFetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -31,84 +31,30 @@ function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
 }
 
-function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
-  return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
-}
-
-function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>) {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
-}
-
 async function readBoundedResponseText(params: {
   response: Response;
   url: string;
   maxBytes: number;
-  timeoutPromise: Promise<never>;
   signal: AbortSignal;
 }) {
   const tooLargeError = () =>
-    Object.assign(new Error(bodyTooLargeErrorMessage(params.url, params.maxBytes)), {
+    Object.assign(new Error(`HTTP response from ${params.url} exceeded ${params.maxBytes} bytes`), {
       code: "ETOOBIG",
     });
   const contentLength = params.response.headers.get("content-length");
   if (contentLength && /^\d+$/u.test(contentLength) && Number(contentLength) > params.maxBytes) {
-    await params.response.body?.cancel().catch(() => undefined);
+    void params.response.body?.cancel().catch(() => undefined);
     throw tooLargeError();
   }
   if (!params.response.body) {
     return "";
   }
 
-  const reader = params.response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let canceled = false;
-  try {
-    for (;;) {
-      const readPromise = reader.read();
-      let removeAbortListener: (() => void) | undefined;
-      const abortPromise = new Promise<never>((_resolve, reject) => {
-        const onAbort = () => {
-          canceled = true;
-          cancelReaderSoon(reader);
-          reject(
-            params.signal.reason instanceof Error
-              ? params.signal.reason
-              : new Error(`HTTP request to ${params.url} aborted`),
-          );
-        };
-        params.signal.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => params.signal.removeEventListener("abort", onAbort);
-      });
-      const { done, value } = await Promise.race([
-        readPromise,
-        abortPromise,
-        params.timeoutPromise,
-      ]).finally(() => removeAbortListener?.());
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (totalBytes > params.maxBytes) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw tooLargeError();
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-  return chunks.join("");
+  const bytes = await readResponseWithLimit(params.response, params.maxBytes, {
+    signal: params.signal,
+    onOverflow: tooLargeError,
+  });
+  return new TextDecoder().decode(bytes);
 }
 
 export async function fetchQaFixtureJson(
@@ -116,40 +62,32 @@ export async function fetchQaFixtureJson(
   init: RequestInit = {},
   options: QaFixtureFetchJsonOptions = {},
 ): Promise<unknown> {
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
   const controller = new AbortController();
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
-  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setNodeTimeout(() => {
-      controller.abort(error);
-      reject(error);
-    }, timeoutMs);
-  });
-
-  let response: Response;
-  let text: string;
-  try {
-    response = await Promise.race([
-      (options.fetchImpl ?? fetch)(url, {
+  const { response, text } = await withTimeout(
+    Promise.resolve().then(async () => {
+      const fetchedResponse = await (options.fetchImpl ?? fetch)(url, {
         ...init,
         signal: controller.signal,
-      }),
-      timeoutPromise,
-    ]);
-    text = await readBoundedResponseText({
-      response,
-      url,
-      maxBytes: maxBodyBytes,
-      timeoutPromise,
-      signal: controller.signal,
-    });
-  } finally {
-    if (timeout) {
-      clearNodeTimeout(timeout);
-    }
-  }
+      });
+      const responseText = await readBoundedResponseText({
+        response: fetchedResponse,
+        url,
+        maxBytes: maxBodyBytes,
+        signal: controller.signal,
+      });
+      return { response: fetchedResponse, text: responseText };
+    }),
+    timeoutMs,
+    {
+      createError: () => {
+        controller.abort(error);
+        return error;
+      },
+    },
+  );
   let parsed: unknown;
   try {
     parsed = text ? JSON.parse(text) : {};
@@ -167,9 +105,9 @@ export function outputToolNames(response: unknown): string[] {
   if (!Array.isArray(output)) {
     return [];
   }
-  return output
-    .filter((item) => item.type === "function_call" && typeof item.name === "string")
-    .map((item) => item.name as string);
+  return output.flatMap((item) =>
+    item.type === "function_call" && typeof item.name === "string" ? [item.name] : [],
+  );
 }
 
 export function outputText(response: unknown): string {
@@ -183,11 +121,8 @@ export function outputText(response: unknown): string {
         return [];
       }
       return item.content.flatMap((piece) => {
-        if (!piece || typeof piece !== "object") {
-          return [];
-        }
-        const record = piece as { text?: unknown };
-        return typeof record.text === "string" ? [record.text] : [];
+        const text = readStringField(asOptionalObjectRecord(piece), "text");
+        return text === undefined ? [] : [text];
       });
     })
     .join("\n");
@@ -201,13 +136,7 @@ function readContentText(content: unknown): string {
     return "";
   }
   return content
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return "";
-      }
-      const record = item as { type?: unknown; text?: unknown };
-      return typeof record.text === "string" ? record.text : "";
-    })
+    .map((item) => readStringField(asOptionalObjectRecord(item), "text") ?? "")
     .join("\n");
 }
 
@@ -231,7 +160,10 @@ export function countSystemPromptChars(body: unknown): number {
   return total;
 }
 
-function countOccurrences(haystack: string, needle: string): number {
+const TOOL_IDENTIFIER_CHARACTERS =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+function countOccurrences(haystack: string, needle: string, exactIdentifier = false): number {
   if (!needle) {
     return 0;
   }
@@ -242,28 +174,30 @@ function countOccurrences(haystack: string, needle: string): number {
     if (next < 0) {
       return count;
     }
-    count += 1;
+    const before = haystack[next - 1];
+    const after = haystack[next + needle.length];
+    if (
+      !exactIdentifier ||
+      ((before === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(before)) &&
+        (after === undefined || !TOOL_IDENTIFIER_CHARACTERS.includes(after)))
+    ) {
+      count += 1;
+    }
     offset = next + needle.length;
   }
 }
 
-function createCounts(needles: Record<string, string>): Record<string, number> {
-  return Object.fromEntries(Object.keys(needles).map((key) => [key, 0]));
+/** Counts exact ASCII tool identifiers in diagnostic text without interpreting regex syntax. */
+export function countToolIdentifierMentions(text: string, identifier: string): number {
+  return countOccurrences(text, identifier, true);
 }
 
 function recordRole(record: unknown): string | undefined {
-  if (!record || typeof record !== "object") {
-    return undefined;
-  }
-  const candidate = record as { message?: unknown; role?: unknown };
-  if (typeof candidate.role === "string") {
-    return candidate.role;
-  }
-  if (!candidate.message || typeof candidate.message !== "object") {
-    return undefined;
-  }
-  const message = candidate.message as { role?: unknown };
-  return typeof message.role === "string" ? message.role : undefined;
+  const candidate = asOptionalObjectRecord(record);
+  return (
+    readStringField(candidate, "role") ??
+    readStringField(asOptionalObjectRecord(candidate?.message), "role")
+  );
 }
 
 function collectStringLeaves(value: unknown, output: string[]) {
@@ -271,16 +205,10 @@ function collectStringLeaves(value: unknown, output: string[]) {
     output.push(value);
     return;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectStringLeaves(item, output);
-    }
-    return;
-  }
   if (!value || typeof value !== "object") {
     return;
   }
-  for (const item of Object.values(value)) {
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
     collectStringLeaves(item, output);
   }
 }
@@ -316,7 +244,7 @@ async function visitSessionLogEvents(
 ): Promise<void> {
   const files = await fs.readdir(sessionsDir, { recursive: true }).catch(() => []);
   for (const file of files) {
-    if (typeof file !== "string" || !file.endsWith(".jsonl")) {
+    if (!file.endsWith(".jsonl")) {
       continue;
     }
     const text = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
@@ -329,40 +257,30 @@ async function visitSessionLogEvents(
   if (!sqlitePath) {
     return;
   }
-  let db: DatabaseSync | null = null;
   try {
-    db = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const hasTranscriptEvents = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
-      .get();
-    if (!hasTranscriptEvents) {
-      return;
-    }
-    const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
-    for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
-      if (typeof row.event_json === "string") {
-        visit(row.event_json);
-      }
-    }
+    const { visitQaSqliteTranscriptEvents } = await import("openclaw/plugin-sdk/qa-runtime");
+    await visitQaSqliteTranscriptEvents(sqlitePath, visit);
   } catch {
     // Missing or unreadable stores contribute no events.
-  } finally {
-    db?.close();
   }
 }
 
 export async function countSessionLogMentions(params: {
+  identifierKeys?: ReadonlySet<string>;
   sessionsDir: string;
   needles: Record<string, string>;
 }): Promise<Record<string, number>> {
-  const counts = createCounts(params.needles);
+  const counts = Object.fromEntries(Object.keys(params.needles).map((key) => [key, 0]));
   await visitSessionLogEvents(params.sessionsDir, (eventJson) => {
     const scanText = sessionLogScanText(eventJson);
     if (scanText === null) {
       return;
     }
     for (const [key, needle] of Object.entries(params.needles)) {
-      counts[key] = (counts[key] ?? 0) + countOccurrences(scanText, needle);
+      const count = params.identifierKeys?.has(key)
+        ? countToolIdentifierMentions(scanText, needle)
+        : countOccurrences(scanText, needle);
+      counts[key] = (counts[key] ?? 0) + count;
     }
   });
   return counts;

@@ -1,6 +1,8 @@
 import path from "node:path";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
@@ -61,6 +63,37 @@ describe("session transcript inbound context", () => {
         timestamp: 2_000,
       },
     ]);
+  });
+
+  it("renders the configured native window without restoring stale transcript content", async () => {
+    readRecent.mockResolvedValue([
+      { id: "deleted", role: "user", text: "deleted platform message", timestamp: 3_000 },
+    ]);
+    const ctx = context({
+      ChatType: "channel",
+      SessionTranscriptContext: { historyLimit: 50, historyKind: "recent" },
+      InboundHistory: Array.from({ length: 55 }, (_, index) => ({
+        sender: "Alice",
+        body: `native-line-${String(index).padStart(2, "0")}`,
+        timestamp: index,
+      })),
+    });
+    let prompt = "";
+    await runPreparedChannelTurn({
+      channel: "slack",
+      routeSessionKey: ctx.SessionKey!,
+      storePath: path.join(tempDirs.make("openclaw-native-history-context-"), "sessions.json"),
+      ctxPayload: ctx,
+      recordInboundSession: vi.fn(async () => undefined),
+      runDispatch: async () => {
+        prompt = buildInboundUserContextPrefix(ctx);
+        return { queuedFinal: false };
+      },
+    });
+    expect(prompt.match(/native-line-\d{2}/g)).toEqual(
+      Array.from({ length: 50 }, (_, index) => `native-line-${String(index + 5).padStart(2, "0")}`),
+    );
+    expect(prompt).not.toContain("deleted platform message");
   });
 
   it("restores marked Cron delivery context when no live chat window survives", async () => {
@@ -201,6 +234,61 @@ describe("session transcript inbound context", () => {
     expect(ctx.ChannelStructuredContext?.[0]?.payload).toEqual({
       messages: [{ body: "target", is_reply_target: true }],
     });
+  });
+
+  it("preserves a provider-owned thread window while enriching a populated session prompt", async () => {
+    readRecent.mockResolvedValue([
+      { id: "u1", role: "user", text: "canonical question", timestamp: 1_000 },
+      { id: "a1", role: "assistant", text: "canonical reply", timestamp: 2_000 },
+    ]);
+    const graphMessages = [
+      { message_id: "graph-parent", sender: "Parent", body: "Graph parent" },
+      { message_id: "graph-reply", sender: "Teammate", body: "Graph reply" },
+    ];
+    const ctx = context({
+      ChatType: "channel",
+      InboundHistory: [
+        { messageId: "pending", sender: "Pending", body: "pending backlog", timestamp: 3_000 },
+      ],
+      SessionTranscriptContext: { historyLimit: 2 },
+      ChannelStructuredContext: [
+        {
+          label: "Thread history",
+          source: "msteams",
+          type: "chat_window",
+          sessionTranscriptMode: "preserve",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: graphMessages,
+          },
+        },
+      ],
+    });
+
+    let prompt = "";
+    await runPreparedChannelTurn({
+      channel: "msteams",
+      routeSessionKey: ctx.SessionKey!,
+      storePath: path.join(tempDirs.make("openclaw-teams-transcript-context-"), "sessions.json"),
+      ctxPayload: ctx,
+      recordInboundSession: vi.fn(async () => undefined),
+      runDispatch: vi.fn(async () => {
+        prompt = buildInboundUserContextPrefix(ctx, { timezone: "UTC" });
+        return { queuedFinal: false };
+      }),
+    });
+
+    expect(ctx.ChannelStructuredContext?.[0]?.source).toBe("msteams");
+    expect(asRecord(ctx.ChannelStructuredContext?.[0]?.payload).messages).toEqual(graphMessages);
+    expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
+      "canonical reply",
+      "pending backlog",
+    ]);
+    expect(prompt).toContain("Graph parent");
+    expect(prompt).toContain("Graph reply");
+    expect(prompt).toContain("canonical reply");
+    expect(prompt).toContain("pending backlog");
   });
 
   it("fails closed for an unscoped session key without a routed agent owner", async () => {

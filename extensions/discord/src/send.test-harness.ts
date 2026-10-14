@@ -58,6 +58,7 @@ export function timerDelayAt(source: MockCallSource, callIndex = 0) {
 }
 
 export async function createDiscordLoopbackRest(options?: {
+  queueRequests?: boolean;
   respond?: (request: DiscordLoopbackRequest) => unknown;
   status?: (request: DiscordLoopbackRequest) => number;
 }): Promise<{
@@ -108,7 +109,7 @@ export async function createDiscordLoopbackRest(options?: {
   return {
     rest: new RequestClient("test-token", {
       baseUrl: `http://127.0.0.1:${address.port}`,
-      queueRequests: false,
+      queueRequests: options?.queueRequests ?? false,
     }),
     requests,
     close: () =>

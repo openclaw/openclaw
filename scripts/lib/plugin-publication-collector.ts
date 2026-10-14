@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { isPluginPublicationEnabled } from "./plugin-publication-target.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 
 export type PluginPackageJson = {
@@ -59,8 +60,8 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta" | "extended-stable";
+  channel: "stable" | "beta";
+  publishTag: "latest" | "beta" | "extended-stable";
   installNpmSpec?: string;
   requiredLatestDependencies?: RequiredLatestDependency[];
 };
@@ -79,13 +80,6 @@ type PublishablePluginPackageSource = Pick<
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const SAFE_CLAWHUB_EXTENSION_ID = /^[a-z0-9][a-z0-9._-]*$/;
-
-/** Explicit core ownership defers staged external publication until the plugin is externalized. */
-function isPluginExternalPublicationDeferred(packageJson: {
-  openclaw?: { build?: { bundledDist?: unknown } };
-}): boolean {
-  return packageJson.openclaw?.build?.bundledDist === true;
-}
 
 function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
   dependencies: RequiredLatestDependency[];
@@ -148,9 +142,12 @@ function resolvePublishablePluginVersion(params: {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     params.validationErrors.push(
-      `${params.extensionId}: package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${version}".`,
+      `${params.extensionId}: package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "${version}".`,
     );
     return null;
+  }
+  if (parsedVersion.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
   return { version, parsedVersion };
 }
@@ -193,8 +190,11 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "${packageVersion}".`,
     );
+  }
+  if (parseReleaseVersion(packageVersion)?.channel === "alpha") {
+    errors.push("Alpha releases are retired; use a beta prerelease instead.");
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
     errors.push("openclaw.extensions must contain at least one entry.");
@@ -258,6 +258,9 @@ export function collectPublishablePluginPackagesFromCandidates(
   target: "npm" | "clawhub",
   filters: PublishablePluginPackageFilters = {},
 ): PublishablePluginPackage[] {
+  if (filters.rootVersion?.includes("-alpha.")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const publishable: PublishablePluginPackage[] = [];
   const validationErrors: string[] = [];
   const selectedExtensionIds = new Set(filters.extensionIds ?? []);
@@ -270,9 +273,8 @@ export function collectPublishablePluginPackagesFromCandidates(
       candidates
         .filter(
           (candidate) =>
-            !isPluginExternalPublicationDeferred(candidate.packageJson) &&
-            (candidate.packageJson.openclaw?.release?.publishToNpm === true ||
-              candidate.packageJson.openclaw?.release?.publishToClawHub === true),
+            isPluginPublicationEnabled(candidate.packageJson, "npm") ||
+            isPluginPublicationEnabled(candidate.packageJson, "clawhub"),
         )
         .map((candidate) => ({
           extensionId: candidate.extensionId,
@@ -291,14 +293,7 @@ export function collectPublishablePluginPackagesFromCandidates(
     if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
       continue;
     }
-    if (isPluginExternalPublicationDeferred(packageJson)) {
-      continue;
-    }
-    const enabled =
-      target === "npm"
-        ? packageJson.openclaw?.release?.publishToNpm === true
-        : packageJson.openclaw?.release?.publishToClawHub === true;
-    if (!enabled) {
+    if (!isPluginPublicationEnabled(packageJson, target)) {
       continue;
     }
     if (target === "clawhub" && !SAFE_CLAWHUB_EXTENSION_ID.test(extensionId)) {
@@ -326,18 +321,16 @@ export function collectPublishablePluginPackagesFromCandidates(
     const publishTag =
       target === "npm"
         ? resolveNpmPublishPlan(version, undefined, filters.npmDistTag).publishTag
-        : parsedVersion.channel === "alpha"
-          ? "alpha"
-          : parsedVersion.channel === "beta"
-            ? "beta"
-            : "latest";
+        : parsedVersion.channel === "beta"
+          ? "beta"
+          : "latest";
 
     publishable.push({
       extensionId,
       packageDir,
       packageName,
       version,
-      channel: parsedVersion.channel,
+      channel: parsedVersion.channel === "beta" ? "beta" : "stable",
       publishTag,
       ...(target === "npm"
         ? { installNpmSpec: normalizeOptionalString(packageJson.openclaw?.install?.npmSpec) }

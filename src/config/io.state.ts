@@ -17,8 +17,6 @@ export const warnedFutureTouchedVersions = createDedupeCache({
   maxSize: CONFIG_IO_WARNING_CACHE_MAX_SIZE,
 });
 
-export const autoOwnerDisplaySecretByPath = new Map<string, string>();
-
 /** Retains a warning fingerprint as most-recently used while enforcing the shared bound. */
 export function setBoundedConfigIoWarningEntry<K, V>(map: Map<K, V>, key: K, value: V): void {
   map.delete(key);

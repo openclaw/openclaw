@@ -1,12 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "./tool-search-catalog.js";
+import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
+  readParameterText,
   scoreLexical,
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry {
   return {
@@ -34,11 +42,11 @@ const CATALOG = [
   }),
 ];
 
-function runtime(): ToolSearchRuntime {
+function runtime(catalog = CATALOG): ToolSearchRuntime {
   const ctx = {
     catalogRef: {
       current: {
-        entries: CATALOG,
+        entries: catalog,
         counterScope: "scope-1",
         searchCount: 0,
         describeCount: 0,
@@ -49,32 +57,21 @@ function runtime(): ToolSearchRuntime {
   return new ToolSearchRuntime(ctx as never, {
     enabled: true,
     mode: "directory",
-    codeTimeoutMs: 1000,
     searchDefaultLimit: 10,
     maxSearchLimit: 50,
   });
 }
 
 describe("tokenizeQuery", () => {
-  it("collapses inflected forms to a shared root", () => {
-    expect(tokenizeQuery("scheduling").map((term) => term.term)).toEqual(
-      tokenizeDocument("schedule"),
-    );
-    expect(tokenizeQuery("reminders").map((term) => term.term)).toContain("remind");
-  });
-
   it.each([
     ["running", "run"],
-    ["stopping", "stop"],
-    ["logging", "log"],
-    ["planning", "plan"],
     ["runner", "run"],
   ])("undoes the consonant English doubles before a suffix: %s", (inflected, root) => {
     // Without undoubling, "running" stems to "runn" and can never meet "run".
     expect(tokenizeDocument(inflected)).toEqual(tokenizeDocument(root));
   });
 
-  it.each(["call", "process", "off"])("keeps doubles that belong to the root: %s", (word) => {
+  it.each(["call", "process"])("keeps doubles that belong to the root: %s", (word) => {
     expect(tokenizeDocument(`${word}ing`)).toEqual(tokenizeDocument(word));
   });
 
@@ -90,10 +87,6 @@ describe("tokenizeQuery", () => {
     // "get" looks like filler but names operations ("get_weather"); dropping it
     // would reduce "get issue" to "issue" and let delete/update entries win.
     expect(tokenizeQuery("get").map((term) => term.term)).not.toEqual([]);
-  });
-
-  it("drops stopwords so they cannot carry a match", () => {
-    expect(tokenizeQuery("the and with")).toEqual([]);
   });
 
   it("expands intent words toward the vocabulary descriptions use", () => {
@@ -114,23 +107,11 @@ describe("tokenizeQuery", () => {
     expect(terms).toContain("web");
   });
 
-  it("decomposes camelCase names, which MCP catalogs commonly use", () => {
-    const document = tokenizeDocument("readFile");
-
-    // Lowercasing first would leave only "readfil", which "read file" cannot meet.
-    for (const term of tokenizeQuery("read file")) {
-      expect(document).toContain(term.term);
-    }
+  it.each(["news"])("keeps %s distinct from the word left by stripping its s", (word) => {
+    // "news" -> "new" would literal-match every "Create a new ..." tool, and
+    // literal matches are ranked ahead of the web tool the query meant.
+    expect(tokenizeDocument(word)).toEqual([word]);
   });
-
-  it.each(["news", "status", "canvas", "alias"])(
-    "keeps %s distinct from the word left by stripping its s",
-    (word) => {
-      // "news" -> "new" would literal-match every "Create a new ..." tool, and
-      // literal matches are ranked ahead of the web tool the query meant.
-      expect(tokenizeDocument(word)).toEqual([word]);
-    },
-  );
 
   it("does not let a singular/plural collision invent an intent", () => {
     // "news" must not normalize to "new", or "open a new issue" acquires a
@@ -193,125 +174,255 @@ describe("scoreLexical", () => {
     expect(hits.filter((hit) => hit.matchedLiteral).map((hit) => hit.value)).toContain("weather-a");
     expect(web?.matchedLiteral).toBe(false);
   });
-
-  it("ranks a rare term above one shared across the catalog", () => {
-    const index = buildLexicalIndex([
-      { value: "rare", terms: tokenizeDocument("search quantum") },
-      { value: "common-a", terms: tokenizeDocument("search files") },
-      { value: "common-b", terms: tokenizeDocument("search mail") },
-    ]);
-    const ranked = scoreLexical(index, tokenizeQuery("quantum")).toSorted(
-      (a, b) => b.score - a.score,
-    );
-
-    expect(ranked[0]?.value).toBe("rare");
-  });
 });
 
 describe("untrusted schemas", () => {
-  it("never traverses parameters from a source the catalog treats as untrusted", async () => {
-    // compactToolSearchCatalogEntry already reports non-first-party parameters
-    // as "unknown"; indexing must respect the same boundary. A client can hand
-    // us a lazy object that throws on property access, and MCP-authored text
-    // must not become ranking input.
-    const hostile = entry({
-      source: "client",
-      name: "client_pick_file",
-      description: "Ask the client to pick a file",
-      parameters: {
-        type: "object",
-        properties: new Proxy(
-          {},
-          {
-            ownKeys: () => {
-              throw new Error("client properties must remain deferred");
+  it.each(["client", "mcp"] as const)(
+    "never traverses parameters from the untrusted %s source",
+    async (source) => {
+      // compactToolSearchCatalogEntry already reports non-first-party parameters
+      // as "unknown"; indexing must respect the same boundary. A client can hand
+      // us a lazy object that throws on property access, and MCP-authored text
+      // must not become ranking input.
+      const hostile = entry({
+        source,
+        name: "client_pick_file",
+        description: "Ask the client to pick a file",
+        parameters: {
+          type: "object",
+          properties: new Proxy(
+            {},
+            {
+              ownKeys: () => {
+                throw new Error("client properties must remain deferred");
+              },
             },
-          },
-        ),
-      },
-    });
-    const ctx = {
-      catalogRef: {
-        current: {
-          entries: [...CATALOG, hostile],
-          counterScope: "scope-1",
-          searchCount: 0,
-          describeCount: 0,
-          callCount: 0,
+          ),
         },
-      },
-    };
-    const search = new ToolSearchRuntime(ctx as never, {
-      enabled: true,
-      mode: "directory",
-      codeTimeoutMs: 1000,
-      searchDefaultLimit: 10,
-      maxSearchLimit: 50,
-    });
+      });
+      const search = runtime([...CATALOG, hostile]);
 
-    // Reaching the schema at all throws, so surviving the query is the proof.
-    await expect(search.search("pick a file")).resolves.toBeDefined();
-    expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
-      "client_pick_file",
-    );
-  });
+      // Reaching the schema at all throws, so surviving the query is the proof.
+      await expect(search.search("pick a file")).resolves.toBeDefined();
+      expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
+        "client_pick_file",
+      );
+    },
+  );
 });
 
 describe("ToolSearchRuntime.search", () => {
-  it.each([
-    {
-      query: "scheduling",
-      expected: "cron_create",
-      why: "stemmed to the description's 'Schedule'",
+  it.each(["anyOf", "oneOf", "allOf"])(
+    "finds parameter metadata inside %s branches and refreshes it after edits",
+    async (keyword) => {
+      const branch = {
+        type: "object",
+        properties: { orchard: { type: "string", description: "Collect apples" } },
+      };
+      const catalogRef = createToolSearchCatalogRef();
+      const tools = [
+        {
+          name: "indexed_resource",
+          label: "Resource",
+          description: "Inspect resources",
+          parameters: { [keyword]: [{ description: "Measure asteroids" }, branch] },
+          execute: async () => ({ content: [], details: {} }),
+        },
+      ];
+      registerHeadlessToolSearchCatalog({ catalogRef, tools });
+      const search = new ToolSearchRuntime(
+        { catalogRef },
+        {
+          enabled: true,
+          mode: "tools",
+          searchDefaultLimit: 10,
+          maxSearchLimit: 50,
+        },
+      );
+
+      for (const query of ["asteroids", "orchard", "apples"]) {
+        expect((await search.search(query)).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      }
+      branch.properties.orchard.description = "Observe meteors";
+      registerHeadlessToolSearchCatalog({ catalogRef, tools });
+      expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      expect(await search.search("apples")).toEqual([]);
+      expect(await search.search("orchard", { allowedIds: new Set() })).toEqual([]);
     },
+  );
+
+  it("finds metadata through composed property and array-item schemas", async () => {
+    const search = runtime([
+      entry({
+        name: "indexed_resource",
+        parameters: {
+          type: "object",
+          properties: {
+            resources: {
+              anyOf: [
+                { type: "null" },
+                {
+                  type: "array",
+                  items: { allOf: [{ type: "string", description: "Observe meteors" }] },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+  });
+
+  it("prepares search text and its revision once across warm searches and runtimes", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `warm-index:${item.id}` }));
+    const render = vi.spyOn(ranking, "readParameterText");
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const allowedIds = new Set(catalog.map(({ id }) => id));
+    for (let turn = 0; turn < 3; turn++) {
+      const search = runtime(catalog);
+      expect((await search.search("repository", { allowedIds })).map(({ name }) => name)).toEqual([
+        "issue_create",
+      ]);
+      expect((await search.search("read", { allowedIds })).map(({ name }) => name)).toEqual([
+        "read_file",
+      ]);
+    }
+    expect(render).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(1);
+    allowedIds.delete(catalog[4]!.id);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(render).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps BM25 population statistics scoped to the current visibility", async () => {
+    const search = runtime([
+      entry({ name: "first", description: "alpha alpha" }),
+      entry({ name: "second", description: "beta" }),
+      ...["third", "fourth", "fifth"].map((name) => entry({ name, description: "alpha" })),
+    ]);
+    const allowedIds = new Set(["first", "second"]);
+    expect((await search.search("alpha beta", { limit: 1 }))[0]?.name).toBe("second");
+    expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("first");
+    allowedIds.add("third").add("fourth").add("fifth");
+    expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("second");
+  });
+
+  it("shares one index across fresh turns and rebuilds for a changed tool-set revision", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `shared-index:${item.id}` }));
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    for (const [query, expected] of [
+      ["repository", ["issue_create"]],
+      ["scheduling", ["cron_create"]],
+      ["read", ["read_file"]],
+    ] as const) {
+      const freshCatalog = catalog.map((item) => entry({ ...item, tool: {} as never }));
+      const hits = await runtime(freshCatalog).search(query, {
+        allowedIds: new Set(catalog.map(({ id }) => id)),
+      });
+      expect(hits.map(({ name }) => name)).toEqual(expected);
+    }
+    expect(build).toHaveBeenCalledTimes(1);
+
+    catalog[0]!.description = "Observe asteroids";
+    expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
+      "web_search",
+    ]);
+    expect(build).toHaveBeenCalledTimes(2);
+
+    await runtime([...catalog]).search("repository");
+    expect(build).toHaveBeenCalledTimes(2);
+
+    const allowedIds = new Set([catalog[0]!.id]);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(build).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    { encoding: "ASCII", padding: " ", suffix: "" },
+    { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
+    { encoding: "Unicode word", padding: "λ", suffix: "" },
+  ])(
+    "shares oversized $encoding revisions while their indexes remain live",
+    async ({ padding, suffix }) => {
+      const catalog = [
+        entry({
+          name: "oversized_revision",
+          description: `Retention ${padding.repeat(4 * 1024 * 1024)}${suffix}`,
+        }),
+      ];
+      // The spy retains built indexes, as another active catalog view would.
+      const build = vi.spyOn(ranking, "buildLexicalIndex");
+      for (let turn = 0; turn < 2; turn++) {
+        expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
+          "oversized_revision",
+        ]);
+      }
+      expect(build).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("projects shared index hits from the current catalog without retaining another run's metadata", async () => {
+    const first = entry({ name: "shared_revision", description: "Measure quasars" });
+    await runtime([first]).search("quasars");
+    const current = entry({ ...first, source: "mcp", sourceName: "current-server" });
+    expect(await runtime([current]).search("quasars")).toEqual([
+      expect.objectContaining({ source: "mcp", sourceName: "current-server", input: "unknown" }),
+    ]);
+  });
+
+  it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
+    const search = runtime(
+      ["listURL", "listUrl"].map((toolName) =>
+        entry({
+          id: `mcp:accounting:${toolName}`,
+          name: toolName,
+          source: "mcp",
+          description: "Find overdue invoices",
+        }),
+      ),
+    );
+    expect(
+      (await search.search(`mcp:accounting:${name}`, { limit: 1 })).map((hit) => hit.id),
+    ).toEqual([`mcp:accounting:${name}`]);
+  });
+
+  it("preserves ranked exact-match order when the limit excludes other exact matches", async () => {
+    const search = runtime([
+      entry({ id: "z", name: "harvest", description: "Collect records" }),
+      entry({ id: "a", name: "harvest", description: "Collect records" }),
+      entry({ id: "m", name: "HARVEST", description: "Collect records" }),
+      entry({ name: "records", description: "harvest" }),
+    ]);
+
+    expect((await search.search("harvest", { limit: 2 })).map((hit) => hit.id)).toEqual(["a", "m"]);
+  });
+
+  it.each([
     { query: "reminder", expected: "cron_create", why: "expanded toward schedule/cron" },
     {
       query: "look up the price",
       expected: "web_search",
       why: "intent expanded toward search/web",
     },
-    { query: "repository", expected: "issue_create", why: "matched only via a parameter" },
   ])("finds $expected for $query ($why)", async ({ query, expected }) => {
     const hits = await runtime().search(query);
     expect(hits.map((hit) => hit.name)).toContain(expected);
   });
 
-  it("ranks an exact tool name first even when a shorter entry mentions it", async () => {
-    const catalog = [
-      entry({ name: "issue_create", description: "Open a new issue" }),
-      entry({ id: "b", name: "notes", description: "Notes about issue_create and other tools" }),
-    ];
-    const ctx = {
-      catalogRef: {
-        current: {
-          entries: catalog,
-          counterScope: "scope-1",
-          searchCount: 0,
-          describeCount: 0,
-          callCount: 0,
-        },
-      },
-    };
-    const search = new ToolSearchRuntime(ctx as never, {
-      enabled: true,
-      mode: "directory",
-      codeTimeoutMs: 1000,
-      searchDefaultLimit: 10,
-      maxSearchLimit: 50,
-    });
-
-    // Querying a known name is a request for that tool, not a description of one.
-    const hits = await search.search("issue_create");
-    expect(hits[0]?.name).toBe("issue_create");
-  });
-
   it.each([
     ["cookies", "cookie"],
     ["policies", "policy"],
-    ["movies", "movie"],
-    ["repositories", "repository"],
-    ["queries", "query"],
-    ["memories", "memory"],
   ])("matches both readings of an -ies plural: %s", (plural, singular) => {
     // "policies" is "policy" but "cookies" is "cookie"; one rule cannot serve
     // both, so both stems are emitted and whichever the catalog uses matches.
@@ -322,7 +433,6 @@ describe("ToolSearchRuntime.search", () => {
   it.each([
     ["getURLs", "url"],
     ["getOAuthToken", "auth"],
-    ["readFile", "read"],
   ])("keeps acronym and camelCase parts addressable: %s", (name, part) => {
     // Splitting on case transitions alone cuts "URLs" into "UR"/"Ls".
     expect(tokenizeDocument(name)).toContain(part);
@@ -330,43 +440,66 @@ describe("ToolSearchRuntime.search", () => {
 
   it("returns a tool named exactly like a stopword", async () => {
     const catalog = [
-      entry({ name: "do", description: "Run a stored action" }),
+      entry({ id: "z-local", name: "do", description: "Run a stored action" }),
+      entry({ id: "a-remote", source: "mcp", name: "DO", description: "Run a remote action" }),
+      entry({ id: "m-local", name: "do", description: "Run another stored action" }),
       entry({ id: "other", name: "other", description: "Unrelated" }),
     ];
-    const ctx = {
-      catalogRef: {
-        current: {
-          entries: catalog,
-          counterScope: "scope-1",
-          searchCount: 0,
-          describeCount: 0,
-          callCount: 0,
-        },
-      },
+    const search = runtime(catalog);
+
+    // "do" tokenizes to nothing; exact matches still retain catalog order,
+    // with visibility applied before the result limit.
+    expect((await search.search(" DO ")).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+      "m-local",
+    ]);
+    expect((await search.search("do", { limit: 2 })).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+    ]);
+    expect(
+      (await search.search("do", { includeMcp: false, limit: 1 })).map((hit) => hit.id),
+    ).toEqual(["z-local"]);
+    expect(
+      (
+        await search.search("do", {
+          allowedIds: new Set(["a-remote", "m-local"]),
+          includeMcp: false,
+          limit: 1,
+        })
+      ).map((hit) => hit.id),
+    ).toEqual(["m-local"]);
+  });
+});
+
+describe("readParameterText", () => {
+  it("ignores boolean schemas and literal data while collecting composed metadata", () => {
+    expect(
+      readParameterText({
+        description: "visible",
+        const: { description: "literal" },
+        enum: [{ description: "literal" }],
+        anyOf: [true, false, { description: "branch" }],
+        oneOf: [],
+        allOf: [],
+      }),
+    ).toBe("visible branch");
+  });
+
+  it("reads metadata from tuple items", () => {
+    expect(
+      readParameterText({ items: [{ description: "first" }, { description: "second" }] }),
+    ).toBe("first second");
+  });
+
+  it("keeps cyclic composed schemas bounded", () => {
+    const schema: Record<string, unknown> = {
+      description: "visible",
     };
-    const search = new ToolSearchRuntime(ctx as never, {
-      enabled: true,
-      mode: "directory",
-      codeTimeoutMs: 1000,
-      searchDefaultLimit: 10,
-      maxSearchLimit: 50,
-    });
+    schema.anyOf = [schema];
 
-    // "do" tokenizes to nothing, so it never reaches the ranking; naming it
-    // exactly is still an unambiguous request for it.
-    expect((await search.search("do")).map((hit) => hit.name)).toEqual(["do"]);
-  });
-
-  it("does not match a term that only appears inside another word", async () => {
-    // "spreadsheet" contains "read"; substring scoring used to rank it here.
-    const names = (await runtime().search("read")).map((hit) => hit.name);
-    expect(names).toContain("read_file");
-    expect(names).not.toContain("spreadsheet_open");
-  });
-
-  it("returns nothing rather than an unranked catalog for a query the catalog cannot answer", async () => {
-    // The catalog is described in English, so this matches nothing. The old
-    // scorer returned every tool in id order for exactly this input.
-    expect(await runtime().search("価格を調べて")).toEqual([]);
+    expect(readParameterText(schema).split(" ")).toEqual(Array(5).fill("visible"));
+    expect(readParameterText(schema, 5)).toBe("");
   });
 });

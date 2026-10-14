@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   SessionCatalogShareRouteSchema,
   SessionsCatalogHostEventSchema,
+  SessionsCatalogImportParamsSchema,
+  SessionsCatalogImportResultSchema,
   SessionsCatalogListParamsSchema,
   SessionsCatalogListResultSchema,
   SessionsCatalogStartTerminalParamsSchema,
@@ -123,35 +125,62 @@ describe("SessionsCatalogStartTerminal schemas", () => {
   });
 });
 
+describe("SessionsCatalogImport schemas", () => {
+  it("accepts a locator and closed import counts, including incomplete and unchanged results", () => {
+    const params = {
+      catalogId: "claude",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      sourceHomeId: "home-1",
+      agentId: "research",
+    };
+    const result = {
+      sessionKey: "agent:research:imported-session",
+      importedItems: 0,
+      totalItems: 20,
+      complete: false,
+      created: false,
+    };
+
+    expect(Value.Check(SessionsCatalogImportParamsSchema, params)).toBe(true);
+    for (const displayName of ["Imported native session", "x".repeat(500)]) {
+      expect(Value.Check(SessionsCatalogImportParamsSchema, { ...params, displayName })).toBe(true);
+    }
+    for (const displayName of ["", "x".repeat(501)]) {
+      expect(Value.Check(SessionsCatalogImportParamsSchema, { ...params, displayName })).toBe(
+        false,
+      );
+    }
+    expect(Value.Check(SessionsCatalogImportParamsSchema, { ...params, fork: true })).toBe(false);
+    expect(Value.Check(SessionsCatalogImportResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogImportResultSchema, {
+        ...result,
+        importedItems: 20,
+        complete: true,
+        created: true,
+      }),
+    ).toBe(true);
+    for (const invalid of [
+      { importedItems: -1 },
+      { importedItems: 0.5 },
+      { totalItems: -1 },
+      { totalItems: 0.5 },
+      { complete: "false" },
+      { created: "false" },
+      { unexpected: true },
+    ]) {
+      expect(Value.Check(SessionsCatalogImportResultSchema, { ...result, ...invalid })).toBe(false);
+    }
+  });
+});
+
 describe("SessionsCatalogListParamsSchema", () => {
-  it("accepts an optional progressive stream id without a catalog selector", () => {
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, {
-        agentId: "main",
-        progressId: "progress-1",
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts an optional agent scope", () => {
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, {
-        agentId: "research",
-        catalogId: "claude",
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts flat optional catalog cursor fields", () => {
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, { cursors: { "gateway:local": "1" } }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionsCatalogListParamsSchema, {
-        catalogId: "claude",
-        cursors: { "gateway:local": "1" },
-      }),
-    ).toBe(true);
+  it("accepts only boolean metadata selection while retaining full-list defaults", () => {
+    for (const params of [{}, { metadataOnly: false }, { metadataOnly: true }]) {
+      expect(Value.Check(SessionsCatalogListParamsSchema, params)).toBe(true);
+    }
+    expect(Value.Check(SessionsCatalogListParamsSchema, { metadataOnly: "true" })).toBe(false);
   });
 });
 
@@ -177,6 +206,12 @@ describe("SessionsCatalogHostEventSchema", () => {
     };
 
     expect(Value.Check(SessionsCatalogHostEventSchema, event)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [{ ...event.catalog.hosts[0], pending: true }] },
+      }),
+    ).toBe(true);
     expect(Value.Check(SessionsCatalogHostEventSchema, { ...event, unexpected: true })).toBe(false);
     expect(
       Value.Check(SessionsCatalogHostEventSchema, {

@@ -1,6 +1,9 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
+import { createDeferred } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const fixtures = [
   { owner: "setup", name: "forwards output and SIGTERM through the runner process group" },
@@ -15,7 +18,7 @@ afterEach(() => {
     "node:child_process",
     "../../scripts/profile-extension-memory.mts",
     "../../scripts/lib/vitest-build-prerequisites.mts",
-    "../helpers/promise.js",
+    "../helpers/fixture-receipts.js",
   ]) {
     vi.doUnmock(module);
   }
@@ -30,12 +33,27 @@ function errorTree(error: unknown): unknown[] {
   return error instanceof Error && error.cause ? [error, ...errorTree(error.cause)] : [error];
 }
 
+type FixtureContext = {
+  signal: AbortSignal;
+  onTestFinished: (hook: () => unknown) => void;
+};
+
 async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   vi.resetModules();
-  const bodies = new Map<string, () => Promise<void>>();
-  const register = (name: string, body: () => Promise<void>) => bodies.set(name, body);
+  const bodies = new Map<string, (context: FixtureContext) => Promise<void>>();
+  const beforeAllHooks: Array<() => unknown> = [];
+  const beforeHooks: Array<() => unknown> = [];
+  const afterHooks: Array<() => unknown> = [];
+  const afterAllHooks: Array<() => unknown> = [];
+  const register = (name: string, body: (context: FixtureContext) => Promise<void>) =>
+    bodies.set(name, body);
+  const collectSuite = (_name: string, body: () => void) => body();
   vi.doMock("vitest", () => ({
-    describe: (_name: string, body: () => void) => body(),
+    beforeAll: (hook: () => unknown) => beforeAllHooks.push(hook),
+    afterAll: (hook: () => unknown) => afterAllHooks.push(hook),
+    afterEach: (hook: () => unknown) => afterHooks.push(hook),
+    beforeEach: (hook: () => unknown) => beforeHooks.push(hook),
+    describe: Object.assign(collectSuite, { runIf: () => collectSuite }),
     it: Object.assign(register, { each: () => () => {}, runIf: () => register, skip: register }),
     expect,
     vi,
@@ -48,7 +66,26 @@ async function captureFixture(owner: (typeof fixtures)[number]["owner"]) {
   const fixture = fixtures.find((entry) => entry.owner === owner)!;
   const body = bodies.get(fixture.name);
   expect(body, fixture.name).toBeTypeOf("function");
-  return body!;
+  return async () => {
+    const finished: Array<() => unknown> = [];
+    // Vitest retains body and teardown failures independently. A rejecting finalizer
+    // must not replace the body error or prevent later cleanup hooks from running.
+    await runQaGatewayFixture(
+      async () => {
+        for (const hook of [...beforeAllHooks, ...beforeHooks]) {
+          await hook();
+        }
+        await body!({
+          signal: new AbortController().signal,
+          onTestFinished: (hook) => finished.push(hook),
+        });
+      },
+      ...afterHooks.toReversed(),
+      // The body registers these hooks, so enumerate them only after it settles.
+      () => runQaGatewayFixture(async () => {}, ...finished.toReversed()),
+      ...afterAllHooks.toReversed(),
+    );
+  };
 }
 
 // Execute the registered process fixtures, injecting OS faults at their real
@@ -59,6 +96,8 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
       ["EPERM", "ESRCH"].map((code) => ({ owner, name, code })),
     ),
   )("preserves failures and finishes safe $owner cleanup after $code", async ({ owner, code }) => {
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const primary = new Error("fixture assertion failed");
     const denied = Object.assign(new Error("injected kill failure"), { code });
     const scratchError = new Error("scratch removal failed");
@@ -67,6 +106,7 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
     const alive = new Set([leader, ...descendants]);
     let parentSignaled = false;
     const events: string[] = [];
+    const receiptReady = createDeferred();
     const child = Object.assign(new EventEmitter(), {
       pid: leader,
       exitCode: null as number | null,
@@ -98,8 +138,21 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
     };
     vi.doMock("node:fs", () => ({ ...fs, default: fs }));
     vi.doMock("node:child_process", () => ({
+      ...childProcess,
       spawn: () => {
-        setImmediate(() => child.emit("spawn"));
+        if (owner === "setup") {
+          child.stdin.once("data", () => {
+            child.stdout.write("setup-stdout\n");
+            child.stderr.write("setup-stderr\n");
+          });
+        }
+        setImmediate(() => {
+          child.emit("spawn");
+          if (owner === "timeout") {
+            child.stdout.write(`descendant-ready ${descendants[0]}\n`);
+          }
+          receiptReady.resolve();
+        });
         return child;
       },
     }));
@@ -109,13 +162,15 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
         throw primary;
       },
     }));
-    const { withTestTimeout } = await import("../helpers/promise.js");
-    vi.doMock("../helpers/promise.js", () => ({
-      // Keep the real deadline owner; shorten only this injected never-closing child.
-      withTestTimeout: (promise: PromiseLike<unknown>, ms: number, message: string) =>
-        withTestTimeout(promise, owner === "parent" && code === "EPERM" ? 20 : ms, message),
+    vi.doMock("../helpers/fixture-receipts.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../helpers/fixture-receipts.js")>()),
+      openFixtureReceiptChannel: async () => ({
+        endpoint: "/fixture/receipts",
+        broadcastName: "fixture-receipts",
+        waitFor: () => receiptReady.promise,
+        close: async () => {},
+      }),
     }));
-    vi.spyOn(vi, "waitFor").mockRejectedValue(primary);
     vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
       if (signal === 0) {
         const groupPids = [leader, ...descendants];

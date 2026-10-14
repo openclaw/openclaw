@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 
@@ -46,6 +47,21 @@ describe("resolveCommandSessionStoreTargets", () => {
 
     expect(targets).toEqual([{ agentId: "main", storePath: "/tmp/main-sessions.json" }]);
     expect(resolveSessionStoreTargetsMock).toHaveBeenCalledWith({}, {});
+  });
+
+  it("keeps agent selection refusals typed with the session-store surface", () => {
+    resolveSessionStoreTargetsMock.mockImplementation(() => {
+      throw new AgentSelectionRequiredError(["main", "analyst"]);
+    });
+    expect(() => resolveCommandSessionStoreTargets({ cfg: {}, opts: {} })).toThrow(
+      expect.objectContaining({
+        name: "AgentSelectionRequiredError",
+        agentIds: ["main", "analyst"],
+        message: expect.stringContaining(
+          "session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents",
+        ),
+      }),
+    );
   });
 
   it("hands resolution errors to the CLI failure owner", () => {

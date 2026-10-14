@@ -8,12 +8,8 @@ export type McpCodexToolAnnotations = {
   openWorldHint?: boolean;
 };
 
-const APPROVAL_MODES = new Set<McpCodexToolApprovalMode>(["auto", "prompt", "approve"]);
-
 function normalizeApprovalMode(value: unknown): McpCodexToolApprovalMode | undefined {
-  return typeof value === "string" && APPROVAL_MODES.has(value as McpCodexToolApprovalMode)
-    ? (value as McpCodexToolApprovalMode)
-    : undefined;
+  return value === "auto" || value === "prompt" || value === "approve" ? value : undefined;
 }
 
 function isOpenClawLoopbackServer(name: string, server: McpServerConfig): boolean {
@@ -48,10 +44,9 @@ export function resolveProjectedMcpCodexToolApprovalMode(
 }
 
 export function normalizeMcpCodexToolAnnotations(value: unknown): McpCodexToolAnnotations {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return {};
   }
-  const record = value as Record<string, unknown>;
   const result: McpCodexToolAnnotations = {};
   for (const key of [
     "readOnlyHint",
@@ -59,8 +54,8 @@ export function normalizeMcpCodexToolAnnotations(value: unknown): McpCodexToolAn
     "idempotentHint",
     "openWorldHint",
   ] as const) {
-    if (typeof record[key] === "boolean") {
-      result[key] = record[key];
+    if (typeof value[key] === "boolean") {
+      result[key] = value[key];
     }
   }
   return result;

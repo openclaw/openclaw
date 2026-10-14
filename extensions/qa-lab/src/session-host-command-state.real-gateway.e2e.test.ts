@@ -7,7 +7,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.ts";
-import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  tooltipTitleText,
+} from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { createQaGatewayChild } from "../api.ts";
 
 const COMMAND = "codex.exec-server.stdio.v1";
@@ -17,6 +20,7 @@ const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
 const REQUEST_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 180_000;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const helloCounts = new WeakMap<GatewayClient, number>();
 
 const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
@@ -51,7 +55,6 @@ suite.define(() => {
       gatewayOwners.push(gatewayOwner);
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        useRepoCli: true,
         transportBaseUrl: "http://127.0.0.1",
         providerMode: "mock-openai",
         providerBaseUrl: "http://127.0.0.1:9/v1",
@@ -79,7 +82,7 @@ suite.define(() => {
                 sshVerify: false,
               },
             },
-            reload: { mode: "hot" },
+            reload: { mode: "hybrid" },
           },
           agents: {
             ...config.agents,
@@ -99,6 +102,10 @@ suite.define(() => {
         const undeclaredIdentity = createDeviceIdentity();
         const pendingIdentity = createDeviceIdentity();
         const unauthorizedIdentity = createDeviceIdentity();
+        const undeclaredMessage =
+          "This model uses the Codex harness, which is unavailable on this device. Install it on that node (openclaw plugins install @openclaw/codex), or enable an existing install (openclaw plugins enable codex). Then restart the node (openclaw node restart) and approve its updated command surface, or choose a model using the OpenClaw harness.";
+        const pendingMessage = `paired-device command ${COMMAND} is awaiting pairing approval for node ${pendingIdentity.deviceId}; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>`;
+        const unauthorizedMessage = `paired-device command ${COMMAND} is blocked by Gateway policy for node ${unauthorizedIdentity.deviceId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
 
         const undeclaredNode = await connectPairedNode({
           displayName: "Undeclared command",
@@ -140,7 +147,7 @@ suite.define(() => {
           const inventory = await operator.request<{
             environments: Array<{
               id: string;
-              requiredNodeCommand?: { command: string; state: string };
+              requiredNodeCommand?: { command: string; state: string; message?: string };
             }>;
           }>("environments.list", { runtimeId: "codex" });
           return inventory.environments.find((environment) => environment.id === `node:${deviceId}`)
@@ -149,10 +156,12 @@ suite.define(() => {
         expect(await readCommandState(undeclaredIdentity.deviceId)).toEqual({
           command: COMMAND,
           state: "undeclared",
+          message: undeclaredMessage,
         });
         expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
           command: COMMAND,
           state: "pending-approval",
+          message: pendingMessage,
         });
         expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
           command: COMMAND,
@@ -162,7 +171,9 @@ suite.define(() => {
         await suite.withPage(
           {
             locale: "en-US",
-            recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1440 } },
+            ...(captureUiProof
+              ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1440 } } }
+              : {}),
             serviceWorkers: "block",
             viewport: { height: 900, width: 1440 },
           },
@@ -172,28 +183,30 @@ suite.define(() => {
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
-            await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+            await confirmation.getByRole("button", { name: /^Switch to /u }).click();
 
             await page.locator("#new-session-where-trigger").click();
-            const place = page.locator("wa-popover.new-session-page__where-popover");
+            const place = page.locator(".oc-popover.new-session-page__where-popover");
             const row = (deviceId: string) => place.locator(`[data-value="device:${deviceId}"]`);
-            const facts = async (deviceId: string) =>
-              await row(deviceId).locator(".new-session-page__menu-fact").allTextContents();
+            const disabledReason = async (deviceId: string) => tooltipTitleText(row(deviceId));
 
             await row(undeclaredIdentity.deviceId).waitFor();
-            expect(await facts(undeclaredIdentity.deviceId)).toContain(
-              `Make ${COMMAND} available on this device, then reconnect, or pick another device.`,
-            );
+            expect(await disabledReason(undeclaredIdentity.deviceId)).toContain(undeclaredMessage);
             await expect
-              .poll(() => facts(pendingIdentity.deviceId))
-              .toContain(
-                `Ask an administrator to approve the pending ${COMMAND} request, or pick another device.`,
-              );
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(suite.artifactDir, "01-undeclared-and-pending.png"),
-            });
+              .poll(() => disabledReason(pendingIdentity.deviceId))
+              .toContain(pendingMessage);
+            if (captureUiProof) {
+              // Keep captures at the recorded viewport size: clips and larger full-page
+              // screenshots temporarily resize Chromium's shared screencast surface.
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "00-undeclared.png"),
+              });
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "01-pending-approval.png"),
+              });
+            }
             await page.keyboard.press("Escape");
 
             const beforeConfig = await operator.request<{ hash: string }>("config.get", {});
@@ -210,26 +223,61 @@ suite.define(() => {
                 expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
                   command: COMMAND,
                   state: "unauthorized",
+                  message: unauthorizedMessage,
                 });
               },
               { interval: 250, timeout: 60_000 },
             );
-            await waitForReconnect(unauthorizedNode, unauthorizedHelloCount);
-            await publishSessionHost(unauthorizedNode);
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
 
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
             await expect
-              .poll(() => facts(unauthorizedIdentity.deviceId))
-              .toContain(
-                `Authorize ${COMMAND} in the Gateway node command policy, or pick another device.`,
-              );
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(suite.artifactDir, "02-unauthorized-after-restart.png"),
+              .poll(() => disabledReason(unauthorizedIdentity.deviceId))
+              .toContain(unauthorizedMessage);
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
+              });
+            }
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
+            await page.keyboard.press("Escape");
+
+            const deniedConfig = await operator.request<{ hash: string }>("config.get", {});
+            await operator.request("config.patch", {
+              raw: JSON.stringify({
+                gateway: { nodes: { commands: { allow: [COMMAND], deny: [] } } },
+              }),
+              baseHash: deniedConfig.hash,
+              replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
             });
+            await vi.waitFor(
+              async () => {
+                expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
+                  command: COMMAND,
+                  state: "invocable",
+                });
+                expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
+                  command: COMMAND,
+                  state: "pending-approval",
+                  message: pendingMessage,
+                });
+              },
+              { interval: 250, timeout: 60_000 },
+            );
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
+            await page.reload();
+            await page.locator("#new-session-where-trigger").click();
+            await row(unauthorizedIdentity.deviceId).waitFor();
+            expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(suite.artifactDir, "03-invocable-after-reallow.png"),
+              });
+            }
           },
         );
       } finally {
@@ -430,13 +478,6 @@ async function publishSessionHost(node: GatewayClient): Promise<void> {
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       capacity: { total: 1, available: 1 },
     },
-  });
-}
-
-async function waitForReconnect(client: GatewayClient, previousCount: number): Promise<void> {
-  await vi.waitFor(() => expect(helloCounts.get(client) ?? 0).toBeGreaterThan(previousCount), {
-    interval: 100,
-    timeout: 60_000,
   });
 }
 

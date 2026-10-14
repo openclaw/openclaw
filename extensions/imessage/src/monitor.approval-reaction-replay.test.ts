@@ -109,7 +109,7 @@ describe("iMessage approval reaction durable replay", () => {
               approval: { status: "allowed", decision: "allow-once", reason: "user" },
             };
           });
-        registerIMessageApprovalReactionTarget({
+        await registerIMessageApprovalReactionTarget({
           accountId: "default",
           conversation: { chatId: 7, handle: "+15551230000" },
           messageId: "pending-approval",

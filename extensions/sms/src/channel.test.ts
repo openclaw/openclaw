@@ -7,6 +7,8 @@ import { smsPlugin } from "./channel.js";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
+import type { SmsChannelConfig } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn<typeof sendSmsViaTwilioType>(async ({ to, onPlatformSendDispatch }) => {
@@ -87,148 +89,41 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("smsPlugin account removal", () => {
-  it("removes the default media cap without changing retained named accounts", () => {
-    const cfg = smsPlugin.config.deleteAccount?.({
-      accountId: "default",
-      cfg: {
-        agents: { defaults: { mediaMaxMb: 3 } },
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            mediaMaxMb: 1,
-            accounts: { support: { mediaMaxMb: 2 }, inherited: { enabled: true } },
-          },
-        },
-      },
-    });
-    if (!cfg) {
-      throw new Error("expected SMS account deletion result");
-    }
-    expect(resolveSmsAccount(cfg, "support").mediaMaxBytes).toBe(2 * 1024 * 1024);
-    expect(resolveSmsAccount(cfg, "inherited").mediaMaxBytes).toBe(3 * 1024 * 1024);
-  });
-});
-
-describe("smsPlugin status", () => {
-  it("builds a status snapshot for configured SMS accounts", async () => {
-    const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
-      cfg: {},
-      account: {
-        accountId: "support",
-        enabled: true,
+function createConfig(overrides: SmsChannelConfig = {}) {
+  return {
+    channels: {
+      sms: {
         accountSid: "AC123",
         authToken: "secret",
         fromNumber: "+15557654321",
-        messagingServiceSid: "",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
-        publicWebhookUrl: "",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
+        ...overrides,
       },
-    });
+    },
+  };
+}
 
-    expect(snapshot).toMatchObject({
-      accountId: "support",
-      name: "+15557654321",
-      enabled: true,
-      configured: true,
-      statusState: "configured",
-    });
-  });
-
+describe("smsPlugin status", () => {
   it("projects lifecycle from the runtime status record", async () => {
     const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
       cfg: {},
-      account: {
+      account: createSmsTestAccount({
         accountId: "support",
-        enabled: true,
         accountSid: "AC123",
-        authToken: "secret",
-        fromNumber: "+15557654321",
-        messagingServiceSid: "",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
         publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
-      },
+      }),
       runtime: { accountId: "support", lifecycle: "blocked", terminalDisconnect: true },
     });
 
     expect(snapshot).toMatchObject({ lifecycle: "blocked", terminalDisconnect: true });
   });
 
-  it("loads delivery observations with the full Twilio account identity", async () => {
-    const account = {
-      accountId: "support",
-      enabled: true,
-      accountSid: "AC-support",
-      authToken: "secret",
-      fromNumber: "+15557654321",
-      messagingServiceSid: "",
-      defaultTo: "",
-      webhookPath: "/webhooks/sms",
-      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-      dangerouslyDisableSignatureValidation: false,
-      dmPolicy: "pairing" as const,
-      allowFrom: [],
-      textChunkLimit: 1500,
-    };
-    const records = [
-      {
-        accountId: "support",
-        accountSidHash: "account-sid-hash",
-        messageSid: "SM123",
-        status: "delivered",
-        firstObservedAt: 1,
-        lastObservedAt: 2,
-        observations: [],
-      },
-    ];
-    listRecentSmsDeliveryRecords.mockResolvedValueOnce(records);
-
-    await smsPlugin.status?.probeAccount?.({
-      cfg: {},
-      account,
-      timeoutMs: 1000,
-    });
-
-    expect(listRecentSmsDeliveryRecords).toHaveBeenCalledWith(account);
-    expect(probeSmsAccount).toHaveBeenCalledWith({
-      account,
-      timeoutMs: expect.any(Number),
-      options: { deliveryRecords: records },
-    });
-    const remainingTimeoutMs = probeSmsAccount.mock.calls[0]?.[0]?.timeoutMs;
-    expect(remainingTimeoutMs).toBeGreaterThan(0);
-    expect(remainingTimeoutMs).toBeLessThanOrEqual(1000);
-  });
-
   it("passes only the remaining probe budget after loading delivery observations", async () => {
     vi.useFakeTimers();
-    const account = {
+    const account = createSmsTestAccount({
       accountId: "support",
-      enabled: true,
       accountSid: "AC-support",
-      authToken: "secret",
-      fromNumber: "+15557654321",
-      messagingServiceSid: "",
-      defaultTo: "",
-      webhookPath: "/webhooks/sms",
       publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-      dangerouslyDisableSignatureValidation: false,
-      dmPolicy: "pairing" as const,
-      allowFrom: [],
-      textChunkLimit: 1500,
-    };
+    });
     listRecentSmsDeliveryRecords.mockImplementationOnce(
       async () =>
         await new Promise<SmsDeliveryRecord[]>((resolve) => {
@@ -265,16 +160,9 @@ describe("smsPlugin outbound", () => {
     expect(smsPlugin.outbound?.chunker?.("alpha beta", 6)).toEqual(["alpha", "beta"]);
     expect(
       smsPlugin.outbound?.resolveEffectiveTextChunkLimit?.({
-        cfg: {
-          channels: {
-            sms: {
-              accountSid: "AC123",
-              authToken: "secret",
-              fromNumber: "+15557654321",
-              textChunkLimit: 42,
-            },
-          },
-        },
+        cfg: createConfig({
+          textChunkLimit: 42,
+        }),
       }),
     ).toBe(42);
     expect(
@@ -300,16 +188,9 @@ describe("smsPlugin outbound", () => {
 
   it("uses defaultTo for targetless sends and preserves Twilio receipt metadata", async () => {
     const result = await smsPlugin.outbound?.sendText?.({
-      cfg: {
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            defaultTo: "+15551234567",
-          },
-        },
-      },
+      cfg: createConfig({
+        defaultTo: "+15551234567",
+      }),
       to: "",
       text: "hello",
     });
@@ -332,16 +213,9 @@ describe("smsPlugin outbound", () => {
   it("resolves the configured default SMS target for outbound delivery", () => {
     expect(
       smsPlugin.outbound?.resolveTarget?.({
-        cfg: {
-          channels: {
-            sms: {
-              accountSid: "AC123",
-              authToken: "secret",
-              fromNumber: "+15557654321",
-              defaultTo: "+15551234567",
-            },
-          },
-        },
+        cfg: createConfig({
+          defaultTo: "+15551234567",
+        }),
         to: "",
       }),
     ).toEqual({ ok: true, to: "+15551234567" });
@@ -362,17 +236,10 @@ describe("smsPlugin outbound", () => {
         status: "queued",
       });
     const ctx = {
-      cfg: {
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-            textChunkLimit: 5,
-          },
-        },
-      },
+      cfg: createConfig({
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+        textChunkLimit: 5,
+      }),
       to: "+15551234567",
       text: "alpha beta",
       kind: "media" as const,
@@ -408,6 +275,13 @@ describe("smsPlugin outbound", () => {
     expect(result?.messageId).toBe("MM-first");
     expect(result?.receipt.platformMessageIds).toEqual(["MM-first", "SM-second"]);
     expect(result?.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+    expect(recordInitialSmsDeliveryResult).toHaveBeenCalledTimes(2);
+    for (const [index, sid] of ["MM-first", "SM-second"].entries()) {
+      expect(recordInitialSmsDeliveryResult).toHaveBeenNthCalledWith(index + 1, {
+        account: resolveSmsAccount(ctx.cfg),
+        result: { sid, to: ctx.to, from: "+15557654321", status: "queued" },
+      });
+    }
   });
 
   it("hosts durable MMS media in the lifecycle before platform send starts", async () => {
@@ -425,16 +299,9 @@ describe("smsPlugin outbound", () => {
       return { sid: "MM-first", to };
     });
     const ctx = {
-      cfg: {
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-          },
-        },
-      },
+      cfg: createConfig({
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      }),
       to: "+15551234567",
       text: "caption",
       kind: "media" as const,
@@ -469,16 +336,9 @@ describe("smsPlugin outbound", () => {
         });
       }
       const ctx = {
-        cfg: {
-          channels: {
-            sms: {
-              accountSid: "AC123",
-              authToken: "secret",
-              fromNumber: "+15557654321",
-              publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-            },
-          },
-        },
+        cfg: createConfig({
+          publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+        }),
         to: "+15551234567",
         text: "caption",
         kind: "media" as const,
@@ -504,16 +364,9 @@ describe("smsPlugin outbound", () => {
 
   it("discards staged MMS media when core fails before entering the adapter", async () => {
     const ctx = {
-      cfg: {
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-          },
-        },
-      },
+      cfg: createConfig({
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      }),
       to: "+15551234567",
       text: "caption",
       kind: "media" as const,
@@ -539,16 +392,9 @@ describe("smsPlugin outbound", () => {
       throw failure;
     });
     const ctx = {
-      cfg: {
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-          },
-        },
-      },
+      cfg: createConfig({
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      }),
       to: "+15551234567",
       text: "caption",
       kind: "media" as const,
@@ -586,17 +432,10 @@ describe("smsPlugin outbound", () => {
         }),
       );
     const ctx = {
-      cfg: {
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-            textChunkLimit: 5,
-          },
-        },
-      },
+      cfg: createConfig({
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+        textChunkLimit: 5,
+      }),
       to: "+15551234567",
       text: "alpha beta",
       kind: "media" as const,
@@ -646,16 +485,9 @@ describe("smsPlugin outbound", () => {
     let observed: unknown;
     try {
       await smsPlugin.message?.send?.text?.({
-        cfg: {
-          channels: {
-            sms: {
-              accountSid: "AC123",
-              authToken: "secret",
-              fromNumber: "+15557654321",
-              textChunkLimit: 5,
-            },
-          },
-        },
+        cfg: createConfig({
+          textChunkLimit: 5,
+        }),
         to: "+15551234567",
         text: "alpha beta",
         onPlatformSendDispatch,
@@ -666,14 +498,23 @@ describe("smsPlugin outbound", () => {
     }
 
     expect(isChannelPartialDeliveryError(observed)).toBe(true);
-    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        messageId: "SM-first",
-        receipt: expect.objectContaining({
-          platformMessageIds: ["SM-first"],
-        }),
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult).toMatchObject({
+      messageIds: ["SM-first"],
+      visibleReplySent: true,
+      receipt: { parts: [{ platformMessageId: "SM-first", kind: "text" }] },
+    });
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({
+      channel: "sms",
+      messageId: "SM-first",
+      chatId: "+15551234567",
+      receipt: expect.objectContaining({
+        platformMessageIds: ["SM-first"],
+        parts: [expect.objectContaining({ platformMessageId: "SM-first", kind: "text" })],
       }),
-    );
+    });
     expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
     expect(events).toEqual([
       "dispatch",

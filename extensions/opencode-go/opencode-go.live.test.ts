@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import plugin from "./index.js";
 import {
   buildOpencodeGoLiveProviderConfig,
   listOpencodeGoModelCatalogEntries,
@@ -62,10 +65,21 @@ describeLive("OpenCode Go live dynamic catalog", () => {
       baseUrl: row.baseUrl ?? provider.baseUrl,
       input,
     };
+    const registeredProvider = await registerSingleProviderPlugin(plugin);
+    const sessionId = `opencode-go-live-${randomUUID()}`;
+    const turnState = registeredProvider.resolveTransportTurnState?.({
+      provider: model.provider,
+      modelId: model.id,
+      model,
+      sessionId,
+      turnId: randomUUID(),
+      attempt: 1,
+      transport: "stream",
+    });
     const result = await completeSimple(
       model,
       { messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }] },
-      { apiKey: OPENCODE_API_KEY, maxTokens: 128 },
+      { apiKey: OPENCODE_API_KEY, maxTokens: 128, sessionId, headers: turnState?.headers },
     );
     if (result.stopReason === "error") {
       throw new Error(result.errorMessage || "OpenCode Go inference returned an error");

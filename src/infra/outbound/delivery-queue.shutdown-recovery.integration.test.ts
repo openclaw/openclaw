@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -62,14 +63,8 @@ describe("outbound recovery shutdown", () => {
     const secondBefore = (await loadPendingDeliveries(tmpDir)).find(
       (entry) => entry.id === intentIds[1],
     );
-    let secondPrepared!: () => void;
-    const secondPreparedPromise = new Promise<void>((resolve) => {
-      secondPrepared = resolve;
-    });
-    let releaseSecond!: () => void;
-    const secondBlocked = new Promise<void>((resolve) => {
-      releaseSecond = resolve;
-    });
+    const { promise: secondPreparedPromise, resolve: secondPrepared } = createDeferred();
+    const { promise: secondBlocked, resolve: releaseSecond } = createDeferred();
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "sent-before-stop" });
     const deliver = vi.fn<DeliverFn>(async (params) => {
       if (deliver.mock.calls.length === 2) {
@@ -85,16 +80,26 @@ describe("outbound recovery shutdown", () => {
       stateDir: tmpDir,
       shouldContinue: () => shouldContinue,
     });
-    await secondPreparedPromise;
+    try {
+      await Promise.race([
+        secondPreparedPromise,
+        drain.then(() => {
+          throw new Error("Recovery drain completed before the second attempt prepared");
+        }),
+      ]);
 
-    shouldContinue = false;
-    releaseSecond();
-    await drain;
+      shouldContinue = false;
+      releaseSecond();
+      await drain;
 
-    expect(deliver).toHaveBeenCalledTimes(2);
-    expect(sendMatrix).toHaveBeenCalledOnce();
-    expect(
-      (await loadPendingDeliveries(tmpDir)).find((entry) => entry.id === intentIds[1]),
-    ).toEqual(secondBefore);
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(sendMatrix).toHaveBeenCalledOnce();
+      expect(
+        (await loadPendingDeliveries(tmpDir)).find((entry) => entry.id === intentIds[1]),
+      ).toEqual(secondBefore);
+    } finally {
+      releaseSecond();
+      await drain.catch(() => undefined);
+    }
   });
 });

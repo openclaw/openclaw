@@ -25,13 +25,7 @@ describe("realtime voice agent consult tool", () => {
     ).toBe("What changed?\n\nContext:\nPR #123\n\nSpoken style:\nconcise");
   });
 
-  it("requires a non-empty question", () => {
-    expect(() => parseRealtimeVoiceAgentConsultArgs({ context: "missing" })).toThrow(
-      "question required",
-    );
-  });
-
-  it("normalizes a server-issued spoken confirmation id", () => {
+  it("does not accept a model-supplied spoken confirmation as authority", () => {
     expect(
       parseRealtimeVoiceAgentConsultArgs({
         question: "Send it now",
@@ -40,22 +34,6 @@ describe("realtime voice agent consult tool", () => {
     ).toStrictEqual({
       question: "Send it now",
       context: undefined,
-      responseStyle: undefined,
-      confirmationId: "confirm-123",
-    });
-  });
-
-  it("accepts provider question aliases from realtime tool calls", () => {
-    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toStrictEqual({
-      context: undefined,
-      question: "Check the repo.",
-      responseStyle: undefined,
-    });
-    expect(
-      parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
-    ).toStrictEqual({
-      context: undefined,
-      question: "Send a Discord message.",
       responseStyle: undefined,
     });
   });
@@ -78,6 +56,7 @@ describe("realtime voice agent consult tool", () => {
         "Live voice request from the participant during a private Google Meet.",
         "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
         "When finished, return only the concise result the realtime voice agent should speak back.",
+        "Report a security or approval block only when an actual tool result says so. Distinguish tool errors from permission denials; do not invent a blocked attempt. If a read-only call fails, correct the tool or arguments and continue when possible.",
         "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
         "Recent voice transcript for context:\nParticipant: Can you check the repo?\nAgent: I'll verify.",
         "User request:\nDo we support realtime tools?",

@@ -1,4 +1,5 @@
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { BootstrapContextMode } from "../../bootstrap-files.js";
 import { normalizeSpawnedRunMetadata } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -15,53 +16,21 @@ export function buildSubagentLaunchRequest(params: {
   toolSpawnMetadata: Parameters<typeof normalizeSpawnedRunMetadata>[0];
   spawnedWorkspaceDir?: string;
   childSessionKey: string;
-  childSessionOrigin?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
+  childSessionOrigin?: DeliveryContext;
   childIdem: string;
   outputSchema?: Record<string, unknown>;
   childSystemPrompt: string;
   thinkingOverride?: string;
   runTimeoutSeconds: number;
   lightContext: boolean;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  requesterOrigin?: DeliveryContext;
   currentMessagingTarget?: string;
   currentChannelId?: string;
   currentMessageId?: string | number;
   launchAuthorization?: SubagentLaunchAuthorization;
   swarmSchedulerGroupKey?: string;
   swarmMaxConcurrent: number;
-}): {
-  childLaunch: {
-    request: Record<string, unknown>;
-    authorization?: SubagentLaunchAuthorization;
-    timeoutMs: number;
-  };
-  queuedLaunch?: {
-    request: Record<string, unknown>;
-    authorization?: SubagentLaunchAuthorization;
-    timeoutMs: number;
-    schedulerGroupKey: string;
-    maxConcurrent: number;
-  };
-  progressOrigin: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-    channelId?: string;
-    messageId?: string | number;
-  };
-  spawnedMetadata: ReturnType<typeof normalizeSpawnedRunMetadata>;
-} {
+}) {
   const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
     ? "lightweight"
     : undefined;

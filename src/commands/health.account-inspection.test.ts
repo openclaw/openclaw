@@ -81,35 +81,32 @@ describe("collectGatewayHealthSnapshot account inspection", () => {
     expect(buildAccountSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it.each([undefined, { name: "Partial inspection" }])(
-    "keeps unknown configuration when account resolution fails and inspection is %s",
-    async (inspected) => {
-      const runtimeOnly = vi.fn(() => {
-        throw new Error("runtime hook received an inspection summary");
-      });
-      plugins = [
-        {
-          ...health.createChannelTestPluginBase({ id: "health-partial-fixture", label: "Partial" }),
-          config: {
-            listAccountIds: () => ["default"],
-            inspectAccount: () => inspected,
-            resolveAccount: () => {
-              throw new Error("account resolution failed");
-            },
-          },
-          status: {
-            probeAccount: runtimeOnly,
-            buildAccountSnapshot: runtimeOnly,
-            buildChannelSummary: runtimeOnly,
+  it("keeps unknown configuration when account resolution and inspection are unavailable", async () => {
+    const runtimeOnly = vi.fn(() => {
+      throw new Error("runtime hook received an inspection summary");
+    });
+    plugins = [
+      {
+        ...health.createChannelTestPluginBase({ id: "health-partial-fixture", label: "Partial" }),
+        config: {
+          listAccountIds: () => ["default"],
+          inspectAccount: () => undefined,
+          resolveAccount: () => {
+            throw new Error("account resolution failed");
           },
         },
-      ];
+        status: {
+          probeAccount: runtimeOnly,
+          buildAccountSnapshot: runtimeOnly,
+          buildChannelSummary: runtimeOnly,
+        },
+      },
+    ];
 
-      const snapshot = await health.getHealthSnapshot({ probe: true });
-      const account = snapshot.channels["health-partial-fixture"]?.accounts?.default;
-      expect(account?.configured).toBeUndefined();
-      expect(account?.stateReason).toBe("configuration status unavailable");
-      expect(runtimeOnly).not.toHaveBeenCalled();
-    },
-  );
+    const snapshot = await health.getHealthSnapshot({ probe: true });
+    const account = snapshot.channels["health-partial-fixture"]?.accounts?.default;
+    expect(account?.configured).toBeUndefined();
+    expect(account?.stateReason).toBe("configuration status unavailable");
+    expect(runtimeOnly).not.toHaveBeenCalled();
+  });
 });

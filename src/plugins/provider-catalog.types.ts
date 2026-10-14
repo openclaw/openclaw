@@ -11,7 +11,11 @@ export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 
 export type ProviderCatalogOrder = "simple" | "profile" | "paired" | "late";
 
+export type ProviderConfiguredModelRef = { provider: string; modelId: string; baseUrl?: string };
+
 export type ProviderCatalogContext = {
+  /** Acquisition lifetime; release awaited work and join its cleanup when aborted. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -21,6 +25,9 @@ export type ProviderCatalogContext = {
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+    profileId?: string;
+    /** Credential kind from this lookup when known; never infer it from another selection. */
+    mode?: "api_key" | "oauth" | "token";
   };
   resolveProviderAuth: (
     providerId?: string,
@@ -33,6 +40,9 @@ export type ProviderCatalogContext = {
     mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
     source: "env" | "profile" | "none";
     profileId?: string;
+    /** Credential preparation exhausted its candidates; not an unconfigured provider. */
+    preparationFailed?: boolean;
+    authFlow?: string;
   };
 };
 
@@ -51,10 +61,14 @@ export type ProviderCatalogResult =
 export type ProviderPluginCatalog = {
   order?: ProviderCatalogOrder;
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
+  /** Pure advisory projection; skip other endpoints and never perform discovery or I/O. */
+  getUnlistedConfiguredModelIds?: (
+    catalog: NonNullable<ProviderCatalogOutcome["modelIdCatalog"]>,
+    configuredModels: readonly ProviderConfiguredModelRef[],
+  ) => readonly string[];
 };
 
 export type UnifiedModelCatalogProviderContext = ProviderCatalogContext & {
-  signal?: AbortSignal;
   includeLive?: boolean;
   timeoutMs?: number;
 };
@@ -69,13 +83,7 @@ export type UnifiedModelCatalogProviderPlugin = {
     | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
     | null
     | undefined;
-  liveCatalog?: (
-    ctx: UnifiedModelCatalogProviderContext,
-  ) =>
-    | readonly UnifiedModelCatalogEntry[]
-    | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
-    | null
-    | undefined;
+  liveCatalog?: NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
 };
 
 /**

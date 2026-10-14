@@ -6,11 +6,13 @@ import type {
   RunExit,
   SpawnInput,
 } from "../process/supervisor/types.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createCronStreamWatchers } from "./cron-stream-watchers.js";
 
 export function job(overrides: Partial<CronJob> = {}): CronJob {
   const base: CronJob = {
     id: "stream-job",
+    agentId: "main",
     name: "stream job",
     enabled: true,
     createdAtMs: 1,
@@ -64,11 +66,16 @@ export function fakeSupervisor() {
   const exits: Array<(result: RunExit) => void> = [];
   const spawn = vi.fn(async (input: SpawnInput) => {
     inputs.push(input);
+    const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
     let resolveWait!: (result: RunExit) => void;
     const wait = new Promise<RunExit>((resolve) => {
-      resolveWait = resolve;
+      resolveWait = (result) => {
+        activity.resultSettled = true;
+        resolve(result);
+      };
     });
     const run: ManagedRun = {
+      activity,
       runId: `run-${runs.length + 1}`,
       startedAtMs: Date.now(),
       stdin: undefined,
@@ -81,10 +88,12 @@ export function fakeSupervisor() {
     return run;
   });
   const supervisor = {
+    acquireScopeCleanup: vi.fn(() => {
+      throw new Error("Cron stream fixture does not own a cleanup scope");
+    }),
     spawn,
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   } satisfies ProcessSupervisor;
   return { inputs, runs, exits, spawn, supervisor };
 }
@@ -111,12 +120,15 @@ export async function settle(): Promise<void> {
 }
 
 export function createWatchers(
-  params: Omit<Parameters<typeof createCronStreamWatchers>[0], "retireSource"> & {
+  params: Omit<Parameters<typeof createCronStreamWatchers>[0], "retireSource" | "scheduler"> & {
+    scheduler?: Parameters<typeof createCronStreamWatchers>[0]["scheduler"];
     retireSource?: Parameters<typeof createCronStreamWatchers>[0]["retireSource"];
   },
 ) {
   return createCronStreamWatchers({
     retireSource: vi.fn(async (_jobId, _scheduleKey, identity) => `${identity}:retired`),
     ...params,
+    scheduler:
+      params.scheduler ?? createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
   });
 }

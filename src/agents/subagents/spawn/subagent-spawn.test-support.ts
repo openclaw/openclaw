@@ -1,4 +1,5 @@
-export * from "./subagent-spawn.js";
+import { vi, type MockInstance } from "vitest";
+import * as spawnRuntime from "./subagent-spawn.runtime.js";
 
 type SpawnRuntime = typeof import("./subagent-spawn.runtime.js");
 type SpawnDeps = Omit<
@@ -11,7 +12,7 @@ type SpawnDeps = Omit<
     | "getGlobalHookRunner"
     | "getRuntimeConfig"
     | "hasInProcessGatewayContext"
-    | "loadPreparedModelCatalog"
+    | "prepareModelChoice"
     | "resolveContextEngine"
   >,
   "getGlobalHookRunner"
@@ -23,12 +24,71 @@ type Testing = {
   setDepsForTest(overrides?: Partial<SpawnDeps>): void;
 };
 
-function getTesting(): Testing {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.subagentSpawnTestApi")
-  ] as Testing;
-}
+const runtime: SpawnDeps = spawnRuntime;
+const overridesToRestore: Array<Pick<MockInstance, "mockRestore">> = [];
 
 export const testing: Testing = {
-  setDepsForTest: (overrides) => getTesting().setDepsForTest(overrides),
+  setDepsForTest(overrides) {
+    for (const mock of overridesToRestore.splice(0).toReversed()) {
+      mock.mockRestore();
+    }
+    if (!overrides) {
+      return;
+    }
+    if (overrides.callGateway) {
+      overridesToRestore.push(
+        vi.spyOn(runtime, "callGateway").mockImplementation(overrides.callGateway),
+      );
+    }
+    if (overrides.dispatchGatewayMethodInProcess) {
+      overridesToRestore.push(
+        vi
+          .spyOn(runtime, "dispatchGatewayMethodInProcess")
+          .mockImplementation(overrides.dispatchGatewayMethodInProcess),
+      );
+    }
+    if (overrides.ensureContextEnginesInitialized) {
+      overridesToRestore.push(
+        vi
+          .spyOn(runtime, "ensureContextEnginesInitialized")
+          .mockImplementation(overrides.ensureContextEnginesInitialized),
+      );
+    }
+    if (overrides.forkSessionEntryFromParent) {
+      overridesToRestore.push(
+        vi
+          .spyOn(runtime, "forkSessionEntryFromParent")
+          .mockImplementation(overrides.forkSessionEntryFromParent),
+      );
+    }
+    if (overrides.getGlobalHookRunner) {
+      overridesToRestore.push(
+        vi.spyOn(runtime, "getGlobalHookRunner").mockImplementation(overrides.getGlobalHookRunner),
+      );
+    }
+    if (overrides.getRuntimeConfig) {
+      overridesToRestore.push(
+        vi.spyOn(runtime, "getRuntimeConfig").mockImplementation(overrides.getRuntimeConfig),
+      );
+    }
+    if (overrides.hasInProcessGatewayContext) {
+      overridesToRestore.push(
+        vi
+          .spyOn(runtime, "hasInProcessGatewayContext")
+          .mockImplementation(overrides.hasInProcessGatewayContext),
+      );
+    }
+    if (overrides.prepareModelChoice) {
+      overridesToRestore.push(
+        vi.spyOn(runtime, "prepareModelChoice").mockImplementation(overrides.prepareModelChoice),
+      );
+    }
+    if (overrides.resolveContextEngine) {
+      overridesToRestore.push(
+        vi
+          .spyOn(runtime, "resolveContextEngine")
+          .mockImplementation(overrides.resolveContextEngine),
+      );
+    }
+  },
 };

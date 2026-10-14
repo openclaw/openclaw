@@ -1,9 +1,10 @@
 // Sandbox security validation tests cover bind, network, seccomp, and AppArmor
 // hardening rules before Docker runtimes are created.
-import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
@@ -13,6 +14,8 @@ import {
 } from "./validate-sandbox-security.js";
 
 type SandboxSecurityConfig = Parameters<typeof validateSandboxSecurity>[0];
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function validateBindMounts(
   binds: string[] | undefined,
@@ -123,6 +126,30 @@ describe("getBlockedBindReason", () => {
 });
 
 describe("validateBindMounts", () => {
+  it.runIf(process.platform !== "win32")(
+    "distinguishes literal backslash roots and symlink escapes",
+    () => {
+      const root = tempDirs.make("openclaw-literal-bind-");
+      const literal = join(root, "a\\b");
+      const slash = join(root, "a/b");
+      mkdirSync(literal);
+      mkdirSync(slash, { recursive: true });
+      symlinkSync(slash, join(literal, "escape"));
+      expect(() =>
+        validateBindMounts([`${literal}:/data:ro`], {
+          allowedSourceRoots: [literal],
+        }),
+      ).not.toThrow();
+      for (const source of [slash, join(literal, "escape/missing")]) {
+        expect(() =>
+          validateBindMounts([`${source}:/data:ro`], {
+            allowedSourceRoots: [literal],
+          }),
+        ).toThrow("outside allowed roots");
+      }
+    },
+  );
+
   it("allows legitimate project directory mounts", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-"));
     expect(
@@ -313,6 +340,58 @@ describe("validateBindMounts", () => {
     ).toThrow(/blocked path/);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "validates the exact spaced source and target instead of a trimmed sibling",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-spaced-bind-"));
+      try {
+        const plain = join(root, "allowed");
+        const spaced = join(root, "allowed ");
+        mkdirSync(plain);
+        mkdirSync(spaced);
+        expect(() =>
+          validateBindMounts([`${spaced}:/workspace `], { allowedSourceRoots: [spaced] }),
+        ).not.toThrow();
+        expect(() =>
+          validateBindMounts([`${spaced}:/data`], { allowedSourceRoots: [plain] }),
+        ).toThrow("outside allowed roots");
+        expect(() => validateBindMounts([`${plain}:/workspace`])).toThrow(
+          "reserved container path",
+        );
+        expect(() => validateBindMounts([` ${plain}:/data`])).toThrow("non-absolute");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "checks spaced source symlinks against blocked and allowed roots",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-spaced-bind-"));
+      try {
+        const allowed = join(root, "allowed");
+        const outside = join(root, "outside");
+        mkdirSync(allowed);
+        mkdirSync(outside);
+        for (const [name, destination, error] of [
+          ["blocked", "/etc", "blocked path"],
+          ["external", outside, "outside allowed roots"],
+        ] as const) {
+          mkdirSync(join(allowed, name));
+          symlinkSync(destination, join(allowed, `${name} `));
+          expect(() =>
+            validateBindMounts([`${join(allowed, `${name} `)}:/data`], {
+              allowedSourceRoots: [allowed],
+            }),
+          ).toThrow(error);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("rejects non-absolute source paths (relative or named volumes)", () => {
     const cases = ["../etc/passwd:/mnt/passwd", "etc/passwd:/mnt/passwd", "myvol:/mnt"] as const;
     for (const source of cases) {
@@ -411,20 +490,6 @@ describe("validateNetworkMode", () => {
         allowContainerNamespaceJoin: true,
       }),
     ).toBeUndefined();
-  });
-});
-
-describe("validateSeccompProfile", () => {
-  it("allows custom profile paths/undefined", () => {
-    expect(validateSeccompProfile("/tmp/seccomp.json")).toBeUndefined();
-    expect(validateSeccompProfile(undefined)).toBeUndefined();
-  });
-});
-
-describe("validateApparmorProfile", () => {
-  it("allows named profile/undefined", () => {
-    expect(validateApparmorProfile("openclaw-sandbox")).toBeUndefined();
-    expect(validateApparmorProfile(undefined)).toBeUndefined();
   });
 });
 

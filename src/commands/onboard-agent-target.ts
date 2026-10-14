@@ -25,16 +25,23 @@ import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 
-export type OnboardingAgentTarget = {
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-};
+export type OnboardingAgentTarget = ReturnType<typeof resolveOnboardingAgentTarget>;
 
-export function resolveOnboardingAgentTarget(
-  config: OpenClawConfig,
-  explicitAgentId?: string,
-): OnboardingAgentTarget {
+function splitAgentModelDefaults<
+  T extends Pick<AgentEntryConfig, "model" | "utilityModel" | "models" | "modelPolicy">,
+>({ model, utilityModel, models, modelPolicy, ...rest }: T) {
+  return {
+    rest,
+    modelDefaults: {
+      ...(model !== undefined ? { model } : {}),
+      ...(utilityModel !== undefined ? { utilityModel } : {}),
+      ...(models !== undefined ? { models } : {}),
+      ...(modelPolicy !== undefined ? { modelPolicy } : {}),
+    },
+  };
+}
+
+export function resolveOnboardingAgentTarget(config: OpenClawConfig, explicitAgentId?: string) {
   const agentId = normalizeAgentId(
     explicitAgentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveSoleAgentId(config),
   );
@@ -103,11 +110,10 @@ function replaceOnboardingAgentEntry(
   } else {
     nextEntries.push(replacement);
   }
-  const { list: _list, entries: _entries, ...agents } = config.agents ?? {};
   return {
     ...updated,
     agents: {
-      ...agents,
+      ...config.agents,
       entries: toAgentEntriesRecord(nextEntries),
     },
   };
@@ -161,6 +167,23 @@ export function applyOnboardingPrimaryModel(
   });
 }
 
+/** Apply a utility selection to its existing agent/default owner without changing primary. */
+export function applyOnboardingUtilityModel(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  model: string,
+): OpenClawConfig {
+  const utilityModel = normalizeAgentModelRefForConfig(model);
+  const entry = resolveMutableAgentEntry(config, target.agentId);
+  if (entry?.utilityModel === undefined && config.agents?.ownership !== "explicit") {
+    return {
+      ...config,
+      agents: { ...config.agents, defaults: { ...config.agents?.defaults, utilityModel } },
+    };
+  }
+  return replaceOnboardingAgentEntry(config, config, target, { ...entry, utilityModel });
+}
+
 /** Expose one agent's effective model settings through the defaults-based provider contract. */
 export function prepareAgentModelDefaults(
   config: OpenClawConfig,
@@ -173,9 +196,7 @@ export function prepareAgentModelDefaults(
       ...config.agents,
       defaults: {
         ...config.agents?.defaults,
-        ...(entry?.model !== undefined ? { model: entry.model } : {}),
-        ...(entry?.models !== undefined ? { models: entry.models } : {}),
-        ...(entry?.modelPolicy !== undefined ? { modelPolicy: entry.modelPolicy } : {}),
+        ...splitAgentModelDefaults(entry ?? {}).modelDefaults,
       },
     },
   };
@@ -225,9 +246,11 @@ export function projectAgentModelDefaults(
   const hasAgentModelPolicy =
     entry?.modelPolicy !== undefined ||
     !isDeepStrictEqual(updatedDefaults?.modelPolicy, originalDefaults?.modelPolicy);
-  const { model: _model, models: _models, modelPolicy: _modelPolicy, ...entryRest } = entry ?? {};
+  const hasAgentUtilityModel =
+    entry?.utilityModel !== undefined ||
+    updatedDefaults?.utilityModel !== originalDefaults?.utilityModel;
   const nextEntry = {
-    ...entryRest,
+    ...splitAgentModelDefaults(entry ?? {}).rest,
     ...(hasAgentModel && updatedDefaults?.model !== undefined
       ? { model: updatedDefaults.model }
       : {}),
@@ -235,13 +258,10 @@ export function projectAgentModelDefaults(
     ...(hasAgentModelPolicy && updatedDefaults?.modelPolicy !== undefined
       ? { modelPolicy: updatedDefaults.modelPolicy }
       : {}),
+    ...(hasAgentUtilityModel && updatedDefaults?.utilityModel !== undefined
+      ? { utilityModel: updatedDefaults.utilityModel }
+      : {}),
   };
-  const {
-    model: _updatedModel,
-    models: _updatedModels,
-    modelPolicy: _updatedModelPolicy,
-    ...sharedDefaults
-  } = updatedDefaults ?? {};
   const baseConfig = {
     ...config,
     agents: {
@@ -249,14 +269,8 @@ export function projectAgentModelDefaults(
       ...(originalDefaults || updatedDefaults
         ? {
             defaults: {
-              ...sharedDefaults,
-              ...(originalDefaults?.model !== undefined ? { model: originalDefaults.model } : {}),
-              ...(originalDefaults?.models !== undefined
-                ? { models: originalDefaults.models }
-                : {}),
-              ...(originalDefaults?.modelPolicy !== undefined
-                ? { modelPolicy: originalDefaults.modelPolicy }
-                : {}),
+              ...splitAgentModelDefaults(updatedDefaults ?? {}).rest,
+              ...splitAgentModelDefaults(originalDefaults ?? {}).modelDefaults,
             },
           }
         : {}),

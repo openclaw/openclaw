@@ -1,11 +1,16 @@
-// Browser Origin validator for gateway HTTP and websocket requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getHeader } from "./http-header-value.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+} from "./ingress-attribution.js";
 import {
   isLocalDirectRequest,
   isLoopbackHost,
@@ -13,6 +18,19 @@ import {
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
+import type {
+  GatewayWsBrowserOrigin,
+  RemoteControlUiIngressContext,
+} from "./server/client-identity-types.js";
+
+export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
+  return checkBrowserOrigin({
+    ...origin,
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
+    allowHostHeaderOriginFallback:
+      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  });
+}
 
 type OriginCheckResult =
   | {
@@ -21,17 +39,14 @@ type OriginCheckResult =
     }
   | { ok: false; reason: string };
 
-type BrowserOriginPolicy = {
+export type BrowserOriginPolicy = {
   requestHost?: string;
   origin?: string;
   fetchSite?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
 };
-
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
 
 /** Gather the canonical Gateway browser-origin policy inputs for one HTTP request. */
 export function resolveBrowserOriginPolicy(params: {
@@ -39,10 +54,11 @@ export function resolveBrowserOriginPolicy(params: {
   cfg?: OpenClawConfig;
 }): BrowserOriginPolicy {
   return {
-    requestHost: headerValue(params.req.headers.host),
-    origin: headerValue(params.req.headers.origin),
-    fetchSite: headerValue(params.req.headers["sec-fetch-site"]),
-    allowedOrigins: params.cfg?.gateway?.controlUi?.allowedOrigins,
+    remoteControlUiIngress: getRemoteControlUiIngressContext(params.req),
+    requestHost: getHeader(params.req, "host"),
+    origin: getHeader(params.req, "origin"),
+    fetchSite: getHeader(params.req, "sec-fetch-site"),
+    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg),
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };
@@ -60,22 +76,18 @@ function parseOrigin(
   if (!/^[a-z][a-z0-9+.-]*:\/\/[^/?#\\]+\/?$/i.test(trimmed)) {
     return null;
   }
-  try {
-    const url = new URL(trimmed);
-    if (url.username || url.password || !url.protocol || !url.host) {
-      return null;
-    }
-    // Hosted app schemes have an opaque URL.origin but a stable authority.
-    const origin = url.origin === "null" ? `${url.protocol}//${url.host}` : url.origin;
-    return {
-      origin: normalizeLowercaseStringOrEmpty(origin),
-      protocol: normalizeLowercaseStringOrEmpty(url.protocol),
-      host: normalizeLowercaseStringOrEmpty(url.host),
-      hostname: normalizeLowercaseStringOrEmpty(url.hostname),
-    };
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url || url.username || url.password || !url.protocol || !url.host) {
     return null;
   }
+  // Hosted app schemes have an opaque URL.origin but a stable authority.
+  const origin = url.origin === "null" ? `${url.protocol}//${url.host}` : url.origin;
+  return {
+    origin: normalizeLowercaseStringOrEmpty(origin),
+    protocol: normalizeLowercaseStringOrEmpty(url.protocol),
+    host: normalizeLowercaseStringOrEmpty(url.host),
+    hostname: normalizeLowercaseStringOrEmpty(url.hostname),
+  };
 }
 
 /** Whether a browser document was loaded from the Gateway's advertised HTTP host. */
@@ -103,7 +115,14 @@ export function checkBrowserOrigin(params: {
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
 }): OriginCheckResult {
+  if (params.remoteControlUiIngress) {
+    return hasCurrentRemoteControlUiIngress(params.remoteControlUiIngress) &&
+      params.origin === params.remoteControlUiIngress.publicOrigin
+      ? { ok: true, matchedBy: "allowlist" }
+      : { ok: false, reason: "remote Control UI origin missing, stale, or not an exact match" };
+  }
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
     return { ok: false, reason: "origin missing or invalid" };

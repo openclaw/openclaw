@@ -32,8 +32,3 @@ export function selectVisibleTranscriptEventEntries<T>(
 export function selectVisibleTranscriptEvents<T>(events: readonly T[]): T[] {
   return selectVisibleTranscriptEventEntries(events).map((entry) => entry.event);
 }
-
-/** Resolves the parent id that the next active transcript append should use. */
-export function resolveVisibleTranscriptAppendParentId(events: readonly unknown[]): string | null {
-  return scanSessionTranscriptTree(events).appendParentId;
-}

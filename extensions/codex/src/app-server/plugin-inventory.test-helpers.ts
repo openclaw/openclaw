@@ -80,7 +80,7 @@ export function appSummary(id: string): v2.AppSummary {
   };
 }
 
-export function appInfo(id: string, accessible: boolean): v2.AppInfo {
+export function appInfo(id: string, accessible: boolean, enabled = true): v2.AppInfo {
   return {
     id,
     name: id,
@@ -93,7 +93,7 @@ export function appInfo(id: string, accessible: boolean): v2.AppInfo {
     labels: null,
     installUrl: null,
     isAccessible: accessible,
-    isEnabled: true,
+    isEnabled: enabled,
     pluginDisplayNames: [],
   };
 }

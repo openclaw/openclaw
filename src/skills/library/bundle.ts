@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Type, type Static } from "typebox";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
@@ -10,21 +10,35 @@ import {
   type SkillLibraryFile,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
+import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
 
-type PreparedSkillBundle = {
-  revision: string;
-  files: Array<Static<typeof manifestSchema>[number] & { bytes: Buffer }>;
-};
-export type PreparedSkillLibraryBundle = PreparedSkillBundle & { description: string };
+/** Identifies the exact directory failure that prevented complete skill-tree traversal. */
+export class SkillTreeDirectoryError extends SkillLibraryError {
+  constructor(
+    readonly rootPath: string,
+    readonly failedPath: string,
+    cause: unknown,
+  ) {
+    super(
+      "INVALID_BUNDLE",
+      `Skill tree directory could not be read: root=${JSON.stringify(rootPath)} ` +
+        `path=${JSON.stringify(failedPath)} error=${describeSkillTreeFailure(cause)}`,
+      undefined,
+      { cause },
+    );
+  }
+}
+
+export type PreparedSkillLibraryBundle = ReturnType<typeof prepareSkillLibraryBundle>;
 const portableCompare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const manifestSchema = Type.Array(
   Type.Object(
     {
@@ -65,7 +79,7 @@ export async function readSkillLibraryManifestTree(
       symlinks: "reject",
       maxBytes: file.sizeBytes,
     });
-    if (buffer.length !== file.sizeBytes || sha256(buffer) !== file.sha256) {
+    if (buffer.length !== file.sizeBytes || sha256Hex(buffer) !== file.sha256) {
       throw new SkillLibraryError(
         "INVALID_BUNDLE",
         `Published skill file failed integrity verification: ${file.path}`,
@@ -110,12 +124,11 @@ function validateSkillBundlePath(filePath: string): void {
         part === "." ||
         part === ".." ||
         /[\\<>:"|?*]/u.test(part) ||
-        Array.from(part).some(
-          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-        ) ||
+        containsAsciiControlCharacter(part) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
-        /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(part),
+        /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||
+        /^(conin|conout)\$$/iu.test(part),
     )
   ) {
     throw new SkillLibraryError("INVALID_BUNDLE", `Non-portable skill file path: ${filePath}`);
@@ -131,7 +144,7 @@ export function decodeSkillLibraryFile(file: SkillLibraryFile): Buffer {
 }
 
 /** Validate exact portable artifacts without imposing publication metadata on loaded skills. */
-export function prepareSkillBundle(files: readonly SkillLibraryFile[]): PreparedSkillBundle {
+export function prepareSkillBundle(files: readonly SkillLibraryFile[]) {
   if (files.length > SKILL_LIBRARY_MAX_FILES) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Skill bundle exceeds 256 files.");
   }
@@ -156,7 +169,7 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
       return {
         path: file.path,
         bytes,
-        sha256: sha256(bytes),
+        sha256: sha256Hex(bytes),
         sizeBytes: bytes.length,
         executable: file.executable === true,
       };
@@ -179,14 +192,12 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
   // Preserve the managed revision encoding: only exact artifact bytes and metadata enter the hash.
   const manifest = prepared.map(({ bytes: _bytes, ...file }) => file);
   return {
-    revision: sha256(JSON.stringify(["openclaw.skill-library.tree.v1", manifest])),
+    revision: sha256Hex(JSON.stringify(["openclaw.skill-library.tree.v1", manifest])),
     files: prepared,
   };
 }
 
-export function prepareSkillLibraryBundle(
-  files: readonly SkillLibraryFile[],
-): PreparedSkillLibraryBundle {
+export function prepareSkillLibraryBundle(files: readonly SkillLibraryFile[]) {
   const bundle = prepareSkillBundle(files);
   for (const file of bundle.files) {
     validateSkillLibraryPath(file.path);
@@ -263,7 +274,12 @@ export async function stageSkillLibraryBundle(
   skillId: string,
   bundle: PreparedSkillLibraryBundle,
   env?: NodeJS.ProcessEnv,
+  assertFileMutationAllowed?: () => void,
 ) {
+  const assertCurrent = assertFileMutationAllowed
+    ? retainMutationAuthority(assertFileMutationAllowed)
+    : undefined;
+  assertCurrent?.();
   const destination = skillLibraryRevisionDir(skillId, bundle.revision, env);
   const parent = path.dirname(destination);
   const ensured = await ensureAbsoluteDirectory(parent, { mode: 0o700 });
@@ -271,24 +287,25 @@ export async function stageSkillLibraryBundle(
     throw ensured.error;
   }
   await cleanAbandonedSkillStaging(parent);
+  assertCurrent?.();
   const staging = await fs.mkdtemp(path.join(parent, `.staging-${process.pid}-`));
   try {
+    const stagingRoot = await root(staging, { assertBeforeMutation: assertCurrent });
     const directories = new Set([staging]);
     for (const file of bundle.files) {
       const target = path.join(staging, file.path);
+      assertCurrent?.();
       await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       let directory = path.dirname(target);
       while (directory !== parent) {
         directories.add(directory);
         directory = path.dirname(directory);
       }
-      const handle = await fs.open(target, "wx", file.executable ? 0o500 : 0o400);
-      try {
-        await handle.writeFile(file.bytes);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await stagingRoot.create(`./${file.path}`, file.bytes, {
+        mode: (file.executable ? 0o500 : 0o400) & ~process.umask(),
+        mkdir: false,
+        durable: "file",
+      });
     }
     for (const directory of [...directories].toSorted((a, b) => b.length - a.length)) {
       await syncDirectory(directory);
@@ -296,6 +313,7 @@ export async function stageSkillLibraryBundle(
     return {
       staging,
       async publish() {
+        assertCurrent?.();
         try {
           await fs.rename(staging, destination);
         } catch (error) {
@@ -333,10 +351,22 @@ export async function readSkillLibraryTree(directory: string): Promise<SkillLibr
   return files;
 }
 
+function describeSkillTreeFailure(error: unknown): string {
+  if (isErrno(error) && error.code) {
+    return `${error.code}: ${error.message}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function readSkillBundleTree(
   directory: string,
   includePath?: (filePath: string) => boolean,
+  options?: {
+    symlinks?: "reject" | "follow-within-root";
+    assertFileAccess?: (requestedPath: string, canonicalPath: string) => void;
+  },
 ): Promise<SkillLibraryFile[]> {
+  const symlinks = options?.symlinks ?? "reject";
   const include = includePath ? (entry: { path: string }) => includePath(entry.path) : undefined;
   const walked = await walkDirectory(directory, {
     // Inspect one extra level: walkDirectory otherwise silently skips deeper content.
@@ -353,28 +383,59 @@ export async function readSkillBundleTree(
     throw new SkillLibraryError("INVALID_BUNDLE", "Skill tree exceeds traversal limits.");
   }
   if (walked.failedDirs.length) {
-    throw new SkillLibraryError("INVALID_BUNDLE", "Skill tree could not be read completely.");
+    const failed = walked.failedDirs[0]!;
+    throw new SkillTreeDirectoryError(directory, failed.path, failed.error);
   }
-  const safeRoot = await root(directory);
+  const safeRoot = await root(directory).catch((error: unknown) => {
+    throw new SkillTreeDirectoryError(directory, directory, error);
+  });
+  const includedFiles = new Set(
+    walked.entries.filter((entry) => entry.kind === "file").map((entry) => entry.relativePath),
+  );
   const files: SkillLibraryFile[] = [];
   let total = 0;
   for (const entry of walked.entries) {
     if (entry.kind === "directory") {
       continue;
     }
-    if (entry.kind !== "file") {
+    if (entry.kind !== "file" && !(entry.kind === "symlink" && symlinks === "follow-within-root")) {
       throw new SkillLibraryError(
         "INVALID_BUNDLE",
-        "Skill trees cannot contain links or special files.",
+        `Skill trees cannot contain links or special files: root=${JSON.stringify(directory)} ` +
+          `path=${JSON.stringify(entry.path)} kind=${entry.kind}.`,
       );
     }
     const portablePath = entry.relativePath.split(path.sep).join("/");
     validateSkillBundlePath(portablePath);
-    const { buffer, stat } = await safeRoot.read(entry.relativePath, {
-      hardlinks: "reject",
-      symlinks: "reject",
-      maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
-    });
+    const read = await safeRoot
+      .read(entry.relativePath, {
+        hardlinks: "reject",
+        symlinks,
+        maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
+      })
+      .catch((error: unknown) => {
+        throw new SkillLibraryError(
+          "INVALID_BUNDLE",
+          `Skill tree file could not be read: root=${JSON.stringify(directory)} ` +
+            `path=${JSON.stringify(entry.path)} error=${describeSkillTreeFailure(error)}`,
+          undefined,
+          { cause: error },
+        );
+      });
+    // Use the verified opened target so aliases cannot include ignored trees or
+    // content outside the bounded walk, including after a concurrent retarget.
+    if (
+      symlinks === "follow-within-root" &&
+      !includedFiles.has(path.relative(safeRoot.rootReal, read.realPath))
+    ) {
+      throw new SkillLibraryError(
+        "INVALID_BUNDLE",
+        `Skill tree link target is not an included regular file: root=${JSON.stringify(directory)} ` +
+          `path=${JSON.stringify(entry.path)}.`,
+      );
+    }
+    options?.assertFileAccess?.(entry.path, read.realPath);
+    const { buffer, stat } = read;
     total += buffer.length;
     if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES || files.length >= SKILL_LIBRARY_MAX_FILES) {
       throw new SkillLibraryError("INVALID_BUNDLE", "Skill tree exceeds bundle limits.");

@@ -22,6 +22,44 @@ async function checkout(version: string) {
 }
 
 describe("resolveUpdateBuildManager", () => {
+  describe.each(["corepack", "npm"])("%s bootstrap deadlines", (installer) => {
+    it.each([
+      ["legacy caller", undefined, 5_000],
+      ["unbounded update work", {}, undefined],
+      ["explicit update deadline", { timeoutMs: 9_000 }, 9_000],
+    ] as const)(
+      "keeps pnpm bootstrap work separate from probes: %s",
+      async (_label, work, expected) => {
+        const root = await checkout("12.0.0");
+        let installed = false;
+        const runCommand: PackageManagerCommandRunner = async (argv, options) => {
+          if (
+            (installer === "npm" && argv[0] === "npm" && argv[1] === "install") ||
+            (installer === "corepack" && argv[0] === "corepack" && argv[1] === "enable")
+          ) {
+            expect(options.timeoutMs).toBe(expected);
+            installed = true;
+            return { code: 0, stdout: "installed", stderr: "" };
+          }
+          expect(options.timeoutMs).toBe(5_000);
+          if (
+            (installer === "npm" && argv[0] === "corepack") ||
+            (argv[0] === "pnpm" && !installed)
+          ) {
+            throw new Error("not installed");
+          }
+          return { code: 0, stdout: "12.0.0", stderr: "" };
+        };
+        const result = await resolveUpdateBuildManager(runCommand, root, 5_000, undefined, work);
+        expect(result.kind).toBe("resolved");
+        expect(installed).toBe(true);
+        if (result.kind === "resolved") {
+          await result.cleanup?.();
+        }
+      },
+    );
+  });
+
   it.each(["11.22.0", "12.0.0"])(
     "bootstraps the target checkout's exact pnpm %s via npm instead of global pnpm 10",
     async (version) => {
@@ -59,13 +97,7 @@ describe("resolveUpdateBuildManager", () => {
         }
         throw new Error(`Unexpected command ${key}`);
       };
-      const result = await resolveUpdateBuildManager(
-        runCommand,
-        root,
-        5000,
-        undefined,
-        "require-preferred",
-      );
+      const result = await resolveUpdateBuildManager(runCommand, root, 5000);
       expect(result.kind).toBe("resolved");
       if (result.kind !== "resolved") {
         throw new Error(result.reason);
@@ -92,13 +124,7 @@ describe("resolveUpdateBuildManager", () => {
       prefix = argv[3] ?? "";
       return { stdout: "", stderr: "", code: failure === "install" ? 1 : 0 };
     };
-    const result = await resolveUpdateBuildManager(
-      runCommand,
-      root,
-      5000,
-      undefined,
-      "require-preferred",
-    );
+    const result = await resolveUpdateBuildManager(runCommand, root, 5000);
     expect(result).toEqual({
       kind: "missing-required",
       preferred: "pnpm",

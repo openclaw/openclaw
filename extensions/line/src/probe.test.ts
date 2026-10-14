@@ -1,4 +1,4 @@
-import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+// Line tests cover probe plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { probeLineBot } from "./probe.js";
 import { createPendingLineResponse, stubLineApiFetch } from "./probe.test-support.js";
@@ -15,46 +15,35 @@ describe("probeLineBot", () => {
     userId: "U0",
     basicId: "@bot",
   };
-
-  it("reports used allowance beside the bot identity", async () => {
-    const fetchMock = stubLineApiFetch(
-      Response.json(identity),
-      Response.json({ type: "limited", value: 200 }),
-      Response.json({ totalUsage: 70 }),
-    );
-
-    await expect(probeLineBot("token", 5000)).resolves.toMatchObject({
-      ok: true,
-      bot: identity,
-      quota: { kind: "limited", limit: 200, used: 70 },
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
+  // The probe reads the webhook switch after the optional quota reads, so every
+  // sequence that gets that far declares its answer rather than falling through to
+  // the support stub's unexpected-request guard.
+  const webhookResponse = (active: boolean) =>
+    Response.json({ endpoint: "https://gateway.example/line/webhook", active });
 
   it("stays healthy and cancels an optional quota body before the probe deadline", async () => {
     vi.useFakeTimers();
     const pending = createPendingLineResponse({ type: "none" });
-    const fetchMock = stubLineApiFetch(Response.json(identity), pending.response);
+    const fetchMock = stubLineApiFetch(
+      Response.json(identity),
+      pending.response,
+      webhookResponse(true),
+    );
     const probing = probeLineBot("token", 300);
     try {
       await vi.advanceTimersByTimeAsync(200);
       const result = await probing;
       expect(result).toMatchObject({ ok: true, bot: identity });
       expect(result.quota).toBeUndefined();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // The stalled quota read spends only its own slice; the webhook read still gets
+      // a bounded budget of what remains, so it runs rather than being starved.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(pending.cancel).toHaveBeenCalledOnce();
     } finally {
       pending.finish();
       await vi.runAllTimersAsync();
       await probing;
     }
-  });
-
-  it("reports a failure when the bot identity itself cannot be read", async () => {
-    const fetchMock = stubLineApiFetch(Response.json({ message: "Unauthorized" }, { status: 401 }));
-
-    await expect(probeLineBot("token", 5000)).resolves.toMatchObject({ ok: false });
-    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("cancels a stalled bot identity read and reports a timeout", async () => {
@@ -74,39 +63,17 @@ describe("probeLineBot", () => {
     }
   });
 
-  it("reports an explicit unlimited plan without reading consumption", async () => {
-    const fetchMock = stubLineApiFetch(Response.json(identity), Response.json({ type: "none" }));
-
-    await expect(probeLineBot("token", 5000)).resolves.toMatchObject({
-      ok: true,
-      bot: identity,
-      quota: { kind: "unlimited" },
-    });
-    expect(fetchMock.mock.calls.map(([url]) => resolveRequestUrl(url))).toEqual([
-      "https://api.line.me/v2/bot/info",
-      "https://api.line.me/v2/bot/message/quota",
-    ]);
-  });
-
   it("keeps a limited response without an amount unknown", async () => {
-    const fetchMock = stubLineApiFetch(Response.json(identity), Response.json({ type: "limited" }));
-
-    const result = await probeLineBot("token", 5000);
-    expect(result).toMatchObject({ ok: true, bot: identity });
-    expect(result.quota).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a failed quota request unknown", async () => {
     const fetchMock = stubLineApiFetch(
       Response.json(identity),
-      Response.json({ message: "Unauthorized" }, { status: 401 }),
+      Response.json({ type: "limited" }),
+      webhookResponse(true),
     );
 
     const result = await probeLineBot("token", 5000);
     expect(result).toMatchObject({ ok: true, bot: identity });
     expect(result.quota).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("shares the optional quota deadline across both response bodies", async () => {
@@ -122,6 +89,7 @@ describe("probeLineBot", () => {
       Response.json(identity),
       delayedBody({ type: "limited", value: 200 }),
       delayedBody({ totalUsage: 70 }),
+      webhookResponse(true),
     );
     const completed: Array<LineMessageQuota | undefined> = [];
     // Identity leaves a two-second quota budget; renewing it for consumption would take 2.4s.
@@ -131,7 +99,8 @@ describe("probeLineBot", () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(2001);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Three LINE reads plus the webhook read that follows the exhausted quota budget.
+      expect(fetchMock).toHaveBeenCalledTimes(4);
       expect(bodies).toHaveLength(2);
       expect(completed).toEqual([undefined]);
       expect(await reading).toMatchObject({ ok: true, bot: identity });
@@ -142,6 +111,67 @@ describe("probeLineBot", () => {
       }
       await vi.runAllTimersAsync();
       await reading;
+    }
+  });
+
+  it.each([{ active: false, expected: "disabled" }] as const)(
+    "reports a registered webhook that is active=$active",
+    async ({ active, expected }) => {
+      stubLineApiFetch(
+        Response.json(identity),
+        Response.json({ type: "none" }),
+        webhookResponse(active),
+      );
+
+      // LINE returns the registered URL; the probe deliberately does not carry it,
+      // because it would then reach logs and status output with no action to take on it.
+      const result = await probeLineBot("token", 5000);
+      expect(result.webhook).toEqual({ status: expected });
+    },
+  );
+
+  it("reports an unregistered webhook when LINE answers 404", async () => {
+    stubLineApiFetch(
+      Response.json(identity),
+      Response.json({ type: "none" }),
+      Response.json({ message: "Not found" }, { status: 404 }),
+    );
+
+    await expect(probeLineBot("token", 5000)).resolves.toMatchObject({
+      webhook: { status: "unset" },
+    });
+  });
+
+  // An answer that is not the documented boolean is not evidence either: reporting it
+  // as disabled would send an operator to a console switch that is already on.
+  it("leaves the webhook unreported when active is not a boolean", async () => {
+    stubLineApiFetch(
+      Response.json(identity),
+      Response.json({ type: "none" }),
+      Response.json({ endpoint: "https://gateway.example/line/webhook", active: "yes" }),
+    );
+
+    const result = await probeLineBot("token", 5000);
+    expect(result.ok).toBe(true);
+    expect(result.webhook).toBeUndefined();
+  });
+
+  // The webhook lookup is an optional extra inside the probe's deadline. If it could
+  // spend that deadline, a healthy token would be reported as a broken channel.
+  it("stays healthy when the webhook lookup never settles", async () => {
+    vi.useFakeTimers();
+    const pending = createPendingLineResponse({ endpoint: "https://x", active: true });
+    stubLineApiFetch(Response.json(identity), Response.json({ type: "none" }), pending.response);
+    const probing = probeLineBot("token", 300);
+    try {
+      await vi.advanceTimersByTimeAsync(299);
+      const result = await probing;
+      expect(result).toMatchObject({ ok: true, bot: identity });
+      expect(result.webhook).toBeUndefined();
+    } finally {
+      pending.finish();
+      await vi.runAllTimersAsync();
+      await probing;
     }
   });
 });

@@ -1,3 +1,4 @@
+import { containingSegment } from "@openclaw/normalization-core/grapheme";
 import stringWidth from "string-width";
 import {
   ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
@@ -54,6 +55,9 @@ function stripAnsiInternal(
   input: string,
   options: { compatibilityGrammar: boolean; preserveIncompleteCsi?: boolean },
 ): string {
+  if (!hasAnsiIntroducer(input)) {
+    return input;
+  }
   const output: string[] = [];
   let copyStart = 0;
   let index = 0;
@@ -66,50 +70,29 @@ function stripAnsiInternal(
     }
 
     const osc = matchAnsiOscAt(input, index);
-    if (osc) {
-      output.push(input.slice(copyStart, index));
-      index += osc.length;
-      copyStart = index;
-      continue;
-    }
-
-    const csi = scanAnsiCsiAt(input, index);
-    if (!csi) {
-      ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-      const compatibilityMatch = options.compatibilityGrammar
-        ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-        : null;
-      if (compatibilityMatch) {
-        output.push(input.slice(copyStart, index));
-        index += compatibilityMatch[0].length;
-        copyStart = index;
-        continue;
-      }
+    const csi = osc ? undefined : scanAnsiCsiAt(input, index);
+    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
+    const compatibilityMatch =
+      !osc && options.compatibilityGrammar
+        ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)?.[0]
+        : undefined;
+    let length = osc?.length ?? csi?.value.length ?? compatibilityMatch?.length;
+    if (length === undefined) {
       index += 1;
       continue;
     }
 
-    ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.lastIndex = index;
-    const compatibilityMatch = options.compatibilityGrammar
-      ? ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX.exec(input)
-      : null;
-    if (!csi.ended && options.preserveIncompleteCsi) {
+    if (csi && !csi.ended && options.preserveIncompleteCsi) {
       break;
     }
 
-    let cursor = index + csi.value.length;
-    const canonicalLength = csi.value.length;
-    if (
-      csi.controls.length === 0 &&
-      compatibilityMatch &&
-      compatibilityMatch[0].length > canonicalLength
-    ) {
-      cursor = index + compatibilityMatch[0].length;
+    if (csi?.controls.length === 0 && compatibilityMatch) {
+      length = Math.max(length, compatibilityMatch.length);
     }
 
-    output.push(input.slice(copyStart, index), ...csi.controls);
-    index = cursor;
-    copyStart = cursor;
+    output.push(input.slice(copyStart, index), ...(csi?.controls ?? []));
+    index += length;
+    copyStart = index;
   }
 
   output.push(input.slice(copyStart));
@@ -117,18 +100,12 @@ function stripAnsiInternal(
 }
 
 export function stripAnsi(input: string): string {
-  if (!hasAnsiIntroducer(input)) {
-    return input;
-  }
   return stripAnsiInternal(input, { compatibilityGrammar: false });
 }
 
 export function stripAnsiSequences(input: string): string {
   if (typeof input !== "string") {
     throw new TypeError(`Expected a \`string\`, got \`${typeof input}\``);
-  }
-  if (!hasAnsiIntroducer(input)) {
-    return input;
   }
   return stripAnsiInternal(input, { compatibilityGrammar: true });
 }
@@ -147,10 +124,14 @@ export function stripAnsiForStreamChunk(
   });
 }
 
-export function splitGraphemes(input: string): string[] {
-  if (!input) {
-    return [];
+/** Let sequential renderers consume graphemes without retaining a full-run array. */
+export function* iterateGraphemes(input: string): Generator<string, void> {
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    yield segment;
   }
+}
+
+export function splitGraphemes(input: string): string[] {
   return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
 }
 
@@ -246,7 +227,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
         position >= current.index + current.segment.length
       ) {
         // SAFETY: the end sentinel returns above; other probes resolve inside this segment.
-        current = segments.containing(position) as Intl.SegmentData;
+        current = containingSegment(segments, segment, position) as Intl.SegmentData;
         candidateWidth =
           current.index === 0
             ? 0

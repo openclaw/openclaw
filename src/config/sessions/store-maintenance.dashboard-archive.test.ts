@@ -15,7 +15,6 @@ function entry(updatedAt: number, extra: Partial<SessionEntry> = {}): SessionEnt
 function artifacts() {
   return {
     archiveRemovedSessionTranscripts: async () => new Set<string>(),
-    removeRemovedSessionTrajectoryArtifacts: async () => {},
     cleanupArchivedSessionTranscripts: async () => {},
   };
 }
@@ -48,29 +47,28 @@ describe("archiveStaleDashboardEntries", () => {
     expect(store[preservedKey]?.archivedAt).toBeUndefined();
   });
 
-  it("leaves pinned, archived, and non-dashboard sessions untouched", () => {
+  it("leaves protected and non-dashboard sessions untouched", () => {
     const now = 40 * DAY_MS;
     const archivedAt = now - DAY_MS;
     const store: Record<string, SessionEntry> = {
       "agent:main:dashboard:pinned": entry(1, { pinnedAt: 2 }),
       "agent:main:dashboard:archived": entry(1, { archivedAt }),
+      "agent:main:dashboard:running": entry(1),
+      "agent:main:dashboard:locked": entry(1, { modelSelectionLocked: true }),
       "agent:main:main": entry(1),
       "agent:main:slack:channel:C1": entry(1),
       "agent:main:subagent:child": entry(1),
       "dashboard:unscoped": entry(1),
     };
 
-    expect(archiveStaleDashboardEntries(store, 7 * DAY_MS, { nowMs: now })).toBe(0);
-    expect(store["agent:main:dashboard:pinned"]?.archivedAt).toBeUndefined();
-    expect(store["agent:main:dashboard:archived"]?.archivedAt).toBe(archivedAt);
-    for (const key of [
-      "agent:main:main",
-      "agent:main:slack:channel:C1",
-      "agent:main:subagent:child",
-      "dashboard:unscoped",
-    ]) {
-      expect(store[key]?.archivedAt).toBeUndefined();
-    }
+    const before = structuredClone(store);
+    expect(
+      archiveStaleDashboardEntries(store, 7 * DAY_MS, {
+        nowMs: now,
+        preserveKeys: new Set(["agent:main:dashboard:running"]),
+      }),
+    ).toBe(0);
+    expect(store).toEqual(before);
   });
 
   it("supports the default and both disable values", () => {

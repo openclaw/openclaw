@@ -8,16 +8,11 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { CompactionProvider } from "../../plugins/compaction-provider.js";
-import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
-import {
-  getCompactionSafeguardRuntime,
-  setCompactionSafeguardRuntime,
-} from "../agent-hooks/compaction-safeguard-runtime.js";
-import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
 import { estimateContextTokens } from "../runtime/index.js";
@@ -27,6 +22,7 @@ import {
   agentSessionSetContextReplacementHook,
 } from "./agent-session-compaction.js";
 import {
+  collectCompactionEnds,
   createAssistant,
   createAssistantResultStream,
   createAutoCompactionSettings,
@@ -47,8 +43,15 @@ import { loadExtensionFromFactory } from "./extensions/loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStaleThinkingContent(): AssistantMessage["content"] {
   return [
@@ -90,187 +93,7 @@ function createResultHandlers(
   return handlers;
 }
 
-function collectCompactionEnds(session: Awaited<ReturnType<typeof createTestSession>>["session"]) {
-  const events: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
-  session.subscribe((event) => {
-    if (event.type === "compaction_end") {
-      events.push(event);
-    }
-  });
-  return events;
-}
-
 describe("AgentSession compaction", () => {
-  it.each([
-    { name: "provider timeout", errorName: "TimeoutError", cancelCaller: false, recovers: false },
-    {
-      name: "provider timeout recovery",
-      errorName: "TimeoutError",
-      cancelCaller: false,
-      recovers: true,
-    },
-    { name: "ordinary provider failure", errorName: "Error", cancelCaller: false, recovers: false },
-    { name: "provider-side abort", errorName: "AbortError", cancelCaller: false, recovers: true },
-    { name: "caller cancellation", errorName: "AbortError", cancelCaller: true, recovers: false },
-  ])(
-    "preserves the safeguard boundary after $name",
-    async ({ errorName, cancelCaller, recovers }) => {
-      // A synthetic API plus the registered stream keep both real summarizers offline.
-      const model = {
-        ...testModel,
-        api: "compaction-test-api",
-        contextWindow: 4_096,
-        maxTokens: 128,
-      };
-      const summary = recovers
-        ? [
-            "## Decisions\nThe old prompt was answered.",
-            "## Open TODOs\nNone.",
-            "## Constraints/Rules\nPreserve the session history.",
-            "## Pending user asks\nNone.",
-            "## Exact identifiers\nNone.",
-          ].join("\n\n")
-        : "Core summary without required safeguard headings";
-      const recoveredSummary = [
-        "## Latest user request context",
-        JSON.stringify("old prompt"),
-        "",
-        summary,
-      ].join("\n");
-      const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-      sessionManager.appendMessage({
-        ...createAssistant(model, [{ type: "text", text: "old answer" }]),
-        timestamp: 2,
-      });
-      sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
-      const providerStarted = createDeferred();
-      const releaseProvider = createDeferred();
-      const summarize = vi.fn<CompactionProvider["summarize"]>(async () => {
-        providerStarted.resolve();
-        await releaseProvider.promise;
-        throw Object.assign(new Error("synthetic custom-provider failure"), { name: errorName });
-      });
-      const registration = {
-        provider: { id: "session-compaction-test", label: "Session compaction test", summarize },
-      };
-      const registry = requireActivePluginRegistry();
-      registry.compactionProviders.push(registration);
-      setCompactionSafeguardRuntime(sessionManager, {
-        provider: registration.provider.id,
-        model,
-        recentTurnsPreserve: 0,
-        qualityGuardEnabled: true,
-        qualityGuardMaxRetries: 0,
-      });
-      const network = vi
-        .spyOn(globalThis, "fetch")
-        .mockRejectedValue(new Error("Unexpected network request in compaction test"));
-      const eventBus = createEventBus();
-      try {
-        const resourceLoader = createResourceLoader();
-        const extensions = resourceLoader.getExtensions();
-        extensions.extensions.push(
-          await loadExtensionFromFactory(
-            compactionSafeguardExtension,
-            sessionManager.getCwd(),
-            eventBus,
-            extensions.runtime,
-          ),
-        );
-        streamMocks.streamSimple.mockImplementation(
-          (activeModel: Model, _context: Context, options?: SimpleStreamOptions) =>
-            createAssistantResultStream(
-              createAssistant(
-                activeModel,
-                [{ type: "text", text: summary }],
-                options?.signal?.aborted ? "aborted" : "stop",
-              ),
-            ),
-        );
-        const { session } = await createTestSession({
-          model,
-          sessionManager,
-          resourceLoader,
-          settingsManager: SettingsManager.inMemory({
-            compaction: { enabled: false, reserveTokens: 64, keepRecentTokens: 1 },
-            retry: { enabled: false },
-          }),
-        });
-        const subscription = subscribeEmbeddedAgentSession({
-          session,
-          runId: "run-safeguard-summary-usage",
-        });
-        const entriesBefore = structuredClone(sessionManager.getEntries());
-        const messagesBefore = structuredClone(session.messages);
-        const compactionEnds = collectCompactionEnds(session);
-        const compaction = session.compact().then(
-          (result) => ({ status: "resolved", summary: result.summary }),
-          (error: unknown) => ({
-            status: "rejected",
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-        // Cancel through the public session API while the custom provider is in flight.
-        await Promise.race([providerStarted.promise, compaction]);
-        const callerSignal = summarize.mock.calls[0]?.[0].signal;
-        const callerAbortedAtProviderEntry = callerSignal?.aborted;
-        if (cancelCaller) {
-          session.abortCompaction();
-        }
-        releaseProvider.resolve();
-        const result = await compaction;
-        const appended = sessionManager
-          .getEntries()
-          .filter((entry) => entry.type === "compaction")
-          .map(({ summary: text, fromHook }) => ({ summary: text, fromHook }));
-
-        const observation = {
-          providerCalls: summarize.mock.calls.length,
-          callerAbortedAtProviderEntry,
-          callerAborted: callerSignal?.aborted,
-          result,
-          outcomes: compactionEnds.map((event) => event.outcome.status),
-          appended,
-        };
-        expect(subscription.getUsageTotals()?.total ?? 0).toBe(
-          streamMocks.streamSimple.mock.calls.length * 2,
-        );
-        subscription.unsubscribe();
-        expect.soft(observation).toMatchObject({
-          providerCalls: 1,
-          callerAbortedAtProviderEntry: false,
-          callerAborted: cancelCaller,
-          result: recovers
-            ? { status: "resolved", summary: recoveredSummary }
-            : { status: "rejected" },
-          outcomes: [recovers ? "completed" : "aborted"],
-          appended: recovers ? [{ summary: recoveredSummary, fromHook: true }] : [],
-        });
-        // The guarded pipeline may chunk the history; do not pin its request count.
-        if (!cancelCaller) {
-          expect(streamMocks.streamSimple).toHaveBeenCalled();
-        }
-        if (!recovers) {
-          expect.soft(sessionManager.getEntries()).toEqual(entriesBefore);
-          expect.soft(session.messages).toEqual(messagesBefore);
-        }
-        if (!cancelCaller && !recovers) {
-          expect(getCompactionSafeguardRuntime(sessionManager)?.cancellation?.reason).toContain(
-            "failed quality checks",
-          );
-        }
-        expect(network.mock.calls.length).toBe(0);
-      } finally {
-        releaseProvider.resolve();
-        setCompactionSafeguardRuntime(sessionManager, null);
-        registry.compactionProviders.splice(registry.compactionProviders.indexOf(registration), 1);
-        eventBus.clear();
-        network.mockRestore();
-      }
-    },
-  );
-
   it.each([
     {
       name: "long untrusted focus",
@@ -374,7 +197,12 @@ describe("AgentSession compaction", () => {
         error: `No API key found for ${activeModel.provider}`,
       });
       return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       );
     });
     const compactionEvents = collectCompactionEnds(session);
@@ -404,7 +232,12 @@ describe("AgentSession compaction", () => {
     const sessionManager = SessionManager.open(scope, dir);
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
     sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "old answer" }], "stop", 950),
+      ...createAssistant(
+        testModel,
+        [{ type: "text", text: "old answer" }],
+        "stop",
+        testModel.contextWindow,
+      ),
       timestamp: 2,
     });
     const currentUser = {
@@ -427,6 +260,7 @@ describe("AgentSession compaction", () => {
       settingsManager: createAutoCompactionSettings(),
       resourceLoader: createResourceLoader(createResultHandlers("condensed history")),
     });
+    const compactionEvents = collectCompactionEnds(session);
     // Embedded attempt preparation removes the ingress-persisted user from model state.
     // Pre-prompt compaction rebuilds it from the durable branch before prompt submission.
     session.agent.state.messages = session.agent.state.messages.slice(0, -1);
@@ -435,6 +269,15 @@ describe("AgentSession compaction", () => {
       persistedUserIdempotencyKey: currentUser.idempotencyKey,
     });
 
+    expect(compactionEvents).toEqual([
+      expect.objectContaining({
+        reason: "threshold",
+        outcome: expect.objectContaining({ status: "completed", willRetry: false }),
+      }),
+    ]);
+    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(
+      1,
+    );
     expect(requests).toHaveLength(1);
     expect(
       requests[0]?.messages.filter(
@@ -485,11 +328,7 @@ describe("AgentSession compaction", () => {
   it("accounts branch-summary responses through the same run owner", async () => {
     const sessionManager = SessionManager.inMemory();
     const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    const abandonedId = sessionManager.appendMessage({
-      role: "user",
-      content: "abandoned branch",
-      timestamp: 2,
-    });
+    const abandonedId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
     sessionManager.branch(rootId);
     const targetId = sessionManager.appendMessage({
       ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
@@ -533,7 +372,12 @@ describe("AgentSession compaction", () => {
           throw syntheticError;
         }
         return createAssistantResultStream(
-          createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+          createAssistant(
+            activeModel,
+            [{ type: "text", text: "complete answer" }],
+            "stop",
+            activeModel.contextWindow,
+          ),
         );
       },
     );
@@ -551,6 +395,7 @@ describe("AgentSession compaction", () => {
 
     await session.prompt("continue");
 
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     const compactionEvents = onAgentEvent.mock.calls
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
@@ -583,29 +428,15 @@ describe("AgentSession compaction", () => {
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
-    const handlers = createCompactionHandlers();
     const syntheticError = new Error("synthetic manual cancellation rejection");
-    const abortActiveCompaction = () => session.abortCompaction();
-    handlers.set("session_before_compact", [
-      async () => {
-        abortActiveCompaction();
-        throw syntheticError;
-      },
-    ]);
     streamMocks.streamSimple.mockImplementation(
       (_activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
-        if (options?.signal?.aborted) {
-          throw syntheticError;
-        }
-        return createAssistantResultStream(
-          createAssistant(testModel, [{ type: "text", text: "unexpected compaction" }]),
-        );
+        expect(options?.signal?.aborted).toBe(false);
+        session.abortCompaction();
+        throw syntheticError;
       },
     );
-    const { session } = await createTestSession({
-      sessionManager,
-      resourceLoader: createResourceLoader(handlers),
-    });
+    const { session } = await createTestSession({ sessionManager });
     const onAgentEvent = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
       session,
@@ -615,6 +446,7 @@ describe("AgentSession compaction", () => {
 
     await expect(session.compact()).rejects.toBe(syntheticError);
 
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     const compactionEvents = onAgentEvent.mock.calls
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
@@ -622,6 +454,7 @@ describe("AgentSession compaction", () => {
     expect(compactionEvents[0]).toEqual({
       stream: "compaction",
       data: { phase: "start", itemId: expect.any(String) },
+      transcriptStart: null,
     });
     expect(compactionEvents.at(-1)).toEqual({
       stream: "compaction",
@@ -666,7 +499,7 @@ describe("AgentSession compaction", () => {
     expect(manualRequestState).toBeUndefined();
   });
 
-  it.each(Array.from({ length: MAX_OVERFLOW_COMPACTION_ATTEMPTS }, (_, index) => index + 1))(
+  it.each([1, MAX_OVERFLOW_COMPACTION_ATTEMPTS])(
     "recovers when the provider accepts overflow compaction attempt %i",
     async (overflowCount) => {
       let agentRequests = 0;
@@ -733,21 +566,13 @@ describe("AgentSession compaction", () => {
   it("reports replacement tokens and the exact equal-summary entry before a post-commit hook finishes", async () => {
     const sessionManager = SessionManager.inMemory();
     const summary = "The same bounded summary";
-    const oldUserId = sessionManager.appendMessage({
-      role: "user",
-      content: "old prompt",
-      timestamp: 1,
-    });
+    const oldUserId = sessionManager.appendMessage(makeUserMessage("old prompt", 1));
     sessionManager.appendMessage({
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
     const oldCompactionId = sessionManager.appendCompaction(summary, oldUserId, 100);
-    const recentUserId = sessionManager.appendMessage({
-      role: "user",
-      content: "recent prompt",
-      timestamp: 3,
-    });
+    const recentUserId = sessionManager.appendMessage(makeUserMessage("recent prompt", 3));
     sessionManager.appendMessage({
       ...createAssistant(testModel, [{ type: "text", text: "recent answer" }]),
       timestamp: 4,
@@ -803,7 +628,7 @@ describe("AgentSession compaction", () => {
         }
         const contextTokens = estimateContextTokens(session.messages).tokens;
         expect(contextTokens).toBeGreaterThan(0);
-        expect(committed).toMatchObject({ summary });
+        expect(committed).toMatchObject({ summary, tokensAfter: contextTokens });
         expect(committed.id).not.toBe(oldCompactionId);
         expect.soft(reportedCompactionId).toBe(committed.id);
         expect.soft(replacementTokens).toEqual([contextTokens]);

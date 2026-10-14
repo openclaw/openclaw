@@ -1,6 +1,20 @@
 // Vitest performance config helper normalizes performance test environment settings.
 import path from "node:path";
+import type { Plugin } from "vite";
+import type { CacheKeyIdGenerator } from "vitest/node";
 type EnvMap = Record<string, string | undefined>;
+
+const optimizerCacheKey: CacheKeyIdGenerator = ({ environment }) => environment.config.cacheDir;
+
+export function createVitestProjectCachePlugin(): Plugin {
+  return {
+    name: "openclaw:vitest-project-cache",
+    configureVitest({ defineCacheKeyGenerator }) {
+      // Cached imports embed project-specific optimized dependency paths.
+      defineCacheKeyGenerator(optimizerCacheKey);
+    },
+  };
+}
 
 const isEnabled = (value: string | undefined): boolean => {
   const normalized = value?.trim().toLowerCase();
@@ -20,10 +34,10 @@ const isWindowsEnv = (env: EnvMap, platform: NodeJS.Platform): boolean => {
   return runnerOs === "windows";
 };
 
-type VitestExperimentalConfig = {
+type VitestPerformanceConfig = {
+  fsModuleCache?: true;
+  fsModuleCachePath?: string;
   experimental?: {
-    fsModuleCache?: true;
-    fsModuleCachePath?: string;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   };
@@ -35,38 +49,33 @@ export function resolveVitestFsModuleCacheRoot(cwd = process.cwd()): string {
   return path.join(cwd, ".cache", "vitest");
 }
 
-export function loadVitestExperimentalConfig(
+export function loadVitestPerformanceConfig(
   env: EnvMap = process.env,
   platform: NodeJS.Platform = process.platform,
   cwd = process.cwd(),
-): VitestExperimentalConfig {
-  const experimental: {
-    fsModuleCache?: true;
-    fsModuleCachePath?: string;
-    importDurations?: { print: true };
-    printImportBreakdown?: true;
-  } = {};
+): VitestPerformanceConfig {
+  const config: VitestPerformanceConfig = {};
   const windowsEnv = isWindowsEnv(env, platform);
 
   if (!windowsEnv && !isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
-    experimental.fsModuleCache = true;
+    config.fsModuleCache = true;
   }
   if (windowsEnv && isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
-    experimental.fsModuleCache = true;
+    config.fsModuleCache = true;
   }
-  if (experimental.fsModuleCache) {
+  if (config.fsModuleCache) {
     // The default leaf cannot contain the scheduler's concurrent cache leaves:
     // Vitest recursively removes its selected directory when lockfiles change.
-    experimental.fsModuleCachePath =
+    config.fsModuleCachePath =
       env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim() ||
       path.join(resolveVitestFsModuleCacheRoot(cwd), "default");
   }
   if (isEnabled(env.OPENCLAW_VITEST_IMPORT_DURATIONS)) {
-    experimental.importDurations = { print: true };
+    (config.experimental ??= {}).importDurations = { print: true };
   }
   if (isEnabled(env.OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN)) {
-    experimental.printImportBreakdown = true;
+    (config.experimental ??= {}).printImportBreakdown = true;
   }
 
-  return Object.keys(experimental).length > 0 ? { experimental } : {};
+  return config;
 }

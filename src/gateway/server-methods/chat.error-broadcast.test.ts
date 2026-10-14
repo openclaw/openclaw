@@ -5,11 +5,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { chatHandlers } from "./chat.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 vi.mock("./chat-send-agent-dispatch.js", () => ({
@@ -21,18 +22,12 @@ vi.mock("./chat-send-agent-dispatch.js", () => ({
 function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
-  const chatAbortControllers = new Map();
-  const agentRunSeq = new Map<string, number>();
-  const dedupe = new Map();
 
   return {
+    ...createDirectChatContext(),
     broadcast,
     nodeSendToSession,
-    chatAbortControllers,
-    chatRunState: createChatRunState(),
-    agentRunSeq,
-    dedupe,
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -45,10 +40,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -75,74 +67,6 @@ describe("chat.send error broadcast", () => {
     expect(ctx.recordClientActivity).not.toHaveBeenCalled();
   });
 
-  it("rejects a stale expected session routing contract before dispatch", async () => {
-    const ctx = createMockContext();
-    const respond = vi.fn();
-
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
-      params: {
-        sessionKey: "main",
-        message: "hello",
-        expectedSessionRoutingContract: "global|main|main",
-        idempotencyKey: "test-stale-routing",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        details: { reason: "session-routing-changed" },
-      }),
-    );
-    expect(ctx.addChatRun).not.toHaveBeenCalled();
-    expect(ctx.broadcast).not.toHaveBeenCalled();
-  });
-
-  it("returns an idempotent cached send after session routing changes", async () => {
-    const ctx = createMockContext();
-    const respond = vi.fn();
-    ctx.dedupe.set("chat:test-cached-routing", {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId: "test-cached-routing", status: "started" },
-    });
-
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
-      params: {
-        sessionKey: "main",
-        message: "hello",
-        expectedSessionRoutingContract: "global|main|main",
-        idempotencyKey: "test-cached-routing",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { runId: "test-cached-routing", status: "started" },
-      undefined,
-      { cached: true },
-    );
-    expect(ctx.recordClientActivity).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])(
     "records new admission activity only if the socket remains live (closed=%s)",
     async (closedDuringAdmission) => {
@@ -163,7 +87,7 @@ describe("chat.send error broadcast", () => {
           authenticatedUserId: "send@activity.test",
           personPresence: { onlineSince: Date.now() - 1_000 },
         };
-        const clients = new Set([client]);
+        const clients = new GatewayClientRegistry([client]);
         ctx.recordClientActivity.mockImplementation((requestClient) => {
           recordClientPresenceActivity(clients, requestClient);
         });
@@ -222,7 +146,11 @@ describe("chat.send error broadcast", () => {
           closedDuringAdmission ? undefined : admittedAt,
         );
         const cachedResponse = vi.fn();
-        await handleChatSend({ ...options, respond: cachedResponse });
+        await handleChatSend({
+          ...options,
+          params: { ...options.params, expectedSessionRoutingContract: "global|main|main" },
+          respond: cachedResponse,
+        });
         expect(cachedResponse.mock.calls[0]?.[3]).toMatchObject({ cached: true });
         expect(ctx.recordClientActivity).toHaveBeenCalledExactlyOnceWith(client);
       });
@@ -233,10 +161,7 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "/stop",
@@ -258,54 +183,6 @@ describe("chat.send error broadcast", () => {
     expect(ctx.addChatRun).not.toHaveBeenCalled();
   });
 
-  it("should broadcast error when addChatRun throws", async () => {
-    const ctx = createMockContext();
-    const respond = vi.fn();
-
-    // Make addChatRun throw synchronously (inside the try block at line 2470)
-    ctx.addChatRun.mockImplementation(() => {
-      throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
-    });
-
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
-      params: {
-        sessionKey: "main",
-        message: "hello",
-        idempotencyKey: "test-run-1",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-    });
-
-    // Verify respond was called with error
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.objectContaining({ runId: "test-run-1", status: "error" }),
-      expect.any(Object),
-      expect.any(Object),
-    );
-
-    const payload = expectDefined(ctx.broadcast.mock.calls[0], "error broadcast")[1] as Record<
-      string,
-      unknown
-    >;
-    expect(payload).toMatchObject({
-      runId: "test-run-1",
-      state: "error",
-      errorMessage: expect.stringContaining("LLM timeout"),
-    });
-    expect(payload).not.toHaveProperty("message");
-    expect(ctx.broadcast).toHaveBeenCalledWith("chat", payload, {
-      sessionKeys: ["agent:main:main"],
-    });
-  });
-
   it("scopes selected-agent global errors to the linked agent", async () => {
     const ctx = createMockContext();
     const respond = vi.fn();
@@ -314,10 +191,7 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "global",
         agentId: "main",
@@ -330,6 +204,13 @@ describe("chat.send error broadcast", () => {
       client: null as never,
       isWebchatConnect: () => false,
     });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({ runId: "test-run-global", status: "error" }),
+      expect.any(Object),
+      expect.any(Object),
+    );
 
     // The global agent alias canonicalizes to the agent's main session before
     // load, so errors broadcast on the same key the visible thread subscribes

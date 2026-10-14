@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { CronJob } from "../api/types.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -12,7 +15,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
 });
 
-function cronJob(id: string, name: string) {
+function cronJob(id: string, name: string): CronJob {
   return {
     id,
     name,
@@ -30,8 +33,8 @@ function cronJob(id: string, name: string) {
 const captureDurationProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const requireDurationRecord = createRequireRecord("record", "expected-object-value");
 
-function durationResponses(jobs: unknown[]) {
-  const list = (entries: unknown[]) => ({
+function durationResponses(jobs: CronJob[]) {
+  const list = (entries: CronJob[]) => ({
     jobs: entries,
     snapshotRevision: "exact-duration-fixture",
     total: entries.length,
@@ -41,19 +44,24 @@ function durationResponses(jobs: unknown[]) {
     nextOffset: null,
   });
   return {
-    "cron.list": {
-      cases: [{ match: { lastRunStatus: "error" }, response: list([]) }, { response: list(jobs) }],
-    },
+    "cron.list": cronListResponseFixture([
+      { match: { lastRunStatus: "error" }, response: list([]) },
+      { response: list(jobs) },
+    ]),
     "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
     "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
   };
 }
 
-async function captureDurationProof(page: Page, name: string, observed: unknown) {
+async function captureDurationProof(page: Page, name: string, observed: unknown, content: Locator) {
   if (!captureDurationProofEnabled) {
     return;
   }
-  await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`), fullPage: true });
+  await content.scrollIntoViewIfNeeded();
+  await fs.writeFile(
+    path.join(suite.artifactDir, `${name}.png`),
+    await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [content]),
+  );
   await fs.writeFile(
     path.join(suite.artifactDir, `${name}.json`),
     `${JSON.stringify(observed, null, 2)}\n`,
@@ -88,7 +96,7 @@ suite.define(() => {
         description: "Explain the system-owned heartbeat",
         payload: { kind: "heartbeat" },
       },
-    ] as const;
+    ] satisfies [CronJob, ...CronJob[]];
     const undescribedJob = cronJob("without-description", "Plain task");
     await suite.withPage(
       {
@@ -99,7 +107,7 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           methodResponses: {
-            "cron.list": {
+            "cron.list": cronListResponseFixture({
               jobs: [...jobs, undescribedJob],
               snapshotRevision: "cron-descriptions-fixture",
               total: jobs.length + 1,
@@ -107,7 +115,7 @@ suite.define(() => {
               limit: 50,
               hasMore: false,
               nextOffset: null,
-            },
+            }),
             "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
             "cron.status": { enabled: true, jobs: jobs.length + 1, nextWakeAtMs: null },
           },
@@ -163,12 +171,15 @@ suite.define(() => {
         text: "Every 1h 1m 1s 1ms",
       },
     ] as const;
-    const jobs = cases.map(({ id, name, everyMs }) => ({
-      ...cronJob(id, name),
-      enabled: false,
-      configRevision: `${id}-definition`,
-      schedule: { kind: "every", everyMs },
-    }));
+    const jobs = cases.map(
+      ({ id, name, everyMs }) =>
+        ({
+          ...cronJob(id, name),
+          enabled: false,
+          configRevision: `${id}-definition`,
+          schedule: { kind: "every", everyMs },
+        }) satisfies CronJob,
+    );
     await suite.withPage(
       {
         locale: "en-US",
@@ -187,7 +198,12 @@ suite.define(() => {
         const rows = await page
           .locator(".cron-table__schedule .cron-table__cell-value")
           .allTextContents();
-        await captureDurationProof(page, "interval-list", { rows, jobs });
+        await captureDurationProof(
+          page,
+          "interval-list",
+          { rows, jobs },
+          page.locator(`[data-test-id="cron-row-${cases[0].id}"]`),
+        );
         const observed: Array<{
           id: string;
           row: string | undefined;
@@ -204,11 +220,16 @@ suite.define(() => {
           await subtitle.waitFor();
           const detail = (await subtitle.textContent())?.trim();
           observed.push({ id: job.id, row: rowText, detail });
-          await captureDurationProof(page, job.id, {
-            everyMs: job.schedule.everyMs,
-            row: rowText,
-            detail,
-          });
+          await captureDurationProof(
+            page,
+            job.id,
+            {
+              everyMs: job.schedule.everyMs,
+              row: rowText,
+              detail,
+            },
+            subtitle,
+          );
           await page.locator('[data-test-id="cron-back"]').click();
           await row.waitFor();
         }
@@ -224,7 +245,7 @@ suite.define(() => {
       enabled: false,
       configRevision: "precise-stagger-definition",
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 1_001 },
-    };
+    } satisfies CronJob;
     await suite.withPage(
       {
         locale: "en-US",
@@ -243,17 +264,27 @@ suite.define(() => {
         await page.locator("details.cron-advanced > summary").click();
         const amount = page.locator("#cron-stagger-amount");
         const loadedStagger = await amount.inputValue();
-        await captureDurationProof(page, "stagger-loaded", {
-          loadedStagger,
-          schedule: job.schedule,
-        });
+        await captureDurationProof(
+          page,
+          "stagger-loaded",
+          {
+            loadedStagger,
+            schedule: job.schedule,
+          },
+          amount,
+        );
         await page.locator("#cron-cron-expr").fill("*/5 * * * *");
         const previousUpdates = (await gateway.getRequests("cron.update")).length;
         await gateway.deferNext("cron.update");
         await page.locator('[data-test-id="cron-submit"]').click();
         const request = await gateway.waitForRequest("cron.update", { after: previousUpdates });
         const patch = requireDurationRecord(requireDurationRecord(request.params).patch);
-        await captureDurationProof(page, "stagger-submitted", { loadedStagger, request });
+        await captureDurationProof(
+          page,
+          "stagger-submitted",
+          { loadedStagger, request },
+          page.locator('[data-test-id="cron-submit"]'),
+        );
         // Echo the actual wire patch, so a lossy submission cannot become a correct fixture response.
         const updatedJob = { ...job, ...patch, configRevision: "precise-stagger-updated" };
         const previousLists = (await gateway.getRequests("cron.list")).length;
@@ -264,11 +295,16 @@ suite.define(() => {
           .poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled())
           .toBe(false);
         const reloadedStagger = await amount.inputValue();
-        await captureDurationProof(page, "stagger-readback", {
-          loadedStagger,
-          request,
-          reloadedStagger,
-        });
+        await captureDurationProof(
+          page,
+          "stagger-readback",
+          {
+            loadedStagger,
+            request,
+            reloadedStagger,
+          },
+          amount,
+        );
         expect({ loadedStagger, request: request.params, reloadedStagger }).toMatchObject({
           loadedStagger: "1.001",
           request: {

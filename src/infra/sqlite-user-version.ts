@@ -1,15 +1,18 @@
+import type { DatabaseSync } from "node:sqlite";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
+import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-
-type SqliteUserVersionReader = {
-  prepare: (sql: string) => { get: () => unknown };
-};
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
 
-export class SqliteSchemaVersionError extends Error {
+export class SqliteSchemaVersionError extends StartupMaintenanceRequiredError {
   override name = SQLITE_SCHEMA_VERSION_ERROR_NAME;
+
+  constructor(message: string) {
+    super("newer-schema", message);
+  }
 }
 
 export function isSqliteSchemaVersionError(error: unknown): error is Error {
@@ -19,9 +22,18 @@ export function isSqliteSchemaVersionError(error: unknown): error is Error {
   );
 }
 
-export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+export function readSqliteUserVersion(db: DatabaseSync): number {
+  const row = executeWithCachedStatement(db, "PRAGMA user_version", [], (statement) =>
+    statement.get(),
+  );
   return Number(row?.user_version ?? 0);
+}
+
+export function writeSqliteUserVersion(db: DatabaseSync, version: number): void {
+  if (!Number.isInteger(version) || version < 0 || version > 2147483647) {
+    throw new RangeError("SQLite user_version must be an integer from 0 through 2147483647.");
+  }
+  db.exec(`PRAGMA user_version = ${version}`);
 }
 
 /**
@@ -45,7 +57,7 @@ export function createNewerSqliteSchemaVersionError(
     "This OpenClaw build cannot open your existing data.\n" +
       `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
       `Refused by ${describeRunningOpenClawBuild()}.\n` +
-      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To start fresh with this build, point OPENCLAW_STATE_DIR at a separate directory.\n` +
+      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To use an older build, restore your pre-update backup created with openclaw backup create.\n` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
 }

@@ -19,6 +19,7 @@ type NodeHostWorkerInput =
   | { type: "invoke"; generation: number; request: NodeInvokeRequestPayload }
   | { type: "invoke-input"; generation: number; invokeId: string; seq: number; payloadJSON: string }
   | { type: "invoke-cancel"; generation: number; invokeId: string }
+  | { type: "runner-inventory-refresh"; generation: number }
   | NodeHostWorkerGatewayResponse
   | { type: "stop" };
 
@@ -45,6 +46,9 @@ export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | nu
       const connection =
         parsed?.connection === null ? null : connectionSchema.parse(parsed?.connection);
       return { type, generation, connection };
+    }
+    if (type === "runner-inventory-refresh") {
+      return { type, generation };
     }
     if (type === "invoke") {
       const request = asRecord(parsed?.request);
@@ -115,6 +119,7 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
     params?: unknown,
     opts?: GatewayClientRequestOptions,
   ): Promise<T> {
+    opts?.signal?.throwIfAborted();
     const generation = this.invocationGeneration.getStore() ?? this.generation;
     if (!this.connected || generation !== this.generation) {
       throw new Error("node-host Gateway route is closed");
@@ -130,14 +135,18 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
 
     const id = `gateway-${this.nextRequestId++}`;
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 15_000);
+    const signal = opts?.signal;
+    const onAbort = () => this.pending.take(id)?.reject(signal?.reason);
     const pending = this.pending.add(id, {
       value: undefined,
       timeoutMs,
       timeoutError: () => new Error(`Gateway request timed out: ${method}`),
+      dispose: () => signal?.removeEventListener("abort", onAbort),
     });
     if (!pending) {
       throw new Error(`Gateway request id collision: ${id}`);
     }
+    signal?.addEventListener("abort", onAbort, { once: true });
     this.writeMessage({
       type: "gateway-request",
       generation,

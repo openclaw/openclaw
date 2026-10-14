@@ -3,8 +3,6 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
-private struct GatewayRequestCancellationTimeout: Error {}
-
 private actor GatewayRequestProbe {
     private var value: String?
     private var waiter: CheckedContinuation<String, Never>?
@@ -25,6 +23,7 @@ private actor GatewayRequestProbe {
 
 private actor GatewayRequestStartGate {
     private var entered = false
+    private var released = false
     private var enteredWaiter: CheckedContinuation<Void, Never>?
     private var releaseWaiter: CheckedContinuation<Void, Never>?
 
@@ -32,6 +31,8 @@ private actor GatewayRequestStartGate {
         self.entered = true
         self.enteredWaiter?.resume()
         self.enteredWaiter = nil
+        // Reconnects after release pass through instead of replacing a parked waiter.
+        guard !self.released else { return }
         await withCheckedContinuation { self.releaseWaiter = $0 }
     }
 
@@ -43,6 +44,7 @@ private actor GatewayRequestStartGate {
     }
 
     func release() {
+        self.released = true
         self.releaseWaiter?.resume()
         self.releaseWaiter = nil
     }
@@ -57,9 +59,49 @@ private final class GatewayRequestChannelLifetime {
     }
 }
 
+@Suite(.testWaitLimit)
 struct GatewayChannelRequestTests {
     enum RequestCompletion: CaseIterable, Sendable {
         case response, cancellation, disconnect, shutdown
+    }
+
+    @Test func `websocket results retain arrival order across receive callbacks`() async throws {
+        let socket = GatewayTestWebSocketTask()
+        socket.resume()
+        let (messages, continuation) = AsyncStream<String>.makeStream()
+        defer { continuation.finish() }
+        let receive: @Sendable (Int) -> Void = { ordinal in
+            socket.receive { result in
+                switch result {
+                case let .success(.string(value)):
+                    continuation.yield("\(ordinal):\(value)")
+                case let .failure(error):
+                    #expect((error as? URLError)?.code == .networkConnectionLost)
+                    continuation.yield("\(ordinal):connection lost")
+                default:
+                    Issue.record("Expected a synthetic string frame or connection loss")
+                }
+            }
+        }
+
+        receive(1)
+        socket.emitReceiveSuccess(.string("agent.wait completed"))
+        // The next peer reply can arrive before the channel registers its next receive.
+        socket.emitReceiveSuccess(.string("chat.history reply"))
+        socket.emitReceiveFailure()
+
+        var received: [String] = []
+        for await message in messages {
+            received.append(message)
+            if received.count == 3 { break }
+            receive(received.count + 1)
+        }
+        guard received.count == 3 else {
+            Issue.record("Still waiting for ordered websocket results")
+            throw CancellationError()
+        }
+        #expect(received == ["1:agent.wait completed", "2:chat.history reply", "3:connection lost"])
+        #expect(socket.snapshotCallbackReceiveCount() == 3)
     }
 
     @Test(arguments: RequestCompletion.allCases)
@@ -101,7 +143,7 @@ struct GatewayChannelRequestTests {
             let socket = try #require(session.latestTask())
             switch completion {
             case .response:
-                socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
                 let response = try await request.value
                 #expect(!response.isEmpty)
             case .cancellation:
@@ -124,20 +166,19 @@ struct GatewayChannelRequestTests {
         return lifetime
     }
 
-    private func makeSession(requestSendDelayMs: Int) -> GatewayTestWebSocketSession {
-        GatewayTestWebSocketSession(
+    @Test func `request timeout then send failure does not double resume`() async throws {
+        let timedOut = AsyncTestGate()
+        let sendFailed = AsyncTestGate()
+        let session = GatewayTestWebSocketSession(
             taskFactory: {
                 GatewayTestWebSocketTask(
                     sendHook: { _, _, sendIndex in
                         guard sendIndex == 1 else { return }
-                        try await Task.sleep(nanoseconds: UInt64(requestSendDelayMs) * 1_000_000)
+                        await timedOut.wait()
+                        sendFailed.open()
                         throw URLError(.cannotConnectToHost)
                     })
             })
-    }
-
-    @Test func `request timeout then send failure does not double resume`() async throws {
-        let session = self.makeSession(requestSendDelayMs: 100)
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
@@ -153,7 +194,9 @@ struct GatewayChannelRequestTests {
             #expect(ns.code == 5)
         }
 
-        // Give the delayed send failure task time to run; this used to crash due to a double-resume.
+        timedOut.open()
+        try await sendFailed.wait("late request send failure")
+        // Observe the late send failure for 250 ms; a double resume would crash during this absence window.
         try? await Task.sleep(nanoseconds: 250 * 1_000_000)
     }
 
@@ -167,7 +210,7 @@ struct GatewayChannelRequestTests {
                     guard sendIndex == 2,
                           let requestID = GatewayWebSocketTestSupport.requestID(from: message)
                     else { return }
-                    task.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
                 })
             })
         let channel = try GatewayChannelActor(
@@ -211,15 +254,12 @@ struct GatewayChannelRequestTests {
         request.cancel()
 
         await #expect(throws: CancellationError.self) {
-            try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { GatewayRequestCancellationTimeout() },
-                operation: { try await request.value })
+            try await TestWait.value(of: request, "request cancellation")
         }
         #expect(await channel._test_pendingRequestCount() == 0)
 
         let socket = try #require(session.latestTask())
-        socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
         await Task.yield()
         #expect(await channel._test_pendingRequestCount() == 0)
     }
@@ -248,7 +288,7 @@ struct GatewayChannelRequestTests {
         let requestID = await probe.wait()
         let socket = try #require(session.latestTask())
 
-        socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
         await resumedGate.waitUntilEntered()
         request.cancel()
         await resumedGate.release()
@@ -368,21 +408,25 @@ struct GatewayChannelRequestTests {
         let request = Task {
             try await channel.request(method: "cancel-during-connect", params: nil, timeoutMs: 5000)
         }
-        for _ in 0..<1000 {
-            if await channel._test_connectWaiterCount() == 2 {
-                break
+        do {
+            try await TestWait.state("two shared connect waiters") {
+                await channel._test_connectWaiterCount() == 2
             }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        } catch {
+            await connectGate.release()
+            request.cancel()
+            connecting.cancel()
+            _ = try? await request.value
+            _ = try? await connecting.value
+            await channel.shutdown()
+            throw error
         }
         #expect(await channel._test_connectWaiterCount() == 2)
 
         request.cancel()
 
         await #expect(throws: CancellationError.self) {
-            try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { GatewayRequestCancellationTimeout() },
-                operation: { try await request.value })
+            try await TestWait.value(of: request, "request cancellation")
         }
         #expect(await channel._test_connectWaiterCount() == 1)
         #expect(await channel._test_pendingRequestCount() == 0)
@@ -391,6 +435,7 @@ struct GatewayChannelRequestTests {
 
         await connectGate.release()
         try await connecting.value
+        await channel.shutdown()
     }
 
     @Test func `cancelling the initiating connect leaves the shared attempt alive`() async throws {
@@ -410,21 +455,25 @@ struct GatewayChannelRequestTests {
         let initiator = Task { try await channel.connect() }
         await connectGate.waitUntilEntered()
         let peer = Task { try await channel.connect() }
-        for _ in 0..<1000 {
-            if await channel._test_connectWaiterCount() == 2 {
-                break
+        do {
+            try await TestWait.state("two shared connect waiters") {
+                await channel._test_connectWaiterCount() == 2
             }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+        } catch {
+            await connectGate.release()
+            initiator.cancel()
+            peer.cancel()
+            _ = try? await initiator.value
+            _ = try? await peer.value
+            await channel.shutdown()
+            throw error
         }
         #expect(await channel._test_connectWaiterCount() == 2)
 
         initiator.cancel()
 
         await #expect(throws: CancellationError.self) {
-            try await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { GatewayRequestCancellationTimeout() },
-                operation: { try await initiator.value })
+            try await TestWait.value(of: initiator, "initiating connect cancellation")
         }
         #expect(await channel._test_connectWaiterCount() == 1)
         let socket = try #require(session.latestTask())
@@ -434,5 +483,6 @@ struct GatewayChannelRequestTests {
         try await peer.value
         #expect(await channel._test_connectWaiterCount() == 0)
         #expect(socket.snapshotSendCount() == 1)
+        await channel.shutdown()
     }
 }

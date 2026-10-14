@@ -63,6 +63,7 @@ const localOnboarding = vi.hoisted(() => {
       (params: {
         configPath: string;
         workspace: string;
+        teamCoordinatorId?: string;
         securityAcknowledgedAt: string;
         replace?: boolean;
         expectedRunId?: string;
@@ -78,6 +79,7 @@ const localOnboarding = vi.hoisted(() => {
           runId: params.runId,
           configPath: params.configPath,
           workspace: params.workspace,
+          ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
           securityAcknowledgedAt: params.securityAcknowledgedAt,
           startedAtMs: 1,
         };
@@ -116,6 +118,13 @@ const withConfigMutationExclusive = vi.hoisted(() =>
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot, withConfigMutationExclusive }));
+vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/setup.shared.js")>()),
+  writeWizardConfigFile: vi.fn(async (config: OpenClawConfig) => {
+    localOnboarding.persisted.config = config;
+    return { nextConfig: config };
+  }),
+}));
 vi.mock("../state/local-onboarding-state.js", () => ({
   readLocalOnboardingState: localOnboarding.read,
   readLocalOnboardingStateForConfig: localOnboarding.readForConfig,
@@ -126,7 +135,7 @@ vi.mock("./onboard-agent.js", () => ({
   ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({
     config: {
       ...config,
-      agents: { ...config.agents, list: [{ id: "main", default: true }] },
+      agents: { ...config.agents, entries: { main: {} } },
     },
     agentId: "main",
     bootstrapPending: true,
@@ -221,6 +230,7 @@ function setupDeps(params: {
   runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
+  runMemorySetupFlow?: GuidedOnboardingDeps["runMemorySetupFlow"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
   runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
@@ -263,9 +273,11 @@ function setupDeps(params: {
         return config.wizard?.securityAcknowledgedAt;
       }),
     runSetupMemoryImportStep,
+    runMemorySetupFlow:
+      params.runMemorySetupFlow ?? vi.fn(async (config: OpenClawConfig) => config),
     runAppRecommendations:
       params.runAppRecommendations ??
-      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
+      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) })),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({
@@ -294,7 +306,11 @@ export function setupGuidedCustodianTestSuite() {
       .mockReset()
       .mockImplementation(async (effect) => await effect(localOnboarding.persisted.config ?? {}));
     restoreTerminalState.mockClear();
-    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockReset()
+      .mockImplementation(
+        async ({ additionalGroups }) => additionalGroups?.[0]?.options[0]?.value ?? "skip",
+      );
     ensureAuthProfileStore.mockClear();
     detectAvailableSetupProviderIds.mockReset();
     detectAvailableSetupProviderIds.mockResolvedValue(new Set());
@@ -323,6 +339,7 @@ export function setupGuidedCustodianTestSuite() {
     candidate,
     detection,
     existingModelCandidate,
+    ensureAuthProfileStore,
     localOnboarding,
     makeRuntime,
     pendingLocalSetup,

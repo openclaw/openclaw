@@ -32,10 +32,7 @@ export function claudeNodeTerminalCapability(node: {
   connected?: boolean;
   commands?: string[];
   invocableCommands?: string[];
-}): {
-  canOpenTerminalClaude: boolean;
-  canStartTerminal: boolean;
-} {
+}) {
   const commands = node.invocableCommands ?? node.commands;
   return {
     canOpenTerminalClaude:
@@ -46,30 +43,17 @@ export function claudeNodeTerminalCapability(node: {
   };
 }
 
-function isLocalClaudeResumable(host: { hostId: string }, source: string | undefined): boolean {
-  return host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(source);
-}
-
-function canOpenClaudeTerminalSession(
-  host: { hostId: string; canOpenTerminalClaude?: boolean },
-  source: string | undefined,
-  localCliAvailable: boolean,
-): boolean {
-  return (
-    isResumableClaudeSource(source) &&
-    ((host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && localCliAvailable) ||
-      host.canOpenTerminalClaude === true)
-  );
-}
-
 export function terminalEligibility(
   host: { hostId: string; canOpenTerminalClaude?: boolean },
   source: string | undefined,
   localCliAvailable: boolean,
-): { localResumable: boolean; canOpenTerminal: boolean } {
+) {
+  const resumable = isResumableClaudeSource(source);
+  const local = host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID;
   return {
-    localResumable: isLocalClaudeResumable(host, source),
-    canOpenTerminal: canOpenClaudeTerminalSession(host, source, localCliAvailable),
+    localResumable: local && resumable,
+    canOpenTerminal:
+      resumable && ((local && localCliAvailable) || host.canOpenTerminalClaude === true),
   };
 }
 
@@ -83,6 +67,7 @@ export async function startClaudeCatalogTerminal(params: {
       kind: "node",
       nodeId: params.nodeId,
       command: CLAUDE_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ cwd: params.cwd, initialMessage: params.initialMessage }),
       cwd: params.cwd,
       title: "claude",
@@ -165,6 +150,7 @@ export async function openClaudeCatalogTerminal(
     kind: "node",
     nodeId,
     command: CLAUDE_TERMINAL_RESUME_COMMAND,
+    uploadPathStyle: "native",
     paramsJSON: JSON.stringify({ threadId: params.threadId }),
     ...(record.cwd ? { cwd: record.cwd } : {}),
     title,

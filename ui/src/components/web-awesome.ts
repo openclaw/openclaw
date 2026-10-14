@@ -2,11 +2,8 @@
 // surface-specific registrars so route-only controls stay out of startup.
 import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
+import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
 
-const keyboardDismissedDropdowns = new WeakSet<EventTarget>();
-
-/** Transient menus use hidden triggers. Keep Escape intent on the host so Lit
- * re-renders cannot lose it before Web Awesome finishes hiding the popup. */
 export function trackDropdownKeyboardDismissal(
   event: KeyboardEvent,
   focusDurableTrigger?: () => void,
@@ -15,20 +12,7 @@ export function trackDropdownKeyboardDismissal(
   // use a hidden trigger, so move focus first and let native Tab continue.
   if (event.key === "Tab") {
     focusDurableTrigger?.();
-    return;
   }
-  if (event.key === "Escape" && event.currentTarget) {
-    keyboardDismissedDropdowns.add(event.currentTarget);
-  }
-}
-
-export function consumeDropdownKeyboardDismissal(event: Event): boolean {
-  const dropdown = event.currentTarget;
-  if (!dropdown || !keyboardDismissedDropdowns.has(dropdown)) {
-    return false;
-  }
-  keyboardDismissedDropdowns.delete(dropdown);
-  return true;
 }
 
 /** Web Awesome exposes checkbox items only. Preserve its roving-focus item
@@ -54,16 +38,12 @@ function labelDropdownMenu(dropdown: HTMLElement) {
   if (!menu) {
     return;
   }
-  const label = dropdown.getAttribute("aria-label");
+  const trigger = dropdown.querySelector<HTMLElement>('[slot="trigger"]');
+  const label =
+    dropdown.getAttribute("aria-label") ||
+    (trigger?.getAttribute("aria-label") ?? trigger?.textContent?.trim());
   if (label) {
     menu.setAttribute("aria-label", label);
-    menu.removeAttribute("aria-labelledby");
-    return;
-  }
-  const trigger = dropdown.querySelector<HTMLElement>('[slot="trigger"]');
-  const triggerLabel = trigger?.getAttribute("aria-label") ?? trigger?.textContent?.trim();
-  if (triggerLabel) {
-    menu.setAttribute("aria-label", triggerLabel);
     menu.removeAttribute("aria-labelledby");
   }
 }
@@ -112,20 +92,39 @@ function startDropdownLabelSync(event: Event) {
   if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
     return;
   }
+  // Native NSViews also cover browser top-layer popovers. Wait for all show
+  // listeners to accept opening; retain occlusion through the hide animation.
+  queueMicrotask(() => {
+    // SAFETY: The registered wa-dropdown host exposes its boolean open property.
+    if (!event.defaultPrevented && (dropdown as HTMLElement & { open: boolean }).open) {
+      occludeNativeBrowserSurface(dropdown, "wa-after-hide", function* () {
+        const menu = dropdown.shadowRoot?.querySelector('[part="menu"]');
+        if (menu) {
+          yield menu;
+        }
+        // The host bounds belong to the trigger. Submenus have their own
+        // top-layer rectangles, including while their hide animation runs.
+        for (const item of dropdown.querySelectorAll("wa-dropdown-item")) {
+          const submenu = item.shadowRoot?.querySelector('[part="submenu"]');
+          if (submenu) {
+            yield submenu;
+          }
+        }
+      });
+    }
+  });
   // Reopening must restore the menu before Web Awesome moves focus into it.
   dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.removeAttribute("inert");
   labelDropdownMenu(dropdown);
   labelDropdownSubmenus(dropdown);
   dropdownLabelObservers.get(dropdown)?.disconnect();
-  if (typeof MutationObserver === "undefined") {
-    return;
-  }
   const observer = new MutationObserver(() => {
     labelDropdownMenu(dropdown);
     labelDropdownSubmenus(dropdown);
   });
   // Open menus can survive an in-place locale render. Watch only their light
   // DOM so translated labels stay current without observing the whole app.
+  // MutationObserver is part of the supported Control UI browser floor.
   observer.observe(dropdown, {
     attributes: true,
     attributeFilter: ["aria-label"],

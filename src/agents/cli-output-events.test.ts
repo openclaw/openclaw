@@ -1,20 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   CliCompactionDelta,
+  CliToolInputDelta,
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+import { claudeStreamEvent, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 function claudeMessageStop() {
   return claudeStreamEvent({ type: "message_stop" });
@@ -28,15 +20,240 @@ function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number)
   });
 }
 
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
-  });
-}
-
 describe("createCliJsonlStreamingParser events", () => {
+  it("does not start interrupted tool input when a later message reuses its index for text", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "fixture", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "fixture-cli",
+      onAssistantDelta: () => {},
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+    parser.push(
+      joinJsonlFrames(
+        claudeStreamEvent({ type: "message_start", message: { id: "interrupted" } }),
+        claudeBlockStart({ type: "tool_use", id: "abandoned", name: "Write", input: {} }, 0),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: '{"content":"unfinished\\n' },
+        }),
+        claudeStreamEvent({ type: "message_start", message: { id: "recovered" } }),
+        claudeBlockStart({ type: "text", text: "" }, 0),
+        claudeTextDelta("Recovered.", 0),
+        claudeStreamEvent({ type: "content_block_stop", index: 0 }),
+        claudeMessageStop(),
+        { type: "result", subtype: "success", result: "Recovered." },
+        "",
+      ),
+    );
+    parser.finish();
+    expect(starts).toEqual([]);
+    expect(parser.getOutput()?.text).toBe("Recovered.");
+  });
+
+  it.each([
+    {
+      name: "Write",
+      args: { file_path: "fixture.txt", content: "one\ntwo\n" },
+      diff: { added: 2, removed: 0 },
+    },
+    {
+      name: "Edit",
+      args: { file_path: "fixture.txt", old_string: "old\n", new_string: "new\nnext\n" },
+      diff: { added: 2, removed: 1 },
+    },
+  ])(
+    "streams bounded $name input progress before complete-argument execution starts",
+    ({ name, args, diff }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      try {
+        const progress: CliToolInputDelta[] = [];
+        const starts: CliToolUseStartDelta[] = [];
+        const parser = createCliJsonlStreamingParser({
+          backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+          providerId: "claude-cli",
+          onAssistantDelta: vi.fn(),
+          onToolInputDelta: (delta) => progress.push(delta),
+          onToolUseStart: (delta) => starts.push(delta),
+        });
+        const push = (event: Record<string, unknown>, parentToolUseId?: string) =>
+          parser.push(
+            JSON.stringify({ type: "stream_event", event, parent_tool_use_id: parentToolUseId }) +
+              "\n",
+          );
+        push({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "call-1", name, input: {} },
+        });
+        // Subagent blocks share numeric indexes with their parent but own no parent progress.
+        push(
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "child", name: "Write", input: {} },
+          },
+          "parent",
+        );
+        push(
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"content":"child\\n' },
+          },
+          "parent",
+        );
+        const json = JSON.stringify(args);
+        for (let offset = 0; offset < json.length; offset += 7) {
+          vi.setSystemTime(Date.now() + 250);
+          push({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: json.slice(offset, offset + 7) },
+          });
+        }
+        expect(starts).toEqual([]);
+        expect(progress.length).toBeGreaterThan(0);
+        expect(progress.at(-1)).toEqual({ toolCallId: "call-1", name: name.toLowerCase(), diff });
+        expect(
+          progress.every(
+            (delta) => Object.keys(delta).toSorted().join(",") === "diff,name,toolCallId",
+          ),
+        ).toBe(true);
+        push({ type: "content_block_stop", index: 0 });
+        parser.push(
+          JSON.stringify({
+            type: "assistant",
+            message: { content: [{ type: "tool_use", id: "call-1", name, input: args }] },
+          }) + "\n",
+        );
+        parser.finish();
+        expect(starts).toEqual([{ toolCallId: "call-1", name, kind: "tool_use", args }]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("throttles fragmented input and retires counters across stops, snapshots, and reused indexes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const progress: CliToolInputDelta[] = [];
+      const starts: CliToolUseStartDelta[] = [];
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        onAssistantDelta: vi.fn(),
+        onToolInputDelta: (delta) => progress.push(delta),
+        onToolUseStart: (delta) => starts.push(delta),
+      });
+      const push = (event: Record<string, unknown>) =>
+        parser.push(JSON.stringify(claudeStreamEvent(event)) + "\n");
+      const start = (id: string, index = 0) =>
+        push({
+          type: "content_block_start",
+          index,
+          content_block: { type: "tool_use", id, name: "Write", input: {} },
+        });
+      const delta = (partial_json: string, index = 0) =>
+        push({
+          type: "content_block_delta",
+          index,
+          delta: { type: "input_json_delta", partial_json },
+        });
+      const snapshot = (id: string, input: Record<string, unknown>) =>
+        parser.push(
+          JSON.stringify({
+            type: "assistant",
+            message: { content: [{ type: "tool_use", id, name: "Write", input }] },
+          }) + "\n",
+        );
+      start("fragmented");
+      delta('{"content":"one\\n');
+      delta("two\\n");
+      vi.setSystemTime(1_249);
+      delta("three\\n");
+      expect(progress).toEqual([
+        { toolCallId: "fragmented", name: "write", diff: { added: 1, removed: 0 } },
+      ]);
+      expect(starts).toEqual([]);
+      vi.setSystemTime(1_250);
+      delta('four\\n"}');
+      expect(progress.at(-1)?.diff).toEqual({ added: 4, removed: 0 });
+      // A repeated begin for the same call cannot move its visible counts backwards.
+      start("fragmented");
+      vi.setSystemTime(1_500);
+      delta('{"content":"one\\n');
+      expect(progress).toHaveLength(2);
+      delta('two\\nthree\\nfour\\n"}');
+      push({ type: "content_block_stop", index: 0 });
+      const args = { content: "one\ntwo\nthree\nfour\n" };
+      snapshot("fragmented", args);
+      expect(starts).toEqual([{ toolCallId: "fragmented", name: "Write", kind: "tool_use", args }]);
+      start("fragmented");
+      delta('{"content":"replay\\n"}');
+      push({ type: "content_block_stop", index: 0 });
+      expect(progress).toHaveLength(2);
+      expect(starts).toHaveLength(1);
+      start("fresh");
+      delta('{"content":"fresh\\n"}');
+      expect(progress.at(-1)).toEqual({
+        toolCallId: "fresh",
+        name: "write",
+        diff: { added: 1, removed: 0 },
+      });
+      push({ type: "content_block_stop", index: 0 });
+      // Both completion shapes must release the shared 64-call progress budget.
+      for (let index = 1; index <= 65; index++) {
+        const id = `completed-${index}`;
+        start(id, index);
+        delta('{"content":"line\\n"}', index);
+        if (index % 2 === 0) {
+          push({ type: "content_block_stop", index });
+        } else {
+          snapshot(id, { content: "line\n" });
+        }
+      }
+      expect(progress).toHaveLength(68);
+      expect(starts).toHaveLength(67);
+      parser.finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops counting oversized streamed input without truncating complete execution arguments", () => {
+    const progress: CliToolInputDelta[] = [];
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: vi.fn(),
+      onToolInputDelta: (delta) => progress.push(delta),
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+    const args = { content: `${"x".repeat(1024 * 1024)}\n` };
+    const input = JSON.stringify(args);
+    const events = [
+      claudeBlockStart({ type: "tool_use", id: "large", name: "Write", input: {} }, 0),
+      ...[input.slice(0, 512 * 1024), input.slice(512 * 1024)].map((partial_json) =>
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json },
+        }),
+      ),
+      claudeStreamEvent({ type: "content_block_stop", index: 0 }),
+    ];
+    parser.push(joinJsonlFrames(...events) + "\n");
+    parser.finish();
+    expect(progress).toEqual([]);
+    expect(starts).toEqual([{ toolCallId: "large", name: "Write", kind: "tool_use", args }]);
+  });
+
   it("streams Gemini message deltas and tool events", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
     const starts: CliToolUseStartDelta[] = [];
@@ -127,6 +344,8 @@ describe("createCliJsonlStreamingParser events", () => {
     ]);
     expect(parser.getOutput()).toEqual({
       text: "Checking tools. Done.",
+      // Diagnostics record only the post-tool message as the final answer.
+      rawFinalText: "Done.",
       sessionId: "gemini-session-stream",
       usage: {
         input: 4,
@@ -246,6 +465,41 @@ describe("createCliJsonlStreamingParser events", () => {
       sessionId: "custom-successor",
       usage: { input: 3, output: 2, total: 5 },
     });
+  });
+
+  it("replaces an earlier final message when a later custom result supplies the answer", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "acme", output: "jsonl" },
+      providerId: "acme-cli",
+      parseJsonlEvent: (line) => {
+        const event = JSON.parse(line) as { type: string; text?: string };
+        if (event.type === "text") {
+          return { kind: "text", text: event.text ?? "" };
+        }
+        if (event.type === "tool-start") {
+          return { kind: "toolStart", toolCallId: "call-1", name: "search", args: {} };
+        }
+        return { kind: "result", text: event.text };
+      },
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      `${joinJsonlFrames(
+        { type: "text", text: "Checking. " },
+        { type: "tool-start" },
+        { type: "text", text: "Done." },
+        { type: "result" },
+      )}\n`,
+    );
+    expect(parser.getOutput()?.rawFinalText).toBe("Done.");
+
+    parser.push(`${joinJsonlFrames({ type: "result", text: "Replacement answer" })}\n`);
+    parser.finish();
+
+    const output = parser.getOutput();
+    expect(output?.text).toBe("Replacement answer");
+    expect(output?.rawFinalText).toBeUndefined();
   });
 
   it("lets plugin parsers own their frames before lazily parsing fallback JSON", () => {

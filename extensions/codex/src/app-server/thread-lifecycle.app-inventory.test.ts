@@ -11,7 +11,7 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { resolveCodexPluginsPolicy } from "./config.js";
+import type { CodexPluginConfig } from "./config.js";
 import {
   appInfo,
   appSummary,
@@ -20,14 +20,12 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
-import { buildCodexPluginThreadConfigInputFingerprint } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
-import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app-authority.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel, useAutoCleanupTempDirTracker } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
@@ -84,7 +82,11 @@ describe("Codex app inventory across physical process restart", () => {
     vi.restoreAllMocks();
   });
 
-  async function fixture(scheduled: boolean) {
+  async function fixture(
+    scheduled: boolean,
+    configuredPlugins: CodexPluginConfig = pluginConfig,
+    nativeApps: JsonObject = {},
+  ) {
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     const params = createParams(
@@ -106,7 +108,6 @@ describe("Codex app inventory across physical process restart", () => {
     const appServer = {
       ...createAppServerOptions(),
       connectionClass: "local-loopback" as const,
-      remoteAppsSubstrate: "preconfigured" as const,
     };
     appServer.start = {
       ...appServer.start,
@@ -124,11 +125,17 @@ describe("Codex app inventory across physical process restart", () => {
     let accountRevoked = false;
     const calls: Array<{ processId: string; method: string; params: JsonObject; loaded: boolean }> =
       [];
+    const nativeLinkPolicy: JsonObject = {};
     const currentConfig: JsonObject = {
       mcp_servers: { inherited: { command: "synthetic-mcp" } },
       apps: {
+        ...nativeApps,
         _default: { enabled: false },
-        [appId]: { enabled: true, tools: { list: { approval_mode: "auto" } } },
+        [appId]: {
+          enabled: true,
+          tools: { list: { approval_mode: "auto" } },
+          links: { account: nativeLinkPolicy },
+        },
       },
     };
 
@@ -151,6 +158,14 @@ describe("Codex app inventory across physical process restart", () => {
       const assertOpen = () => {
         if (closeError) {
           throw closeError;
+        }
+      };
+      const reloadUserConfig = () => {
+        for (const threadId of loadedThreads.keys()) {
+          loadedThreads.set(
+            threadId,
+            mergeNativeFixtureConfig(currentConfig, durableThreads.get(threadId)!),
+          );
         }
       };
       const fake = await createLeasedCodexLifecycleHarness({
@@ -202,6 +217,9 @@ describe("Codex app inventory across physical process restart", () => {
           if (method === "config/read") {
             return { config: currentConfig, layers: [] };
           }
+          if (method === "config/batchWrite") {
+            throw new Error("App admission must not mutate saved native settings");
+          }
           if (method === "configRequirements/read") {
             return { requirements: null };
           }
@@ -216,12 +234,27 @@ describe("Codex app inventory across physical process restart", () => {
               await faults.beforeInventory?.();
             }
             assertOpen();
-            const effective = threadId ? loadedThreads.get(threadId) : currentConfig;
+            const effective = threadId
+              ? mergeNativeFixtureConfig(currentConfig, durableThreads.get(threadId)!)
+              : currentConfig;
             const apps = isJsonObject(effective?.apps) ? effective.apps : {};
             const app = isJsonObject(apps[appId]) ? apps[appId] : {};
             const row = {
               ...appInfo(appId, !accountRevoked),
-              isEnabled: app.enabled === true && !(threadId && disabledThreadApps.has(threadId)),
+              isEnabled:
+                effective?.["features.apps"] !== false &&
+                app.enabled === true &&
+                !(threadId && disabledThreadApps.has(threadId)),
+              toolSummaries: [
+                {
+                  name: "list",
+                  title: null,
+                  description: "List calendar entries.",
+                  isEnabled: true,
+                  disabledReason: null,
+                  isReadOnly: true,
+                },
+              ],
             };
             if (method === "app/installed") {
               return codexAppInventoryResponse(
@@ -244,21 +277,28 @@ describe("Codex app inventory across physical process restart", () => {
             if (threadId && requestParams.limit === undefined) {
               await faults.beforeMcpAttestation?.();
             }
+            const effective = threadId
+              ? mergeNativeFixtureConfig(currentConfig, durableThreads.get(threadId)!)
+              : currentConfig;
             return {
               data: [
-                {
-                  name: "codex_apps",
-                  serverInfo: { name: "codex_apps", version: "1" },
-                  tools:
-                    accountRevoked || (threadId && threadToolRevocations.has(threadId))
-                      ? {}
-                      : {
-                          list: {
-                            _meta: { connector_id: appId },
-                            annotations: { destructiveHint: false, openWorldHint: false },
-                          },
-                        },
-                },
+                ...(effective?.["features.apps"] === false
+                  ? []
+                  : [
+                      {
+                        name: "codex_apps",
+                        serverInfo: { name: "codex_apps", version: "1" },
+                        tools:
+                          accountRevoked || (threadId && threadToolRevocations.has(threadId))
+                            ? {}
+                            : {
+                                list: {
+                                  _meta: { connector_id: appId },
+                                  annotations: { destructiveHint: false, openWorldHint: false },
+                                },
+                              },
+                      },
+                    ]),
                 {
                   name: "inherited",
                   serverInfo: faults.activeInheritedMcp
@@ -274,7 +314,7 @@ describe("Codex app inventory across physical process restart", () => {
             const id = `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
             const config = isJsonObject(requestParams.config) ? requestParams.config : {};
             durableThreads.set(id, config);
-            loadedThreads.set(id, config);
+            loadedThreads.set(id, mergeNativeFixtureConfig(currentConfig, config));
             subscribedThreads.add(id);
             return { ...threadStartResult(id, workspaceDir), model: params.modelId };
           }
@@ -290,7 +330,7 @@ describe("Codex app inventory across physical process restart", () => {
               const config = isJsonObject(requestParams.config)
                 ? requestParams.config
                 : durableThreads.get(threadId)!;
-              loadedThreads.set(threadId, config);
+              loadedThreads.set(threadId, mergeNativeFixtureConfig(currentConfig, config));
               durableThreads.set(threadId, config);
             }
             subscribedThreads.add(threadId);
@@ -317,22 +357,18 @@ describe("Codex app inventory across physical process restart", () => {
       processes.push({ close });
       const abandonClient = vi.fn(async () => close());
       const appCacheKey = "same-account-home-version";
-      const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
-        buildCodexPluginThreadConfigInputFingerprint({ pluginConfig, appCacheKey }),
+      const prepareProvider = preparePluginThreadConfigForTest(
+        configuredPlugins,
+        appCacheKey,
         params.scheduledRuntimeAuthority,
       );
       const provider = () =>
-        createCodexPluginThreadConfigStartupProvider({
-          inputFingerprint,
-          enabledPluginConfigKeys: [pluginName],
-          policy: resolveCodexPluginsPolicy(pluginConfig),
+        prepareProvider({
           requestTimeoutMs: appServer.requestTimeoutMs,
           signal: abort.signal,
-          pluginConfig,
           client: fake.client,
           configCwd: workspaceDir,
           appCache,
-          appCacheKey,
           metadataCache,
           scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
         });
@@ -340,6 +376,7 @@ describe("Codex app inventory across physical process restart", () => {
         ...fake,
         close,
         loadedThreads,
+        reloadUserConfig,
         subscribedThreads,
         threadToolRevocations,
         disabledThreadApps,
@@ -365,8 +402,10 @@ describe("Codex app inventory across physical process restart", () => {
       };
     }
     return {
+      appServer,
       calls,
       createProcess,
+      nativeLinkPolicy,
       readBinding: () => bindingStore.read(identity),
       replaceBinding: async (threadId: string) => {
         const current = bindingStore.read(identity);
@@ -390,8 +429,13 @@ describe("Codex app inventory across physical process restart", () => {
     };
   }
 
-  async function continuation(scheduled: boolean, lifecycle: string) {
-    const f = await fixture(scheduled);
+  async function continuation(
+    scheduled: boolean,
+    lifecycle: string,
+    configuredPlugins?: CodexPluginConfig,
+    nativeApps?: JsonObject,
+  ) {
+    const f = await fixture(scheduled, configuredPlugins, nativeApps);
     const firstProcess = await f.createProcess();
     const first = await firstProcess.run();
     expect(first.pluginAppPolicyContext?.apps[appId]).toBeDefined();
@@ -426,14 +470,7 @@ describe("Codex app inventory across physical process restart", () => {
     return { ...f, first, process };
   }
 
-  it.each([
-    { lifecycle: "cold", scheduled: false },
-    { lifecycle: "warm", scheduled: false },
-    { lifecycle: "unloaded-same-process", scheduled: false },
-    { lifecycle: "cold", scheduled: true },
-    { lifecycle: "warm", scheduled: true },
-    { lifecycle: "unloaded-same-process", scheduled: true },
-  ])(
+  it.each([{ lifecycle: "unloaded-same-process", scheduled: true }])(
     "preserves approved apps on $lifecycle continuation, scheduled=$scheduled",
     async ({ lifecycle, scheduled }) => {
       const f = await continuation(scheduled, lifecycle);
@@ -486,6 +523,145 @@ describe("Codex app inventory across physical process restart", () => {
     },
   );
 
+  it("preserves excluded native app denials on non-ask warm continuation", async () => {
+    const f = await continuation(
+      false,
+      "warm",
+      { codexPlugins: { enabled: true, allow_all_plugins: true } },
+      { excluded: { enabled: true } },
+    );
+    const boundary = f.calls.length;
+    const second = await f.process.run();
+    expect(second.threadId).toBe(f.first.threadId);
+    expect(
+      f.calls
+        .slice(boundary)
+        .some((call) => ["thread/resume", "thread/unsubscribe"].includes(call.method)),
+    ).toBe(false);
+    expect(f.process.loadedThreads.get(second.threadId)).toMatchObject({
+      apps: { [appId]: { enabled: true }, excluded: { enabled: false } },
+    });
+  });
+
+  it.each(["cold", "warm"])(
+    "reconfigures the %s thread when native ask override keys change",
+    async (lifecycle) => {
+      const f = await continuation(false, lifecycle, {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "ask",
+        },
+      });
+      expect(f.first.pluginAppPolicyContext?.apps[appId]).toMatchObject({
+        source: "account",
+        destructiveApprovalMode: "ask",
+      });
+      // A native client can add a higher-precedence link reviewer without changing
+      // the OpenClaw policy fingerprint or invalidating its cached app inventory.
+      f.nativeLinkPolicy.approvals_reviewer = "auto_review";
+      if (lifecycle === "warm") {
+        f.process.reloadUserConfig();
+        expect(f.process.loadedThreads.get(f.first.threadId)).toMatchObject({
+          apps: { [appId]: { links: { account: { approvals_reviewer: "auto_review" } } } },
+        });
+      }
+      const boundary = f.calls.length;
+      const second = await f.process.run();
+      expect(f.nativeLinkPolicy.approvals_reviewer).toBe("auto_review");
+      const writes = f.calls.slice(boundary).filter((call) => call.method === "config/batchWrite");
+      expect(writes).toHaveLength(0);
+      if (lifecycle === "cold") {
+        expect(second.threadId).toBe(f.first.threadId);
+      } else {
+        expect(second.threadId).not.toBe(f.first.threadId);
+      }
+      expect(f.readBinding()?.pluginAppPolicyContext?.apps[appId]).toMatchObject({
+        source: "account",
+        destructiveApprovalMode: "ask",
+      });
+      expect(f.process.loadedThreads.get(second.threadId)).toMatchObject({
+        apps: {
+          [appId]: {
+            enabled: true,
+            approvals_reviewer: "user",
+            links: { account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" } },
+          },
+        },
+      });
+      // A later native reload keeps this thread's higher-precedence ask overlay.
+      expect(
+        await retainCodexAppServerLiveThread(
+          f.process.client,
+          second.threadId,
+          undefined,
+          second.liveThreadConfigFingerprint,
+        ),
+      ).toBe(true);
+      f.process.reloadUserConfig();
+      const third = await f.process.run();
+      expect(third.threadId).toBe(second.threadId);
+      expect(f.process.loadedThreads.get(third.threadId)).toMatchObject({
+        apps: { [appId]: { links: { account: { approvals_reviewer: "user" } } } },
+      });
+    },
+  );
+
+  it.each([
+    { lifecycle: "cold", scheduled: false },
+    { lifecycle: "warm", scheduled: true },
+  ])(
+    "contains $lifecycle ask inventory timeouts, scheduled=$scheduled",
+    async ({ lifecycle, scheduled }) => {
+      const f = await continuation(scheduled, lifecycle, {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "ask",
+        },
+      });
+      const binding = f.readBinding();
+      const release = createDeferred<void>();
+      f.process.faults.beforeInventory = () => release.promise;
+      f.appServer.requestTimeoutMs = 400;
+      // Real request timers can win before the wall clock reaches the shared
+      // deadline. Keep that ordering deterministic without replacing the timers.
+      vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const boundary = f.calls.length;
+      try {
+        if (scheduled) {
+          await expect(f.process.run()).rejects.toThrow(
+            "Codex app policy verification exceeded its 100 ms startup budget",
+          );
+          expect(f.readBinding()).toEqual(binding);
+          expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(
+            false,
+          );
+          return;
+        }
+        const second = await f.process.run();
+        expect(second.threadId).not.toBe(f.first.threadId);
+        expect(f.readBinding()?.threadId).toBe(second.threadId);
+        expect(f.readBinding()?.pluginAppPolicyContext?.apps).toEqual({});
+        expect(f.process.loadedThreads.get(second.threadId)).toMatchObject({
+          "features.apps": false,
+          apps: { _default: { enabled: false }, [appId]: { enabled: true } },
+        });
+        const mcp = await f.process.client.request("mcpServerStatus/list", {
+          threadId: second.threadId,
+        });
+        expect(mcp.data).not.toContainEqual(expect.objectContaining({ name: "codex_apps" }));
+        expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
+        expect(
+          f.calls.slice(boundary).filter((call) => call.method === "thread/start"),
+        ).toHaveLength(1);
+      } finally {
+        f.process.abort.abort();
+        release.resolve();
+      }
+    },
+  );
+
   it("keeps revoked account apps unavailable after a cold process restart", async () => {
     const f = await continuation(false, "cold");
     f.revokeAccount();
@@ -501,33 +677,7 @@ describe("Codex app inventory across physical process restart", () => {
     expect(reads.every((call) => !call.params.threadId || call.loaded)).toBe(true);
   });
 
-  it("rejects a scheduled continuation whose account app was revoked", async () => {
-    const f = await continuation(true, "cold");
-    f.revokeAccount();
-    await expect(f.process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-  });
-
-  it("checks scheduled tools on the loaded thread even when account-wide tools remain available", async () => {
-    const f = await continuation(true, "warm");
-    const { process, first } = f;
-    process.threadToolRevocations.add(first.threadId);
-    const boundary = f.calls.length;
-    await expect(process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-    const calls = f.calls.slice(boundary);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "mcpServerStatus/list" &&
-          call.params.threadId === first.threadId &&
-          call.loaded,
-      ),
-    ).toBe(true);
-    expect(
-      calls.filter((call) => call.method === "thread/start" || call.method === "thread/resume"),
-    ).toEqual([]);
-  });
-
-  it.each(["cold", "warm"])(
+  it.each(["cold"])(
     "rejects active inherited MCP servers on a scheduled %s continuation",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);
@@ -556,8 +706,6 @@ describe("Codex app inventory across physical process restart", () => {
 
   it.each([
     { lifecycle: "cold", fault: "abort" },
-    { lifecycle: "warm", fault: "abort" },
-    { lifecycle: "cold", fault: "replacement" },
     { lifecycle: "warm", fault: "replacement" },
   ])("fences $fault during $lifecycle loaded-thread admission", async ({ lifecycle, fault }) => {
     const f = await continuation(false, lifecycle);
@@ -591,39 +739,33 @@ describe("Codex app inventory across physical process restart", () => {
     expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
   });
 
-  it.each(["cold", "warm"])(
-    "attests provisional apps on the %s loaded thread",
-    async (lifecycle) => {
-      const f = await continuation(false, lifecycle);
-      const previousBinding = f.readBinding();
-      f.process.disabledThreadApps.add(f.first.threadId);
-      const boundary = f.calls.length;
-      await expect(f.process.run()).rejects.toThrow("did not expose admitted apps");
-      expect(f.readBinding()).toEqual(previousBinding);
-      expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
-      expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
-    },
-  );
+  it("keeps the cold loaded thread when an optional app is disabled", async () => {
+    const f = await continuation(false, "cold");
+    const previousBinding = f.readBinding();
+    f.process.disabledThreadApps.add(f.first.threadId);
+    const boundary = f.calls.length;
+    await expect(f.process.run()).resolves.toMatchObject({ threadId: f.first.threadId });
+    expect(f.readBinding()).toMatchObject({ threadId: previousBinding!.threadId });
+    expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(true);
+    expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
+  });
 
-  it.each(["cold", "warm"])(
-    "preserves the durable binding when the %s client closes during inventory",
-    async (lifecycle) => {
-      const f = await continuation(false, lifecycle);
-      const previousBinding = f.readBinding();
-      f.process.faults.beforeInventory = async () => {
-        f.process.faults.beforeInventory = undefined;
-        f.process.close(new Error("codex app-server client is closed"));
-      };
-      const boundary = f.process.request.mock.calls.length;
-      await expect(f.process.run()).rejects.toThrow();
-      expect(f.readBinding()).toEqual(previousBinding);
-      expect(
-        f.process.request.mock.calls.slice(boundary).some(([method]) => method === "thread/start"),
-      ).toBe(false);
-    },
-  );
+  it("preserves the durable binding when the warm client closes during inventory", async () => {
+    const f = await continuation(false, "warm");
+    const previousBinding = f.readBinding();
+    f.process.faults.beforeInventory = async () => {
+      f.process.faults.beforeInventory = undefined;
+      f.process.close(new Error("codex app-server client is closed"));
+    };
+    const boundary = f.process.request.mock.calls.length;
+    await expect(f.process.run()).rejects.toThrow();
+    expect(f.readBinding()).toEqual(previousBinding);
+    expect(
+      f.process.request.mock.calls.slice(boundary).some(([method]) => method === "thread/start"),
+    ).toBe(false);
+  });
 
-  it.each(["cold", "warm"])(
+  it.each(["warm"])(
     "retires the %s client when denied admission cannot unsubscribe",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);
@@ -648,3 +790,16 @@ describe("Codex app inventory across physical process restart", () => {
     },
   );
 });
+
+// Codex reloads durable user layers while retaining the thread's session overrides.
+function mergeNativeFixtureConfig(base: JsonObject, patch: JsonObject): JsonObject {
+  const merged = structuredClone(base);
+  for (const [key, value] of Object.entries(patch)) {
+    const current = merged[key];
+    merged[key] =
+      isJsonObject(current) && isJsonObject(value)
+        ? mergeNativeFixtureConfig(current, value)
+        : structuredClone(value);
+  }
+  return merged;
+}

@@ -13,9 +13,6 @@ export function bindReplyOperationTyping(
   }
   typingByReplyOperation.set(operation, typing);
   runAfterReplyOperationClear(operation, () => {
-    if (typingByReplyOperation.get(operation) !== typing) {
-      return;
-    }
     typingByReplyOperation.delete(operation);
     typing.cleanup();
   });

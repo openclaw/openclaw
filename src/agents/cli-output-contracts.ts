@@ -5,6 +5,7 @@ import type {
   CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import type { LiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -31,7 +32,11 @@ export type CliTerminalFailure =
       reason: "max_turns";
       limit?: number;
     }
-  | { reason: "synthetic_no_response" };
+  | { reason: "synthetic_no_response" }
+  // The backend ended the turn on purpose without a reply (hook stop, aborted
+  // tools, budget). Keeping the CLI's own `terminal_reason` here is what lets
+  // consumers name the cause instead of reporting a transport-shaped failure.
+  | { reason: "turn_stopped"; terminalReason: string; stopReason?: string };
 
 export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";
@@ -40,7 +45,15 @@ export type CliTerminalInterruption = {
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
+  /** Completed result boundaries, retained for independent delivery and retry. */
+  textParts?: string[];
   rawText?: string;
+  /**
+   * Raw text of the model's final message when it differs from the cumulative
+   * `text` (earlier results or pre-tool narration); empty when the final message
+   * had no text. Never plugin-transformed.
+   */
+  rawFinalText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;
@@ -58,6 +71,7 @@ export type CliOutput = {
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
@@ -107,6 +121,9 @@ export type CliToolUseStartDelta = {
   args: Record<string, unknown>;
 };
 
+/** Counts-only progress while CLI tool arguments are still being generated. */
+export type CliToolInputDelta = LiveEditDiffProgress;
+
 /** Tool-call result event reconstructed from CLI stream output. */
 export type CliToolResultDelta = {
   toolCallId: string;
@@ -121,15 +138,21 @@ export type CliJsonlStreamingParserOptions = {
   parseJsonlEvent?: CliBackendParseJsonlEvent;
   parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onCompletedReply?: (text: string, assistantMessageIndex: number) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onCompaction?: (delta: CliCompactionDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolInputDelta?: (delta: CliToolInputDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
+  /** Parent initialization fact; its authority owner validates the raw tool list. */
+  onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  /** Semantic subagent work for an active parent Agent call. Not a parent-lane event. */
+  onAttributedSubagentProgress?: (parentToolUseId: string) => void;
 };

@@ -1,27 +1,18 @@
 import { vi } from "vitest";
-import type { PluginOrigin } from "../plugins/types.js";
-
-type TestPluginRecord = {
-  pluginId: string;
-  origin: PluginOrigin;
-  rootDir: string;
-  manifestPath: string;
-  manifestHash: string;
-  source: string;
-  packageName: string;
-  packageVersion: string;
-  installRecordHash?: string;
-  packageJson: { path: string; hash: string };
-};
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 
 export function pluginRecord(
   pluginId: string,
-  overrides: Partial<TestPluginRecord> = {},
-): TestPluginRecord {
+  overrides: Partial<InstalledPluginIndexRecord> = {},
+): InstalledPluginIndexRecord {
   const rootDir = `/plugins/${pluginId}`;
   return {
     pluginId,
     origin: "global",
+    enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
     rootDir,
     manifestPath: `${rootDir}/openclaw.plugin.json`,
     manifestHash: `${pluginId}-manifest-v1`,
@@ -56,3 +47,29 @@ export const codexRuntimeArtifactAuth = {
   runtimeArtifactFingerprint: "codex-runtime-v1",
   runtimeArtifactId: "codex-app-server",
 } as const;
+
+export function config(model = "openai/gpt-5.5@openai:verified"): OpenClawConfig {
+  return {
+    agents: { defaults: { model } },
+    auth: {
+      profiles: {
+        "openai:verified": { provider: "openai", mode: "api_key" },
+      },
+    },
+  };
+}
+
+export function profileAuth(profileId: string, apiKey: string) {
+  return { apiKey, profileId, source: `profile:${profileId}`, mode: "api-key" as const };
+}
+
+export function profileStore(profileId: string, credential: object) {
+  return vi.fn(async () => ({ version: 1, profiles: { [profileId]: credential } })) as never;
+}
+
+export function requireFingerprint(value: string | undefined): string {
+  if (!value) {
+    throw new Error("missing test auth fingerprint");
+  }
+  return value;
+}

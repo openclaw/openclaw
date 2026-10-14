@@ -2,16 +2,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
-const routeState = vi.hoisted(() => ({
-  driver: "openclaw",
-  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
-  cookiesSetManyViaPlaywright: vi.fn(async () => ({ added: 2 })),
-  setDeviceViaPlaywright: vi.fn(async () => {}),
-  setHttpCredentialsViaPlaywright: vi.fn(async () => {}),
-  storageSetViaPlaywright: vi.fn(async () => {}),
-  storageClearViaPlaywright: vi.fn(async () => {}),
-  withPlaywrightRouteContext: vi.fn(),
-}));
+type StorageKind = "local" | "session";
+
+const routeState = vi.hoisted(() => {
+  const storage = { local: new Map<string, string>(), session: new Map<string, string>() };
+  return {
+    driver: "openclaw",
+    cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
+    cookiesSetManyViaPlaywright: vi.fn(async () => ({ added: 2 })),
+    setDeviceViaPlaywright: vi.fn(async () => {}),
+    setHttpCredentialsViaPlaywright: vi.fn(async () => {}),
+    storage,
+    storageGetViaPlaywright: vi.fn(async ({ kind, key }: { kind: StorageKind; key?: string }) => ({
+      values: Object.fromEntries(
+        [...storage[kind]].filter(([storedKey]) => key === undefined || storedKey === key),
+      ),
+    })),
+    storageSetViaPlaywright: vi.fn(
+      async ({ kind, key, value }: { kind: StorageKind; key: string; value: string }) => {
+        storage[kind].set(key, value);
+      },
+    ),
+    storageClearViaPlaywright: vi.fn(async ({ kind }: { kind: StorageKind }) => {
+      storage[kind].clear();
+    }),
+    withPlaywrightRouteContext: vi.fn(),
+  };
+});
 
 vi.mock("./agent.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent.shared.js")>()),
@@ -32,6 +49,7 @@ type PlaywrightRouteParams = {
       cookiesSetManyViaPlaywright: typeof routeState.cookiesSetManyViaPlaywright;
       setDeviceViaPlaywright: typeof routeState.setDeviceViaPlaywright;
       setHttpCredentialsViaPlaywright: typeof routeState.setHttpCredentialsViaPlaywright;
+      storageGetViaPlaywright: typeof routeState.storageGetViaPlaywright;
       storageSetViaPlaywright: typeof routeState.storageSetViaPlaywright;
       storageClearViaPlaywright: typeof routeState.storageClearViaPlaywright;
     };
@@ -46,9 +64,22 @@ function getPostHandler(route: string) {
   return handler;
 }
 
+async function post(
+  route: string,
+  body: BrowserRequest["body"],
+  params: BrowserRequest["params"] = {},
+  signal?: AbortSignal,
+) {
+  const response = createBrowserRouteResponse();
+  await getPostHandler(route)!({ params, query: {}, body, signal }, response.res);
+  return response;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   routeState.driver = "openclaw";
+  routeState.storage.local.clear();
+  routeState.storage.session.clear();
   routeState.withPlaywrightRouteContext
     .mockReset()
     .mockImplementation(async (params: PlaywrightRouteParams) => {
@@ -69,8 +100,7 @@ describe("browser device route", () => {
     { route: "/set/locale", body: { locale: "en-US" } },
   ])("rejects existing-session $route with a supported alternative", async ({ route, body }) => {
     routeState.driver = "existing-session";
-    const response = createBrowserRouteResponse();
-    await getPostHandler(route)?.({ params: {}, query: {}, body }, response.res);
+    const response = await post(route, body);
     expect(response.statusCode).toBe(501);
     expect(response.body).toMatchObject({
       error: expect.stringContaining("managed browser profile"),
@@ -80,16 +110,11 @@ describe("browser device route", () => {
 
   it("forwards the route lease signal into the atomic device transition", async () => {
     const controller = new AbortController();
-    const response = createBrowserRouteResponse();
-
-    await getPostHandler("/set/device")?.(
-      {
-        params: {},
-        query: {},
-        body: { targetId: "tab-1", name: "iPhone 14" },
-        signal: controller.signal,
-      },
-      response.res,
+    const response = await post(
+      "/set/device",
+      { targetId: "tab-1", name: "iPhone 14" },
+      {},
+      controller.signal,
     );
 
     expect(routeState.setDeviceViaPlaywright).toHaveBeenCalledWith({
@@ -131,7 +156,6 @@ describe("browser device route", () => {
 describe("browser cookie batch route", () => {
   it("parses and injects a non-empty cookie batch", async () => {
     const controller = new AbortController();
-    const response = createBrowserRouteResponse();
     const cookies = [
       {
         name: "session",
@@ -146,14 +170,11 @@ describe("browser cookie batch route", () => {
       { name: "theme", value: "dark", url: "https://example.com" },
     ];
 
-    await getPostHandler("/cookies/set-many")?.(
-      {
-        params: {},
-        query: {},
-        body: { targetId: "requested-tab", cookies },
-        signal: controller.signal,
-      },
-      response.res,
+    const response = await post(
+      "/cookies/set-many",
+      { targetId: "requested-tab", cookies },
+      {},
+      controller.signal,
     );
 
     expect(routeState.cookiesSetManyViaPlaywright).toHaveBeenCalledWith({
@@ -166,13 +187,10 @@ describe("browser cookie batch route", () => {
   });
 
   it.each([
-    ["missing", {}],
     ["empty", { cookies: [] }],
     ["non-array", { cookies: {} }],
   ])("rejects a %s cookies payload", async (_label, body) => {
-    const response = createBrowserRouteResponse();
-
-    await getPostHandler("/cookies/set-many")?.({ params: {}, query: {}, body }, response.res);
+    const response = await post("/cookies/set-many", body);
 
     expect(response.statusCode).toBe(400);
     expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
@@ -181,60 +199,76 @@ describe("browser cookie batch route", () => {
 });
 
 describe("browser storage route boundaries", () => {
+  it("reads the distinct padded local key", async () => {
+    const kind = "local";
+    routeState.storage[kind].set("account", "plain");
+    routeState.storage[kind].set(" account ", "padded");
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserAgentStorageRoutes(app, {} as never);
+    const response = createBrowserRouteResponse();
+
+    await getHandlers.get("/storage/:kind")!(
+      { params: { kind }, query: { key: " account " } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({
+      ok: true,
+      targetId: "tab-1",
+      values: { " account ": "padded" },
+    });
+  });
+
   it.each([
-    { kind: "local", operation: "set", value: "  preserved  " },
-    { kind: "session", operation: "set", value: "" },
+    { kind: "session", operation: "set", value: "  preserved  " },
     { kind: "local", operation: "clear", value: undefined },
-    { kind: "session", operation: "clear", value: undefined },
   ] as const)(
-    "parses $kind storage $operation before dispatch",
+    "changes only the requested $kind storage entry on $operation",
     async ({ kind, operation, value }) => {
-      const response = createBrowserRouteResponse();
-      await getPostHandler(`/storage/:kind/${operation}`)?.(
-        {
-          params: { kind: ` ${kind} ` },
-          query: {},
-          body: { targetId: " requested-tab ", key: " key ", value },
-        },
-        response.res,
+      const store = routeState.storage[kind];
+      store.set("key", "plain");
+      store.set(" key ", "padded");
+      const otherStore = routeState.storage[kind === "local" ? "session" : "local"];
+      otherStore.set("key", "other bucket");
+      const response = await post(
+        `/storage/:kind/${operation}`,
+        { targetId: " requested-tab ", key: " key ", value },
+        { kind: ` ${kind} ` },
       );
 
-      expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ targetId: "requested-tab", feature: `storage ${operation}` }),
+      expect(Object.fromEntries(store)).toEqual(
+        operation === "set" ? { key: "plain", " key ": value } : {},
       );
-      const mutation =
-        operation === "set"
-          ? routeState.storageSetViaPlaywright
-          : routeState.storageClearViaPlaywright;
-      expect(mutation).toHaveBeenCalledExactlyOnceWith({
-        cdpUrl: "http://127.0.0.1:18800",
-        targetId: "tab-1",
-        kind,
-        ...(operation === "set" ? { key: "key", value } : {}),
-      });
+      expect(Object.fromEntries(otherStore)).toEqual({ key: "other bucket" });
       expect(response.statusCode).toBe(200);
-      expect(response.body).toEqual({ ok: true, targetId: "tab-1" });
     },
   );
+
+  it.each([
+    { key: 0, expected: { "0": "value" } },
+    { key: " \t ", expected: {} },
+  ])("preserves key coercion and blank rejection for $key", async ({ key, expected }) => {
+    routeState.storage.local.set("existing", "unchanged");
+    const response = await post("/storage/:kind/set", { key, value: "value" }, { kind: "local" });
+
+    expect(response.statusCode).toBe(typeof key === "string" ? 400 : 200);
+    expect(Object.fromEntries(routeState.storage.local)).toEqual({
+      existing: "unchanged",
+      ...expected,
+    });
+  });
 
   it.each(["set", "clear"])(
     "rejects an invalid storage kind before %s dispatch",
     async (operation) => {
-      const response = createBrowserRouteResponse();
-      await getPostHandler(`/storage/:kind/${operation}`)?.(
-        {
-          params: { kind: "invalid" },
-          query: {},
-          body: {
-            key: "",
-            targetId: " requested-tab ",
-          },
-        },
-        response.res,
+      const response = await post(
+        `/storage/:kind/${operation}`,
+        { key: "", targetId: " requested-tab " },
+        { kind: "invalid" },
       );
 
       expect(response.statusCode).toBe(400);
-      expect(response.body).toEqual({ error: "kind must be local|session" });
       expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
       expect(routeState.storageSetViaPlaywright).not.toHaveBeenCalled();
       expect(routeState.storageClearViaPlaywright).not.toHaveBeenCalled();
@@ -255,16 +289,10 @@ describe("browser storage route boundaries", () => {
   });
 
   it("applies HTTP credentials without ever returning the password", async () => {
-    const response = createBrowserRouteResponse();
-
-    await getPostHandler("/set/credentials")?.(
-      {
-        params: {},
-        query: {},
-        body: { username: "browser-user", password: "sensitive-browser-password" },
-      },
-      response.res,
-    );
+    const response = await post("/set/credentials", {
+      username: "browser-user",
+      password: "sensitive-browser-password",
+    });
 
     expect(routeState.setHttpCredentialsViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",

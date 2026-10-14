@@ -213,13 +213,8 @@ struct StatusMenuHeaderView: View {
         }
         if self.state.connectionMode == .remote {
             let presentation = GatewayConnectionPresentation(state: self.controlChannel.state)
-            switch presentation.tone {
-            case .healthy:
-                break
-            case .transient:
-                lines.append((presentation.generalSubtitle, nil, .orange))
-            case .attention:
-                lines.append((presentation.generalSubtitle, nil, .red))
+            if presentation.tone != .healthy {
+                lines.append((presentation.generalSubtitle, nil, presentation.tone == .transient ? .orange : .red))
             }
         }
 
@@ -310,15 +305,16 @@ struct StatusMenuHeaderView: View {
 
     private func loadBrowserEnabled() async {
         let config = await ConfigStore.load()
-        let browser = config["browser"] as? [String: Any]
+        guard config.isCurrent else { return }
+        let browser = config.root["browser"] as? [String: Any]
         self.browserEnabled = browser?["enabled"] as? Bool ?? true
     }
 
     private func saveBrowserEnabled(_ enabled: Bool) async {
         var config = await ConfigStore.load()
-        var browser = config["browser"] as? [String: Any] ?? [:]
+        var browser = config.root["browser"] as? [String: Any] ?? [:]
         browser["enabled"] = enabled
-        config["browser"] = browser
+        config.root["browser"] = browser
         do {
             try await ConfigStore.save(config)
         } catch {

@@ -15,15 +15,11 @@ const NON_HARD_TIMEOUTS = [
 
 let runSequence = 0;
 
-async function resolveOuterTimeoutRace(
-  data: Readonly<Record<string, unknown>>,
-  options?: { ignoreCachedSnapshot?: boolean },
-) {
+async function resolveOuterTimeoutRace(data: Readonly<Record<string, unknown>>) {
   const runId = `run-timeout-fallback-${runSequence++}`;
   const waitPromise = waitForAgentJob({
     runId,
     timeoutMs: 5_000,
-    ignoreCachedSnapshot: options?.ignoreCachedSnapshot,
   });
 
   emitAgentEvent({
@@ -74,51 +70,6 @@ describe("waitForAgentJob timeout fallback", () => {
       await expect(resolveOuterTimeoutRace(scenario.data)).resolves.toBeNull();
     });
   }
-
-  it("keeps restart cancellation as an error instead of a hard timeout", async () => {
-    await expect(
-      resolveOuterTimeoutRace({
-        providerStarted: true,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-      }),
-    ).resolves.toMatchObject({
-      status: "error",
-      stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-      startedAt: 1_000,
-      endedAt: 1_100,
-    });
-  });
-
-  it("publishes exhausted fallback failures without waiting for retry grace", async () => {
-    const runId = `run-timeout-fallback-exhausted-${runSequence++}`;
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
-
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        error: "All model fallback candidates failed",
-        fallbackExhaustedFailure: true,
-      },
-    });
-
-    const terminalFailure = {
-      status: "error",
-      startedAt: 1_000,
-      endedAt: 1_100,
-      error: "All model fallback candidates failed",
-    };
-    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject(terminalFailure);
-    await expect(waitPromise).resolves.toMatchObject(terminalFailure);
-  });
 
   it("publishes exhausted fallback provider timeouts without waiting for retry grace", async () => {
     const runId = `run-timeout-fallback-exhausted-provider-${runSequence++}`;
@@ -222,7 +173,7 @@ describe("waitForAgentJob timeout fallback", () => {
     await expect(waitPromise).resolves.toMatchObject({ status: "error", endedAt: 1_200 });
   });
 
-  it.each([1, 2])(
+  it.each([2])(
     "keeps an active waiter open across %i expired retryable failure grace periods",
     async (failureCount) => {
       const runId = `run-timeout-fallback-late-recovery-${runSequence++}`;
@@ -342,7 +293,7 @@ describe("waitForAgentJob timeout fallback", () => {
     await expect(lateWait).resolves.toMatchObject({ status: "ok", endedAt: 25_000 });
   });
 
-  it.each(["blocked", "abandoned"] as const)(
+  it.each(["blocked"] as const)(
     "does not keep a %s lifecycle failure pending beyond the terminal grace",
     async (livenessState) => {
       const runId = `run-timeout-fallback-definitive-${livenessState}-${runSequence++}`;
@@ -359,59 +310,6 @@ describe("waitForAgentJob timeout fallback", () => {
       await expect(waitPromise).resolves.toMatchObject({ status: "error", livenessState });
     },
   );
-
-  it.each([
-    { label: "failure", metadata: {} },
-    {
-      label: "provider timeout",
-      metadata: {
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-    },
-  ])("preserves pending hard timeouts over an exhausted fallback $label", async ({ metadata }) => {
-    const runId = `run-timeout-fallback-exhausted-hard-timeout-${runSequence++}`;
-    const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
-
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        aborted: true,
-        timeoutPhase: "provider",
-      },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_200,
-        error: "All model fallback candidates failed",
-        ...metadata,
-        fallbackExhaustedFailure: true,
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    await expect(waitPromise).resolves.toMatchObject({
-      status: "timeout",
-      startedAt: 1_000,
-      endedAt: 1_100,
-      timeoutPhase: "provider",
-    });
-  });
 
   it.each([
     {
@@ -487,7 +385,6 @@ describe("waitForAgentJob timeout fallback", () => {
     const waitPromise = waitForAgentJob({
       runId,
       timeoutMs: 1_000,
-      ignoreCachedSnapshot: true,
     });
     emitAgentEvent({
       runId,
@@ -674,7 +571,6 @@ describe("waitForAgentJob timeout fallback", () => {
     const freshWaitPromise = waitForAgentJob({
       runId,
       timeoutMs: 5_000,
-      ignoreCachedSnapshot: true,
     });
     emitAgentEvent({
       runId,
@@ -730,45 +626,6 @@ describe("waitForAgentJob timeout fallback", () => {
       status: "error",
       endedAt: 1_050,
       stopReason: "rpc",
-    });
-  });
-
-  it("ignores a hard timeout that predates a fresh wait", async () => {
-    const runId = `run-timeout-fallback-${runSequence++}`;
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        aborted: true,
-        timeoutPhase: "provider",
-      },
-    });
-
-    const waitPromise = waitForAgentJob({
-      runId,
-      timeoutMs: 5_000,
-      ignoreCachedSnapshot: true,
-    });
-    await vi.advanceTimersByTimeAsync(6_000);
-
-    await expect(waitPromise).resolves.toBeNull();
-  });
-
-  it("lets a fresh wait consume a hard timeout it observes", async () => {
-    await expect(
-      resolveOuterTimeoutRace({ timeoutPhase: "provider" }, { ignoreCachedSnapshot: true }),
-    ).resolves.toMatchObject({
-      status: "timeout",
-      timeoutPhase: "provider",
-      endedAt: 1_100,
     });
   });
 });

@@ -4,16 +4,12 @@ const STORE_NAME = "composerDrafts";
 const OWNER_INDEX = "ownerKey";
 let databasePromise: Promise<IDBDatabase> | null = null;
 
-function indexedDbError(error: DOMException | null, message: string): Error {
-  return error ?? new Error(message);
-}
-
 export function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result), { once: true });
     request.addEventListener(
       "error",
-      () => reject(indexedDbError(request.error, "IndexedDB request failed")),
+      () => reject(request.error ?? new Error("IndexedDB request failed")),
       { once: true },
     );
   });
@@ -24,12 +20,12 @@ export function transactionComplete(transaction: IDBTransaction): Promise<void> 
     transaction.addEventListener("complete", () => resolve(), { once: true });
     transaction.addEventListener(
       "abort",
-      () => reject(indexedDbError(transaction.error, "IndexedDB transaction aborted")),
+      () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")),
       { once: true },
     );
     transaction.addEventListener(
       "error",
-      () => reject(indexedDbError(transaction.error, "IndexedDB transaction failed")),
+      () => reject(transaction.error ?? new Error("IndexedDB transaction failed")),
       { once: true },
     );
   });
@@ -39,7 +35,12 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
   if (databasePromise) {
     return databasePromise;
   }
-  databasePromise = new Promise((resolve, reject) => {
+  const opening = new Promise<IDBDatabase>((resolve, reject) => {
+    const release = () => {
+      if (databasePromise === opening) {
+        databasePromise = null;
+      }
+    };
     if (typeof indexedDB === "undefined") {
       reject(new Error("IndexedDB is unavailable"));
       return;
@@ -68,12 +69,14 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
         const database = request.result;
         if (blocked) {
           database.close();
-          databasePromise = null;
+          release();
           return;
         }
+        // Browser-forced closure does not emit versionchange; never reuse its dead handle.
+        database.addEventListener("close", release, { once: true });
         database.addEventListener("versionchange", () => {
           database.close();
-          databasePromise = null;
+          release();
         });
         resolve(database);
       },
@@ -82,8 +85,8 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
     request.addEventListener(
       "error",
       () => {
-        databasePromise = null;
-        reject(indexedDbError(request.error, "IndexedDB open failed"));
+        release();
+        reject(request.error ?? new Error("IndexedDB open failed"));
       },
       { once: true },
     );
@@ -98,5 +101,6 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
       { once: true },
     );
   });
-  return databasePromise;
+  databasePromise = opening;
+  return opening;
 }

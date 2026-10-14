@@ -1,19 +1,78 @@
-// Structural formatting stays policy-free. Core and memory-host adapters intentionally inject
-// owner-specific redactors; bypassing them would weaken redaction and break one-argument APIs.
+// Structural formatting stays policy-free; diagnostic adapters supply their redaction policy.
 export type FormatErrorMessageOptions = {
   includeCode?: boolean;
-  redact: (text: string) => string;
+  redact?: (text: string) => string;
 };
 
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 const STRUCTURED_ERROR_PROTOTYPE_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
+const PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND = Symbol.for(
+  "openclaw.provider-auth-persistence-error",
+);
 
-function readProperty(value: object, key: "cause" | "code" | "status"): unknown {
+export class ProviderAuthPersistenceError extends AggregateError {
+  readonly [PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND] = true;
+  readonly persistenceError: unknown;
+  readonly cleanupError: unknown;
+
+  constructor(message: string, persistenceError: unknown, { cause }: { cause: unknown }) {
+    super([persistenceError, cause], message, { cause });
+    this.persistenceError = persistenceError;
+    this.cleanupError = cause;
+  }
+}
+
+function isProviderAuthPersistenceError(value: Error): value is ProviderAuthPersistenceError {
+  try {
+    return (
+      PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND in value &&
+      value[PROVIDER_AUTH_PERSISTENCE_ERROR_BRAND] === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isErrorObject(value: unknown): value is Error {
+  try {
+    if (value instanceof Error) {
+      return true;
+    }
+    // VM and worker realms have distinct Error constructors; retain their diagnostic fields.
+    return Object.prototype.toString.call(value) === "[object Error]";
+  } catch {
+    return false;
+  }
+}
+
+function isAggregateErrorObject(error: Error): boolean {
+  try {
+    if (error instanceof AggregateError) {
+      return true;
+    }
+    for (let proto = Object.getPrototypeOf(error); proto; proto = Object.getPrototypeOf(proto)) {
+      const constructor: unknown = Object.getOwnPropertyDescriptor(proto, "constructor")?.value;
+      if (typeof constructor === "function" && constructor.name === "AggregateError") {
+        return true;
+      }
+    }
+  } catch {
+    // An opaque prototype must not promote arbitrary errors-array metadata into causes.
+  }
+  return false;
+}
+
+function readProperty(value: object, key: string): unknown {
   try {
     return (value as Record<string, unknown>)[key];
   } catch {
     return undefined;
   }
+}
+
+function readErrorText(value: object, key: "message" | "name"): string | undefined {
+  const field = readProperty(value, key);
+  return typeof field === "string" ? field : undefined;
 }
 
 function formatStatusAndCode(value: unknown): string | undefined {
@@ -42,19 +101,7 @@ function formatStatusAndCode(value: unknown): string | undefined {
 }
 
 function stringifyUnknown(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (value === undefined) {
-    return "undefined";
-  }
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
     return String(value);
   }
   try {
@@ -72,13 +119,39 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-/** Formats unknown errors with cause details, structured codes, and secret redaction. */
-export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
+export function readErrorCauses(current: Record<string, unknown>): unknown[] {
+  if (!isErrorObject(current)) {
+    return [];
+  }
+  const cause = readProperty(current, "cause");
+  const errors = isAggregateErrorObject(current) ? readProperty(current, "errors") : undefined;
+  // Cleanup is the native cause; keep initiating failures first in operator diagnostics.
+  const persistenceFailures = isProviderAuthPersistenceError(current)
+    ? [readProperty(current, "persistenceError"), readProperty(current, "cleanupError")]
+    : [];
+  // Downlevel await-using emits a named Error; both failure fields exist even for nullish throws.
+  const suppressed =
+    readErrorText(current, "name") === "SuppressedError"
+      ? [readProperty(current, "error"), readProperty(current, "suppressed")].map((failure) =>
+          failure == null ? String(failure) : failure,
+        )
+      : [];
+  return [
+    ...persistenceFailures,
+    cause || undefined,
+    ...(Array.isArray(errors) ? errors : []),
+    ...suppressed,
+  ];
+}
+
+/** Formats unknown errors with cause/aggregate details and optional diagnostic redaction. */
+export function formatErrorMessage(
+  value: unknown,
+  options: FormatErrorMessageOptions = {},
+): string {
   let formatted: string;
-  if (value instanceof Error) {
-    formatted = value.message || value.name || "Error";
-    let cause = readProperty(value, "cause");
-    const seen = new Set<unknown>([value]);
+  if (isErrorObject(value)) {
+    formatted = readErrorText(value, "message") || readErrorText(value, "name") || "Error";
     const seenMessages = new Set<string>([formatted]);
     const appendCauseMessage = (message: string | undefined): void => {
       if (!message || seenMessages.has(message)) {
@@ -87,47 +160,36 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       formatted += ` | ${message}`;
       seenMessages.add(message);
     };
-    // Wrappers routinely embed the cause verbatim ("failed to parse X: <cause.message>"),
-    // which exact-match dedupe misses, so the whole sentence prints twice. Codes stay on
-    // their own: a trailing bare code is this formatter's convention even when the detail
-    // already names it.
-    const appendCauseErrorMessage = (message: string | undefined): void => {
-      if (message && formatted.includes(message)) {
-        seenMessages.add(message);
-        return;
-      }
-      appendCauseMessage(message);
-    };
     if (options.includeCode) {
       const code = readProperty(value, "code");
       if (typeof code === "string" || typeof code === "number") {
         appendCauseMessage(String(code));
       }
     }
-    while (cause && !seen.has(cause)) {
-      seen.add(cause);
-      if (cause instanceof Error) {
-        appendCauseErrorMessage(cause.message);
+    const causes = collectErrorGraphCandidates(value, readErrorCauses);
+    for (const cause of causes.slice(1)) {
+      if (isErrorObject(cause)) {
+        const message = readErrorText(cause, "message");
+        // Wrappers may already embed the cause message; codes remain separate below.
+        if (message && formatted.includes(message)) {
+          seenMessages.add(message);
+        } else {
+          appendCauseMessage(message);
+        }
         const code = readProperty(cause, "code");
         if (typeof code === "string" || typeof code === "number") {
           appendCauseMessage(String(code));
         }
-        cause = readProperty(cause, "cause");
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
-        break;
       } else {
-        // Mirror the top-level branch: an object cause with keys beyond
-        // status/code makes formatStatusAndCode return undefined, so fall
-        // back to stringifyUnknown rather than dropping the cause entirely.
         appendCauseMessage(formatStatusAndCode(cause) ?? stringifyUnknown(cause));
-        break;
       }
     }
   } else {
     formatted = formatStatusAndCode(value) ?? stringifyUnknown(value);
   }
-  return options.redact(formatted);
+  return options.redact ? options.redact(formatted) : formatted;
 }
 
 /**
@@ -217,15 +279,8 @@ export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  // SAFETY: The object guard admits SDK error wrappers with optional code fields.
-  const code = (err as { code?: unknown }).code;
-  if (typeof code === "string") {
-    return code;
-  }
-  if (typeof code === "number") {
-    return String(code);
-  }
-  return undefined;
+  const code = readProperty(err, "code");
+  return typeof code === "string" || typeof code === "number" ? String(code) : undefined;
 }
 
 export function readErrorName(err: unknown): string {
@@ -241,25 +296,22 @@ export function collectErrorGraphCandidates(
   err: unknown,
   resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
 ): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
+  if (err == null) {
+    return [];
+  }
+  const candidates: unknown[] = [err];
+  const seen = new Set<unknown>().add(err);
 
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
+  // First discovery fixes breadth-first order; the returned array is also the worklist.
+  for (const current of candidates) {
     if (!current || typeof current !== "object" || !resolveNested) {
       continue;
     }
     // SAFETY: Non-object nodes were excluded before the callback reads optional graph links.
     for (const nested of resolveNested(current as Record<string, unknown>)) {
       if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
+        seen.add(nested);
+        candidates.push(nested);
       }
     }
   }
@@ -289,14 +341,16 @@ export function extractErrorCodeOrErrno(err: unknown): string | undefined {
 export function collectNestedErrorCandidates(err: unknown): unknown[] {
   return collectErrorGraphCandidates(err, (current) => {
     const nested: unknown[] = [
-      current.cause,
-      current.reason,
-      current.original,
-      current.error,
-      current.data,
+      readProperty(current, "cause"),
+      readProperty(current, "reason"),
+      readProperty(current, "original"),
+      readProperty(current, "error"),
+      readProperty(current, "suppressed"),
+      readProperty(current, "data"),
     ];
-    if (Array.isArray(current.errors)) {
-      nested.push(...current.errors);
+    const errors = readProperty(current, "errors");
+    if (Array.isArray(errors)) {
+      nested.push(...errors);
     }
     return nested;
   });

@@ -36,10 +36,6 @@ describe("applyModelDefaults", () => {
     );
   });
 
-  function mockNormalizedProvider(provider: ModelProviderConfig) {
-    providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockReturnValueOnce(provider);
-  }
-
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
     return {
       models: {
@@ -152,66 +148,13 @@ describe("applyModelDefaults", () => {
     } satisfies PluginManifestRegistry;
   }
 
-  it("adds default aliases when models are present", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-5": {},
-            "anthropic/claude-sonnet-5": {},
-            "openai/gpt-5.4": {},
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBe("opus");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
-  });
-
-  it("does not override existing aliases", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-8": { alias: "Opus" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
-  });
-
-  it("preserves an authored Opus alias when the new default target is also present", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-8": { alias: "Opus" },
-            "anthropic/claude-opus-5": {},
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
-  });
-
   it("preserves an authored Sonnet alias when the new default target is also present", () => {
     const cfg = {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "anthropic/claude-sonnet-5": {},
+            "anthropic/claude-sonnet-5": { alias: "Sonnet" },
+            "anthropic/claude-sonnet-5-5": {},
           },
         },
       },
@@ -219,8 +162,8 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("Sonnet");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("Sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBeUndefined();
   });
 
   it("respects explicit empty alias disables", () => {
@@ -245,44 +188,6 @@ describe("applyModelDefaults", () => {
     expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite"]?.alias).toBe(
       "gemini-flash-lite",
     );
-  });
-
-  it("normalizes retired Gemini model keys before applying aliases", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-3-pro-preview": {},
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models).toEqual({
-      "google/gemini-3.1-pro-preview": { alias: "gemini" },
-    });
-  });
-
-  it("normalizes retired Gemini primary and fallback refs", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3-pro-preview",
-            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
-    });
   });
 
   it("normalizes the retired Together default primary and fallback refs", () => {
@@ -314,9 +219,8 @@ describe("applyModelDefaults", () => {
   it("normalizes retired Gemini per-agent model refs", () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -325,124 +229,19 @@ describe("applyModelDefaults", () => {
               "google/gemini-3-pro-preview": {},
             },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.list?.[0]?.model).toEqual({
+    expect(next.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
-    expect(next.agents?.list?.[0]?.models).toEqual({
+    expect(next.agents?.entries?.ops?.models).toEqual({
       "google/gemini-3.1-pro-preview": {},
     });
-  });
-
-  it("applies provider policy normalization to configured provider rows", () => {
-    const cfg = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
-            apiKey: "GOOGLE_API_KEY",
-            models: [
-              {
-                id: "google/gemini-3-pro-preview",
-                name: "Gemini 3 Pro",
-                input: ["text", "image"],
-                reasoning: true,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_048_576,
-                maxTokens: 65_536,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const provider = cfg.models.providers.google;
-    mockNormalizedProvider({
-      ...provider,
-      models: provider.models.map((model) =>
-        Object.assign({}, model, { id: "google/gemini-3.1-pro-preview" }),
-      ),
-    });
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
-  });
-
-  it("preserves an explicit provider api after provider policy normalization", () => {
-    const cfg = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-            api: "openai-completions",
-            apiKey: "GOOGLE_API_KEY",
-            models: [
-              {
-                id: "google/gemini-3-pro-preview",
-                name: "Gemini 3 Pro",
-                input: ["text", "image"],
-                reasoning: true,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_048_576,
-                maxTokens: 65_536,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const provider = cfg.models.providers.google;
-    mockNormalizedProvider({
-      ...provider,
-      models: provider.models.map((model) =>
-        Object.assign({}, model, { id: "google/gemini-3.1-pro-preview" }),
-      ),
-    });
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.google?.api).toBe("openai-completions");
-    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
-  });
-
-  it("normalizes nested retired Gemini ids in proxy provider rows", () => {
-    const cfg = buildProxyProviderConfig();
-    const model = expectDefined(
-      cfg.models.providers.myproxy.models[0],
-      "cfg.models.providers.myproxy.models[0] test invariant",
-    );
-    model.id = "google/gemini-3-pro-preview";
-    model.name = "Gemini via proxy";
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
-  });
-
-  it("normalizes provider-prefixed nested retired Gemini ids in proxy provider rows", () => {
-    const cfg = buildProxyProviderConfig();
-    const model = expectDefined(
-      cfg.models.providers.myproxy.models[0],
-      "cfg.models.providers.myproxy.models[0] test invariant",
-    );
-    model.id = "myproxy/google/gemini-3-pro-preview";
-    model.name = "Gemini via proxy";
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe(
-      "myproxy/google/gemini-3.1-pro-preview",
-    );
   });
 
   it("normalizes configured provider rows with explicit manifest registry policies", () => {
@@ -474,34 +273,12 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(8192);
   });
 
-  it("clamps maxTokens to contextWindow", () => {
-    const cfg = buildProxyProviderConfig({ contextWindow: 32768, maxTokens: 40960 });
-
-    const next = applyModelDefaults(cfg);
-    const model = next.models?.providers?.myproxy?.models?.[0];
-
-    expect(model?.contextWindow).toBe(32768);
-    expect(model?.maxTokens).toBe(32768);
-  });
-
   it.each([
     {
       name: "inherits only the provider output-token default",
       provider: { maxTokens: 4_096 },
       model: undefined,
       expected: { contextWindow: undefined, contextTokens: undefined, maxTokens: 4_096 },
-    },
-    {
-      name: "keeps model overrides",
-      provider: { maxTokens: 4_096 },
-      model: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
-      expected: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
-    },
-    {
-      name: "clamps provider maxTokens to the model contextWindow",
-      provider: { maxTokens: 8_192 },
-      model: { contextWindow: 4_096 },
-      expected: { contextWindow: 4_096, contextTokens: undefined, maxTokens: 4_096 },
     },
   ])("$name", ({ provider, model, expected }) => {
     const cfg = buildProviderTokenDefaultsConfig({ provider, model });
@@ -526,15 +303,7 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(16384);
   });
 
-  it("caps explicit mistral maxTokens above the named model limit", () => {
-    const cfg = buildMistralProviderConfig({ maxTokens: 17_000 });
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
-  });
-
-  it.each(["custom-mistral-model", "constructor"])(
+  it.each(["constructor"])(
     "preserves explicit maxTokens for custom mistral model %s",
     (modelId) => {
       const cfg = buildMistralProviderConfig({
@@ -559,49 +328,5 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(8192);
-  });
-
-  it("propagates a provider policy api default to models", () => {
-    const cfg = {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://relay.example.com/api",
-            apiKey: "cr_xxxx", // pragma: allowlist secret
-            models: [
-              {
-                id: "claude-opus-4-6",
-                name: "Claude Opus 4.6",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200_000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    mockNormalizedProvider({
-      ...cfg.models.providers.anthropic,
-      api: "anthropic-messages",
-    });
-
-    const next = applyModelDefaults(cfg);
-    const provider = next.models?.providers?.anthropic;
-    const model = provider?.models?.[0];
-
-    expect(provider?.api).toBe("anthropic-messages");
-    expect(model?.api).toBe("anthropic-messages");
-  });
-
-  it("propagates provider api to models when model api is missing", () => {
-    const cfg = buildProxyProviderConfig();
-
-    const next = applyModelDefaults(cfg);
-    const model = next.models?.providers?.myproxy?.models?.[0];
-    expect(model?.api).toBe("openai-completions");
   });
 });

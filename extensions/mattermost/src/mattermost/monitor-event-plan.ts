@@ -1,4 +1,3 @@
-// Mattermost plugin module prepares shared routing and reply facts for monitor events.
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveMattermostReplyToMode } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";

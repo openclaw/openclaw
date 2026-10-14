@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it } from "vitest";
-import type { RawData, WebSocket } from "ws";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,

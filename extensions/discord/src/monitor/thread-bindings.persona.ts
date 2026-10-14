@@ -1,4 +1,3 @@
-// Discord plugin module implements thread bindings.persona behavior.
 import { SYSTEM_MARK } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
@@ -6,11 +5,7 @@ import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 const THREAD_BINDING_PERSONA_MAX_CHARS = 80;
 
 function normalizePersonaLabel(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized || undefined;
+  return value ? value.replace(/\s+/g, " ").trim() || undefined : undefined;
 }
 
 export function resolveThreadBindingPersona(params: { label?: string; agentId?: string }): string {
@@ -19,9 +14,5 @@ export function resolveThreadBindingPersona(params: { label?: string; agentId?: 
   return truncateUtf16Safe(`${SYSTEM_MARK} ${base}`, THREAD_BINDING_PERSONA_MAX_CHARS);
 }
 
-export function resolveThreadBindingPersonaFromRecord(record: ThreadBindingRecord): string {
-  return resolveThreadBindingPersona({
-    label: record.label,
-    agentId: record.agentId,
-  });
-}
+export const resolveThreadBindingPersonaFromRecord: (record: ThreadBindingRecord) => string =
+  resolveThreadBindingPersona;
