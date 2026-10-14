@@ -10,7 +10,6 @@ import {
   withReadySessionRows,
   type SessionRowReadView,
   type SessionRowPreparationOptions,
-  type withPreparedSessionRows,
 } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 import {
@@ -214,7 +213,7 @@ export function createSessionRowAncestorReads(owner: {
       queries: (config: records.Inputs["cfg"]) => readonly records.Lookup[],
       consume: (read: SessionRowReadView) => T,
       options?: SessionRowPreparationOptions,
-    ): ReturnType<typeof withPreparedSessionRows<T>> {
+    ): Promise<T> {
       const selected = options?.includeAncestors
         ? (config: records.Inputs["cfg"]) => {
             const targets = queries(config);
@@ -289,11 +288,8 @@ export function createSessionRowAncestorReads(owner: {
               },
               options?.selection ? owner.prepareSelection : undefined,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== membershipPending) {
               return prepared;
-            }
-            if (prepared.value !== membershipPending) {
-              return { kind: "complete", value: prepared.value };
             }
           } catch (error) {
             if (!(error instanceof SessionRowFactsPending)) {

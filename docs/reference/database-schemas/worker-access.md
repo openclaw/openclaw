@@ -49,17 +49,20 @@ Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
 New observers capture those resources when admitting a directory. File scans
 publish through the current binding, including scans spanning a restart.
-Detached filesystem notifications use that cancellation scope and the shared
-serialized process pool; they do not launch a native process for each WAL change.
-Every refresh still re-admits the current database source and checks its authority.
-Scope retirement stops change publications and joins accepted reads;
-the next Gateway generation rebinds retained observers before startup admission.
+Filesystem notifications retire physical replacements and changed legacy sources;
+ordinary database and WAL contents changes do not reload auth rows. Scope retirement
+stops change publications, and the next Gateway generation rebinds retained observers
+before startup admission.
 
-Persisted auth-row observation belongs to the host. Catalog workers reload
-credentials through their native task owner instead of retaining background row
-readers for WAL notifications. Workers still observe physical file replacement
-to retire native SQLite handles; session-only WAL activity needs no worker auth
-reread.
+Canonical auth rows belong to one Gateway cache shared by runtime loading, scoped
+credentials, source detection, and usage preparation. Agent and shared readers reuse
+immutable rows while their auth-scoped write receipt remains current. Session-only
+writes do not invalidate them; auth and unscoped writes do. Committed canonical
+postimages update the same cache before runtime overlays are applied. Explicit
+refresh drops cached rows, and maintenance, artifact-preserving, pinned-snapshot,
+and worker-owned reads retain their own custody. In-place writes from another process
+are unsupported while the Gateway owns the database. Credential effects still check
+current published credential authority at the fetch boundary without reading SQL.
 
 Generic scoped SQLite reads share at most four process slots, matched by captured
 runtime generation, environment, working directory, and spawn-broker owner.
@@ -5875,9 +5878,8 @@ definition-generation, expiry, and exact-operation checks. Cancellation, expiry,
 failed launch, and unknown consumption never refund or replay usage. A fallback
 proven to precede initiation revalidates the same grant without consuming again.
 Close refuses new effects and joins accepted accounting before retiring workers.
-An unconfirmed native launch makes drain and close fail while retaining database
-custody and the admission seal. The Gateway process must retire before that
-authority can be reopened; an uncertain launch is never replayed or refunded.
+An unconfirmed native launch keeps the exec-policy mutation fence until canonical
+close releases that use; an uncertain launch is never replayed or refunded.
 Grant eligibility, released SDK contracts, schemas, retention, and update behavior
 are unchanged.
 
