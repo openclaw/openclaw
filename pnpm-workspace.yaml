@@ -16,6 +16,8 @@ minimumReleaseAgeExclude:
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
+  # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
+  - "node-edge-tts@1.2.11"
   # Reviewed fs-safe 0.26.5 release and native helpers; remove after 2026-10-21T13:01:12.291Z.
   - "@openclaw/fs-safe@0.26.5"
   - "@openclaw/fs-safe-darwin-arm64@0.26.5"
