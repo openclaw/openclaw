@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import {
   prepareSqliteTransactionCommit,
@@ -120,7 +121,7 @@ export function bindSqliteWorkerBackend(
           return runSqliteSingleStatementSync(db, () => {
             contribution.stage();
             deferSqliteWorkerCommitReceipt(db, candidate);
-            prepareSqliteTransactionCommit(db);
+            prepareSqliteTransactionCommit(sqlPublicationAnchor(db));
             contribution.statement();
             return contribution.result;
           });
@@ -131,7 +132,7 @@ export function bindSqliteWorkerBackend(
       let participantResult: SessionSharingWorkerOperations["participant"]["output"] | undefined;
       let membershipResult: MembershipPublication | undefined;
       let ownerResult: SessionSharingWorkerOperations["owner.assign"]["output"] | undefined;
-      return withSqlitePostCommitPublications(db, () =>
+      return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () =>
         runSqliteWorkerTransactionSync(
           {
             ...context,

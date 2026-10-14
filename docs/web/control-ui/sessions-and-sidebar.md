@@ -13,6 +13,14 @@ sidebarTitle: "Sessions and sidebar"
 The sidebar separates navigation into **Pages**, **Sessions**, and **Online**.
 The New session page starts new conversations.
 
+To work directly in a folder on a paired device, select that specific device,
+then choose **Existing folder on device** in the workspace picker. Enter an
+absolute path on that device. The option appears only when the connected session
+host advertises support; **Auto** cannot select an existing device folder.
+The session stays bound to that device and displays its folder path. Files stay
+on the device rather than being copied to or reconciled with the Gateway. See
+[session hosting](/nodes/session-hosting#work-in-an-existing-device-folder).
+
 ## Navigation rail
 
 The icon rail stays separate from the selected navigation list. **Pages** opens

@@ -1,4 +1,5 @@
 import { expressionBuilder } from "kysely";
+import { jsonOrderedArray } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -133,11 +134,10 @@ export function readSelectedSessionEntryRows(
         tableExists(database.db, "session_members")
           ? outer
               .selectFrom("session_members")
-              .select(({ fn }) =>
-                fn
-                  .agg<string>("json_group_array", ["identity_id"])
-                  .orderBy("identity_id")
-                  .as("ids"),
+              .select((builder) =>
+                jsonOrderedArray(database.db, builder.ref("identity_id"), [
+                  builder.ref("identity_id"),
+                ]).as("ids"),
               )
               .whereRef("session_members.session_key", "=", "session_nodes.session_key")
               .$asScalar()

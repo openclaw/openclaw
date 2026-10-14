@@ -101,7 +101,7 @@ export function renderLazyViewError(params: {
 
 export function renderPanelErrorState(params: {
   actions?: TemplateResult;
-  className?: string;
+  class?: string;
   detail?: string;
   inline?: boolean;
   role?: "alert" | "status";

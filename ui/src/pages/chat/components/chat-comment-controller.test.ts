@@ -9,7 +9,7 @@ import {
 } from "../attachment-payload-store.ts";
 import { createComposerContainer } from "../chat-composer.test-support.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
-import { renderChat } from "../chat-view.ts";
+import { renderChat } from "../chat-view.tsx";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import "./chat-comment-controller.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";

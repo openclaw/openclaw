@@ -131,6 +131,7 @@ function createNativeGeneration(
     assertCleanup,
     undefined,
     () => {},
+    () => {},
   );
 }
 

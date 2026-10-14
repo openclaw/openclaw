@@ -24,7 +24,6 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
-import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
 import { createBrowserProvider, createBrowserSessionMock } from "./client-fixtures.test-support.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
@@ -105,6 +104,7 @@ const mocks = vi.hoisted(() => ({
         release = registeredRelease;
       });
       return {
+        run: { runId: "run-voice-1", sessionKey: "agent:main:main" },
         release,
         isCurrent: () => true,
         abortIfCurrent: () => {},
@@ -2095,6 +2095,7 @@ describe("talk.session unified handlers", () => {
     expect(mocks.stopTalkRealtimeRelaySession).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
+      disposition: undefined,
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     const closedSession = vi.fn();
@@ -2939,7 +2940,7 @@ describe("talk.client.toolCall handler", () => {
           ? undefined
           : ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
         transcript: { display: false, excludeFromContext: true },
-        prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
+        prepareAssistantTranscriptMessage: expect.any(Function),
         beforeDispatch: expect.any(Function),
       });
       const response = expectRespondOk(respond, { runId: "run-voice-1" });
@@ -2992,6 +2993,11 @@ describe("talk.client.toolCall handler", () => {
         args: { question: "What now?" },
       },
       respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        chatAbortControllers: new Map([["run-voice-1", { sessionId: "session-main" }]]),
+        logGateway: { warn: vi.fn() },
+      },
     });
 
     expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
@@ -3000,6 +3006,7 @@ describe("talk.client.toolCall handler", () => {
       sessionKey: "agent:main:main",
       runId: "run-voice-1",
       callId: "call-1",
+      transcriptSessionId: "session-main",
       assertCurrent: expect.any(Function),
       registerVoice: expect.any(Function),
     });

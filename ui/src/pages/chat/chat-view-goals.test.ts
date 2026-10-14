@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

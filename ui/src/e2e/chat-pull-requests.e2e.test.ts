@@ -18,7 +18,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   sharedPublisher,
   waitForWatchedSessionKey,
@@ -159,8 +159,8 @@ describeControlUiE2e("session pull request chips", () => {
     expect(await chips.first().isVisible()).toBe(false);
     expect(
       await page.locator('[data-details-group="pull-requests"]').getAttribute("open"),
-    ).toBeNull();
-    await openDetailsPullRequests(page);
+    ).not.toBeNull();
+    await openChatDetails(page);
 
     const openChip = chips.first();
     await expect.poll(() => openChip.getAttribute("data-state")).toBe("open");
@@ -210,7 +210,7 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => chevron.evaluate((node) => getComputedStyle(node).transform))
       .not.toBe(openTransform);
     // Reopening Details does not reopen its dismissed CI popup.
-    await openDetailsPullRequests(page);
+    await openChatDetails(page);
     expect(await menu.isVisible()).toBe(false);
     // Keyboard activation keeps the same disclosure behavior.
     await checksControl.focus();
@@ -271,7 +271,7 @@ describeControlUiE2e("session pull request chips", () => {
       });
       await page.goto(`${server.baseUrl}chat`);
       const watchedKey = await waitForWatchedSessionKey(gateway);
-      await openDetailsPullRequests(page);
+      await openChatDetails(page);
       await expect
         .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
         .toBe(theme);
@@ -320,6 +320,12 @@ describeControlUiE2e("session pull request chips", () => {
           expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
           previousBottom = row.bottom;
         }
+        if (captureUiProof) {
+          await writeFile(
+            path.join(stackingProofDir, `pr-links-${width}-${theme}-${count}.png`),
+            await takeControlUiViewportScreenshot(page, stack, [chips.first()]),
+          );
+        }
         for (const chip of await chips.all()) {
           await chip.locator(".chat-pr__link").click({ trial: true });
           await chip.locator(".chat-pr__dismiss").click({ trial: true });
@@ -350,7 +356,7 @@ describeControlUiE2e("session pull request chips", () => {
       });
       await page.goto(`${server.baseUrl}chat`);
       const watchedKey = await waitForWatchedSessionKey(gateway);
-      await openDetailsPullRequests(page);
+      await openChatDetails(page);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
           [watchedKey]: {
@@ -448,7 +454,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
-    await openDetailsPullRequests(page);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -579,7 +585,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(controlUiSessionUrl(server.baseUrl, sessionA));
     await waitForWatchedSessionKey(gateway);
-    await openDetailsPullRequests(page);
+    await openChatDetails(page);
     const publicationState = (branch: string) => ({
       pullRequests: [],
       branch: {
@@ -617,7 +623,7 @@ describeControlUiE2e("session pull request chips", () => {
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: { [sessionB]: publicationState("openclaw/publication-b") },
     });
-    await openDetailsPullRequests(page);
+    await openChatDetails(page);
     await gateway.deferNext("sessions.github.publish", { sessionKey: sessionB });
     const requestCountB = (await gateway.getRequests("sessions.github.publish")).length;
     await page.getByRole("button", { name: "Publish PR" }).click();
@@ -682,7 +688,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
-    await openDetailsPullRequests(page);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -752,7 +758,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
-    await openDetailsPullRequests(page);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {
@@ -848,7 +854,7 @@ describeControlUiE2e("session pull request chips", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
-    await openDetailsPullRequests(page);
+    await openChatDetails(page);
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: {
         [watchedKey]: {

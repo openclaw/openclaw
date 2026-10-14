@@ -158,6 +158,17 @@ describe("standing intents", () => {
       kind: "result",
       value: [{ id: "cancelled", status: "cancelled" }],
     });
+    const preciseExpiry = 1_790_000_000_001;
+    worker.execute({
+      type: "create",
+      input: { ...row, id: "precise-expiry", expires_at: preciseExpiry },
+    });
+    expect(worker.execute({ type: "sweep", input: { nowMs: preciseExpiry - 1 } })).toMatchObject({
+      nextDueAt: preciseExpiry,
+    });
+    expect(worker.execute({ type: "sweep", input: { nowMs: preciseExpiry } })).toMatchObject({
+      nextDueAt: Infinity,
+    });
     worker.execute({ type: "create", input: { ...row, id: "large-expiry", expires_at: 2 ** 60 } });
     expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).not.toThrow();
     worker.execute({

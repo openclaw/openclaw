@@ -24,7 +24,7 @@ import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import type { ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.tsx";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";

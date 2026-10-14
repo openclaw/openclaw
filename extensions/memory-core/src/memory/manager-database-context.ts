@@ -69,6 +69,7 @@ export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
+  private terminalSignal?: AbortSignal;
   private schemaAdmission?: Promise<void>;
   private factsToken?: string;
   private shadow?: {
@@ -114,6 +115,7 @@ export class MemoryIndexDatabase {
         admission,
       );
       if (initialized) {
+        database.terminalSignal = initialized.worker.terminalSignal;
         database.publicationWorker = Promise.resolve({
           store: initialized.worker,
           busyTimeoutMs: 5_000,
@@ -241,7 +243,7 @@ export class MemoryIndexDatabase {
   }
 
   get isOpen(): boolean {
-    return !this.closed && (this.nativeDb?.isOpen ?? true);
+    return !this.closed && !this.terminalSignal?.aborted && this.nativeDb?.isOpen !== false;
   }
 
   /** Released synchronous status compatibility; runtime callers use worker reads. */
@@ -409,6 +411,7 @@ export class MemoryIndexDatabase {
             input: { kind: "agent" },
           },
         );
+        this.terminalSignal = store.terminalSignal;
         return { store, busyTimeoutMs: 5_000 };
       }
       const pragmas = this.shadow!.pragmas;

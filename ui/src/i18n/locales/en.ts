@@ -3357,6 +3357,10 @@ export const en: TranslationMap & {
         cancelled:
           "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
       },
+      automationRecovery: {
+        label: "System · automation recovery",
+        summary: "An automation failed — asked the agent to investigate and continue if needed.",
+      },
       gatewayRestarted: {
         label: "System · gateway restarted",
       },
