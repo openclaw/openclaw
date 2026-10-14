@@ -505,6 +505,43 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(toolResults).toEqual([]);
   });
 
+  it("omits echoed binary from a tool result that settles after the budget", () => {
+    const results: CliToolResultDelta[] = [];
+    const parser = createPostBudgetAgentToolParser({
+      onToolResult: (delta) => results.push(delta),
+    });
+    const base64 = "A".repeat(4_300_000);
+
+    parser.push(
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: AGENT_TOOL_CALL_ID,
+              content: [
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: base64 },
+                },
+              ],
+            },
+          ],
+        },
+      })}\n`,
+    );
+
+    // Settling after the budget must still cross the parser's media boundary;
+    // the raw payload may not reach tool events or after-tool hooks.
+    const block = (results[0]?.result as Record<string, unknown>[] | undefined)?.[0];
+    expect(results).toHaveLength(1);
+    expect(JSON.stringify(results[0])).not.toContain(base64.slice(0, 64));
+    expect(block).toMatchObject({ omitted: true, bytes: estimateBase64DecodedBytes(base64) });
+    expect((block?.source as Record<string, unknown>)?.data).toBeUndefined();
+  });
+
   it("keeps post-budget tool-split reply text while the outstanding tool settles", () => {
     const parser = createCliJsonlStreamingParser({
       backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },

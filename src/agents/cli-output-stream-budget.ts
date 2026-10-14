@@ -14,6 +14,7 @@ import type {
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
 import type { CliStreamJsonOutputLimits, CliToolResultDelta } from "./cli-output-contracts.js";
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import {
   type ClaudeToolUseTracker,
   dispatchClaudeCliOutstandingToolSettlement,
@@ -243,6 +244,12 @@ export function createClaudeTerminalResultWatcher(params: {
       }
     }
     for (const record of decodeCliRecords(line)) {
+      // The same parser-boundary normalization the pre-budget path applies
+      // before dispatch: it strips Claude's echoed base64 in place and records
+      // omitted/bytes metadata. A Read or MCP image call that starts before
+      // exhaustion and returns after it settles through this path, so without
+      // this its payload would reach tool events and after-tool hooks whole.
+      normalizeClaudeCliStreamJsonRecord(record);
       if (record.type === "result" && record.openclaw_interim_result !== true) {
         params.onResultRecord(record);
         continue;

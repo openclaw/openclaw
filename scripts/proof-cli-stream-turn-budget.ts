@@ -34,7 +34,11 @@
  *                       call still settles (and an unstarted one does not), that
  *                       ordinary output advances progress again afterwards, and
  *                       that none of it changes the recovered reply.
- *  8. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
+ *  8. settled-media-normalized — a 4.3 M-character echoed base64 image whose
+ *                       tool result settles AFTER the budget. Pins that the
+ *                       post-budget path still crosses the parser's media
+ *                       boundary, with omitted/bytes metadata.
+ *  9. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
  *                       assistant text and grows the heap by a tiny fraction of
  *                       the bytes streamed. Pins that memory is still bounded.
  *
@@ -406,6 +410,62 @@ function scenarioSemanticProgressAfterBudget(): void {
   );
 }
 
+/**
+ * A Read or MCP image call can start before exhaustion and return after it, so
+ * its result settles through the post-budget path. That path must still cross
+ * the parser's media boundary: `normalizeClaudeCliStreamJsonRecord` strips
+ * Claude's echoed base64 in place. Without it the raw payload reaches
+ * `onToolResult`, and `prepareToolResult`'s array branch only redacts secrets,
+ * so it would flow on to tool events and after-tool hooks.
+ */
+function scenarioSettledMediaNormalized(): void {
+  const activeParsedTools = new Set<string>();
+  const results: unknown[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onToolUseStart: (delta) => activeParsedTools.add(delta.toolCallId),
+    onToolResult: (delta) => results.push(delta),
+  });
+  parser.push(`${agentToolUseFrame()}\n`);
+  overflowLineBudget(parser);
+
+  const base64 = "A".repeat(4_300_000);
+  parser.push(
+    `${JSON.stringify({
+      type: "user",
+      session_id: SESSION_ID,
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: AGENT_TOOL_CALL_ID,
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/png", data: base64 } },
+            ],
+          },
+        ],
+      },
+    })}\n`,
+  );
+
+  assert(results.length === 1, `settled-media-normalized: expected one settled result`);
+  const serialized = JSON.stringify(results[0]);
+  assert(
+    !serialized.includes(base64.slice(0, 64)),
+    `settled-media-normalized: ${base64.length} echoed base64 chars reached onToolResult; tool events and after-tool hooks would carry the payload`,
+  );
+  assert(
+    serialized.includes('"omitted":true'),
+    `settled-media-normalized: omitted metadata is missing, so the payload was dropped without being accounted for`,
+  );
+  console.log(
+    `[settled-media-normalized] ${base64.length} echoed base64 chars omitted at the parser boundary; settled result is ${serialized.length} chars`,
+  );
+}
+
 function scenarioRecovered(name: string, overflow: (parser: Parser) => number): void {
   const assistantDeltas: string[] = [];
   const parser = createParser(assistantDeltas);
@@ -503,5 +563,6 @@ scenarioSupersededDraft();
 scenarioDiscountedOutputSeen();
 scenarioUnknowable();
 scenarioSemanticProgressAfterBudget();
+scenarioSettledMediaNormalized();
 scenarioRetentionFlat();
 console.log("All runtime assertions passed.");
