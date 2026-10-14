@@ -3,7 +3,6 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,10 +12,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { captureExecRequestOwners, withExecRequestTurn } from "../../infra/exec-request-context.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-} from "../../plugins/before-agent-reply.js";
+import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -80,6 +76,7 @@ import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refres
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
+import { buildEmbeddedHandledBeforeAgentReplyResult } from "./run/handled-before-agent-reply-transcript.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -516,20 +513,19 @@ async function runEmbeddedAgentForSession(
                   notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
               });
               if (hookResult?.handled) {
-                return {
-                  payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-                  meta: {
-                    durationMs: Date.now() - started,
-                    agentMeta: {
-                      sessionId: params.sessionId,
-                      provider,
-                      model: modelId,
-                    },
-                    finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-                    finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-                    providerStarted: false,
-                  },
-                };
+                return await buildEmbeddedHandledBeforeAgentReplyResult({
+                  assertCurrent: preReplyAssertCurrent,
+                  agentId: workspaceResolution.agentId,
+                  model: modelId,
+                  provider,
+                  redactedSessionId,
+                  reply: hookResult.reply,
+                  run: params,
+                  sessionKey: resolvedSessionKey,
+                  sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
+                  startedAt: started,
+                  warn: (message) => log.warn(message),
+                });
               }
 
               assistantErrorTranscript ??=

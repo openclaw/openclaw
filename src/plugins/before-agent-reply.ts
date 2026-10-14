@@ -1,8 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
+import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { runOncePerAgentRun } from "../infra/agent-events.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { resolveOutboundPayloadMirrorText } from "../infra/outbound/payloads.js";
+import { resolveOutboundMediaUrls } from "../infra/outbound/reply-payload-parts.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readClaimingHookAdmission, withClaimingHookAdmission } from "./hook-claim-admission.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
@@ -39,6 +48,31 @@ export function withBeforeAgentReplyObserver<T>(
 /** Preserves the full plugin reply contract, including private payload metadata. */
 export function buildHandledBeforeAgentReplyPayloads(reply?: ReplyPayload): ReplyPayload[] {
   return [reply ?? { text: SILENT_REPLY_TOKEN }];
+}
+
+/** Preserve the routed-delivery content mirror before claiming transcript ownership. */
+export function resolveHandledBeforeAgentReplyTranscriptText(reply?: ReplyPayload): string | null {
+  const mediaUrls = resolveOutboundMediaUrls(reply ?? {});
+  const rawText = reply?.text;
+  const heartbeatReply = reply && getReplyPayloadMetadata(reply)?.heartbeatReply === true;
+  const text =
+    reply && rawText && !heartbeatReply
+      ? isSilentReplyPayloadText(rawText)
+        ? undefined
+        : (stripMixedSilentReplyTokens(rawText) ?? rawText)
+      : rawText;
+  const heartbeat =
+    text?.includes(HEARTBEAT_TOKEN) && !heartbeatReply
+      ? stripHeartbeatToken(text, { mode: "message" })
+      : null;
+  const mirroredText = resolveOutboundPayloadMirrorText({
+    ...reply,
+    text: heartbeat?.text ?? text,
+  });
+  if (mediaUrls.length > 0) {
+    return resolveMirroredTranscriptText({ text: mirroredText, mediaUrls }) ?? SILENT_REPLY_TOKEN;
+  }
+  return mirroredText || (heartbeat ? heartbeat.text : text) || null;
 }
 
 /** Runs the reply claim hook once for one admitted turn, across model fallbacks. */
