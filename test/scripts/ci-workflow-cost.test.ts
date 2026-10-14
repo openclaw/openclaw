@@ -14,6 +14,33 @@ const context = {
 const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml");
 const script = action.runs.steps[0].with.script;
 
+describe("plugin scaffold event scope", () => {
+  it.each([
+    [["src/plugin-sdk/AGENTS.md"], false],
+    [["src/plugin-sdk/index.ts"], true],
+    [["src/plugin-sdk/AGENTS.md", "src/plugin-sdk/index.ts"], true],
+    [["src/plugin-sdk/runtime-fixture.md"], true],
+    [[".github/workflows/plugin-init-scaffold-validation.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
+    expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
+    for (const event of ["push", "pull_request"]) {
+      const accepts = files.some((file) =>
+        workflow.on[event].paths.reduce(
+          (selected: boolean, pattern: string) =>
+            pattern.startsWith("!")
+              ? selected && !matchesGlob(file, pattern.slice(1))
+              : selected || matchesGlob(file, pattern),
+          false,
+        ),
+      );
+      expect(accepts).toBe(expected);
+    }
+    expect(workflow.on.workflow_dispatch).toBeDefined();
+    expect(workflow.on.schedule).toBeDefined();
+  });
+});
+
 async function scheduledScope(
   options: {
     files?: Array<{ filename: string; previous_filename?: string }>;
