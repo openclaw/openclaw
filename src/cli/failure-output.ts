@@ -238,6 +238,13 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   const isPluginUpdateCommand = commandPath[0] === "plugins" && commandPath[1] === "update";
   // Update subprocesses use both marker values and retain captured reasons for recovery.
   const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
+  // A crash-looping Gateway start must name its cause: the operator reads the
+  // service journal, where no debug flag is available. Matches the foreground
+  // Gateway invocation shapes (bare `gateway` or `gateway run`).
+  const isGatewayStartCommand =
+    commandPath.length === 1
+      ? commandPath[0] === "gateway"
+      : commandPath.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run";
   if (
     isGatewayTransportError(options.error) &&
     !showDebugDetails &&
@@ -289,7 +296,8 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand || isPluginUpdateCommand;
+      : isUpdateCommand || isPluginUpdateCommand || isGatewayStartCommand;
+
     return [
       `[openclaw] ${options.title}`,
       ...(showReason ? [reason(options.error)] : []),

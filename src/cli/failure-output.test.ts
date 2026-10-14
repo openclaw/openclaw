@@ -240,6 +240,44 @@ describe("formatCliFailureLines", () => {
     expect(output).not.toContain("Stack:");
   });
 
+  it.each([["gateway"], ["gateway", "run"], ["--profile", "work", "gateway", "run"]])(
+    "names the Gateway start reason without diagnostic flags: %j",
+    (...args) => {
+      const reason =
+        "Gateway start refused: the state owner is held by an orphaned child process. Stop it and retry.";
+      const token = "sk-abcdefghijklmnopqrstuv";
+      const output = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: new Error(`${reason} Authorization: Bearer ${token}`, {
+          cause: new Error("private nested diagnostic"),
+        }),
+        argv: ["node", "openclaw", ...args],
+        env: {},
+      }).join("\n");
+
+      expect(output).toContain("[openclaw] Reason: ");
+      expect(output).toContain(reason);
+      expect(output).not.toContain(token);
+      expect(output).not.toContain("private nested diagnostic");
+      expect(output).not.toContain("Stack:");
+    },
+  );
+
+  it.each([
+    ["gateway", "status"],
+    ["sessions", "list"],
+  ])("keeps the default terse output for %j", (...args) => {
+    const output = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error: new Error("internal detail"),
+      argv: ["node", "openclaw", ...args],
+      env: {},
+    }).join("\n");
+
+    expect(output).not.toContain("Reason:");
+    expect(output).toContain("[openclaw] For help, run");
+  });
+
   it.each([
     [
       "typed admission",
