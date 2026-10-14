@@ -4,7 +4,6 @@ import {
   SESSION_DASHBOARD_ROW_FIELDS,
   SESSION_ROW_DETAIL_FIELDS,
   SESSION_SIDEBAR_ROW_FIELDS,
-  shareSessionRowFacts,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -38,7 +37,7 @@ import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
 } from "./session-utils-display.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
 type PresentationOptions = Omit<
   records.SnapshotOptions,
@@ -85,28 +84,90 @@ const publications = new WeakMap<
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
+/** Immutable row identities own field preparation; fact indexes stay response-local. */
+function createSessionRowFactSharing<T extends GatewaySessionRow>() {
+  const prepared = new WeakMap<T, [string, Partial<T>][]>();
+  return (sessions: T[]) => {
+    type SharedFact = { fact: Partial<T>; rows: number[] };
+    const candidates = new Map<string, SharedFact>();
+    sessions.forEach((row, index) => {
+      let facts = prepared.get(row);
+      if (!facts) {
+        facts = [];
+        for (const field in row) {
+          const value = row[field];
+          // Keep required fields and the projection marker readable without expanding the table.
+          if (
+            value === undefined ||
+            ["key", "kind", "updatedAt", "sessionId", "rowMode"].includes(field)
+          ) {
+            continue;
+          }
+          const fact: Partial<T> = {};
+          fact[field] = value;
+          facts.push([JSON.stringify(fact), fact]);
+        }
+        prepared.set(row, facts);
+      }
+      for (const [key, fact] of facts) {
+        const candidate = candidates.get(key);
+        if (candidate) {
+          candidate.rows.push(index);
+        } else {
+          candidates.set(key, { fact, rows: [index] });
+        }
+      }
+    });
+    // Facts with the same recipients share one reference, including common scalar defaults.
+    const groups = new Map<string, SharedFact>();
+    for (const candidate of candidates.values()) {
+      if (candidate.rows.length < 2) {
+        continue;
+      }
+      const key = candidate.rows.join(",");
+      const group = groups.get(key);
+      if (group) {
+        Object.assign(group.fact, candidate.fact);
+      } else {
+        groups.set(key, { fact: { ...candidate.fact }, rows: candidate.rows });
+      }
+    }
+    const rows = sessions.map((row) => ({ ...row }));
+    const sharedFacts: Partial<T>[] = [];
+    for (const group of groups.values()) {
+      const reference = sharedFacts.push(group.fact) - 1;
+      const fields = Object.keys(group.fact);
+      for (const index of group.rows) {
+        const row = rows[index]!;
+        for (const field of fields) {
+          Reflect.deleteProperty(row, field);
+        }
+        (row.sharedFacts ??= []).push(reference);
+      }
+    }
+    return { sessions: rows, sharedFacts };
+  };
+}
+
+const shareSessionRowFacts = createSessionRowFactSharing<GatewaySessionRow>();
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
-  ReturnType<typeof shareSessionRowFacts<GatewaySessionRow>>
+  ReturnType<typeof shareSessionRowFacts> & { rowsRevision: string }
 >();
-const rowRevisions = new WeakMap<GatewaySessionRow[], string>();
 
-export function shareSidebarSessionRows(rows: GatewaySessionRow[], ifRowsRevision?: string) {
-  let rowsRevision = rowRevisions.get(rows);
-  if (!rowsRevision) {
-    rowsRevision = randomUUID();
-    rowRevisions.set(rows, rowsRevision);
-  }
-  if (ifRowsRevision === rowsRevision) {
-    return { sessions: [], rowsRevision, rowsUnchanged: true as const };
-  }
+export function shareSidebarSessionRows(
+  rows: GatewaySessionRow[],
+  ifRowsRevision?: string,
+): Pick<SessionsListResult, "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged"> {
   let shared = sharedLists.get(rows);
   if (!shared) {
-    shared = freezeJsonSnapshot(shareSessionRowFacts(rows));
+    shared = { ...shareSessionRowFacts(rows), rowsRevision: randomUUID() };
     registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
     sharedLists.set(rows, shared);
   }
-  return { ...shared, rowsRevision };
+  return ifRowsRevision === shared.rowsRevision
+    ? { sessions: [], rowsRevision: shared.rowsRevision, rowsUnchanged: true as const }
+    : shared;
 }
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */

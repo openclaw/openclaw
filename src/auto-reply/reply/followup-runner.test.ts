@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  resolveSessionTranscriptReadFence,
+  runWithSessionTranscriptReadFence,
+} from "../../config/sessions/session-transcript-read-fence.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -161,6 +165,42 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
+  it("reads the current transcript without borrowing the interrupted turn's admission fence", async () => {
+    const turn = createTurn();
+    const admission = {
+      agentId: "agent",
+      sessionId: "session",
+      sessionKey: "main",
+      storePath: "/tmp/store",
+      generation: "generation",
+      entryId: "interrupted-user-message",
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 1,
+      logicalTurnId: "interrupted-turn",
+      role: "user" as const,
+    };
+    state.admit.mockImplementation(async () => {
+      expect(resolveSessionTranscriptReadFence(admission)).toBeUndefined();
+      return { kind: "admitted", turn };
+    });
+    state.execute.mockImplementation(async () => {
+      await Promise.resolve();
+      expect(resolveSessionTranscriptReadFence(admission)).toBeUndefined();
+      return createSettledExecution();
+    });
+    state.account.mockResolvedValue(undefined);
+    await runWithSessionTranscriptReadFence(admission, async () => {
+      await createFollowupRunner({
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      })(turn.queued);
+      expect(resolveSessionTranscriptReadFence(admission)).toBe(admission);
+    });
+    expect(state.execute).toHaveBeenCalledOnce();
+  });
+
   it.each([true, false])(
     "publishes admission notices only for consumed execution (admission succeeds=%s)",
     async (succeeds) => {

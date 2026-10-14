@@ -419,10 +419,12 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
       await expect(run).rejects.toMatchObject({
         name: "FailoverError",
-        message: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+        message:
+          "Rate-limit recovery stopped after 3 automatic retries without a completed model response. Check completed work before trying again.",
         reason: "rate_limit",
         provider: "openai",
         model: "mock-1",
+        rateLimitRetriesExhausted: 3,
         suspend: true,
       });
       // Pre-fix the bogus escalation fired after two primary attempts; the

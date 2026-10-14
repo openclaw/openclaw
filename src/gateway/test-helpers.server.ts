@@ -1307,7 +1307,11 @@ export async function rpcReq<T extends Record<string, unknown>>(
     timeoutMs,
   );
   ws.send(JSON.stringify({ type: "req", id, method, params }));
-  return await responsePromise;
+  try {
+    return await responsePromise;
+  } catch (error) {
+    throw new Error(`Gateway test RPC ${method}: ${String(error)}`, { cause: error });
+  }
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {

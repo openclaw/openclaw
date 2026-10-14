@@ -21,7 +21,6 @@ const MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OFFLINE_MODEL_IDS = [
   "claude-opus-5",
   "gpt-5.6-sol",
-  "gpt-5-nano",
   "gemini-3.6-flash",
   "minimax-m3",
   "kimi-k3",
@@ -159,7 +158,7 @@ describe("opencode provider plugin", () => {
     const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
 
     expect(mediaProvider?.capabilities).toEqual(["image"]);
-    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
+    expect(mediaProvider?.defaultModels).toEqual({ image: "minimax-m3" });
     expect(typeof mediaProvider?.describeImage).toBe("function");
     expect(typeof mediaProvider?.describeImages).toBe("function");
   });
@@ -556,8 +555,8 @@ describe("opencode provider plugin", () => {
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toBeUndefined();
-    expect(provider.resolveDynamicModel?.({ modelId: "gpt-5-nano" } as never)).toMatchObject({
-      id: "gpt-5-nano",
+    expect(provider.resolveDynamicModel?.({ modelId: "minimax-m3" } as never)).toMatchObject({
+      id: "minimax-m3",
     });
   });
 

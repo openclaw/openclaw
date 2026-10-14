@@ -205,8 +205,11 @@ suite.define(() => {
       expect(await documentMarker(page)).toBeUndefined();
       expect(documentRequestCount).toBe(1);
       expect(
-        await page.evaluate(() =>
-          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId"),
+        await page.evaluate(
+          () =>
+            JSON.parse(
+              sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null",
+            )?.buildId,
         ),
       ).toBe("e2e");
       await page.waitForTimeout(500);

@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as combinedStore from "../../config/sessions/combined-store-gateway.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -25,6 +25,10 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWorkerWrite,
+  runOpenClawAgentWriteAdmission,
+} from "../../state/openclaw-agent-write-admission.js";
 import * as userProfileReads from "../../state/user-profile-reads.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -398,7 +402,9 @@ describe("session sharing authority", () => {
     });
   });
 
-  it("refuses membership evidence after a published foreign ownership change", async () => {
+  it("refuses membership evidence after a published foreign ownership change", async ({
+    signal,
+  }) => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:sharing-snapshot-owner";
@@ -414,19 +420,51 @@ describe("session sharing authority", () => {
       await initializeSessionReadContext(requestContext);
       const projection = getSessionRowProjection(requestContext)!;
       const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const writerEntered = createDeferredCore();
+      const releaseWriter = createDeferredCore();
+      const snapshotRead = createDeferredCore();
+      // Retain a real SQLite writer lock until the membership read returns.
+      const reservation = runOpenClawAgentWorkerWrite(
+        database,
+        async () => {
+          const holder = new DatabaseSync(database.path);
+          try {
+            holder.exec("BEGIN IMMEDIATE");
+            writerEntered.resolve();
+            await releaseWriter.promise;
+          } finally {
+            if (holder.isTransaction) {
+              holder.exec("ROLLBACK");
+            }
+            holder.close();
+          }
+        },
+        undefined,
+        signal,
+      );
       const readMembers = sharingStore.readSessionMembersInWorker;
       vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(async (input) => {
         const snapshot = await readMembers(input);
-        const writer = new DatabaseSync(database.path);
-        try {
-          writer
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', ?) WHERE session_key = ?",
-            )
-            .run("other", sessionKey);
-        } finally {
-          writer.close();
-        }
+        snapshotRead.resolve();
+        // Bypass cache receipts for this fixture, but honor the native writer queue.
+        await runOpenClawAgentWriteAdmission(
+          database,
+          () => {
+            const writer = new DatabaseSync(database.path);
+            try {
+              writer
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', ?) WHERE session_key = ?",
+                )
+                .run("other", sessionKey);
+            } finally {
+              writer.close();
+            }
+          },
+          false,
+          undefined,
+          signal,
+        );
         sessionChanges.emit({ agentId: "main", sessionKey });
         await projection.prepareSelection();
         const current = projection.sharingTarget({ key: sessionKey, agentId: "main" });
@@ -435,9 +473,32 @@ describe("session sharing authority", () => {
         expect(current?.entry.createdActor).toMatchObject({ id: "other" });
         return snapshot;
       });
-      await expect(
-        call("session.members.listEvidence", { sessionKey }, requestContext, manager),
-      ).rejects.toThrow("session ownership changed before sharing read");
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            writerEntered.promise,
+            reservation,
+            "fixture writer did not retain its native reservation",
+          ),
+          signal,
+        );
+        const denied = expect(
+          call("session.members.listEvidence", { sessionKey }, requestContext, manager),
+        ).rejects.toThrow("session ownership changed before sharing read");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            snapshotRead.promise,
+            denied,
+            "sharing read did not reach the foreign ownership change",
+          ),
+          signal,
+        );
+        releaseWriter.resolve();
+        await withinTest(denied, signal);
+      } finally {
+        releaseWriter.resolve();
+        await reservation;
+      }
     });
   });
 

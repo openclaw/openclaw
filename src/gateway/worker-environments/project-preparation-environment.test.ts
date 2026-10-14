@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyTreeCloseOnExec } from "../../../test/helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
@@ -23,7 +22,12 @@ async function fixture(files: Record<string, string>) {
   const bin = path.join(f.home, "fixture-bin");
   await fs.mkdir(bin);
   // Linux selects tools beside process.execPath; a symlink to host Node would select host tools.
-  copyTreeCloseOnExec(process.execPath, path.join(bin, "node"), { dereference: true });
+  // A separate copier keeps writable Node descriptors out of sibling Vitest forks.
+  execFileSync(process.execPath, [
+    "-e",
+    'const fs = require("node:fs"); fs.copyFileSync(process.execPath, process.argv[1], fs.constants.COPYFILE_FICLONE)',
+    path.join(bin, "node"),
+  ]);
   const libraries = path.resolve(path.dirname(process.execPath), "../lib");
   if (existsSync(libraries)) {
     await fs.symlink(libraries, path.join(f.home, "lib"));

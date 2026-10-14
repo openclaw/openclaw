@@ -961,7 +961,7 @@ describe("ollama plugin", () => {
         "ollama-cloud": {
           api: "ollama",
           baseUrl: cloudBaseUrl,
-          models: [createModel("kimi-k2.5", "Kimi K2.5")],
+          models: [createModel("kimi-k2.6", "Kimi K2.6")],
         },
       }),
       { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },

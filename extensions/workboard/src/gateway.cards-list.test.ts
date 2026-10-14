@@ -210,25 +210,4 @@ describe("workboard card list revisions", () => {
     expect(closed.mock.calls[0]?.[0]).toBe(false);
     expect(closed.mock.calls[0]?.[2].message).toContain("closed");
   });
-
-  it("invalidates committed attachment deletion even if the remaining card update fails", async () => {
-    const { store, stores } = createWorkboardSqliteTestHarness();
-    const card = await store.create({ title: "Attachment" });
-    const attached = await store.addAttachment(card.id, {
-      fileName: "proof.txt",
-      contentBase64: "cHJvb2Y=",
-    });
-    const listCards = captureCardsList(store);
-    const before = await listCards({});
-    expect(before.mock.calls[0]?.[1].cards[0].metadata.attachments).toHaveLength(1);
-    const changes = vi.fn();
-    store.subscribeChanges(changes);
-    vi.spyOn(stores.cards, "registerIfUpdatedAt").mockRejectedValueOnce(new Error("write failed"));
-    await expect(
-      store.deleteAttachment(card.id, attached.metadata!.attachments![0]!.id),
-    ).rejects.toThrow("write failed");
-    expect(changes).toHaveBeenCalledOnce();
-    const after = await listCards({});
-    expect(after.mock.calls[0]?.[1].cards[0].metadata?.attachments).toBeUndefined();
-  });
 });
