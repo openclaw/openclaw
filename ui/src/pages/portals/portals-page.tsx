@@ -332,6 +332,9 @@ export const PortalsPage = defineSolidBridge<PortalsPageProps, PortalsPageMethod
         if (detail?.open === false) {
           return;
         }
+        if (detail?.requestId) {
+          controllers.get(host)?.observePresentation(detail.requestId, detail.portalId);
+        }
         if (
           detail?.portalId &&
           (detail.portalId !== host.requestedPortalId || host.requestedEnvironmentId !== null)

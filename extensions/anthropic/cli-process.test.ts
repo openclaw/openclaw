@@ -487,7 +487,15 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
         expect(signal.aborted).toBe(true);
         expect(childExited).toBe(false);
         if (send) {
-          await expect(send).rejects.toMatchObject({ code: "EPIPE" });
+          // The relay may accept the initial write before its downstream pipe fails.
+          await send.catch((error: unknown) => {
+            expect(error).toMatchObject({ code: "EPIPE" });
+          });
+          await expect(
+            transport.send({ type: "user", data: "after pipe failure" }),
+          ).rejects.toMatchObject({
+            code: "EPIPE",
+          });
         }
       } finally {
         transport.close();

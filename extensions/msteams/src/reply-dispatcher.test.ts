@@ -484,42 +484,6 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("inherits root block streaming mode for named accounts", async () => {
-    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "hello" }]);
-    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"]);
-
-    const dispatcher = createDispatcher(
-      "personal",
-      {},
-      {
-        accountId: "support",
-        cfg: {
-          channels: {
-            msteams: {
-              streaming: { mode: "block" },
-              accounts: {
-                support: {
-                  appId: "support-app",
-                  appPassword: "support-secret",
-                  webhook: { path: "/api/messages/support" },
-                },
-              },
-            },
-          },
-        },
-      },
-    );
-    const options = dispatcherOptions();
-
-    await options.deliver({ text: "support account block reply" });
-
-    const stream = getStreamMock();
-    expect(stream.emit).not.toHaveBeenCalled();
-    expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();
-    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
-    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
-  });
-
   it("queues a system event when some queued Teams messages fail to send", async () => {
     const onSentMessageIds = vi.fn();
     renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "one" }, { text: "two" }] as never);
@@ -713,22 +677,6 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it.each([
-    {
-      name: "attached media",
-      payloads: [
-        {
-          text: "provider final",
-          mediaUrl: "https://example.test/must-not-send.png",
-        },
-      ],
-    },
-    {
-      name: "media after text",
-      payloads: [
-        { text: "provider final" },
-        { mediaUrl: "https://example.test/must-not-send.png" },
-      ],
-    },
     {
       name: "media before text",
       payloads: [

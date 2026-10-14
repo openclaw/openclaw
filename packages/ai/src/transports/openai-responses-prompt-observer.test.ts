@@ -275,7 +275,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     },
   );
 
-  it("binds measured usage to streamed reasoning when the terminal ciphertext changes", async () => {
+  it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
     const model = createModel();
     const identity = { sessionId: "reasoning-session", authProfileId: "reasoning-profile" };
     const context = createCompactionContext(model, identity);
@@ -312,7 +312,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     const result = await stream.result();
     expect(result.content[0]).toMatchObject({
       type: "thinking",
-      thinkingSignature: expect.stringContaining("opaque-streamed-reasoning"),
+      thinkingSignature: expect.stringContaining("opaque-terminal-reasoning"),
     });
     const persisted = JSON.stringify([...context.messages, result]);
     expect(

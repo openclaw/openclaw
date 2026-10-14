@@ -9,6 +9,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI retry and terminal failure" });
@@ -27,10 +28,16 @@ async function capture(
   const thread = page.locator(".chat-thread");
   const frame = await takeControlUiScreenshotFrame(page, thread, content, {
     animations: "disabled",
-    elements: [thread],
+    elements: [thread, ...content],
   });
   await fs.writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
   await fs.writeFile(path.join(suite.artifactDir, name + "-chat.png"), frame.elements[0]!.png);
+  for (let index = 1; index < frame.elements.length; index += 1) {
+    await fs.writeFile(
+      path.join(suite.artifactDir, name + "-element-" + index + ".png"),
+      frame.elements[index]!.png,
+    );
+  }
 }
 
 suite.define(() => {
@@ -332,14 +339,41 @@ suite.define(() => {
         .getByRole("paragraph")
         .filter({ hasText: partial })
         .waitFor();
+      const copy = notice.getByRole("button", { name: "Copy error", exact: true });
+      const retryButton = notice.getByRole("button", { name: "Try again", exact: true });
+      const copyOpacity = () => copy.evaluate((node) => getComputedStyle(node).opacity);
+      await page.mouse.move(0, 0);
+      await expect.poll(copyOpacity).toBe("0");
+      const titleBox = await notice.locator(".chat-run-failure__title").boundingBox();
+      const retryBox = await retryButton.boundingBox();
+      const contentBox = await notice.locator(".chat-run-failure__content").boundingBox();
+      assert(titleBox && retryBox && contentBox);
+      expect(Math.abs(retryBox.x + retryBox.width - contentBox.x - contentBox.width)).toBeLessThan(
+        1,
+      );
+      expect(
+        Math.abs(titleBox.y + titleBox.height / 2 - retryBox.y - retryBox.height / 2),
+      ).toBeLessThan(1);
       await capture(page, "after", [
         notice,
         page.locator(".chat-thread").getByRole("paragraph").filter({ hasText: partial }),
       ]);
-      await notice.locator("summary").click();
-      await notice.getByLabel("Error details").waitFor();
-      await capture(page, "after-details", [notice]);
-      await notice.locator("summary").click();
+      await notice.hover();
+      await expect.poll(copyOpacity).toBe("1");
+      const copyIcon = copy.locator(".chat-copy-btn__icon-copy svg");
+      expect(await copyIcon.evaluate((node) => node.getBoundingClientRect().width)).toBe(14);
+      expect(await copyIcon.evaluate((node) => node.getBoundingClientRect().height)).toBe(14);
+      await capture(page, "after-hover", [notice]);
+      await page.mouse.move(0, 0);
+      await copy.focus();
+      await expect.poll(copyOpacity).toBe("1");
+      await copy.evaluate((node) => node.blur());
+      await expect.poll(copyOpacity).toBe("0");
+      expect(await notice.locator("details").count()).toBe(0);
+      expect(await notice.getByRole("button", { name: "Change model", exact: true }).count()).toBe(
+        0,
+      );
+      await notice.getByRole("button", { name: "Copy error", exact: true }).waitFor();
       await page.setViewportSize({ width: 393, height: 852 });
       await expect
         .poll(() => notice.evaluate((node) => node.scrollWidth <= node.clientWidth))
@@ -349,16 +383,37 @@ suite.define(() => {
       await page.emulateMedia({ colorScheme: "dark" });
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
       await capture(page, "after-dark", [notice]);
+      await suite.withPage(
+        { viewport: { width: 393, height: 852 }, hasTouch: true, isMobile: true },
+        async ({ page: touchPage }) => {
+          await installMockGateway(touchPage, { sessionKey, historyMessages });
+          await touchPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const touchNotice = touchPage.locator(".chat-run-failure");
+          const touchCopy = touchNotice.getByRole("button", { name: "Copy error", exact: true });
+          await touchCopy.waitFor();
+          expect(await touchPage.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true);
+          expect(await touchCopy.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
+          expect(await touchCopy.evaluate((node) => node.getBoundingClientRect().width)).toBe(32);
+          await capture(touchPage, "after-touch", [touchNotice]);
+        },
+      );
       // Persist the mock Gateway response, not just its current document state.
       await gateway.setMethodResponse("chat.history", { messages: historyMessages });
       await page.reload();
       await notice.waitFor();
       expect(await notice.count()).toBe(1);
       expect(await page.locator(".chat-error").count()).toBe(0);
-      await notice.getByRole("button", { name: "Change model", exact: true }).click();
+      // Model selection stays available at its existing composer control.
+      await openChatModelPicker(page);
       await expect
         .poll(() => page.locator(".chat-controls__model-picker").getAttribute("open"))
         .not.toBeNull();
+      await capture(page, "model-picker", [page.locator(".agent-chat__input")]);
+      const modelSearch = page.locator("[data-chat-model-search]");
+      await modelSearch.waitFor({ state: "visible" });
+      await expect
+        .poll(() => modelSearch.evaluate((node) => node === document.activeElement))
+        .toBe(true);
       await page.keyboard.press("Escape");
       const draft = page.locator(".agent-chat__input textarea");
       await draft.fill("Keep this unsent draft");

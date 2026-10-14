@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { normalizeCloudRepo } from "../../../../src/config/cloud-worker-project-profiles.js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
@@ -33,8 +33,10 @@ export function CloudWorkerRepositoryMachine(props: {
     return save.state;
   };
   const config = () => resolveEditableSnapshotConfig(runtime.read().state.configSnapshot);
-  const configuredProfile = () =>
-    readCloudWorkerProfiles(config()).find((profile) => profile.id === props.profileId);
+  const profiles = createMemo(() => readCloudWorkerProfiles(config()));
+  const configuredProfile = createMemo(() =>
+    profiles().find((profile) => profile.id === props.profileId),
+  );
   const facts = () =>
     props.machineFacts ||
     [configuredProfile()?.backend, configuredProfile()?.machineClass, configuredProfile()?.target]
@@ -112,7 +114,7 @@ export function CloudWorkerRepositoryMachine(props: {
             <option value="" disabled>
               {t("cloudWorkersPage.selectProfile")}
             </option>
-            <For each={readCloudWorkerProfiles(config())}>
+            <For each={profiles()}>
               {(profile) => (
                 <option value={profile.id} selected={props.defaultProfileId === profile.id}>
                   {profile.id}

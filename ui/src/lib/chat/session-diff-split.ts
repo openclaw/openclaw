@@ -16,7 +16,7 @@ export function createDiffPairingBudget() {
   return { remaining: PAIR_WORK_BUDGET };
 }
 
-export type DiffPairingBudget = ReturnType<typeof createDiffPairingBudget>;
+type DiffPairingBudget = ReturnType<typeof createDiffPairingBudget>;
 const MAX_LINE_CHARS = 2048;
 const MAX_INLINE_CELLS = 65536;
 const INLINE_CELL_BUDGET = 262144;

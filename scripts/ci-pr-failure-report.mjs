@@ -44,6 +44,23 @@ export async function reportPrFailures(options) {
   ) {
     throw new Error("PR failure report run identity changed");
   }
+  // GitHub supplies the complete direct-needs inventory after every prerequisite
+  // settles. Lane selection and skipped-lane admission remain owned by ci-gate.
+  if (
+    options.preflightResult === "success" &&
+    options.securityFastResult === "success" &&
+    Array.isArray(options.jobResults) &&
+    options.jobResults.length >= 2 &&
+    options.jobResults.every((result) => ["success", "skipped"].includes(result))
+  ) {
+    return {
+      failures: [],
+      knownMainRed: false,
+      failureJobId: "",
+      jobs: [],
+      noFailuresFromNeeds: true,
+    };
+  }
   const jobs = (await readCiRunJobs(options, run)).filter((job) => !CONTROL_JOBS.has(job.name));
   if (jobs.some((job) => job.status !== "completed")) {
     throw new Error("PR jobs have not all completed");
@@ -89,7 +106,11 @@ export function formatFailureReport(report, { repository, runId }) {
   const root = `https://github.com/${repository}/actions/runs`;
   const lines = ["## PR failure classification", ""];
   if (report.failures.length === 0) {
-    return `${lines.join("\n")}No failed or timed-out jobs.\n`;
+    return `${lines.join("\n")}No failed or timed-out jobs.${
+      report.noFailuresFromNeeds
+        ? " GitHub prerequisite results contain only success or skipped; job enumeration and failure classification were unnecessary."
+        : ""
+    }\n`;
   }
   lines.push(
     "| Job | Conclusion | Class | Scheduled main evidence | Reason |",
@@ -120,7 +141,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     pullRequestNumber: Number(process.env.OPENCLAW_CI_PR_NUMBER),
     headSha: process.env.OPENCLAW_CI_PR_HEAD_SHA ?? "",
     token: process.env.GITHUB_TOKEN ?? "",
+    preflightResult: process.env.OPENCLAW_CI_PREFLIGHT_RESULT,
+    securityFastResult: process.env.OPENCLAW_CI_SECURITY_FAST_RESULT,
+    jobResults: undefined,
   };
+  try {
+    options.jobResults = JSON.parse(process.env.OPENCLAW_CI_JOB_RESULTS_JSON ?? "null");
+  } catch {
+    console.warn("::warning::Invalid prerequisite results; enumerating CI jobs");
+  }
   let summary;
   let failures = [];
   try {

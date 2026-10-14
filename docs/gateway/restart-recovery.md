@@ -401,9 +401,14 @@ admitted before shutdown; normal authorization checks still apply. New question
 and approval requests remain fenced.
 
 Work that cannot finish inside the drain budget is marked for recovery before
-the shutdown owner aborts it. Restart cancellation from an earlier cleanup step
-does not remove that run from the marker's candidates. If no supplied candidate
-can be marked, a warning reports the counts and dominant skip reason.
+the shutdown owner aborts it. The close prelude fences new request entry and
+background producers without canceling received execution or retiring its internal
+principals. The run-shutdown owner records recovery, then cancels queued turns,
+replies, and received execution before disposal starts. This keeps the live admission
+available to the recovery marker instead of depending on already-released owners.
+A prior restart cancellation does not remove a still-owned run from the marker's
+candidates. If no supplied candidate can be marked, a warning reports the counts
+and dominant skip reason.
 
 Restart cancellation also preserves recoverability when the bulk shutdown marker
 cannot be written. Native runtime preparation interrupted by the same Gateway
