@@ -471,6 +471,12 @@ describe("command palette people mentions", () => {
         f.palette.remove();
         f.provider.append(f.palette);
       } else if (change === "destination") {
+        f.palette.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
+        await waitForSolid(() =>
+          expect(
+            f.palette.querySelector(".palette-session-settings")?.matches(":popover-open"),
+          ).toBe(true),
+        );
         const agent = f.palette.querySelector("openclaw-agent-select")!;
         await agent.updateComplete;
         expect(agent.value).toBe("main");

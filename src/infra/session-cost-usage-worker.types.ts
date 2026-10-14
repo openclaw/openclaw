@@ -1,10 +1,5 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type {
-  UsageOverviewOptions,
-  UsageOverviewSession,
-  UsageOverviewSlice,
-} from "../shared/usage-types.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import type {
@@ -51,12 +46,6 @@ export type UsageCostWorkerOperation =
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
       kind: "sessions";
-      projection?: "overview";
-      overview?: {
-        sessions: UsageOverviewSession[];
-        options: UsageOverviewOptions;
-        compact?: boolean;
-      };
       pricingFingerprint: string;
       sessions: Array<{ sessionId?: string; sessionFile: string }>;
       startMs?: number;
@@ -94,13 +83,6 @@ export type UsageCostWorkerResult =
   | {
       kind: "sessions";
       summaries: Array<SessionCostSummary | null>;
-      cacheStatus: UsageCacheStatus;
-      staleSessionFiles: string[];
-      invalidRows: SessionCostUsageRollupRow[];
-    }
-  | {
-      kind: "overview";
-      result: UsageOverviewSlice;
       cacheStatus: UsageCacheStatus;
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];

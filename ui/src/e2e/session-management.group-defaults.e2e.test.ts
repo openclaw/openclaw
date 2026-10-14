@@ -680,7 +680,9 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.groups.defaults");
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      const defaultsAction = page.locator('wa-dropdown-item[value="group-defaults"]');
+      const defaultsAction = page.locator(
+        '.sidebar-session-group-menu [data-value="group-defaults"]',
+      );
       await defaultsAction.waitFor({ state: "attached" });
       await expect.poll(() => defaultsAction.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
@@ -712,7 +714,9 @@ suite.define(() => {
 
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      const readyDefaultsAction = page.locator('wa-dropdown-item[value="group-defaults"]');
+      const readyDefaultsAction = page.locator(
+        '.sidebar-session-group-menu [data-value="group-defaults"]',
+      );
       await expect.poll(() => readyDefaultsAction.textContent()).not.toContain("Retry");
       await expect.poll(() => readyDefaultsAction.isEnabled()).toBe(true);
       await readyDefaultsAction.click();

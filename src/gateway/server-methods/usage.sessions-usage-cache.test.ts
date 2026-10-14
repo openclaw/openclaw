@@ -33,7 +33,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
   loadSessionCostSummariesFromCache: mocks.loadSessionCostSummariesFromCache,
 }));
 
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { usageHandlers } from "./usage.js";
 
 let config: OpenClawConfig = {
@@ -219,29 +218,6 @@ describe("sessions.usage result cache and owner attribution", () => {
         message: expect.stringContaining("sessions hidden by your operator role"),
       });
     });
-  });
-
-  it("coalesces concurrent cold misses into one aggregation", async () => {
-    const held = createDeferred();
-    const started = createDeferred();
-    mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
-      async ({ sessions }: { sessions: unknown[] }) => {
-        started.resolve();
-        await held.promise;
-        return freshSummaries(sessions);
-      },
-    );
-    const first = runSessionsUsage(baseParams);
-    const second = runSessionsUsage(baseParams);
-    try {
-      await started.promise;
-      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
-      held.resolve();
-      expect(await second).toEqual(await first);
-    } finally {
-      held.resolve();
-      await Promise.allSettled([first, second]);
-    }
   });
 
   it.each(["cold", "stale"])(

@@ -233,7 +233,11 @@ export class PaletteSessionDraft {
           pickerIdPrefix: this.idPrefix,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
-          closeTransientUi: () => closeSessionMenus(this.host),
+          closeTransientUi: () => {
+            this.draft?.browser.close();
+            this.settings.close();
+            closeSessionMenus(this.host);
+          },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
           onAccepted: (result) => this.accepted(result),

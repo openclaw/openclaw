@@ -41,7 +41,6 @@ import {
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { Message } from "../../llm/types.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -244,35 +243,18 @@ export class SessionManager extends SessionManagerBranching {
       this.assertTranscriptWriteActive();
       const assertNavigation = this.captureTranscriptNavigationAssertion();
       const target = this.persistenceTarget;
-      if (
-        !target ||
-        (isIncognitoSessionKey(target.sessionKey) &&
-          writeAdmission &&
-          "db" in writeAdmission.database)
-      ) {
-        const detachedView = target ? undefined : cloneTranscriptView(this.captureTranscriptView());
+      if (!target) {
+        const detachedView = cloneTranscriptView(this.captureTranscriptView());
         const assertPrepared = () => {
           assertNavigation();
           if (
-            detachedView &&
-            (this.persistenceTarget ||
-              !isDeepStrictEqual(this.captureTranscriptView(), detachedView))
+            this.persistenceTarget ||
+            !isDeepStrictEqual(this.captureTranscriptView(), detachedView)
           ) {
             throw new Error("Session transcript changed before rewrite publication");
           }
         };
-        // Incognito remains process-owned until its worker migration activates.
-        const publish = target
-          ? prepareTranscriptRewriteSync(
-              target,
-              () => {
-                this.assertTranscriptWriteActive();
-                assertNavigation();
-              },
-              this.transcriptVersion,
-            )
-          : undefined;
-        const rewrite = this.prepareTranscriptRewriteView(publish, undefined, assertPrepared);
+        const rewrite = this.prepareTranscriptRewriteView(undefined, undefined, assertPrepared);
         return {
           sessionManager: rewrite.sessionManager,
           commit: async (ids: ReadonlyMap<string, string>) => {

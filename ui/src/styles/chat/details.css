@@ -3,6 +3,14 @@ openclaw-chat-details {
   min-width: 0;
 }
 
+openclaw-chat-details[mobile] {
+  display: contents;
+}
+
+.chat-details-toggle[hidden] {
+  display: none;
+}
+
 /* Notices and suggestions share the gutter; Details lives in the pane header. */
 .chat-gutter-stack--details {
   width: calc(100% - 28px);
