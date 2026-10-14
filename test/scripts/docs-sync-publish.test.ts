@@ -396,6 +396,8 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
     expect(english).toBeDefined();
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
+    const swedish = config.navigation.languages.find((entry) => entry.language === "sv");
+    expect(swedish).toBeDefined();
     const sourceConfig = JSON.parse(
       fs.readFileSync(path.join("docs", "docs.json"), "utf8"),
     ) as typeof config;
@@ -434,6 +436,8 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
         .find((tab) => tab.tab === "贡献")
         ?.groups?.map((group) => group.group),
     ).toEqual(["成熟度", "测试与 CI"]);
+    expect(swedish!.tabs[0]?.tab).toBe("Kom igång");
+    expect(swedish!.tabs[0]?.groups?.[0]?.group).toBe("Översikt");
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
     expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
   });

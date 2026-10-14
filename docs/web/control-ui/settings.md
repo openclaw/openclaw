@@ -155,7 +155,7 @@ The Control UI localizes itself on first load based on your browser locale. To o
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.
 
-Docs translations are generated for the same non-English locale set, except Swedish (`sv`), which is currently Control UI only. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
+Docs translations are generated for the same non-English locale set, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
 
 ## Appearance themes
 
