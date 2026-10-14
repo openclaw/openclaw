@@ -700,17 +700,58 @@ it("permits fixed noncredential generic writer keys without granting a caller ex
   ).toEqual([]);
 });
 
-it("requires host publication for auth-store commands, including literal aliases", () => {
-  const source = `async function runPreparedAuthProfileStoreUpdate() {
-    const type = 'authProfiles.update' as const;
+it.each([
+  [
+    "src/agents/auth-profiles/store-update.ts",
+    "runPreparedAuthProfileStoreUpdate",
+    "authProfiles.update",
+  ],
+  [
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts",
+    "enrollOwnedAuthProfileAuthorization",
+    "authProfiles.enrollAuthorization",
+  ],
+])("requires host publication for credential command aliases in %s", (adapter, entry, command) => {
+  const source = `async function ${entry}() {
+    const type = '${command}' as const;
     await scope.execute({ type, input: {} });
   }`;
-  expect(inspect({ "src/agents/auth-profiles/store-update.ts": source })).toEqual([]);
+  expect(inspect({ [adapter]: source })).toEqual([]);
   expect(inspect({ "src/new-writer.worker.ts": source })).toEqual([
-    expect.stringContaining(
-      "authProfiles.update credential writes require the host publication adapter",
-    ),
+    expect.stringContaining(`${command} credential writes require the host publication adapter`),
   ]);
+});
+
+it("restricts authorization enrollment to its admitted worker entries", () => {
+  const sources = {
+    "src/agents/auth-profiles/sqlite-json-write.ts": `export function writeAuthProfileJsonCell() {}`,
+    "src/agents/auth-profiles/authorization-enrollment.ts": `
+      import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
+      export function enrollAuthProfileAuthorizationInDatabase() { writeAuthProfileJsonCell(); }
+    `,
+    "src/agents/auth-profiles/store.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export const operations = {
+        'authProfiles.enrollAuthorization': () => enrollAuthProfileAuthorizationInDatabase(),
+      };
+    `,
+    "src/agents/auth-profiles/inline-usage.worker.ts": `
+      import { enrollAuthProfileAuthorizationInDatabase } from './authorization-enrollment.js';
+      export function bindSqliteWorkerBackend() {
+        return { execute() { enrollAuthProfileAuthorizationInDatabase(); } };
+      }
+    `,
+  };
+  expect(inspect(sources)).toEqual([]);
+  expect(
+    inspect({
+      ...sources,
+      "src/new-writer.worker.ts": `
+        import { enrollAuthProfileAuthorizationInDatabase } from './agents/auth-profiles/authorization-enrollment.js';
+        enrollAuthProfileAuthorizationInDatabase();
+      `,
+    }),
+  ).toEqual([expect.stringContaining("unreviewed personal credential writer reference")]);
 });
 
 it("keeps catalog capture and worker write custody behind the reviewed batch entry", () => {

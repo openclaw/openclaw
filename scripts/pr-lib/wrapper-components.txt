@@ -2410,6 +2410,7 @@ src/config/sessions/session-manual-compact-entry.ts
 src/config/sessions/session-manual-compact-selection.ts
 src/config/sessions/store-maintenance-plan.ts
 src/config/sessions/store-maintenance-preserve-snapshot.ts
+src/agents/auth-profiles/authorization-lifetime.ts
 src/agents/auth-profiles/constants.ts
 src/agents/auth-profiles/credential-schema.ts
 src/agents/auth-profiles/credential-write-custody.ts
