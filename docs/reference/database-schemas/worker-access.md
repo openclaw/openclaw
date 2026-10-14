@@ -31,6 +31,12 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+SQLite admission delivery follows each worker's ordered cursor. The first snapshot
+includes its shared revision cells; later publications send only new or replaced
+facts, session scopes, and reference cells. Existing cells carry invalidation
+directly, so changing one fact does not resend every session's shared buffer.
+A new worker or database generation receives a complete snapshot.
+
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.

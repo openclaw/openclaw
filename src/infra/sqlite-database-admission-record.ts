@@ -146,10 +146,26 @@ export function publishSqliteDatabaseFact(
   return true;
 }
 
-export type SqliteDatabaseAdmissionCursor = { revision: number; records: WeakSet<Admission> };
+export type SqliteDatabaseAdmissionCursor = {
+  revision: number;
+  records: WeakMap<SharedArrayBuffer, Admission>;
+};
 
 export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCursor {
-  return { revision: -1, records: new WeakSet() };
+  return { revision: -1, records: new WeakMap() };
+}
+
+function changedAdmissionEntries<Key, Value>(
+  current: Map<Key, Value>,
+  previous: Map<Key, Value>,
+): Map<Key, Value> {
+  const changed = new Map<Key, Value>();
+  for (const [key, value] of current) {
+    if (previous.get(key) !== value) {
+      changed.set(key, value);
+    }
+  }
+  return changed;
 }
 
 export class SqliteDatabaseAdmissionRegistry {
@@ -368,12 +384,24 @@ export class SqliteDatabaseAdmissionRegistry {
     if (!identities) {
       cursor.revision = this.revision;
     }
-    return records.filter((record) => {
-      if (cursor.records.has(record)) {
-        return false;
+    return records.flatMap((record) => {
+      const previous = cursor.records.get(record.generation);
+      if (previous === record) {
+        return [];
       }
-      cursor.records.add(record);
-      return true;
+      cursor.records.set(record.generation, record);
+      // One cursor follows one ordered receiver. Shared cells already carry revocation;
+      // resend only replaced entries, not every session's buffer after each publication.
+      return [
+        previous
+          ? {
+              ...record,
+              facts: changedAdmissionEntries(record.facts, previous.facts),
+              writeScopes: changedAdmissionEntries(record.writeScopes, previous.writeScopes),
+              references: changedAdmissionEntries(record.references, previous.references),
+            }
+          : record,
+      ];
     });
   }
 
