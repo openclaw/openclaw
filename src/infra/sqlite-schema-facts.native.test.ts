@@ -218,8 +218,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
     expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
 
-    installSqliteDatabaseAdmissions(before);
+    installSqliteDatabaseAdmissions(structuredClone(before));
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
     expect(
       captureSqliteDatabaseAdmissions().find(
         (record) => record.identity === firstSnapshot.identity,
