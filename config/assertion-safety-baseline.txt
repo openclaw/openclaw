@@ -2187,7 +2187,7 @@ src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
-src/infra/update-global.ts	3
+src/infra/update-global.ts	2
 src/infra/update-package-manager.ts	1
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	2
