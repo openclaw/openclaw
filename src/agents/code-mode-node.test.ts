@@ -61,6 +61,25 @@ describe("Node Code Mode executor", () => {
   it("reports heap exhaustion, recovers, and bounds captured output below the heap limit", async () => {
     // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
     // A standalone process exercises native OOM without changing the test runner's V8 flags.
+    // Keep the allocation live after filling. Give V8 mutator time between majors so
+    // its own ineffective-GC OOM does not preempt the sustained-pressure window.
+    const pressureSource = `
+      const data = globalThis.retained = [];
+      collectGarbage();
+      while (heapStatistics().used_heap_size < heapStatistics().heap_size_limit * 0.86) {
+        for (let i = 0; i < 4; i++) data.push(new Array(131072).fill(1));
+        const until = Date.now() + 20;
+        while (Date.now() < until) {}
+        collectGarbage();
+        await yield_control();
+      }
+      for (;;) {
+        const until = Date.now() + 20;
+        while (Date.now() < until) {}
+        collectGarbage();
+        await yield_control();
+      }
+    `;
     const probe = `
       import { nodeCodeModeExecutor } from ${JSON.stringify(new URL("./code-mode-node.ts", import.meta.url).href)};
       import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
@@ -95,8 +114,7 @@ describe("Node Code Mode executor", () => {
           source: 'for (let i = 0; i < 20000; i++) json({ i, value: "x".repeat(4096) }); return 42;',
         }, { timeoutMs: 7000 }));
         registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url).href)}));
-        // Leave room for the source loader's old-space fragmentation on Linux CI.
-        const pressureConfig = { ...config, timeoutMs: 10000, memoryLimitBytes: 256 * 1024 * 1024 };
+        const pressureConfig = { ...config, timeoutMs: 10000, memoryLimitBytes: 128 * 1024 * 1024 };
         const lowPressure = await host.run(() => nodeCodeModeExecutor.execute({
           kind: "exec", config: pressureConfig, catalog: [], namespaces: [],
           source: 'const until = Date.now() + 1100; while (Date.now() < until) { collectGarbage(); await yield_control(); } return 1;',
@@ -109,7 +127,7 @@ describe("Node Code Mode executor", () => {
         const pressureStarted = performance.now();
         const pressure = await host.run(() => nodeCodeModeExecutor.execute({
           kind: "exec", config: pressureConfig, catalog: [], namespaces: [],
-          source: 'const data = []; while (heapStatistics().used_heap_size < heapStatistics().heap_size_limit * 0.87) data.push(new Array(131072).fill(1)); for (;;) { collectGarbage(); await yield_control(); }',
+          source: ${JSON.stringify(pressureSource)},
         }, { timeoutMs: 10000, inlineHost: {
           onBoundary: async (boundary, context) => ({
             kind: "continue", timeoutMs: Math.min(1000, context.maxTimeoutMs), pendingRequests: [],
