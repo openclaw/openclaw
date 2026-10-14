@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { AuthProfileAuthorizationError } from "../agents/auth-profiles/authorization-contract.js";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { withAuthProfileCredentialWriteCustody } from "../agents/auth-profiles/credential-write-custody.js";
 import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted-store.js";
@@ -19,12 +20,14 @@ import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js"
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { createStateDomainPublication } from "./state-domain-publication.js";
 import { parseUserModelAuthProfileId } from "./user-model-account-id.js";
+import { readProfileAuthority, type ProfileAuthorityStatus } from "./user-profile-authority.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
 
 type CredentialFact = {
   id: string;
   credential: AuthProfileCredential;
   replacement: boolean;
+  authorizationId?: string;
 };
 
 export const personalCredentialPublication = createStateDomainPublication<CredentialFact>({
@@ -35,13 +38,17 @@ export const personalCredentialPublication = createStateDomainPublication<Creden
     typeof value.id === "string" &&
     parseUserModelAuthProfileId(value.id) !== undefined &&
     typeof value.replacement === "boolean" &&
+    (value.authorizationId === undefined || typeof value.authorizationId === "string") &&
     inlineAuthProfileCredentialSchema.safeParse(value.credential).success,
 });
 
 type CredentialCell = {
   credential?: AuthProfileCredential;
   identityCurrent: () => boolean;
+  identityStatus?: () => ProfileAuthorityStatus;
   observed?: boolean;
+  authorizationId?: string;
+  authorizationObserved?: boolean;
 };
 type CredentialOwner = {
   cells: Map<string, CredentialCell>;
@@ -86,6 +93,8 @@ personalCredentialPublication.subscribeFacts((change) => {
         // Reconnect never revives a retained grant, even with identical token bytes.
         const next = fact.value.replacement ? { ...cell } : cell;
         next.credential = fact.value.credential;
+        next.authorizationId = fact.value.authorizationId;
+        next.authorizationObserved = true;
         owner.cells.set(id, next);
       }
     }
@@ -130,7 +139,10 @@ export async function capturePersonalCredentialAuthority(
   }
   let cell = owner.cells.get(profileId);
   if (!cell?.identityCurrent()) {
-    cell = { identityCurrent };
+    cell = {
+      identityCurrent,
+      identityStatus: () => readProfileAuthority(identityCurrent.transferable),
+    };
     owner.cells.set(profileId, cell);
   }
   const retained = cell;
@@ -149,6 +161,32 @@ export async function capturePersonalCredentialAuthority(
   };
   assertCurrent();
   return {
+    observeAuthorizationId(authorizationId: string | undefined) {
+      assertCurrent();
+      if (!retained.authorizationObserved) {
+        retained.authorizationId = authorizationId;
+        retained.authorizationObserved = true;
+      }
+    },
+    assertAuthorizationCurrent(authorizationId: string) {
+      const identityStatus = retained.identityStatus?.();
+      if (
+        owners.get(identity) !== owner ||
+        owner.cells.get(profileId) !== retained ||
+        identityStatus === "revoked" ||
+        (retained.authorizationObserved && retained.authorizationId !== authorizationId)
+      ) {
+        throw new AuthProfileAuthorizationError("retired");
+      }
+      if (
+        identityStatus !== "current" ||
+        owner.pending.size ||
+        owner.uncertain ||
+        !retained.authorizationObserved
+      ) {
+        throw new AuthProfileAuthorizationError("unavailable");
+      }
+    },
     observe(credential: AuthProfileCredential | undefined) {
       assertCurrent();
       // A committed postimage wins over a read dispatched before that mutation.

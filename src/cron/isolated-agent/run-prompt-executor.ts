@@ -42,6 +42,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { acquireCronInferenceAuthorization } from "../inference-binding.runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -163,6 +164,18 @@ export function createCronPromptExecutor(
   const resolveCandidateExecution = createCronCandidateExecutionResolver(params);
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
+    using inferenceLease = new DisposableStack();
+    const binding = params.job.inferenceBinding;
+    const inferenceAuthorization = binding
+      ? await acquireCronInferenceAuthorization({
+          binding,
+          cfg: params.cfgWithAgentDefaults,
+          agentDir: params.agentDir,
+        })
+      : undefined;
+    if (inferenceAuthorization) {
+      inferenceLease.defer(() => inferenceAuthorization.dispose());
+    }
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
     // A retry can fail during preparation, before any backend start callback.
@@ -351,6 +364,17 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
+        if (cliExecution && !params.job.runtimeAuthority && !binding) {
+          throw new Error(
+            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+          );
+        }
+        if (binding && (providerOverride !== binding.provider || cliExecution)) {
+          throw new Error(
+            "Automation candidate is incompatible with its recorded inference account and route.",
+          );
+        }
+        inferenceAuthorization?.assertCurrent();
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -590,10 +614,28 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
+          authProfileId: binding?.profileId ?? params.liveSelection.authProfileId,
+          ...(binding && inferenceAuthorization
+            ? {
+                authProfileBinding: {
+                  profileId: binding.profileId,
+                  authRequirement: binding.authRequirement,
+                  assertCurrent: inferenceAuthorization.assertCurrent,
+                  revalidate: inferenceAuthorization.revalidate,
+                },
+                allowAuthProfileFallback: false,
+                onSuccessfulAuthProfile: (profileId: string | undefined) => {
+                  if (profileId !== binding.profileId) {
+                    throw new Error("Automation inference account changed during execution.");
+                  }
+                },
+              }
+            : {}),
+          authProfileIdSource:
+            binding?.source ??
+            (params.liveSelection.authProfileId
+              ? params.liveSelection.authProfileIdSource
+              : undefined),
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,

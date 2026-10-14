@@ -140,6 +140,7 @@ export function createEmbeddedAuthProfileAdmission(
  * share this state so profile rotation cannot leave either with stale credentials.
  */
 export function createEmbeddedRunAuthController(params: {
+  authProfileBinding?: RunEmbeddedAgentParams["authProfileBinding"];
   config: RunEmbeddedAgentParams["config"];
   agentDir: string;
   workspaceDir: string;
@@ -194,6 +195,10 @@ export function createEmbeddedRunAuthController(params: {
     authMode: string;
     profileId?: string;
   }) => {
+    // Canonical observation follows credential resolution and precedes provider egress.
+    // It catches another process replacing a profile that retained the same ID.
+    await params.authProfileBinding?.revalidate();
+    params.authProfileBinding?.assertCurrent();
     const preparedAuth = await prepareProviderRuntimeAuth({
       provider: prepareParams.runtimeModel.provider,
       config: params.config,
@@ -507,6 +512,10 @@ export function createEmbeddedRunAuthController(params: {
         `Resolved ${apiKeyInfo.mode ?? "unknown"} credentials are incompatible with the selected ${preparedModel.authRequirement} route for ${preparedModel.runtimeModel.provider}.`,
       );
     }
+    params.authProfileBinding?.assertCurrent();
+    if (params.authProfileBinding && apiKeyInfo.profileId !== params.authProfileBinding.profileId) {
+      throw new Error("Resolved credentials do not belong to the automation inference owner.");
+    }
     // Preserve the checked source even when resolution fails before route commit.
     state.apiKeyInfo = apiKeyInfo;
     const usesAwsSdkChain = !apiKeyInfo.apiKey && apiKeyInfo.mode === "aws-sdk";
@@ -549,7 +558,7 @@ export function createEmbeddedRunAuthController(params: {
         runtimeAuthHandled = true;
       }
     } catch (error) {
-      if (!usesAwsSdkChain) {
+      if (params.authProfileBinding || !usesAwsSdkChain) {
         throw error;
       }
       params.log.warn(
