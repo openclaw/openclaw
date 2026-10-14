@@ -153,7 +153,6 @@ function sendStateLabel(
 ): string | null {
   if (
     offline &&
-    connected !== true &&
     item.sendState !== "failed" &&
     item.sendState !== "unconfirmed" &&
     item.sendState !== "held"
@@ -314,7 +313,7 @@ function ChatQueueItem(rowProps: {
     () =>
       !item().serverQueued &&
       !failed() &&
-      ((rowProps.controls.connected !== true && rowProps.controls.offline) ||
+      (rowProps.controls.offline === true ||
         isChatSendReconnecting(item().sendState, rowProps.controls.connected)),
   );
   const stateLabel = createMemo(() =>
