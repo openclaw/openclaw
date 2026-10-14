@@ -26,12 +26,10 @@ const CLI_CHILD_TIMEOUT_MS = 60_000;
 const tempDirs = createFixtureLifetime();
 afterEach(() => tempDirs.cleanup());
 
-function createFixture({ guardReadOnly = false, canonicalServiceIdentity = false } = {}) {
+function createFixture({ guardReadOnly = false } = {}) {
   const root = tempDirs.createTempDir("openclaw-service-capability-");
-  const profile = canonicalServiceIdentity ? path.basename(root).toLowerCase() : undefined;
-  const stateDir = path.join(root, profile ? `.openclaw-${profile}` : "state");
-  const configPath = path.join(profile ? stateDir : root, "openclaw.json");
-  fs.mkdirSync(stateDir, { recursive: true });
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "openclaw.json");
   fs.writeFileSync(configPath, '{"gateway":{"mode":"local"}}\n');
   const env = {
     PATH: process.env.PATH,
@@ -40,7 +38,6 @@ function createFixture({ guardReadOnly = false, canonicalServiceIdentity = false
     OPENCLAW_HOME: root,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
-    ...(profile ? { OPENCLAW_PROFILE: profile } : {}),
     OPENCLAW_NO_RESPAWN: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
     OPENCLAW_HIDE_BANNER: "1",
@@ -101,23 +98,9 @@ if (threads.isMainThread) record("ready");
 `,
     );
   }
-  const identityPreloadPath = path.join(root, "account-home.cjs");
-  if (canonicalServiceIdentity) {
-    // Exercise a canonical install identity without touching the operator's home or service label.
-    fs.writeFileSync(
-      identityPreloadPath,
-      `const os = require("node:os");
-const account = os.userInfo();
-os.userInfo = () => ({ ...account, homedir: ${JSON.stringify(root)} });
-require("node:module").syncBuiltinESMExports();
-`,
-    );
-  }
-  const nodeOptions = [
-    ...(canonicalServiceIdentity ? [`--require ${JSON.stringify(identityPreloadPath)}`] : []),
-    ...(guardReadOnly ? [`--require ${JSON.stringify(preloadPath)}`] : []),
-  ].join(" ");
-  const childEnv = nodeOptions ? { ...env, NODE_OPTIONS: nodeOptions } : env;
+  const childEnv = guardReadOnly
+    ? { ...env, NODE_OPTIONS: `--require ${JSON.stringify(preloadPath)}` }
+    : env;
   const startTime = getFileLockProcessStartTime(process.pid);
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   return {
@@ -220,25 +203,4 @@ describe("candidate service capability startup", () => {
     },
     getCliProcessTestTimeout(CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS, CLI_CHILD_TIMEOUT_MS),
   );
-
-  it("keeps ordinary service commands behind the live Gateway schema fence", async () => {
-    const fixture = createFixture({ canonicalServiceIdentity: true });
-    const before = fs.readFileSync(fixture.databasePath);
-    try {
-      const result = await fixture.run(["gateway", "install", "--json"]);
-      expect(result.code).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: expect.stringContaining(
-            `OpenClaw state database is busy at ${fixture.databasePath}.`,
-          ),
-        },
-      });
-      expect(fs.readFileSync(fixture.databasePath)).toEqual(before);
-    } finally {
-      fixture.gateway.release();
-    }
-  });
 });

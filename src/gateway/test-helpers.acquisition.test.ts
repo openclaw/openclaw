@@ -53,7 +53,7 @@ vi.mock("./test-helpers.listener.js", async (importOriginal) => ({
 }));
 vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
-  resetPreparedGatewayModelCatalogForTest: vi.fn(),
+  resetPreparedModelCatalogStateForTest: vi.fn(),
 }));
 vi.mock("../test-utils/ports.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../test-utils/ports.js")>()),
