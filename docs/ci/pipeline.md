@@ -214,9 +214,12 @@ The qualified TypeScript compiler analysis files and `src/library.test.ts` run
 on Bun. The pinned fork exposes the child-process pipe handles and stream
 reference controls used by TypeScript's synchronous native API. Compiler
 assertions in mixed runtime suites remain enabled.
-The aggregate and src-only unit owners retain their existing four-file Bun
-allowlist, including the worker connection-closing-window test. Other unit-src
-files remain on Node.
+The src-only unit owner also defaults to Bun. The state-lease retention test
+keeps its separate infra owner on Node: the completed worker-heartbeat case still
+retains its caller's async context. The aggregate unit owner shares the Bun
+admission for src-only files and retains Node for the separate ACP, security,
+and package inventories, apart from the previously qualified normalization-core
+grapheme test.
 The Code Mode executor runs with Vitest on Bun using the fork's
 copy-on-write diagnostics-channel subscriber handling. Markdown render-aware
 chunking runs on the pinned fork as part of unit-fast.

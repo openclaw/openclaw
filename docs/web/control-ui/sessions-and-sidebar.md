@@ -193,6 +193,13 @@ opens the home folder. Errors for paths you enter remain visible.
 
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
+For a selected project, **Checkout** uses the Gateway's availability decision for
+the chosen agent. If Current checkout is unavailable and a managed checkout is
+allowed, New session selects **New worktree** before submission. **Current checkout**
+stays visible but disabled with an explanation. Allowed saved choices stay selected;
+an unavailable saved choice is corrected without clearing your prompt, model, or
+effort. The Gateway checks access again when the session is created.
+
 Guests with session access can save these choices in their own profile without
 broader Gateway write permission. This does not allow changing another person's
 preferences or private background resources.
