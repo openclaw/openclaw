@@ -13,6 +13,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import * as sessionPlacement from "../worker-environments/session-placement-lifecycle.js";
 import {
   deletionJournal,
   expectRespondErrorContaining,
@@ -68,6 +69,35 @@ type AgentDeleteRecoveryHarness = {
 
 export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecoveryHarness): void {
   const { mocks, makeCall, call, resume, expectTrashedWithinParent, expectNotTrashed } = harness;
+  it.each([
+    new Error("Placement read failed; restore the placement database and retry"),
+    new Error("Session placement identity changed; reload the session and retry"),
+    new AggregateError([new Error("placement cleanup failed")], "Placement stop failed", {
+      cause: new Error("Placement read failed; restore the placement database and retry"),
+    }),
+  ])("preserves a pre-cancellation placement failure: %s", async (placementError) => {
+    const sessionId = "placement-failure-session";
+    const sessionKey = "agent:test-agent:placement-failure";
+    const handle = createEmbeddedRunHandle({ runId: "placement-failure-run", abort: vi.fn() });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "test-agent");
+    const prepareStop = vi
+      .spyOn(sessionPlacement, "prepareSessionWorkerPlacementStop")
+      .mockRejectedValueOnce(placementError);
+    try {
+      const deletion = makeCall("agents.delete", { agentId: "test-agent" });
+      await expect(deletion.promise).rejects.toBe(placementError);
+      expect(handle.abort).not.toHaveBeenCalled();
+      expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+      expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+      expect(mocks.beginAgentDeletionRetire).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    } finally {
+      prepareStop.mockRestore();
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
+  });
+
   it.each([
     { sessionKey: undefined, isAbortable: false },
     { sessionKey: undefined, isAbortable: true },
