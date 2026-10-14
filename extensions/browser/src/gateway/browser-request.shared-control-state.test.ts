@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   stopKnownBrowserProfiles: vi.fn(async () => {}),
   isChromeReachable: vi.fn(async () => false),
   isChromeCdpReady: vi.fn(async () => false),
+  relayModuleLoadError: null as Error | null,
+  listenedServers: [] as import("node:http").Server[],
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
@@ -35,8 +38,32 @@ vi.mock("../browser/control-auth.js", () => ({
 
 // This suite tests shared state; server auth/bind suites cover real HTTP listeners.
 vi.mock("../browser/http-listen.js", () => ({
-  listenBrowserHttpServer: vi.fn(async () => createServer()),
+  listenBrowserHttpServer: vi.fn(async () => {
+    const server = createServer();
+    mocks.listenedServers.push(server);
+    return server;
+  }),
 }));
+
+vi.mock("../browser/extension-relay.runtime.js", () => {
+  const realGetExtensionRelayModule = createLazyRuntimeModule(
+    () => import("../browser/extension-relay/relay-lifecycle.js"),
+  );
+  return {
+    getGatewayExtensionRelayModule: createLazyRuntimeModule(
+      () => import("../browser/extension-relay/gateway-relay-route.js"),
+    ),
+    getExtensionRelayModule: Object.assign(
+      async () => {
+        if (mocks.relayModuleLoadError) {
+          throw mocks.relayModuleLoadError;
+        }
+        return await realGetExtensionRelayModule();
+      },
+      { peek: () => realGetExtensionRelayModule.peek() },
+    ),
+  };
+});
 
 vi.mock("../browser/server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: mocks.stopKnownBrowserProfiles,
@@ -299,5 +326,30 @@ describe("browser.request local control state", () => {
     expect(state.extensionRelays?.size ?? 0).toBe(0);
     expect(state.resolved.extensionRelayInternalTokens.chrome).toBeUndefined();
     expect(getBrowserControlState()).toBeNull();
+  });
+
+  it("closes the HTTP listener and publishes no runtime when the relay module fails to load", async () => {
+    const relayPort = await getFreePort();
+    mocks.runtimeConfig = browserConfig({
+      profiles: {
+        openclaw: { cdpPort: controlPort + 9 },
+        chrome: { driver: "extension", cdpPort: relayPort },
+      },
+    });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    mocks.relayModuleLoadError = new Error("relay module unavailable");
+    mocks.listenedServers.length = 0;
+    try {
+      await expect(startBrowserControlServerFromConfig()).rejects.toThrow(
+        "relay module unavailable",
+      );
+    } finally {
+      mocks.relayModuleLoadError = null;
+    }
+
+    const server = expectDefined(mocks.listenedServers[0], "browser control listener");
+    expect(server.listening).toBe(false);
+    expect(getBrowserControlState()).toBeNull();
+    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
   });
 });
