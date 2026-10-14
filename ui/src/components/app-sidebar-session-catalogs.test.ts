@@ -9,6 +9,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
+  catalogErrorMessages,
   findCatalogSessionHovercardRow,
   formatSidebarTimestamp,
   projectSidebarSessionCatalogs,
@@ -182,3 +183,51 @@ it.each([false, true])(
     ]);
   },
 );
+
+describe("catalogErrorMessages", () => {
+  const host = (overrides: Partial<SessionCatalogHost> = {}): SessionCatalogHost => ({
+    hostId: "gateway:codex",
+    label: "Local Codex",
+    kind: "gateway",
+    connected: true,
+    sessions: [],
+    ...overrides,
+  });
+  const catalog = (overrides: Partial<SessionCatalog> = {}): SessionCatalog => ({
+    id: "codex",
+    label: "Codex",
+    capabilities: { continueSession: true, archive: true },
+    hosts: [host()],
+    ...overrides,
+  });
+
+  it("treats a pending catalog as a healthy in-flight discovery", () => {
+    expect(
+      catalogErrorMessages(
+        catalog({
+          error: {
+            code: "catalog_pending",
+            message: "Catalog refresh is still pending; retry shortly.",
+          },
+          hosts: [host({ pending: true })],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("still reports a stale catalog", () => {
+    expect(
+      catalogErrorMessages(
+        catalog({ error: { code: "catalog_stale", message: "Showing stale results." } }),
+      ),
+    ).toEqual([expect.stringContaining("[catalog_stale]")]);
+  });
+
+  it("keeps an offline host out of the provider failure list", () => {
+    expect(
+      catalogErrorMessages(
+        catalog({ hosts: [host({ error: { code: "NODE_OFFLINE", message: "offline" } })] }),
+      ),
+    ).toEqual([]);
+  });
+});
