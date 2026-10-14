@@ -23,6 +23,7 @@ type SessionForkAuthority = { active: boolean; capture: object };
 type Snapshot = EmbeddedSessionForkIdentity & {
   model: Model;
   context: Parameters<StreamFn>[1];
+  publishedMessageStart: number;
   options: StreamOptions;
   streamFn: StreamFn;
   payload: Record<string, unknown>;
@@ -180,6 +181,7 @@ export function wrapStreamFnWithSessionFork(
               ...identity,
               model: savedModel,
               context: savedContext,
+              publishedMessageStart: savedContext.messages.length,
               options: savedOptions,
               payload: savedPayload,
               streamFn,
@@ -267,6 +269,35 @@ export async function runEmbeddedSessionFork(params: {
     );
   }
   const context = structuredClone(snapshot.context);
+  // Only publications after the prepared request can still be in flight. Pair them
+  // before provider replay repair can mistake a missing result for an aborted call.
+  // These placeholders belong to this fork, never the parent's retained history.
+  const completedCalls = new Set<string>();
+  for (let index = context.messages.length - 1; index >= snapshot.publishedMessageStart; index--) {
+    const message = context.messages[index]!;
+    if (message.role === "toolResult") {
+      completedCalls.add(message.toolCallId);
+    } else if (message.role === "assistant") {
+      for (const block of message.content) {
+        if (block.type !== "toolCall" || completedCalls.delete(block.id)) {
+          continue;
+        }
+        context.messages.splice(index + 1, 0, {
+          role: "toolResult",
+          toolCallId: block.id,
+          toolName: block.name,
+          content: [
+            {
+              type: "text",
+              text: "This tool call is still running. Its result is not available yet.",
+            },
+          ],
+          isError: false,
+          timestamp: Date.now(),
+        });
+      }
+    }
+  }
   context.messages.push({ role: "user", content: params.question, timestamp: Date.now() });
   const model = getAiTransportHost().inheritManagedTransport(params.model, {
     ...snapshot.model,

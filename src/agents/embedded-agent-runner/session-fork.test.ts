@@ -211,6 +211,70 @@ describe("prepared session fork provider boundary", () => {
     };
   }
 
+  it.each([
+    ["openai-responses", false],
+    ["openai-responses", true],
+    ["anthropic-messages", false],
+    ["anthropic-messages", true],
+  ] as const)("represents an in-flight %s tool call as pending (async=%s)", async (api, async) => {
+    const { parent, physicalFetch } = guardedTransport(undefined, api);
+    const requestModel = {
+      ...model,
+      api,
+      provider: api === "anthropic-messages" ? "anthropic" : "openai",
+      baseUrl: api === "anthropic-messages" ? "https://api.anthropic.com" : model.baseUrl,
+    };
+    const assistant = await (
+      await parent(requestModel, context, { apiKey: "synthetic-key", transport: "sse" })
+    ).result();
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      ...assistant,
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "toolCall",
+          id: "pending_call",
+          name: "exec",
+          arguments: { command: "echo 3; sleep 10" },
+          ...(async ? { async: true } : {}),
+        },
+      ],
+    });
+    const runFork = () =>
+      runEmbeddedSessionFork({
+        ...identity,
+        model: requestModel,
+        apiKey: "synthetic-key",
+        question: "Review only",
+        assertCurrent: () => {},
+      });
+    await expect(runFork()).resolves.toBe("Answer");
+    const pendingCall = physicalFetch.mock.calls[1]!;
+    const pendingBody = await new Request(pendingCall[0], pendingCall[1]).text();
+    expect(pendingBody).toContain("pending_call");
+    expect(pendingBody).toContain("still running");
+    expect(pendingBody).toContain("result is not available yet");
+    expect(pendingBody).not.toContain("aborted");
+    expect(pendingBody).not.toContain('"is_error":true');
+
+    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+      role: "toolResult",
+      toolCallId: "pending_call",
+      toolName: "exec",
+      content: [{ type: "text", text: "3" }],
+      isError: false,
+      timestamp: 3,
+    });
+    await expect(runFork()).resolves.toBe("Answer");
+    const completedCall = physicalFetch.mock.calls[2]!;
+    const completedBody = await new Request(completedCall[0], completedCall[1]).text();
+    expect(completedBody).not.toContain("still running");
+    expect(completedBody).not.toContain("aborted");
+    expect(completedBody).toContain(
+      api === "anthropic-messages" ? '"content":"3"' : '"output":"3"',
+    );
+  });
+
   it("blocks the physical send when access is withdrawn during guarded DNS preparation", async () => {
     let revoked = false;
     let withdrawDuringDns = false;
