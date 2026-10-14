@@ -52,7 +52,10 @@ GitHub-hosted runners.
 PR jobs and independent checks run to completion after a failure, including forks and retries. Setup, planning, build dependencies, cancellation, and watchdog deadlines still stop work that cannot safely proceed. Failing runs therefore take longer and use more runner time; successful runs keep the same selected checks, job names, and concurrency. `pr-failure-report` compares
 every failed or timed-out job with the newest completed scheduled main CI run
 and publishes a **pre-existing**, **new**, or **unknown** classification in its
-summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
+summary and `openclaw/ci-gate`, with machine-readable JSON output. When GitHub reports
+only successful or skipped prerequisites, the reporter records that no failures
+need classification without enumerating job pages. The CI gate still checks
+selected lanes and rejects unexpected skips. Reasons identify
 matched signatures or job-name-only matches. The existing known-main-red
 allowance and gate result stay unchanged. Detected build-verifier or lint-mode
 scope differences are **unknown**; other reasons say when selected scope was

@@ -60,11 +60,16 @@ type CronFailureAlertParams = Parameters<
   ssrfPolicy?: SsrFPolicy;
 };
 
+type GatewayCronFailureRepairDeps = {
+  failureRepairTimeoutMs: NonNullable<CronServiceDeps["failureRepairTimeoutMs"]>;
+  runCronFailureRepair: NonNullable<CronServiceDeps["runCronFailureRepair"]>;
+};
+
 /** Keeps the scheduler's persisted deadline and the repair turn's timeout identical. */
 export function createGatewayCronFailureRepair(
   cfg: OpenClawConfig,
   resolveGatewayContext: GatewayContextResolver | undefined,
-): Pick<CronServiceDeps, "failureRepairTimeoutMs" | "runCronFailureRepair"> {
+): GatewayCronFailureRepairDeps {
   return {
     failureRepairTimeoutMs: resolveAgentTimeoutMs({ cfg }),
     runCronFailureRepair: (request) => runGatewayCronFailureRepair(request, resolveGatewayContext),
@@ -82,7 +87,7 @@ async function runGatewayCronFailureRepair(
   resolveGatewayContext: GatewayContextResolver | undefined,
 ): Promise<void> {
   const runId = `cron-failure-repair:${request.repairId}`;
-  const deadlineAtMs = Date.now() + request.timeoutMs;
+  const deadlineAtMs = performance.now() + request.timeoutMs;
   // The cron run may retire its async scope before this independent repair settles.
   await runWithGatewayDetachedWorkContinuation(async () => {
     await dispatchGatewayLifecycleMethod(
@@ -110,7 +115,7 @@ async function runGatewayCronFailureRepair(
     const settled = await waitForAgentJob({
       runId,
       source: "agent",
-      timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
+      timeoutMs: Math.max(0, deadlineAtMs - performance.now()),
     });
     if (!settled || settled.timeoutPhase === "gateway_draining") {
       throw new Error("Cron failure repair did not settle before its agent timeout or shutdown.");

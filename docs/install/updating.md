@@ -556,6 +556,12 @@ failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
 checks still prevent completion.
 
+Shell completion-cache refresh is best effort. If it times out and its process
+cleanup is verified, finalization records the failed cache phase and deadline
+warning while allowing the update to finish. Run `openclaw completion --write-state`
+to refresh it manually. Unverified process cleanup still blocks finalization;
+the updater does not report success while owned work may remain active.
+
 ### Package-publication recovery
 
 Supported POSIX npm updates print a recovery command using the selected external

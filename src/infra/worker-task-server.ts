@@ -1,3 +1,5 @@
+// Initialize the context-free root before a task can lazily import maintenance owners.
+import "../shared/detached-async-context.js";
 import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {

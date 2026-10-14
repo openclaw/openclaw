@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -15,6 +16,7 @@ import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-schedulin
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
+import { readCronEventClaimInDatabase, transferCronEventInDatabase } from "./event-ingress.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import type {
@@ -112,7 +114,17 @@ export function requestCronRunsInWorker(
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
 ): CronRunQueueOperations["cron.requestRuns"]["output"] {
   return runOpenClawStateWriteTransaction(
-    ({ db }) => requestCronRunsInDatabase(db, input, loadJobs(db, input.storeKey)),
+    ({ db }) => {
+      const hasEvents = input.requests.some((request) => request.event !== undefined);
+      if (hasEvents) {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      }
+      const result = requestCronRunsInDatabase(db, input, loadJobs(db, input.storeKey));
+      if (hasEvents) {
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      }
+      return result;
+    },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.request-runs" },
   );
@@ -132,7 +144,9 @@ function requestCronRunsInDatabase(
     const job = jobs.get(request.jobId);
     const timed = parseCronScheduledRunId(request.receiptId);
     let reason: string | undefined;
-    if (!job || job.state.queuedAtMs !== undefined || job.state.runningAtMs !== undefined) {
+    if (request.event && (!job || !readCronEventClaimInDatabase(db, job, request.event))) {
+      reason = "event-invalidated";
+    } else if (!job || job.state.queuedAtMs !== undefined || job.state.runningAtMs !== undefined) {
       reason = job ? "already-running" : "job-removed";
     } else if (
       resolveCronJobConfigRevision(job) !== request.configRevision ||
@@ -182,7 +196,8 @@ function requestCronRunsInDatabase(
           .select("status")
           .where("receipt_id", "=", request.receiptId),
       );
-      if (existing) {
+      // An existing receipt must not mask a retired or consumed event claim.
+      if (existing && reason !== "event-invalidated") {
         if (
           existing.status !== "running" &&
           job &&
@@ -237,8 +252,21 @@ export function drainCronQueueInWorker(
 ): CronRunQueueOperations["cron.drainQueue"]["output"] {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const hasEvents = input.requests.some((request) => request.event !== undefined);
+      if (hasEvents) {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      }
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
-      return drainCronQueueInDatabase(db, input, loadJobs(db, input.storeKey), receiptSchema);
+      const result = drainCronQueueInDatabase(
+        db,
+        input,
+        loadJobs(db, input.storeKey),
+        receiptSchema,
+      );
+      if (hasEvents) {
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      }
+      return result;
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.drain-queue" },
@@ -309,6 +337,13 @@ function drainCronQueueInDatabase(
       // A sibling facade may hold this transient payload; startup owns lost-context recovery.
       continue;
     }
+    if (context.event && !readCronEventClaimInDatabase(db, job, context.event)) {
+      result.skipped.push({
+        ...skipRequest(db, receiptSchema, handle, job, input.nowMs, "cron event claim invalidated"),
+        eventInvalidated: true,
+      });
+      continue;
+    }
     const fresh = freshReceipts?.has(receipt.receiptId) === true;
     // A newly claimed request still has the eligibility and owner admitted above.
     const agentId = fresh
@@ -358,6 +393,9 @@ function drainCronQueueInDatabase(
           handle: currentHandle,
           startedAtMs: input.nowMs,
         });
+    if (context.event) {
+      transferCronEventInDatabase(db, job, context.event, runReceipt, input.nowMs);
+    }
     delete job.state.queuedAtMs;
     job.state.runningAtMs = input.nowMs;
     job.state.runningReceiptId = runReceipt.receiptId;
