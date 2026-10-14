@@ -247,10 +247,10 @@ selected and **Appearance → Background** uses theme artwork, the Control UI
 paints the image for the matching color mode instead of the neutral plugin
 artwork. A mode without a declared image keeps the neutral artwork. Background
 placement, presentation, visibility, and the accessibility fallbacks that hide
-artwork stay under the viewer's control. Theme artwork is not dimmed for
-contrast the way custom uploads are, so design it like the built-in
-backgrounds: quiet, low-contrast detail that keeps text readable against your
-palette. The built-in images are lossless WebP files of about 20–35 KiB.
+artwork stay under the viewer's control. Like a custom upload, the image is
+dimmed under a theme-colored overlay sized from the palette's text contrast, so
+busy or bright images stay readable but faint; quiet, low-contrast artwork keeps
+the most detail. The built-in images are lossless WebP files of about 20–35 KiB.
 
 Include the definition JSON and every declared SVG and background in the published
 package's `files` list. OpenClaw's bundled metadata copier and runtime package builder

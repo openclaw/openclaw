@@ -69,7 +69,7 @@ export function loadManifestThemeDefinitions(params: {
         }
         return svg;
       };
-      const readBackground = (source: string): Buffer => {
+      const readBackground = (source: string): string => {
         const imageFile = readPluginCacheFile({
           rootDir: params.rootDir,
           relativePath: source,
@@ -84,7 +84,7 @@ export function loadManifestThemeDefinitions(params: {
             `background ${source} must be a readable PNG, JPEG, or WebP inside the plugin root, at most ${PLUGIN_THEME_BACKGROUND_MAX_BYTES} bytes`,
           );
         }
-        return imageFile.contents;
+        return imageFile.contents.toString("base64");
       };
       const artwork: PluginThemeArtwork = {
         ...(theme.icons
@@ -116,7 +116,7 @@ export function loadManifestThemeDefinitions(params: {
               backgrounds: Object.fromEntries(
                 Object.entries(theme.backgrounds).map(([mode, source]) => [
                   mode,
-                  { image: readBackground(source) },
+                  { base64: readBackground(source) },
                 ]),
               ),
             }

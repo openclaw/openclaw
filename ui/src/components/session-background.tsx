@@ -149,7 +149,7 @@ export const SessionBackground = defineSolidBridge<Props>(
     const observer = new MutationObserver(notify);
     observer.observe(host.ownerDocument.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme", "data-theme-mode"],
+      attributeFilter: ["data-theme", "data-theme-mode", "data-theme-background"],
     });
     const accessibilityChanged = () => {
       releaseImage();
@@ -186,9 +186,11 @@ export const SessionBackground = defineSolidBridge<Props>(
         }
       }
       const visibility = preference()?.visibility ?? 0;
+      // Plugin artwork is pre-dimmed like an upload; only bundled art needs the Full bleed cap.
+      const pluginArtwork = host.ownerDocument.documentElement.dataset.themeBackground === "plugin";
       const opacity =
         source?.kind === "theme"
-          ? fullBleed
+          ? fullBleed && !pluginArtwork
             ? visibility * FULL_BLEED_MAX_OPACITY
             : Math.min(1, visibility / DEFAULT_BACKGROUND_PREFERENCE.visibility)
           : opacityLimit * visibility * (context()?.theme.resolvedMode === "light" ? 0.65 : 1);

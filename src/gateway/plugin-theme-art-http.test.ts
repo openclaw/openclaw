@@ -34,7 +34,7 @@ function snapshot(svg = SVG, enabled = true, background = WEBP) {
               icons: { rocket: { svg } },
               hats: { beret: { svg } },
               critters: { ferris: { svg, title: "a crab, allegedly", crossMs: 15000 } },
-              backgrounds: { dark: { image: background } },
+              backgrounds: { dark: { base64: background.toString("base64") } },
             },
           },
         ],

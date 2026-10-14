@@ -68,8 +68,18 @@ suite.define(() => {
         const shell = page.locator(".shell");
         const shellImage = () =>
           shell.evaluate((element) => getComputedStyle(element).backgroundImage);
-        await expect.poll(shellImage).toMatch(/^url\("blob:/u);
+        await expect.poll(shellImage).toMatch(/^linear-gradient\(.+\), url\("blob:/u);
         expect(artRequests).toEqual([darkUrl.split("?")[0]]);
+        // Dimmed like a default-strength upload: at least half theme-colored scrim, never opaque.
+        const scrim = await page.evaluate(() =>
+          Number(
+            /(\d+(?:\.\d+)?)%, transparent/u.exec(
+              document.documentElement.style.getPropertyValue("--app-background-image"),
+            )?.[1],
+          ),
+        );
+        expect(scrim).toBeGreaterThanOrEqual(50);
+        expect(scrim).toBeLessThan(100);
         expect(await page.locator("html").getAttribute("data-theme")).toBe("custom");
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           await page.waitForTimeout(500);

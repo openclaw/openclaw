@@ -19,8 +19,8 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
   }
   const themes: ThemeCatalogEntry[] = [];
   for (const { id, definition, artwork } of plugin.themeDefinitions ?? []) {
-    const resourceUrl = (kind: PluginThemeArtworkKind, artId: string, bytes: string | Buffer) => {
-      const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+    const resourceUrl = (kind: PluginThemeArtworkKind, artId: string, content: string) => {
+      const hash = createHash("sha256").update(content).digest("hex").slice(0, 12);
       return `${buildControlUiResourcePath("pluginThemeArt", "", plugin.id, [id, kind, artId])}?v=${hash}`;
     };
     const projected: ThemeArtwork | undefined = artwork
@@ -58,9 +58,9 @@ function pluginThemes(plugin: PluginManifestRecord): ThemeCatalogEntry[] {
           ...(artwork.backgrounds
             ? {
                 backgrounds: Object.fromEntries(
-                  Object.entries(artwork.backgrounds).map(([mode, { image }]) => [
+                  Object.entries(artwork.backgrounds).map(([mode, { base64 }]) => [
                     mode,
-                    { url: resourceUrl("background", mode, image) },
+                    { url: resourceUrl("background", mode, base64) },
                   ]),
                 ),
               }
@@ -117,7 +117,9 @@ export function resolvePluginThemeArtwork(
     const background =
       artId === "light" || artId === "dark" ? theme?.artwork?.backgrounds?.[artId] : undefined;
     // The route sniffs raster bytes; the name only keeps them off the SVG path.
-    return background ? { sourceName: "theme-background", body: background.image } : undefined;
+    return background
+      ? { sourceName: "theme-background", body: Buffer.from(background.base64, "base64") }
+      : undefined;
   }
   const artwork =
     kind === "icon"

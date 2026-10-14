@@ -13,6 +13,7 @@ import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { finalizePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { listPluginThemes, resolvePluginThemeArtwork } from "./theme-catalog.js";
 
@@ -288,7 +289,8 @@ describe("manifest theme catalog", () => {
         themes: [{ ...plugin.declaration, backgrounds: { dark: "night.webp" } }],
       }),
     );
-    const snapshot = plugin.readSnapshot();
+    // Runtime snapshots are deep-frozen; captured bytes must survive that (Buffers cannot).
+    const snapshot = finalizePluginMetadataSnapshot(plugin.readSnapshot());
     const [theme] = withPluginMetadataSnapshotScope(snapshot, listPluginThemes);
     expect(theme?.artwork).toEqual({
       backgrounds: {

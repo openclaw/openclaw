@@ -282,7 +282,9 @@ describe("manifest theme artwork", () => {
     };
     const captured = capture(WEBP);
     expect(captured.diagnostics).toEqual([]);
-    expect(captured.themes?.[0]?.artwork).toEqual({ backgrounds: { dark: { image: WEBP } } });
+    expect(captured.themes?.[0]?.artwork).toEqual({
+      backgrounds: { dark: { base64: WEBP.toString("base64") } },
+    });
     for (const bytes of [
       SVG,
       "<html>not an image</html>",
