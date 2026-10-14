@@ -5,7 +5,8 @@ import vm from "node:vm";
 
 // The shared thread-watchdog fixture also runs on Bun; only the native-GC probe needs V8 GC.
 let collectGarbage: () => void = () => {
-  setFlagsFromString("--expose_gc");
+  // Inject GC pressure that V8 does not retire first; native OOM uses the normal worker.
+  setFlagsFromString("--expose_gc --no-detect-ineffective-gcs-near-heap-limit");
   collectGarbage = vm.runInNewContext("gc");
   collectGarbage();
 };

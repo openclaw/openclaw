@@ -61,21 +61,16 @@ describe("Node Code Mode executor", () => {
   it("reports heap exhaustion, recovers, and bounds captured output below the heap limit", async () => {
     // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
     // A standalone process exercises native OOM without changing the test runner's V8 flags.
-    // Keep the allocation live after filling. Give V8 mutator time between majors so
-    // its own ineffective-GC OOM does not preempt the sustained-pressure window.
+    // Keep retained allocations live and measure occupancy after native collections.
     const pressureSource = `
       const data = globalThis.retained = [];
       collectGarbage();
       while (heapStatistics().used_heap_size < heapStatistics().heap_size_limit * 0.86) {
         for (let i = 0; i < 4; i++) data.push(new Array(131072).fill(1));
-        const until = Date.now() + 20;
-        while (Date.now() < until) {}
         collectGarbage();
         await yield_control();
       }
       for (;;) {
-        const until = Date.now() + 20;
-        while (Date.now() < until) {}
         collectGarbage();
         await yield_control();
       }
