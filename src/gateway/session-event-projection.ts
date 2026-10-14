@@ -62,6 +62,18 @@ export function prepareSessionEventProjection(
     ) {
       return () => undefined;
     }
+    // Transcript producers publish one message; only the recipient envelope varies.
+    let messageBytes: Buffer | undefined;
+    const serializeMessage =
+      event === "session.message"
+        ? () => {
+            if (!messageBytes) {
+              const field = JSON.stringify({ message: base.message }).slice(1, -1);
+              messageBytes = Buffer.from(field ? `${field},` : "");
+            }
+            return messageBytes;
+          }
+        : undefined;
     const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
     const ancestors = prepared ? prepared.ancestors : projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
@@ -116,6 +128,7 @@ export function prepareSessionEventProjection(
       return {
         payload: projected,
         serializeSession: () => serializeSessionRow(row),
+        serializeMessage,
         delivered: () => {
           references.forget(row.key);
           if (event === "sessions.changed" && source.reason === "activity-summary") {

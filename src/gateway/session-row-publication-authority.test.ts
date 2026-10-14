@@ -142,11 +142,16 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               read.state.rowContext,
             );
             const presentations = vi.spyOn(projection, "present");
+            const message = {
+              role: "assistant",
+              content: [{ type: "text", text: '"🦞"\n\\\ud800'.repeat(256) }],
+            };
             connection.broadcast(
-              "sessions.changed",
+              "session.message",
               {
                 sessionKey: query.key,
                 agentId: query.agentId,
+                message,
                 session: { key: query.key, sessionId: "publication-session" },
               },
               { prepareSessionProjection: prepareSessionEventProjection(projection, read) },
@@ -157,7 +162,11 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               if (!visible) {
                 continue;
               }
-              const row = JSON.parse(String(send.mock.calls[0]![0])).payload.session;
+              const frame = JSON.parse(String(send.mock.calls[0]![0]));
+              expect(frame.payload.message).toEqual(message);
+              expect(frame.seq).toBe(1);
+              expect(send.mock.calls[0]![1]).toEqual({ binary: false });
+              const row = frame.payload.session;
               expect(row).toMatchObject({
                 key: query.key,
                 sessionId: "publication-session",
