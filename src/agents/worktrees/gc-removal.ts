@@ -401,7 +401,6 @@ export function createWorktreeGcRemoval(context: {
   };
   const repositoryProtection = (repoRoot: string) => repositoryFailures.get(repoRoot)?.reason;
   return {
-    repositoryProtection,
     collect: async (
       protect: (record: ManagedWorktreeRecord) => Promise<string | undefined>,
       checkpoint?: () => Promise<void> | undefined,
