@@ -138,17 +138,24 @@ export function wrapStreamFnWithSessionFork(
       ...requestOptions
     } = options ?? {};
     // Encode before streaming can mutate history; only a fork needs a private object graph.
-    const savedContext = JSON.stringify({
-      systemPrompt: context.systemPrompt,
-      messages: context.messages,
-      // AgentTool objects also carry executors. Retain only the transport's Tool contract.
-      tools: context.tools?.map(({ name, description, parameters, async }) => ({
-        name,
-        description,
-        parameters,
-        ...(async === false ? { async } : {}),
-      })),
-    });
+    let savedContext: string;
+    try {
+      savedContext = JSON.stringify({
+        systemPrompt: context.systemPrompt,
+        messages: context.messages,
+        // AgentTool objects also carry executors. Retain only the transport's Tool contract.
+        tools: context.tools?.map(({ name, description, parameters, async }) => ({
+          name,
+          description,
+          parameters,
+          ...(async === false ? { async } : {}),
+        })),
+      });
+    } catch {
+      // Non-wire tool metadata may be non-JSON; optional replay must not fail the parent.
+      clearEmbeddedSessionForkSnapshot(identity.sessionId);
+      return streamFn(model, context, options);
+    }
     const savedModel = structuredClone({ ...model, headers: safeHeaders(model.headers) });
     const savedOptions = { ...requestOptions, headers: safeHeaders(headers) };
     // Internal symbol carriers belong to the parent run, not the independent request.

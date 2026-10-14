@@ -212,6 +212,46 @@ describe("prepared session fork provider boundary", () => {
     };
   }
 
+  it.each(["bigint", "cycle"])(
+    "keeps the parent request working when optional replay cannot encode %s tool metadata",
+    async (kind) => {
+      const { parent, physicalFetch } = guardedTransport();
+      const completed = await (
+        await parent(model, context, { apiKey: "synthetic-key", transport: "sse" })
+      ).result();
+      const cyclic: { self?: unknown } = {};
+      cyclic.self = cyclic;
+      const parentContext: Context = {
+        ...context,
+        messages: [
+          ...context.messages,
+          {
+            ...completed,
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "completed", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "completed",
+            toolName: "lookup",
+            content: [{ type: "text", text: "Tool answer" }],
+            isError: false,
+            timestamp: 2,
+            details: kind === "bigint" ? { value: 1n } : cyclic,
+          },
+        ],
+      };
+      const onPayload = vi.fn();
+      const assistant = await (
+        await parent(model, parentContext, { apiKey: "synthetic-key", transport: "sse", onPayload })
+      ).result();
+      expect(assistant.stopReason).toBe("stop");
+      expect(onPayload).toHaveBeenCalledOnce();
+      expect(physicalFetch).toHaveBeenCalledTimes(2);
+      await expect(fork()).rejects.toThrow("requires a parent turn");
+    },
+  );
+
   it.each(["openai-responses", "anthropic-messages"] as const)(
     "replays frozen %s history and keeps later publications isolated",
     async (api) => {
