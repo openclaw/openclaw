@@ -460,9 +460,6 @@
 }
 
 .model-setup-success__actions {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
   width: 100%;
 }
 
@@ -522,8 +519,6 @@
 }
 
 .model-setup-wizard__footer {
-  display: flex;
-  justify-content: flex-end;
   border-top: 1px solid var(--border);
 }
 
@@ -547,14 +542,6 @@
   .model-setup-success {
     width: calc(100vw - 24px);
     padding: 22px 18px;
-  }
-
-  .model-setup-success__actions {
-    flex-direction: column-reverse;
-  }
-
-  .model-setup-success__actions .btn {
-    width: 100%;
   }
 }
 

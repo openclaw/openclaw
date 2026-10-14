@@ -191,8 +191,16 @@ describe("openclaw-exec-approval", () => {
         request: { command: "pnpm test", agentId: "worker" },
       }),
     ];
-    const { approval } = await renderOpenedApproval(queue);
+    const { approval, onDecision } = await renderOpenedApproval(queue);
     await getRenderedModalDialog(container);
+    const card = container.querySelector(".exec-approval-card")!;
+    const actions = card.querySelector(".exec-approval-actions")!;
+    const pending = container.querySelector(".exec-approval-list")!;
+    expect(card.contains(pending)).toBe(true);
+    expect(card.lastElementChild).toBe(actions);
+    expect(
+      pending.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
       "approval-oldest",
@@ -204,6 +212,8 @@ describe("openclaw-exec-approval", () => {
       "approval-newer",
     );
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
+    container.querySelector<HTMLButtonElement>(".exec-approval-actions button")!.click();
+    expect(onDecision).toHaveBeenCalledWith("approval-newer", "allow-once");
   });
 
   it("compacts queued commands without splitting a surrogate pair", async () => {
