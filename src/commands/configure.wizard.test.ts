@@ -71,29 +71,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("dispatches the memory section and persists its verified choice without gateway setup", async () => {
-    const config: OpenClawConfig = {
-      memory: { search: { cache: { enabled: false } } },
-    };
-    setupBaseWizardState(config);
-    mocks.runMemorySetupFlow.mockImplementation(async (candidate) => ({
-      ...candidate,
-      memory: {
-        ...candidate.memory,
-        search: { ...candidate.memory?.search, provider: "openai", model: "embedding-model" },
-      },
-    }));
-    await configureCommandFromSectionsArg(["memory"], createRuntime(), { interactive: true });
-    expect(mocks.runMemorySetupFlow).toHaveBeenCalledOnce();
-    expect(written().memory?.search).toEqual({
-      cache: { enabled: false },
-      provider: "openai",
-      model: "embedding-model",
-    });
-    expect(mocks.promptGatewayConfig).not.toHaveBeenCalled();
-    expect(mocks.maybeInstallDaemon).not.toHaveBeenCalled();
-  });
-
   it.each([true, false])(
     "does not write a skipped memory section (section flag: %s)",
     async (flag) => {

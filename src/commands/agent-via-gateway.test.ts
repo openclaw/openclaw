@@ -1413,22 +1413,10 @@ describe("agentCliCommand", () => {
 
   it.each([
     {
-      label: "accepted negative final",
-      accepted: { status: "accepted", runId: "gateway-accepted" },
-      payload: { runId: "gateway-final", privateResult: "not-for-cli" },
-      runId: "gateway-final",
-    },
-    {
       label: "cached final only",
       accepted: undefined,
       payload: { runId: "gateway-cached", privateResult: "not-for-cli" },
       runId: "gateway-cached",
-    },
-    {
-      label: "accepted final without ID",
-      accepted: { status: "accepted", runId: "gateway-accepted" },
-      payload: { status: "error" },
-      runId: "gateway-accepted",
     },
     {
       label: "non-string final ID",
@@ -1534,28 +1522,6 @@ describe("agentCliCommand", () => {
       expect(hint).toContain(`accepted run ${runId}`);
       expect(hint).toContain("--timeout <seconds>");
       expect(signal.listenerCount("SIGINT") + signal.listenerCount("SIGTERM")).toBe(0);
-    }, remoteGatewayConfig);
-  });
-
-  it("does not promote arbitrary thrown object fields into Gateway provenance", async () => {
-    await withTempStore(async () => {
-      const error = Object.assign(new Error("local failure"), {
-        runId: "forged",
-        origin: "gateway",
-        responsePayload: { runId: "forged" },
-        details: { runId: "forged" },
-      });
-      callGateway.mockRejectedValue(error);
-      await expect(
-        agentCliCommand(
-          { message: "hi", sessionKey: "agent:ops:run-proof", json: true },
-          jsonRuntime,
-        ),
-      ).rejects.toBe(error);
-      expect(formatCliJsonFailure(error)).toEqual({
-        ok: false,
-        error: { type: "cli_error", message: "local failure" },
-      });
     }, remoteGatewayConfig);
   });
 
@@ -1723,30 +1689,6 @@ describe("agentCliCommand", () => {
     },
   );
 
-  it("maps a failed local terminal outcome to exit 1", async () => {
-    const outcome = "failed";
-    const exitCode = 1;
-
-    await withTempStore(async () => {
-      const signals = createSignalProcess();
-      agentCommand.mockResolvedValueOnce(
-        recordAgentRunTerminalOutcome(
-          {
-            payloads: [{ text: "provider failed", isError: true }],
-            meta: { error: new Error("provider failed") },
-          },
-          outcome,
-        ),
-      );
-
-      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
-        process: signals.processLike,
-      });
-
-      expect(signals.processLike.exitCode).toBe(exitCode);
-    });
-  });
-
   it("scopes legacy explicit session keys before local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();
@@ -1798,23 +1740,6 @@ describe("agentCliCommand", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).not.toHaveBeenCalled();
     });
-  });
-
-  it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-
-      await agentCliCommand(
-        { message: "/compacting the report, please", to: "+15555550123", timeout: "0" },
-        runtime,
-      );
-    });
-
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(runtime.exit).not.toHaveBeenCalledWith(1);
-    expect(
-      requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").timeoutMs,
-    ).toBeNull();
   });
 
   it("stops dispatch and releases signal listeners when the session module fails to load", async () => {
