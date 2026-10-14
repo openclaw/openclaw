@@ -166,6 +166,66 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
   }
 });
 
+it("reuses unrelated agent catalogs across a minute of scoped publications", async () => {
+  vi.useFakeTimers();
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  current().opts.onHello?.(gatewayHelloForMethods([]));
+  const client = gateway.snapshot.client;
+  assert.ok(client);
+  let revision = 0;
+  const request = current().request.mockImplementation(async () => ({
+    models: [{ id: `model-${revision}`, name: "Catalog model", provider: "fixture" }],
+  }));
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = {
+    context: { gateway } as unknown as ApplicationContext,
+  };
+  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  const scopes = ["writer", "reader"].flatMap((agentId) => [
+    { agentId },
+    { agentId, sessionKey: `agent:${agentId}:chat` },
+  ]);
+  const read = () => Promise.all(scopes.map((scope) => loadModelCatalog(client, scope)));
+  try {
+    await read();
+    request.mockClear();
+    for (revision = 1; revision <= 60; revision++) {
+      current().opts.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: {
+          agentId: "writer",
+          modelCatalogChanged: true,
+          authChanged: false,
+          commandsChanged: false,
+        },
+      });
+      const catalogs = await read();
+      expect(catalogs.map((catalog) => catalog.models[0]?.id)).toEqual([
+        `model-${revision}`,
+        `model-${revision}`,
+        "model-0",
+        "model-0",
+      ]);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(120);
+    current().opts.onEvent?.({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true, authChanged: false, commandsChanged: false },
+    });
+    expect((await read()).map((catalog) => catalog.models[0]?.id)).toEqual(
+      Array.from({ length: 4 }, () => "model-61"),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(124);
+  } finally {
+    stopShell();
+    gateway.stop();
+  }
+});
+
 it("refreshes a changed session projection through the catalog owner after explicit metadata", async () => {
   vi.useFakeTimers();
   const model = { id: "model", name: "Initial", provider: "example" };

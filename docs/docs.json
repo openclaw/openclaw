@@ -2243,6 +2243,7 @@
                       "providers/opencode",
                       "providers/opencode-go",
                       "providers/perplexity-provider",
+                      "providers/poolside",
                       "providers/qianfan",
                       "providers/qwen",
                       "providers/radius",

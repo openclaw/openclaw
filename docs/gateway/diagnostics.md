@@ -140,6 +140,10 @@ diagnostics are enabled. It captures operational facts, not content.
 Child-process spawn samples use bounded command families and operation labels.
 Known owners distinguish agent exec launches (`agent.exec`), shell environment
 snapshots (`shell.snapshot`), and service relay helpers (`service.relay`).
+Additional owners distinguish CLI backends (`agent.cli`), isolated file reads
+(`agent.file-read`), service-manager commands (`service.manager`), native worktree
+writes (`worktree.filesystem`), retired checkout deletion (`worktree.cleanup`),
+and temporary pack cleanup (`worktree.maintenance`).
 Relays launched for agent exec retain `agent.exec` as their owner.
 Native PTY exec launches use the same counter after successful admission.
 Windows PTYs publish their PID asynchronously, so attribution waits for the first
@@ -714,7 +718,8 @@ When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
 normal idle timeout. Node Code Mode likewise retains at most one completed
 Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Warm task workers still collect released payloads in place; critical
+match. Code Mode relies on V8's normal garbage collection rather than inspector
+collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
 

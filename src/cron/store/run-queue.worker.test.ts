@@ -164,6 +164,22 @@ it("deduplicates committed slots and drains persisted job order within worker ca
   expect((await queue.drain()).launches.map((entry) => entry.job.id)).toEqual(["a-second"]);
 });
 
+it("advances a consumed scheduled slot without reclaiming its terminal receipt", async () => {
+  const current = job("consumed");
+  const queue = await store("consumed", [current]);
+  const request = scheduled(queue.storeKey, current);
+  await queue.request([request]);
+  await queue.cancel([request.receiptId], "superseded");
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now);
+  const retry = await queue.request([request]);
+  expect(retry.accepted).toEqual([]);
+  expect(retry.rejected).toEqual([
+    { jobId: current.id, receiptId: request.receiptId, reason: "already-requested" },
+  ]);
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
+  expect((await queue.drain()).launches).toEqual([]);
+});
+
 it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
   const original = job("edited");
   const queue = await store("edit", [original]);

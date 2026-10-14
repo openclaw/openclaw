@@ -339,56 +339,47 @@ export function scanPlainTextToolCall(
     );
   const xmlOverCap = overCap(xml.payload);
   const jsonOverCap = overCap(jsonValue.payload);
-
-  if (xml.accepted && xmlish.kind === "complete") {
-    return {
-      ...branches,
-      end: xmlish.end,
-      kind: "complete",
-      next: xmlish.end,
-      overCap: xmlOverCap,
-      payloadStart: xmlish.payload.start,
-    };
-  }
-  if (jsonValue.accepted && json.kind === "complete") {
-    if (jsonOverCap || parseJsonArguments(text, json.payload)) {
+  const complete =
+    xml.accepted && xmlish.kind === "complete"
+      ? xmlish
+      : jsonValue.accepted && json.kind === "complete"
+        ? json
+        : undefined;
+  if (complete) {
+    const payloadOverCap = complete === xmlish ? xmlOverCap : jsonOverCap;
+    if (complete === xmlish || payloadOverCap || parseJsonArguments(text, complete.payload)) {
       return {
         ...branches,
-        end: json.end,
+        end: complete.end,
         kind: "complete",
-        next: json.end,
-        overCap: jsonOverCap,
-        payloadStart: json.payload.start,
+        next: complete.end,
+        overCap: payloadOverCap,
+        payloadStart: complete.payload.start,
       };
     }
     return {
       ...branches,
-      at: json.end,
+      at: complete.end,
       kind: "invalid",
-      next: json.end,
+      next: complete.end,
       overCap: false,
-      payloadStart: json.payload.start,
+      payloadStart: complete.payload.start,
     };
   }
-
-  if (xml.accepted && xmlish.kind === "invalid" && xmlOverCap && xml.payload) {
+  const invalid =
+    xmlOverCap && xmlish.kind === "invalid"
+      ? xmlish
+      : jsonOverCap && json.kind === "invalid"
+        ? json
+        : undefined;
+  if (invalid?.candidate?.payload) {
     return {
       ...branches,
-      at: xmlish.at,
+      at: invalid.at,
       kind: "invalid",
-      next: xmlish.at,
+      next: invalid.at,
       overCap: true,
-      payloadStart: xml.payload.start,
-    };
-  }
-  if (jsonValue.accepted && json.kind === "invalid" && jsonOverCap && jsonValue.payload) {
-    return {
-      ...branches,
-      at: json.at,
-      kind: "invalid",
-      next: json.at,
-      overCap: true,
-      payloadStart: jsonValue.payload.start,
+      payloadStart: invalid.candidate.payload.start,
     };
   }
 
@@ -403,7 +394,7 @@ export function scanPlainTextToolCall(
         : {}),
       kind: "prefix",
       next: text.length,
-      overCap: overCap(payload),
+      overCap: xmlPrefix ? xmlOverCap : jsonOverCap,
       ...(payload ? { payloadStart: payload.start } : {}),
     };
   }
@@ -521,12 +512,9 @@ export function stripPlainTextToolCallBlocks(
   options: { resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver } = {},
 ): string {
   if (
-    !text ||
-    (!/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
-      !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
-        text,
-      ) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text))
+    !/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)/i.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text)
   ) {
     return text;
   }

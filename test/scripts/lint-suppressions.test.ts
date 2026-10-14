@@ -243,6 +243,8 @@ describe("production lint suppressions", () => {
         "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
         // Iterator wrappers capture native next/return and invoke them with the caller's receiver.
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
+        // The Bun transfer probe calls the captured native method with its Worker receiver.
+        "src/infra/sqlite-worker-input.bun.test-support.ts|typescript/unbound-method|1",
         // The dispatch observer captures postMessage before mocking and supplies its worker receiver.
         "src/infra/sqlite-worker-shared-state-admission.test-support.ts|typescript/unbound-method|1",
         // Worker hooks preserve custom methods and later prototype instrumentation with .call(this).

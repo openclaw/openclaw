@@ -273,43 +273,54 @@ describe("child-process spawn diagnostics", () => {
     expect(JSON.stringify(events)).not.toContain("private");
   });
 
-  it("captures child owners across async preparation without replacing explicit Git owners", async () => {
-    const first = new EventEmitter() as ChildProcess;
-    const second = new EventEmitter() as ChildProcess;
-    const git = new EventEmitter() as ChildProcess;
-    await Promise.all([
-      withChildProcessOperation("agent.exec", async () => {
-        await Promise.resolve();
-        withChildProcessOperation(
-          "service.relay",
-          () => recordChildProcessSpawn("bash", first, undefined, ["-c", "private command"]),
-          "default",
-        );
-        withGitProcessOperation("checkout.diff", () => recordChildProcessSpawn("git", git));
-      }),
-      withChildProcessOperation("service.relay", async () => {
-        await Promise.resolve();
-        recordChildProcessSpawn("node", second);
-      }),
-    ]);
-    const unknown = new EventEmitter() as ChildProcess;
-    Reflect.apply(withChildProcessOperation, undefined, [
-      "/private/customer",
-      () => recordChildProcessSpawn("helper", unknown),
-    ]);
-    for (const child of [second, first, git, unknown]) {
-      child.emit("spawn");
-    }
-    now = 60_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({ family: "node", operation: "service.relay", count: 1 }),
-      expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
-      expect.objectContaining({ family: "git", operation: "checkout.diff", count: 1 }),
-      expect.objectContaining({ family: "other", operation: "unknown", count: 1 }),
-    ]);
-    expect(JSON.stringify(events)).not.toContain("private");
-  });
+  it.each([
+    "service.relay",
+    "agent.cli",
+    "agent.file-read",
+    "service.manager",
+    "worktree.filesystem",
+    "worktree.cleanup",
+    "worktree.maintenance",
+  ] as const)(
+    "captures %s across async preparation without replacing explicit Git owners",
+    async (owner) => {
+      const first = new EventEmitter() as ChildProcess;
+      const second = new EventEmitter() as ChildProcess;
+      const git = new EventEmitter() as ChildProcess;
+      await Promise.all([
+        withChildProcessOperation("agent.exec", async () => {
+          await Promise.resolve();
+          withChildProcessOperation(
+            "service.relay",
+            () => recordChildProcessSpawn("bash", first, undefined, ["-c", "private command"]),
+            "default",
+          );
+          withGitProcessOperation("checkout.diff", () => recordChildProcessSpawn("git", git));
+        }),
+        withChildProcessOperation(owner, async () => {
+          await Promise.resolve();
+          recordChildProcessSpawn("node", second);
+        }),
+      ]);
+      const unknown = new EventEmitter() as ChildProcess;
+      Reflect.apply(withChildProcessOperation, undefined, [
+        "/private/customer",
+        () => recordChildProcessSpawn("helper", unknown),
+      ]);
+      for (const child of [second, first, git, unknown]) {
+        child.emit("spawn");
+      }
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "node", operation: owner, count: 1 }),
+        expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
+        expect.objectContaining({ family: "git", operation: "checkout.diff", count: 1 }),
+        expect.objectContaining({ family: "other", operation: "unknown", count: 1 }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("private");
+    },
+  );
 
   it.each([
     ["sh", ["-lc", "private command"], "sh", "unscoped.shell-command"],

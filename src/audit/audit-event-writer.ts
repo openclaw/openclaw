@@ -85,7 +85,7 @@ export function createAuditEventWriter(options: {
     if (shutdownExpired) {
       return { status: "settled" };
     }
-    // Existing state opens lazily inside the zero-busy-timeout audit command.
+    // Existing state opens lazily inside the audit command.
     const result = await runOpenClawStateWorkerOperation<AuditWriterResult>(
       context,
       (scope) =>

@@ -11,6 +11,7 @@ import {
 } from "../sessions/session-row-changes.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { isOpenClawAgentDatabaseRegistryChange } from "../state/openclaw-agent-db-registry-listing.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as profiles from "../state/user-profile-list.js";
 import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
@@ -48,6 +49,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const profileCatalogPath = resolveOpenClawStateSqlitePath(env);
   const discoveryRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime");
   const subagents = createSubagentSessionListReadView({ env });
   if (!subagents.snapshotIdentity()) {
@@ -252,11 +254,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     remove,
   });
   function topology(): Promise<void> {
-    if (disposed || (!topologyDirty && profiles.isUserProfileCatalogReady({ env }))) {
+    if (disposed || (!topologyDirty && profiles.isUserProfileCatalogReady(profileCatalogPath))) {
       return Promise.resolve();
     }
     return (preparingTopology ??= inOwnerContext(async () => {
-      if (!profiles.isUserProfileCatalogReady({ env })) {
+      if (!profiles.isUserProfileCatalogReady(profileCatalogPath)) {
         (await profiles.prepareUserProfileCatalog({ env })).release();
       }
       if (disposed || !topologyDirty) {
@@ -475,7 +477,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     state: () => ({
       cfg,
       disposed,
-      topologyDirty: topologyDirty || !profiles.isUserProfileCatalogReady({ env }),
+      topologyDirty: topologyDirty || !profiles.isUserProfileCatalogReady(profileCatalogPath),
       registryPrepared: Boolean(inOwnerContext(subagents.snapshotIdentity)),
     }),
     runAsOwner: inOwnerContext,
@@ -498,7 +500,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     return (
       !disposed &&
       (topologyDirty ||
-        !profiles.isUserProfileCatalogReady({ env }) ||
+        !profiles.isUserProfileCatalogReady(profileCatalogPath) ||
         catalog.needsInitialRead ||
         dirty.size > 0 ||
         membership.needsPreparation ||
@@ -561,7 +563,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       : records.isCurrentGeneration(row, rows.get(records.identity(row)));
   }
   function prepareRead() {
-    if (topologyDirty || !profiles.isUserProfileCatalogReady({ env })) {
+    if (topologyDirty || !profiles.isUserProfileCatalogReady(profileCatalogPath)) {
       return false;
     }
     metadata.prepare(epoch, cfg, matching, put, referenced);
