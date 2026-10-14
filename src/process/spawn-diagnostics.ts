@@ -7,6 +7,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveOomScoreWrappedCommand } from "./linux-oom-score.js";
 
 const spawnCounts = resolveGlobalSingleton(Symbol.for("openclaw.childProcessSpawnCounts"), () => ({
   counts: new Map<string, { family: string; operation: string; count: number }>(),
@@ -48,6 +49,47 @@ const gitOperation = resolveGlobalSingleton(
   Symbol.for("openclaw.gitSpawnOperation"),
   () => new AsyncLocalStorage<GitProcessOperation | "unknown">(),
 );
+const CHILD_OPERATIONS = ["agent.exec", "shell.snapshot", "service.relay"] as const;
+type ChildProcessOperation = (typeof CHILD_OPERATIONS)[number];
+const childOperations: ReadonlySet<string> = new Set(CHILD_OPERATIONS);
+const childOperation = resolveGlobalSingleton(
+  Symbol.for("openclaw.childSpawnOperation"),
+  () => new AsyncLocalStorage<ChildProcessOperation | "unknown">(),
+);
+
+/** Attribute asynchronous launch preparation to a bounded owner, without command content. */
+export function withChildProcessOperation<T>(
+  operation: ChildProcessOperation,
+  run: () => T,
+  mode: "override" | "default" = "override",
+): T {
+  return mode === "default" && childOperation.getStore() !== undefined
+    ? run()
+    : childOperation.run(childOperations.has(operation) ? operation : "unknown", run);
+}
+
+function unscopedProcessOperation(family: string, name: string, args: readonly string[]): string {
+  if (
+    args[0] === "--version" ||
+    (args[0] === "-v" && (family === "node" || family === "bun" || name === "gh"))
+  ) {
+    return "unscoped.version";
+  }
+  if (/^(sh|bash|zsh|cmd|powershell|pwsh)$/.test(family)) {
+    return args.some((arg) => /^-[a-z]*c$/.test(arg) || /^\/(?:c|k)$/i.test(arg))
+      ? "unscoped.shell-command"
+      : "unscoped.shell";
+  }
+  if (family === "node" || family === "bun") {
+    return args.some((arg) => ["-e", "--eval", "-p", "--print"].includes(arg))
+      ? "unscoped.eval"
+      : "unscoped.runtime";
+  }
+  if (family === "other" && /^(gh|docker|podman|which|uname|sw_vers|sysctl|curl|tar)$/.test(name)) {
+    return `unscoped.${name}`;
+  }
+  return "unscoped.command";
+}
 
 // Unscoped callers remain visible without exporting aliases, arguments, or repository paths.
 function unscopedGitOperation(args: readonly string[]): string {
@@ -103,15 +145,21 @@ export function recordChildProcessSpawn(
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
+  // Like nice+git, an owner-prepared OOM shim execs the target in the same process;
+  // the broker can omit that shell entirely. Report its logical command, not the shim.
+  const wrappedCommand = resolveOomScoreWrappedCommand(command, args);
+  const commandArgs = wrappedCommand ? args.slice(3) : args;
   const name = path.win32
-    .basename(command)
+    .basename(wrappedCommand ?? command)
     .toLowerCase()
     .replace(/\.(exe|cmd)$/, "");
   const family = COMMAND_FAMILIES.test(name) ? name : "other";
   const operation =
     family === "git"
-      ? (gitOperation.getStore() ?? unscopedGitOperation(args))
-      : (sqliteOperation ?? "none");
+      ? (gitOperation.getStore() ?? childOperation.getStore() ?? unscopedGitOperation(commandArgs))
+      : (sqliteOperation ??
+        childOperation.getStore() ??
+        unscopedProcessOperation(family, name, commandArgs));
   const key = `${family}:${operation}`;
   child.once("spawn", () => {
     if (areDiagnosticsEnabledForProcess()) {

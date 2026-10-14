@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import { spawnProcess } from "../process/spawn-utils.js";
 
 const SNAPSHOT_VERSION = 1;
@@ -414,13 +415,15 @@ async function runShell(opts: {
   timeoutMs: number;
 }): Promise<number | null> {
   return await new Promise((resolve) => {
-    const child = spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
-      cwd: opts.cwd,
-      detached: process.platform !== "win32",
-      env: opts.env,
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    const child = withChildProcessOperation("shell.snapshot", () =>
+      spawnProcess(opts.shell, [...opts.shellArgs, opts.command], {
+        cwd: opts.cwd,
+        detached: process.platform !== "win32",
+        env: opts.env,
+        stdio: "ignore",
+        windowsHide: true,
+      }),
+    );
     let settled = false;
     const finish = (status: number | null) => {
       if (settled) {
