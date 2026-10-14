@@ -73,10 +73,9 @@ function buildEnvSecretCandidates(params: {
   const configuredBindings = collectHermesProviderSecretBindings(params.config, params.env);
   const claimedEnvVars = new Set(configuredBindings.map((binding) => binding.envVar));
   const mappings: SecretMapping[] = [
-    ...configuredBindings.map((binding) => ({
-      ...binding,
-      profileId: `${binding.provider}:hermes-import`,
-    })),
+    ...configuredBindings.map((binding) =>
+      Object.assign({}, binding, { profileId: `${binding.provider}:hermes-import` }),
+    ),
     ...SECRET_MAPPINGS.filter((mapping) => !claimedEnvVars.has(mapping.envVar)),
   ];
   return mappings.flatMap((mapping) => {
