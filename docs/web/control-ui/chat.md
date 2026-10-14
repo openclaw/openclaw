@@ -12,10 +12,13 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
-When the latest history page has no visible messages, for example because tool
-activity is hidden, the pane keeps **Show earlier** available. Scroll upward or
-select it to load earlier history; reloading does not fetch unrequested older
-pages. An incomplete history page does not show the new-chat welcome screen.
+When the visible conversation does not fill the chat pane, including when the
+latest history page is empty or tool activity is hidden, earlier history loads
+automatically after the layout settles. Loading stops when the pane is filled,
+history ends, or a request fails. Scroll upward or select **Show earlier** to
+load more or retry. Hidden panes and programmatic scroll placement do not trigger
+automatic loading. An incomplete history page does not show the new-chat welcome
+screen.
 
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
