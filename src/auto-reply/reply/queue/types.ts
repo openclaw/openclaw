@@ -295,11 +295,7 @@ export type FollowupRun = {
     verboseLevelOverride?: VerboseLevel;
     elevatedLevel?: ElevatedLevel;
     execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
-    bashElevated?: {
-      enabled: boolean;
-      allowed: boolean;
-      defaultLevel: ElevatedLevel;
-    };
+    bashElevated?: ExecToolDefaults["elevated"];
     blockReplyBreak: "text_end" | "message_end";
     extraSystemPromptStatic?: string;
     cliSessionBindingFacts?: CliSessionBindingFacts;
