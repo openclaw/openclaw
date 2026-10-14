@@ -57,7 +57,8 @@ export function createSessionRowProjectionCatalog(params: {
     if (event.phase === "invalidated" && event.replacement) {
       replacement = event.replacement;
       const settled = () => {
-        if (!disposed) {
+        // A superseded reload must not release its successor's catalog gate.
+        if (!disposed && replacement === event.replacement) {
           replacement = undefined;
           params.onInvalidated();
         }

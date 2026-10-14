@@ -61,9 +61,18 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
     await catalog.refresh();
     expect(catalog.current).toBe(original);
-    next = view(8_192);
+    const successor = createDeferredCore();
+    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: successor.promise });
     first.resolve();
     await first.promise;
+    await catalog.refresh();
+    expect(catalog.current).toBe(original);
+    expect(refreshed).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+
+    next = view(8_192);
+    successor.resolve();
+    await successor.promise;
     notifyPreparedModelRuntimePublication({ phase: "published" });
     await catalog.refresh();
     expect(refreshed).toHaveBeenLastCalledWith(new Set());
