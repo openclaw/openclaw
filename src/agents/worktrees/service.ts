@@ -189,7 +189,7 @@ export class ManagedWorktreeService {
     this.env = options.env ?? process.env;
     this.now = options.now ?? Date.now;
     this.getConfig = options.getConfig;
-    this.maintainGit = createWorktreeGitMaintenance(this.env);
+    this.maintainGit = createWorktreeGitMaintenance(this.env, this.now);
     this.capacity = createWorktreeCapacityOwner({
       env: this.env,
       now: this.now,

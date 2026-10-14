@@ -300,23 +300,26 @@ describe("operator approval store", () => {
           .where("approval_id", "=", "a-corrupt"),
       );
 
-      const records = await listPendingOperatorApprovals({
+      const listing = listPendingOperatorApprovals({
         audienceSessionKey,
         limit: 1,
         nowMs: 2_000,
         databaseOptions,
       });
-      expect(records.map((record) => record.id)).toEqual(audienceSessionKey ? ["b-match"] : []);
-      expect(rawApprovalRow(databaseOptions, "a-corrupt")).toMatchObject({
-        status: "denied",
-        terminal_reason: "storage-corrupt",
-      });
-      await forceDenyOperatorApproval({
+      // A later decision must not overtake the list's corrupt-row repair.
+      const denying = forceDenyOperatorApproval({
         id: "b-match",
         reason: "no-route",
         resolver: { kind: "system", id: null },
         nowMs: 2_000,
         databaseOptions,
+      });
+      const records = await listing;
+      await denying;
+      expect(records.map((record) => record.id)).toEqual(audienceSessionKey ? ["b-match"] : []);
+      expect(rawApprovalRow(databaseOptions, "a-corrupt")).toMatchObject({
+        status: "denied",
+        terminal_reason: "storage-corrupt",
       });
       expect(
         (

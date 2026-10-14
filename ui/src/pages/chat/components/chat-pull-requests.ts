@@ -122,6 +122,7 @@ function renderChecks(
     sessionKey?: string;
     sessionId?: string;
     presented?: PresentationValue;
+    compact?: boolean;
   },
 ) {
   const checks = pullRequest.checks;
@@ -129,6 +130,7 @@ function renderChecks(
   const presented = props.presented ?? true;
   return solidContent(ChatPullRequestChecks, {
     label,
+    showLabel: props.compact,
     checksState: checks?.state ?? "none",
     presented,
     content: html`
@@ -370,7 +372,10 @@ export function renderChatPullRequests(props: {
               .join(" · ")
           : undefined;
         return html`
-          <article class="chat-pr" data-state=${pullRequest.state}>
+          <article
+            class=${props.compact ? "chat-pr chat-pr--compact" : "chat-pr"}
+            data-state=${pullRequest.state}
+          >
             <a
               class="chat-pr__link"
               title=${compactDescription ?? nothing}

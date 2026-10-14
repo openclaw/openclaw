@@ -5,7 +5,7 @@ import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createFixedWindowRateLimiter,
@@ -452,8 +452,7 @@ export async function processSynologyWebhookIngressEvent(params: {
   if (!body) {
     return;
   }
-  const preview = body.length > 100 ? `${truncateUtf16Safe(body, 100)}...` : body;
-  params.log?.info?.(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
+  params.log?.info?.(`Message from ${payload.username} (${payload.user_id}): len=${body.length}`);
 
   const authorizedWebhookUserId = payload.user_id;
   const deliveryUserId = await resolveSynologyReplyDeliveryUserId({

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, onCleanup, untrack } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -117,32 +117,12 @@ export function SessionGlyph(props: SessionGlyphOptions) {
     >
       <span class="session-glyph__content">{props.content}</span>
       <Show when={props.running}>
-        {(_running) => {
-          const runVisibility = props.runVisibility?.();
-          return props.ring === "pair" ? (
-            <svg
-              class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
-              viewBox="-16 -11 32 22"
-              role="img"
-              aria-label={label()}
-            >
-              <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
-              <path
-                ref={(element) => runVisibility?.(element)}
-                class="session-glyph__trace-run"
-                d={PAIR_TRACE_PATH}
-                pathLength="100"
-              />
-            </svg>
-          ) : (
-            <span
-              ref={(element) => runVisibility?.(element)}
-              class={["session-glyph__ring", { "session-glyph__ring--queued": props.queued }]}
-              role="img"
-              aria-label={label()}
-            />
-          );
-        }}
+        <SessionGlyphRun
+          pair={props.ring === "pair"}
+          queued={props.queued}
+          label={label()}
+          runVisibility={props.runVisibility}
+        />
       </Show>
       {props.badge}
     </span>
@@ -152,6 +132,57 @@ export function SessionGlyph(props: SessionGlyphOptions) {
       <openclaw-tooltip prop:content={props.runningLabel} prop:describe={false}>
         {glyph()}
       </openclaw-tooltip>
+    </Show>
+  );
+}
+
+function SessionGlyphRun(props: {
+  pair: boolean;
+  queued?: boolean;
+  label: string;
+  runVisibility?: SessionRunVisibility;
+}) {
+  const observe = untrack(() => props.runVisibility?.());
+  let indicator: Element | undefined;
+  // Class bindings can clear the offscreen class; refresh native visibility after that commit.
+  createEffect(
+    () => [props.queued, props.pair],
+    () => {
+      if (indicator) {
+        observe?.(indicator);
+      }
+    },
+  );
+  return (
+    <Show
+      when={props.pair}
+      fallback={
+        <span
+          ref={(element) => {
+            indicator = element;
+          }}
+          class={["session-glyph__ring", { "session-glyph__ring--queued": props.queued }]}
+          role="img"
+          aria-label={props.label}
+        />
+      }
+    >
+      <svg
+        class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
+        viewBox="-16 -11 32 22"
+        role="img"
+        aria-label={props.label}
+      >
+        <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
+        <path
+          ref={(element) => {
+            indicator = element;
+          }}
+          class="session-glyph__trace-run"
+          d={PAIR_TRACE_PATH}
+          pathLength="100"
+        />
+      </svg>
     </Show>
   );
 }
@@ -314,98 +345,127 @@ export function renderSessionIdleState(session: SidebarRecentSession): JSX.Eleme
   return <SessionIdleState session={session} />;
 }
 
-export function renderTeamSessionSlots(
-  rows: readonly SidebarRecentSession[],
-  includeChildren: boolean,
-  childCount: number,
-  groupConflicts = 0,
-  runVisibility?: SessionRunVisibility,
-): JSX.Element {
-  const attention = summarizeSidebarSessionAttention(
-    rows.flatMap((row) =>
-      includeChildren
-        ? [row.attention]
-        : [
-            row.ownAttention ?? row.attention,
-            ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
-          ],
-    ),
+export type TeamSessionSlotsProps = {
+  rows: readonly SidebarRecentSession[];
+  includeChildren: boolean;
+  childCount: number;
+  groupConflicts?: number;
+  runVisibility?: SessionRunVisibility;
+};
+
+export function TeamSessionSlots(props: TeamSessionSlotsProps) {
+  const summary = createMemo(() => {
+    const attention = summarizeSidebarSessionAttention(
+      props.rows.flatMap((row) =>
+        props.includeChildren
+          ? [row.attention]
+          : [
+              row.ownAttention ?? row.attention,
+              ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
+            ],
+      ),
+    );
+    let active = 0,
+      queued = 0,
+      unread = 0,
+      failed = false;
+    for (const row of props.rows) {
+      const children = props.includeChildren ? row : row.subagentSummary;
+      active += Number(row.hasActiveRun) + (children?.runningChildCount ?? 0);
+      queued +=
+        Number(row.hasActiveRun && row.status === "queued") + (children?.queuedChildCount ?? 0);
+      unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
+      failed ||=
+        row.status === "failed" ||
+        row.status === "timeout" ||
+        (children?.failedChildCount ?? 0) > 0;
+    }
+    return { attention, active, queued, unread, failed };
+  });
+  const idleChild = createMemo(() =>
+    props.rows.length === 1 &&
+    props.rows[0]?.isChild &&
+    resolveSessionIdleBadge(props.rows[0].status, t)
+      ? props.rows[0]
+      : undefined,
   );
-  let active = 0;
-  let queued = 0;
-  let unread = 0;
-  let failed = false;
-  for (const row of rows) {
-    const children = includeChildren ? row : row.subagentSummary;
-    active += Number(row.hasActiveRun) + (children?.runningChildCount ?? 0);
-    queued +=
-      Number(row.hasActiveRun && row.status === "queued") + (children?.queuedChildCount ?? 0);
-    unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
-    failed ||=
-      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
-  }
-  const state =
-    attention.kind !== "none" ? (
-      renderSessionAttentionIcon(attention)
-    ) : failed ? (
-      <span
-        class="sidebar-child-session__status--failed"
-        role="img"
-        aria-label={t("sessionsView.statusFailed")}
-      >
-        <Icon name="alertTriangle" />
-      </span>
-    ) : groupConflicts ? (
-      <span
-        role="img"
-        aria-label={t("sessionsView.cloudWorkerDescendantConflicts", {
-          count: String(groupConflicts),
-        })}
-      >
-        <Icon name="globe" />
-      </span>
-    ) : active ? (
-      <SessionGlyph
-        content={undefined}
-        running={true}
-        queued={active === queued}
-        runVisibility={runVisibility}
-      />
-    ) : rows.length === 1 && rows[0]?.isChild ? (
-      renderSessionIdleState(rows[0])
-    ) : undefined;
-  if ((!includeChildren || childCount === 0) && unread === 0 && state === undefined) {
-    return undefined;
-  }
+  const hasState = createMemo(
+    () =>
+      summary().attention.kind !== "none" ||
+      summary().failed ||
+      Boolean(props.groupConflicts) ||
+      summary().active > 0 ||
+      Boolean(idleChild()),
+  );
   return (
-    <span class="sidebar-session-team-state">
-      <Show when={(includeChildren && childCount > 0) || unread > 0}>
-        <span class="sidebar-session-team-state__counts">
-          <Show when={includeChildren && childCount > 0}>
-            <span
-              class="sidebar-child-session-toggle__count"
-              role="img"
-              aria-label={`${t("sessionsView.childSessions")}: ${childCount}`}
-            >
-              {childCount}
-            </span>
-          </Show>
-          <Show when={unread > 0}>
-            <span
-              class={unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"}
-              role="img"
-              aria-label={t("sessionsView.unread")}
-              title={t("sessionsView.unread")}
-            >
-              {unread > 1 ? unread : undefined}
-            </span>
-          </Show>
-        </span>
-      </Show>
-      <Show when={state}>
-        <span class="sidebar-session-team-state__status">{state}</span>
-      </Show>
-    </span>
+    <Show
+      when={(props.includeChildren && props.childCount > 0) || summary().unread > 0 || hasState()}
+    >
+      <span class="sidebar-session-team-state">
+        <Show when={(props.includeChildren && props.childCount > 0) || summary().unread > 0}>
+          <span class="sidebar-session-team-state__counts">
+            <Show when={props.includeChildren && props.childCount > 0}>
+              <span
+                class="sidebar-child-session-toggle__count"
+                role="img"
+                aria-label={t("sessionsView.childSessions") + ": " + props.childCount}
+              >
+                {props.childCount}
+              </span>
+            </Show>
+            <Show when={summary().unread > 0}>
+              <span
+                class={
+                  summary().unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"
+                }
+                role="img"
+                aria-label={t("sessionsView.unread")}
+                title={t("sessionsView.unread")}
+              >
+                {summary().unread > 1 ? summary().unread : undefined}
+              </span>
+            </Show>
+          </span>
+        </Show>
+        <Show when={hasState()}>
+          <span class="sidebar-session-team-state__status">
+            <Switch>
+              <Match when={summary().attention.kind !== "none"}>
+                <SessionAttentionIcon attention={summary().attention} />
+              </Match>
+              <Match when={summary().failed}>
+                <span
+                  class="sidebar-child-session__status--failed"
+                  role="img"
+                  aria-label={t("sessionsView.statusFailed")}
+                >
+                  <Icon name="alertTriangle" />
+                </span>
+              </Match>
+              <Match when={props.groupConflicts}>
+                <span
+                  role="img"
+                  aria-label={t("sessionsView.cloudWorkerDescendantConflicts", {
+                    count: String(props.groupConflicts),
+                  })}
+                >
+                  <Icon name="globe" />
+                </span>
+              </Match>
+              <Match when={summary().active > 0}>
+                <SessionGlyph
+                  content={undefined}
+                  running={true}
+                  queued={summary().active === summary().queued}
+                  runVisibility={props.runVisibility}
+                />
+              </Match>
+              <Match when={idleChild()}>{(row) => <SessionIdleState session={row()} />}</Match>
+            </Switch>
+          </span>
+        </Show>
+      </span>
+    </Show>
   );
 }
 
@@ -417,144 +477,149 @@ export function resolveSessionIconGraphic(icon: string): JSX.Element {
   return glyph ? <Icon name={glyph} /> : undefined;
 }
 
-const renderedOwnerIdentities = new WeakMap<
-  SidebarRecentSession,
-  readonly SessionParticipantIdentity[]
->();
-const EMPTY_IDENTITIES: readonly SessionParticipantIdentity[] = Object.freeze([]);
-export function renderSessionLeadingState(
-  session: SidebarRecentSession,
-  ownerActor: SessionCreatedActor | null | undefined,
-  attribution: "created" | "owned" | "archived",
-  ownerViewing?: boolean,
-  avatarAuth?: { authTokens: readonly string[]; authReady: boolean },
-  trailingState = false,
-  icon?: JSX.Element,
-  runVisibility?: SessionRunVisibility,
-): {
-  running: boolean;
-  leadingIndicator: JSX.Element;
-  renderedIdentities?: readonly SessionParticipantIdentity[];
-} {
-  const { participants, participantCount } = session;
-  const subagentsWorking = !trailingState && session.runningChildCount > 0;
-  const running = session.hasActiveRun || subagentsWorking;
-  const ownRunQueued = session.hasActiveRun && session.status === "queued";
-  const runState = {
-    runVisibility,
-    running: running && !trailingState && session.attention.kind !== "question",
-    queued: ownRunQueued && !subagentsWorking,
-    runningLabel:
-      subagentsWorking && (!session.hasActiveRun || ownRunQueued)
-        ? t("sessionsView.subagentsWorking")
-        : undefined,
-  };
-  const graphic = session.icon ? resolveSessionIconGraphic(session.icon) : undefined;
-  const iconContent =
-    session.attention.kind !== "none" && !trailingState
-      ? renderSessionAttentionIcon(session.attention)
-      : (icon ??
-        (session.icon ? (
-          <span class={graphic ? "session-glyph__icon" : "session-glyph__emoji"} aria-hidden="true">
-            {graphic ?? session.icon}
+type SessionLeadingStateProps = {
+  session: SidebarRecentSession;
+  ownerActor?: SessionCreatedActor | null;
+  attribution: "created" | "owned" | "archived";
+  ownerViewing?: boolean;
+  avatarAuth?: { authTokens: readonly string[]; authReady: boolean };
+  trailingState?: boolean;
+  icon?: JSX.Element;
+  runVisibility?: SessionRunVisibility;
+};
+
+export function renderSessionLeadingState(props: SessionLeadingStateProps) {
+  const session = () => props.session;
+  const subagentsWorking = createMemo(
+    () => !props.trailingState && session().runningChildCount > 0,
+  );
+  const running = createMemo(() => session().hasActiveRun || subagentsWorking());
+  const ownRunQueued = createMemo(() => session().hasActiveRun && session().status === "queued");
+  const showRun = createMemo(
+    () => running() && !props.trailingState && session().attention.kind !== "question",
+  );
+  const runningLabel = createMemo(() =>
+    subagentsWorking() && (!session().hasActiveRun || ownRunQueued())
+      ? t("sessionsView.subagentsWorking")
+      : undefined,
+  );
+  const graphic = createMemo(() =>
+    session().icon ? resolveSessionIconGraphic(session().icon!) : undefined,
+  );
+  const iconContent = createMemo(() =>
+    session().attention.kind !== "none" && !props.trailingState
+      ? renderSessionAttentionIcon(session().attention)
+      : (props.icon ??
+        (session().icon ? (
+          <span
+            class={graphic() ? "session-glyph__icon" : "session-glyph__emoji"}
+            aria-hidden="true"
+          >
+            {graphic() ?? session().icon}
           </span>
-        ) : undefined));
-  if (iconContent !== undefined) {
-    return {
-      running,
-      leadingIndicator: (
-        <SessionGlyph
-          content={iconContent}
-          {...runState}
-          badge={
-            session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined
-          }
-        />
-      ),
-    };
-  }
-  const child = session.isChild && !trailingState;
-  if (child && !session.channelAvatarUrl) {
-    return {
-      running,
-      leadingIndicator: running ? (
-        <SessionGlyph content={undefined} {...runState} />
-      ) : (
-        renderSessionIdleState(session)
-      ),
-    };
-  }
+        ) : undefined)),
+  );
+  const child = createMemo(() => session().isChild && !props.trailingState);
+  const hasOwner = createMemo(() => !child() && Boolean(props.ownerActor?.id?.trim()));
   const ownerChip = () =>
-    !child && ownerActor?.id?.trim()
+    hasOwner()
       ? renderSessionOwnerChip(
-          ownerActor,
+          props.ownerActor,
           "row",
-          attribution,
-          ownerViewing,
-          participants,
-          participantCount,
+          props.attribution,
+          props.ownerViewing,
+          session().participants,
+          session().participantCount,
         )
       : undefined;
-  if (session.channelAvatarUrl) {
-    return {
-      running,
-      leadingIndicator: (
-        <SessionGlyph
-          content={
-            <ChannelAvatar
-              routeUrl={session.channelAvatarUrl}
-              authTokens={avatarAuth?.authTokens ?? []}
-              authReady={avatarAuth?.authReady ?? false}
-            >
-              {ownerChip()}
-            </ChannelAvatar>
-          }
-          {...runState}
-          badge={
-            session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined
-          }
-          circular={true}
-        />
-      ),
-    };
-  }
-  if (!child && ownerActor?.id?.trim()) {
-    const stackedParticipants = participantCount ?? participants?.length ?? 0;
-    const identities = [
-      ownerActor?.identity,
-      stackedParticipants === 1 ? participants?.[0]?.identity : undefined,
+  const stackedParticipants = createMemo(
+    () => session().participantCount ?? session().participants?.length ?? 0,
+  );
+  const renderedIdentities = createMemo(() => {
+    if (iconContent() !== undefined || session().channelAvatarUrl || !hasOwner()) {
+      return undefined;
+    }
+    return [
+      props.ownerActor?.identity,
+      stackedParticipants() === 1 ? session().participants?.[0]?.identity : undefined,
     ].filter((identity): identity is SessionParticipantIdentity => identity !== undefined);
-    const previous = renderedOwnerIdentities.get(session);
-    const renderedIdentities =
-      previous?.length === identities.length &&
-      identities.every((identity, index) => identity === previous[index])
-        ? previous
-        : identities.length
-          ? identities
-          : EMPTY_IDENTITIES;
-    renderedOwnerIdentities.set(session, renderedIdentities);
-    return {
-      running,
-      leadingIndicator: (
-        <SessionGlyph
-          content={ownerChip()}
-          {...runState}
-          badge={
-            session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined
-          }
-          circular={true}
-          ring={stackedParticipants > 0 ? "pair" : "circle"}
-        />
-      ),
-      renderedIdentities,
-    };
-  }
+  });
+  const showGlyph = createMemo(
+    () =>
+      iconContent() !== undefined ||
+      (child() && !session().channelAvatarUrl
+        ? running()
+        : Boolean(session().channelAvatarUrl) || hasOwner() || showRun()),
+  );
+  const content = createMemo(() => {
+    if (iconContent() !== undefined) {
+      return iconContent();
+    }
+    if (session().channelAvatarUrl) {
+      return (
+        <ChannelAvatar
+          routeUrl={session().channelAvatarUrl!}
+          authTokens={props.avatarAuth?.authTokens ?? []}
+          authReady={props.avatarAuth?.authReady ?? false}
+        >
+          {ownerChip()}
+        </ChannelAvatar>
+      );
+    }
+    return ownerChip();
+  });
+  // Keep the glyph mounted while session facts change so its CSS animation keeps its timeline.
+  const leadingIndicator = (
+    <Show
+      when={showGlyph()}
+      fallback={
+        <Show when={!props.trailingState}>
+          <SessionIdleState session={session()} />
+        </Show>
+      }
+    >
+      <SessionGlyph
+        content={content()}
+        running={showRun()}
+        queued={ownRunQueued() && !subagentsWorking()}
+        runningLabel={runningLabel()}
+        runVisibility={props.runVisibility}
+        circular={iconContent() === undefined && Boolean(session().channelAvatarUrl || hasOwner())}
+        ring={
+          iconContent() === undefined &&
+          !session().channelAvatarUrl &&
+          hasOwner() &&
+          stackedParticipants() > 0
+            ? "pair"
+            : "circle"
+        }
+        badge={
+          session().unread &&
+          !running() &&
+          !props.trailingState &&
+          !(iconContent() === undefined && child() && !session().channelAvatarUrl)
+            ? renderSessionUnreadBadge()
+            : undefined
+        }
+      />
+    </Show>
+  );
   return {
-    running,
-    leadingIndicator: runState.running ? (
-      <SessionGlyph content={undefined} {...runState} />
-    ) : session.unread && !trailingState ? (
-      renderSessionIdleState(session)
-    ) : undefined,
+    get running() {
+      return running();
+    },
+    leadingIndicator,
+    get visible() {
+      return (
+        showGlyph() ||
+        (!props.trailingState &&
+          (session().isChild
+            ? Boolean(resolveSessionIdleBadge(session().status, t))
+            : session().unread))
+      );
+    },
+    get renderedIdentities() {
+      return renderedIdentities();
+    },
   };
 }

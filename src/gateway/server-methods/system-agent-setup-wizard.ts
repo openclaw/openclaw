@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardSession } from "../../wizard/session.js";
+import type { GatewayClient } from "./client-types.js";
 import {
   createAdmittedWizardSession,
   respondSetupAdmissionBusy,
@@ -10,6 +11,7 @@ import {
   createSystemAgentGatewayRuntime,
 } from "./system-agent-execution.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { publishWizardLoginSession } from "./wizard-login.js";
 
 type SetupActivation = Pick<
   Parameters<typeof activateGatewaySetupInference>[0],
@@ -134,6 +136,7 @@ export function rejectExistingSetupWizardSession(params: {
 export async function startSetupActivationWizard(params: {
   sessionId: string;
   ownerKey?: string;
+  client?: GatewayClient;
   assertCurrent?: () => void;
   activation: SetupActivation;
   isLocalClient?: boolean;
@@ -157,10 +160,21 @@ export async function startSetupActivationWizard(params: {
             prompter,
             signal,
             isCancelled: () => signal.aborted,
-            beforePersistentEffect: () => runnerSession.lockCancellationForPreparation(),
-            onPreparationComplete: () => runnerSession.finishPreparation(),
-            onCommitStarted: () => runnerSession.lockCancellation(),
+            assertCurrent: params.assertCurrent,
+            beforePersistentEffect: () => {
+              params.assertCurrent?.();
+              runnerSession.lockCancellationForPreparation();
+            },
+            onPreparationComplete: () => {
+              params.assertCurrent?.();
+              runnerSession.finishPreparation();
+            },
+            onCommitStarted: () => {
+              params.assertCurrent?.();
+              runnerSession.lockCancellation();
+            },
           });
+          params.assertCurrent?.();
           signal.throwIfAborted();
           if (!result.ok) {
             if (result.disposition === "rejected-before-promotion") {
@@ -182,6 +196,17 @@ export async function startSetupActivationWizard(params: {
   );
   if (!session) {
     respondSetupAdmissionBusy(params.respond);
+    return;
+  }
+  if (params.client) {
+    await publishWizardLoginSession({
+      client: params.client,
+      context: params.context,
+      sessionId: params.sessionId,
+      respond: params.respond,
+      assertCurrent: () => params.assertCurrent?.(),
+      session,
+    });
     return;
   }
   params.context.wizardSessions.set(params.sessionId, session);

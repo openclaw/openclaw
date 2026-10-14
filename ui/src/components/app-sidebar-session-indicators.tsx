@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
@@ -14,7 +14,8 @@ import { Icon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
   sessionRunVisibility,
-  renderTeamSessionSlots,
+  TeamSessionSlots,
+  type TeamSessionSlotsProps,
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
@@ -26,7 +27,7 @@ export function renderSidebarSessionIndicators(
   readSession: () => SidebarRecentSession,
   readDisplay?: () => CatalogBackingSessionDisplay | undefined,
   readIcon?: () => JSX.Element,
-  headerSummary?: Parameters<typeof renderTeamSessionSlots>,
+  headerSummary?: () => TeamSessionSlotsProps,
 ) {
   const team = createMemo(() => host.sidebarAgentsMode === "roster");
   const ownAttention = createMemo(() => readSession().ownAttention ?? readSession().attention);
@@ -119,31 +120,42 @@ export function renderSidebarSessionIndicators(
       password: gateway()?.connection.password,
     }),
   );
-  const teamSummary = createMemo<Parameters<typeof renderTeamSessionSlots>>(
+  const teamSummary = createMemo<TeamSessionSlotsProps>(
     () =>
-      headerSummary ?? [
-        [readSession()],
-        !childrenExpanded(),
-        readSession().childSessionKeys.length,
-        0,
-        sessionRunVisibility,
-      ],
+      headerSummary?.() ?? {
+        rows: [readSession()],
+        includeChildren: !childrenExpanded(),
+        childCount: readSession().childSessionKeys.length,
+        runVisibility: sessionRunVisibility,
+      },
   );
-  const leadingState = createMemo(() =>
-    renderSessionLeadingState(
-      readSession(),
-      leadingOwner(),
-      ownerAttribution(),
-      ownerViewing(),
-      channelAvatarAuth(),
-      team(),
-      readIcon?.(),
-      sessionRunVisibility,
-    ),
-  );
-  const running = createMemo(() => leadingState().running),
-    leadingIndicator = createMemo(() => leadingState().leadingIndicator),
-    renderedIdentities = createMemo(() => leadingState().renderedIdentities);
+  const leadingState = renderSessionLeadingState({
+    get session() {
+      return readSession();
+    },
+    get ownerActor() {
+      return leadingOwner();
+    },
+    get attribution() {
+      return ownerAttribution();
+    },
+    get ownerViewing() {
+      return ownerViewing();
+    },
+    get avatarAuth() {
+      return channelAvatarAuth();
+    },
+    get trailingState() {
+      return team();
+    },
+    get icon() {
+      return readIcon?.();
+    },
+    runVisibility: sessionRunVisibility,
+  });
+  const running = createMemo(() => leadingState.running),
+    leadingIndicator = () => leadingState.leadingIndicator,
+    renderedIdentities = createMemo(() => leadingState.renderedIdentities);
   const stateDescription = createMemo(() => describeSessionState(readSession()));
   const snoozed = createMemo(
     () =>
@@ -251,8 +263,7 @@ export function renderSidebarSessionIndicators(
       <>
         {" "}
         <span class="sidebar-recent-session__details-endcap">
-          {headerSummary &&
-          (leadingIndicator() !== undefined || readSession().visibility === "draft")
+          {headerSummary && (leadingState.visible || readSession().visibility === "draft")
             ? persistentIndicator
             : undefined}
           <openclaw-viewer-facepile
@@ -305,7 +316,9 @@ export function renderSidebarSessionIndicators(
             />
           }
           {team() ? trail() : undefined}{" "}
-          {team() ? renderTeamSessionSlots(...teamSummary()) : undefined}
+          <Show when={team()}>
+            <TeamSessionSlots {...teamSummary()} />
+          </Show>
           {!team() && stateDescription() ? (
             <span class="sr-only" id={stateId()} aria-hidden="true">
               {stateDescription()}
