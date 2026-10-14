@@ -590,7 +590,7 @@ export async function reviewDependencyChanges(
   }
   const { api, owner, repo, pullRequest, issuePath, files } = guard;
   const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
-  if (!["detect", "autoscrub", "enforce"].includes(mode)) {
+  if (!["detect", "autoscrub", "enforce", "prepare"].includes(mode)) {
     throw new Error(`Unknown dependency guard mode: ${mode}`);
   }
   const dependencyFiles = [
@@ -640,7 +640,7 @@ export async function reviewDependencyChanges(
     autoscrubCandidate && pullRequest.state === "open" && !approval && !removalOnly
       ? autoscrubTargetRepository({ owner, repo, pullRequest })
       : null;
-  if (mode === "detect") {
+  if (mode === "detect" || mode === "prepare") {
     await setOutput("autoscrub", String(Boolean(autoscrubTarget)));
     if (autoscrubTarget) {
       await setOutput("autoscrub-owner", autoscrubTarget.owner);
@@ -649,7 +649,13 @@ export async function reviewDependencyChanges(
     await writeSummary(
       "## Dependency Guard\n\nDependency analysis complete; the final guard job publishes the review result.",
     );
-    return true;
+    if (mode === "detect" || autoscrubTarget) {
+      if (prepared && mode === "prepare") {
+        prepared.autoscrubPending = Boolean(autoscrubTarget);
+      }
+      return true;
+    }
+    mode = "enforce";
   }
 
   const comments = await api.paginate(`${issuePath}/comments`);

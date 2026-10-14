@@ -760,7 +760,13 @@ minutes. These retries share the three-restart limit and job deadline with API
 recovery. Each attempt rereads the full file list, PR metadata, approvals, roles,
 and CI state; target, author, and other approval-relevant metadata must still
 match the original evaluation. A newer head supersedes the obsolete run.
-Both guards share each attempt's validated file list. Recovery also runs within
+Both guards share each attempt's validated file list. On direct PR events, the
+preparation step analyzes dependencies and completes both guards in one process
+when no lockfile cleanup is needed. A cleanup candidate still passes through the
+existing App-token/autoscrub steps and a fresh final enforcement. Only a completed
+evaluation can skip the duplicate enforcement process; errors and ineligible PRs
+leave that step active. CI-completion, scheduled, and command reviews keep their
+separate enforcement step and publication admission. Recovery also runs within
 the detection step, so a recovered mismatch does not leave an earlier step red.
 A persistent mismatch fails the review and reports the expected, returned, and
 current file counts.
