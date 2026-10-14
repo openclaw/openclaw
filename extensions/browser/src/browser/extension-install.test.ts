@@ -170,7 +170,12 @@ describe("native host registration", () => {
         pluginRoot: value.pluginRoot,
         waitMs: 1_000,
         // Blocked Chrome profile reads must end the verification wait immediately.
-        deps: { ...value.deps, sleep: async () => (waitTicks += 1) },
+        deps: {
+          ...value.deps,
+          sleep: async () => {
+            waitTicks += 1;
+          },
+        },
       });
       expect(bootstrapped.discoveryBlocked).toContain(chrome.label);
       expect(waitTicks).toBe(0);
