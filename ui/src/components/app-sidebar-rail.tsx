@@ -499,9 +499,13 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         {(entry) => {
           const fixedEntry = untrack(entry);
           const key = serializeSidebarEntry(fixedEntry);
+          // Allocate once per entry; the rendered link owns its reactive fields.
+          const content = untrack(() =>
+            renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs),
+          );
           return (
             <div class="sidebar-pages__entry">
-              {renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs)}
+              {content}
               <button
                 type="button"
                 class={[
