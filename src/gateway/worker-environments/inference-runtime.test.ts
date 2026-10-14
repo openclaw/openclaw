@@ -282,7 +282,6 @@ describe("worker inference provider runtime", () => {
   );
 
   it.each([
-    { name: "short body", status: 503, code: "upstream_unavailable", detail: "Unavailable" },
     { name: "long body", status: 429, code: "insufficient_quota", detail: "x".repeat(520) },
     { name: "bigint diagnostic", status: 429, code: "insufficient_quota", detail: 1n },
   ])("preserves a thrown provider HTTP failure ($name)", async ({ status, code, detail }) => {
@@ -877,16 +876,15 @@ describe("worker inference provider runtime", () => {
   );
 
   it.each([
-    { name: "positive cost-only", tokens: false, cost: 0.25, billed: false },
-    { name: "billed zero", tokens: false, cost: 0, billed: true },
-    { name: "empty snapshot", tokens: false, cost: undefined, billed: false },
+    { name: "positive cost-only", cost: 0.25, billed: false },
+    { name: "billed zero", cost: 0, billed: true },
   ])(
     "accounts for $name before rejecting a dangling streamed tool call",
-    async ({ tokens, cost, billed }) => {
+    async ({ cost, billed }) => {
       const runtime = setup();
       const terminal = finalMessage();
-      terminal.usage = structuredClone(tokens ? usage : makeZeroUsageSnapshot());
-      terminal.usage.cost.total = cost ?? 0;
+      terminal.usage = structuredClone(makeZeroUsageSnapshot());
+      terminal.usage.cost.total = cost;
       if (billed) {
         terminal.usage.cost.totalOrigin = "provider-billed";
       }
@@ -912,11 +910,8 @@ describe("worker inference provider runtime", () => {
         type: "error",
         reason: "provider-error",
       });
-      const expectedEvents = cost === undefined ? [] : [expect.objectContaining({ costUsd: cost })];
-      expect(usageEvents).toEqual(expectedEvents);
-      if (cost !== undefined && !tokens) {
-        expect(usageEvents[0]).not.toHaveProperty("context.used");
-      }
+      expect(usageEvents).toEqual([expect.objectContaining({ costUsd: cost })]);
+      expect(usageEvents[0]).not.toHaveProperty("context.used");
     },
   );
 

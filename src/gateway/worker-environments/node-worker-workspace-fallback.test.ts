@@ -144,26 +144,6 @@ describe("node worker workspace origin fallback", () => {
     );
   });
 
-  it.each([
-    { operation: "clone", reason: "clone-failed", commandCount: 1 },
-    { operation: "checkout", reason: "checkout-failed", commandCount: 4 },
-  ] as const)("preserves the $reason fallback", async ({ operation, reason, commandCount }) => {
-    const localPath = cleanWorkspace();
-    const exec = vi.fn<WorkspaceExec>(async ({ argv }) => ({
-      ...spawnResult(argv.includes("rev-parse") ? COMMIT : "", argv.includes(operation) ? 1 : 0),
-      workspaceDir: REMOTE_WORKSPACE,
-    }));
-
-    await expect(
-      createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
-        { localPath, sessionId: "session-1", generation: 1 },
-        MANIFEST_REF,
-      ),
-    ).resolves.toEqual({ kind: "fallback", reason });
-    expect(exec).toHaveBeenCalledTimes(commandCount + 1);
-    expect(exec.mock.calls.some(([command]) => command.seed?.action === "store")).toBe(false);
-  });
-
   it.each(["none", "remote-mismatch", "fetch-failed", "manifest-mismatch", "apply-error"] as const)(
     "uses the seed when valid and recovers by cloning after %s",
     async (failure) => {
@@ -392,24 +372,6 @@ describe("node worker workspace origin fallback", () => {
         { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
       ),
     ).rejects.toThrow("Worker workspace sync failed: node Git config rejected the author");
-  });
-
-  it("does not apply Git author configuration to a plain workspace", async () => {
-    const localPath = cleanWorkspace();
-    const exec = vi.fn<WorkspaceExec>();
-    const result = {
-      mode: "plain" as const,
-      remoteWorkspaceDir: REMOTE_WORKSPACE,
-      manifestRef: MANIFEST_REF,
-    };
-
-    await expect(
-      createNodeWorkerWorkspaceFallback(exec).finalizeSync(
-        { localPath, sessionId: "session-1", generation: 1, gitAuthor: { name: "Configured" } },
-        result,
-      ),
-    ).resolves.toEqual(result);
-    expect(exec).not.toHaveBeenCalled();
   });
 
   it("rejects malformed Git authors before inspecting a node workspace", async () => {

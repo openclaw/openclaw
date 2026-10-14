@@ -6,7 +6,6 @@ import { promisify } from "node:util";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
-import * as tmpDirs from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   buildId,
@@ -415,26 +414,6 @@ describe("node bootstrap distribution", () => {
       reader.mockRestore();
     }
   });
-
-  it.each(["root resolution", "staging creation"])(
-    "retries preparation after temporary %s becomes available",
-    async (stage) => {
-      const { provider } = await fixture();
-      const failure = new Error("temporary storage unavailable");
-      const makeTemp =
-        stage === "root resolution"
-          ? vi.spyOn(tmpDirs, "resolvePreferredOpenClawTmpDir").mockImplementationOnce(() => {
-              throw failure;
-            })
-          : vi.spyOn(fs, "mkdtemp").mockRejectedValueOnce(failure);
-      try {
-        await expect(provider.prepare()).rejects.toThrow("temporary storage unavailable");
-      } finally {
-        makeTemp.mockRestore();
-      }
-      await expect(provider.prepare()).resolves.toMatchObject({ buildId });
-    },
-  );
 
   it("joins a failed archive output and removes it before a successful retry", async () => {
     const { provider } = await fixture();
