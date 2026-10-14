@@ -145,7 +145,7 @@ export async function capturePersonalCredentialAuthority(
     };
     owner.cells.set(profileId, cell);
   }
-  const retained = cell;
+  let retained = cell;
   const assertCurrent = () => {
     if (
       owners.get(identity) !== owner ||
@@ -162,11 +162,20 @@ export async function capturePersonalCredentialAuthority(
   assertCurrent();
   return {
     observeAuthorizationId(authorizationId: string | undefined) {
-      assertCurrent();
-      if (!retained.authorizationObserved) {
-        retained.authorizationId = authorizationId;
-        retained.authorizationObserved = true;
+      const current = owner.cells.get(profileId);
+      if (current?.authorizationObserved && current.authorizationId === authorizationId) {
+        // Concurrent fresh captures share the same newly observed lifetime.
+        retained = current;
       }
+      assertCurrent();
+      if (retained.authorizationObserved && retained.authorizationId !== authorizationId) {
+        // A canonical read can observe an out-of-process reconnect without a local receipt.
+        // Only this fresh capture adopts it; prior grants retain the retired cell.
+        retained = { identityCurrent, identityStatus: retained.identityStatus };
+        owner.cells.set(profileId, retained);
+      }
+      retained.authorizationId = authorizationId;
+      retained.authorizationObserved = true;
     },
     assertAuthorizationCurrent(authorizationId: string) {
       const identityStatus = retained.identityStatus?.();

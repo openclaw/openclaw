@@ -177,7 +177,10 @@ To change an account deliberately, update the job with a model/profile selection
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
 Legacy jobs without a recorded inference owner require this explicit adoption
 before using host credentials; OpenClaw does not guess their historical account
-from current defaults. Credentialless models remain usable without an account.
+from current defaults. Environment-only and provider-config API keys have no durable
+account ownership, so new host-managed jobs reject them at creation. Store the key
+in an auth profile and select that profile instead. Credentialless models remain
+usable without an account.
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.

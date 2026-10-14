@@ -426,36 +426,24 @@ export function readPersonalAuthProfileAuthorizationInDatabase(
   return { ownerProfileId, authorizationId: parseRecord(raw, profileSchema).authorizationId };
 }
 
-/** Enroll pre-lifetime records only through their existing credential writer. */
-export function enrollPersonalAuthProfileAuthorization(
-  params: {
-    profileId: string;
-    authProfileId: string;
-    assertCurrent: (stage: "transaction" | "commit") => void;
-  },
-  options: OpenClawStateDatabaseOptions = {},
+/** Enroll pre-lifetime records inside the admitted credential worker transaction. */
+export function enrollPersonalAuthProfileAuthorizationInDatabase(
+  db: EngineConnection,
+  params: { profileId: string; authProfileId: string },
 ): { ownerProfileId: string; authorizationId: string } | undefined {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      params.assertCurrent("transaction");
-      const owner = credentialOwner(db, params.authProfileId);
-      if (!owner || resolveOwner(db, params.profileId) !== owner) {
-        return undefined;
-      }
-      const record = readProfile(db, owner, params.authProfileId);
-      if (!record) {
-        return undefined;
-      }
-      const authorizationId = record.authorizationId ?? randomUUID();
-      if (!record.authorizationId) {
-        writeProfile(db, owner, params.authProfileId, record, authorizationId);
-      }
-      params.assertCurrent("commit");
-      return { ownerProfileId: owner, authorizationId };
-    },
-    options,
-    { operationLabel: "users.model-accounts.enroll-authorization" },
-  );
+  const owner = credentialOwner(db, params.authProfileId);
+  if (!owner || resolveOwner(db, params.profileId) !== owner) {
+    return undefined;
+  }
+  const record = readProfile(db, owner, params.authProfileId);
+  if (!record) {
+    return undefined;
+  }
+  const authorizationId = record.authorizationId ?? randomUUID();
+  if (!record.authorizationId) {
+    writeProfile(db, owner, params.authProfileId, record, authorizationId);
+  }
+  return { ownerProfileId: owner, authorizationId };
 }
 
 /** Credential and selection commit together, after revalidating the live authorization. */

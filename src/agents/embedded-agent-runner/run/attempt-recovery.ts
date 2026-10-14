@@ -376,7 +376,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       model: preparedRuntime.modelId,
       authProfileId: runtime.lastProfileId,
       authProfileIdSource: params.authProfileBinding
-        ? params.authProfileIdSource
+        ? (params.authProfileIdSource ?? "auto")
         : runtime.lastProfileId && runtime.lastProfileId === preparedRuntime.lockedProfileId
           ? "user"
           : "auto",

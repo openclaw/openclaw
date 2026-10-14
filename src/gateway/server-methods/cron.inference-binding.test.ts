@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { setAuthProfileOrder } from "../../agents/auth-profiles/profiles.js";
+import {
+  removeAuthProfilesAcrossOwnerStores,
+  setAuthProfileOrder,
+} from "../../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "../../agents/auth-profiles/store-state-owner.test-support.js";
@@ -48,6 +51,7 @@ async function withFixture(
       OPENCLAW_CONFIG_PATH: path.join(root.stateDir, "absent-config.json"),
       OPENAI_API_KEY: undefined,
       OPENAI_OAUTH_TOKEN: undefined,
+      OLLAMA_API_KEY: undefined,
     },
     async () => {
       const fixture = await createFixture(root.stateDir, agentDir);
@@ -117,7 +121,8 @@ async function createFixture(stateDir: string, agentDir: string) {
     // The advertised jobs.json path is only a SQLite partition key.
     await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await cron.status()).toMatchObject({ storage: "sqlite", jobs: 1 });
-    const [job] = await cron.list({ includeDisabled: true });
+    const [listed] = await cron.list({ includeDisabled: true });
+    const job = listed && (await cron.readJob(listed.id));
     if (!job) {
       throw new Error("Expected the committed job after reopening SQLite");
     }
@@ -185,6 +190,24 @@ async function createFixture(stateDir: string, agentDir: string) {
     stop,
     setCreator,
     status: () => cron.status(),
+    replaceAccountBeforeMutation(method: "add" | "update") {
+      const replace = () =>
+        persistAuthProfileBatch({
+          profiles: [{ profileId: platformId, credential: apiKey("synthetic-replacement-key") }],
+        });
+      if (method === "add") {
+        const add = cron.add.bind(cron);
+        return vi.spyOn(cron, "add").mockImplementationOnce(async (...args) => {
+          await replace();
+          return add(...args);
+        });
+      }
+      const update = cron.updateWithPrecondition.bind(cron);
+      return vi.spyOn(cron, "updateWithPrecondition").mockImplementationOnce(async (...args) => {
+        await replace();
+        return update(...args);
+      });
+    },
     async resolveAuth(binding: CronInferenceBinding) {
       const authority = await acquireCronInferenceAuthorization({ binding, cfg, agentDir });
       try {
@@ -226,6 +249,43 @@ async function createFixture(stateDir: string, agentDir: string) {
       } finally {
         authority.dispose();
       }
+    },
+    async useUnstoredCredential(provider: "openai" | "ollama", configuredKey?: string) {
+      const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+      await removeAuthProfilesAcrossOwnerStores({ profileIds: Object.keys(store.profiles) });
+      cfg = {
+        agents: {
+          entries: { main: { agentDir } },
+          defaults: { model: provider === "openai" ? "openai/gpt-4.1" : "ollama/llama3.3" },
+        },
+        ...(provider === "ollama"
+          ? {
+              models: {
+                providers: {
+                  ollama: {
+                    api: "ollama",
+                    apiKey: "ollama-local",
+                    baseUrl: "http://127.0.0.1:11434",
+                    models: [],
+                  },
+                },
+              },
+            }
+          : configuredKey
+            ? {
+                models: {
+                  providers: {
+                    openai: {
+                      apiKey: configuredKey,
+                      baseUrl: "https://api.openai.com/v1",
+                      models: [],
+                    },
+                  },
+                },
+              }
+            : {}),
+      };
+      setRuntimeConfigSnapshot(cfg);
     },
     async personalAccount() {
       const owner = ensureProfileForEmail("cron-owner@example.test");
@@ -312,6 +372,67 @@ function createParams() {
 }
 
 describe("cron handler inference binding persistence", () => {
+  it.each(["environment", "configuration"] as const)(
+    "rejects unowned %s credentials before persisting an unusable job",
+    async (source) => {
+      await withFixture(async (fixture) => {
+        const key = "synthetic-direct-key";
+        await fixture.useUnstoredCredential("openai", source === "configuration" ? key : undefined);
+        await withEnvAsync(
+          { OPENAI_API_KEY: source === "environment" ? key : undefined },
+          async () => {
+            const error = await fixture.invoke("cron.add", createParams(), null, {
+              expectedSuccess: false,
+            });
+            expect(error).toMatchObject({
+              message: expect.stringMatching(/stored.*account.*model@profile/i),
+            });
+            expect(JSON.stringify(error)).not.toContain(key);
+            expect(await fixture.status()).toMatchObject({ jobs: 0 });
+          },
+        );
+      });
+    },
+  );
+
+  it("allows configured credentialless local inference without inventing an account binding", async () => {
+    await withFixture(async (fixture) => {
+      await fixture.useUnstoredCredential("ollama");
+      await fixture.invoke("cron.add", createParams());
+      expect((await fixture.reload()).inferenceBinding).toBeUndefined();
+    });
+  });
+
+  it.each(["add", "update"] as const)(
+    "rejects credential replacement after capture before %s commit",
+    async (method) => {
+      await withFixture(async (fixture) => {
+        if (method === "update") {
+          await fixture.invoke("cron.add", createParams());
+        }
+        const original = method === "update" ? await fixture.reload() : undefined;
+        const mutation = fixture.replaceAccountBeforeMutation(method);
+        try {
+          await expect(
+            method === "add"
+              ? fixture.invoke("cron.add", createParams())
+              : fixture.invoke("cron.update", {
+                  id: original?.id,
+                  patch: { payload: { kind: "agentTurn", model: "openai/gpt-4.1@" + platformId } },
+                }),
+          ).rejects.toThrow(/MCP authorization/);
+          if (original) {
+            expect((await fixture.reload()).inferenceBinding).toEqual(original.inferenceBinding);
+          } else {
+            expect(await fixture.status()).toMatchObject({ jobs: 0 });
+          }
+        } finally {
+          mutation.mockRestore();
+        }
+      });
+    },
+  );
+
   it("requires the personal owner for explicit creation and account adoption", async () => {
     await withFixture(async (fixture) => {
       const personal = await fixture.personalAccount();

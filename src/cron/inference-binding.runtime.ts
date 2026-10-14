@@ -1,3 +1,4 @@
+import type { AuthProfileAuthorization } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
@@ -15,6 +16,7 @@ export async function captureCronInferenceBinding(params: {
   model?: string;
   sessionEntry?: SessionEntry;
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
+  retainAuthorization?: (authority: AuthProfileAuthorization) => void;
 }): Promise<CronInferenceBinding | undefined> {
   const { cfg, agentId } = params;
   const model = resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: params.model });
@@ -53,6 +55,12 @@ export async function captureCronInferenceBinding(params: {
       authProfileStore: store,
     }).attempts;
     if (attempt?.kind !== "profile") {
+      const source = attempt?.plan.credentialSource;
+      if (source?.kind === "direct" && source.evidence !== "synthetic") {
+        throw new Error(
+          "Automation requires a stored inference account. Select one with model@profile; environment and provider-config keys have no durable account ownership.",
+        );
+      }
       return undefined;
     }
     selection = {
@@ -85,8 +93,11 @@ export async function captureCronInferenceBinding(params: {
     cfg,
     assertCurrent: assertSelectionCurrent ?? (() => {}),
   });
+  let retained = false;
   try {
     authority.assertCurrent();
+    params.retainAuthorization?.(authority);
+    retained = params.retainAuthorization !== undefined;
     return {
       version: 1,
       provider: model.provider,
@@ -102,7 +113,9 @@ export async function captureCronInferenceBinding(params: {
           : "auto",
     };
   } finally {
-    authority.dispose();
+    if (!retained) {
+      authority.dispose();
+    }
   }
 }
 

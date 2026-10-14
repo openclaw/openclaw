@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
 
 /** Scheduler-owned identity, not a user model pin or a copy of credential material. */
@@ -15,10 +16,10 @@ export function normalizeCronInferenceBinding(value: unknown): CronInferenceBind
   if (value === undefined) {
     return undefined;
   }
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     throw new Error("Invalid automation inference binding.");
   }
-  const binding = value as Record<string, unknown>;
+  const binding = value;
   if (
     binding.version !== 1 ||
     typeof binding.provider !== "string" ||

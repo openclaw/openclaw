@@ -1,5 +1,6 @@
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -190,6 +191,64 @@ it.each(["same bytes", "refreshed bytes"])(
     });
   },
 );
+
+it("allows concurrent adoption after an out-of-process reconnect without reviving old grants", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { owner, profileId, credential } = fixture();
+    const original = await capture(profileId);
+    try {
+      const operationsUrl = new URL(
+        "../../state/user-model-account-operations.ts",
+        import.meta.url,
+      );
+      const databaseUrl = new URL("../../state/openclaw-state-db-cache.ts", import.meta.url);
+      const replacement = await runNodeScript(
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          "import { connectUserModelAccountAsync } from " +
+            JSON.stringify(operationsUrl.href) +
+            "; import { closeOpenClawStateDatabaseAsync } from " +
+            JSON.stringify(databaseUrl.href) +
+            "; const result = await connectUserModelAccountAsync({ ownerProfileId: " +
+            JSON.stringify(owner.id) +
+            ", credential: " +
+            JSON.stringify(credential) +
+            ", matchesCredential: () => true, assertCurrent() {} });" +
+            "console.log(result.authProfileId); await closeOpenClawStateDatabaseAsync();",
+        ],
+        env,
+        30_000,
+      );
+      expect(replacement.error, replacement.stderr).toBeUndefined();
+      expect(replacement.status, replacement.stderr).toBe(0);
+      expect(replacement.stdout.trim()).toBe(profileId);
+      const adoptedGrants = await Promise.all([capture(profileId), capture(profileId)]);
+      try {
+        for (const adopted of adoptedGrants) {
+          expect(adopted.authorizationId).not.toBe(original.authorizationId);
+          expect(adopted.authorizationId).toBe(adoptedGrants[0].authorizationId);
+          adopted.assertCurrent();
+          await adopted.revalidate();
+        }
+        expect(original.assertCurrent).toThrow(
+          expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
+        );
+        await expect(original.revalidate()).rejects.toMatchObject({
+          code: "MCP_AUTHORIZATION_RETIRED",
+        });
+      } finally {
+        for (const adopted of adoptedGrants) {
+          adopted.dispose();
+        }
+      }
+    } finally {
+      original.dispose();
+    }
+  });
+});
 
 it("separates a different account while preserving the original explicit pin", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

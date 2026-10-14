@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -53,8 +54,12 @@ async function captureCronInferenceForCaller(
   caller: InferenceCaller,
 ) {
   let selection: UserModelAccountSelection | undefined;
+  let authority: AuthProfileAuthorization | undefined;
   const inferenceBinding = await captureCronInferenceBinding({
     ...params,
+    retainAuthorization: (captured) => {
+      authority = captured;
+    },
     authorizeProfile: async (profileId, inherited) => {
       // Trusted creator selections already carry their owner's permission. New
       // personal selections require the same live human authority as chat.
@@ -65,7 +70,14 @@ async function captureCronInferenceForCaller(
       return undefined;
     },
   });
-  return { inferenceBinding, assertInferenceSelectionCurrent: () => selection?.assertCurrent() };
+  return {
+    inferenceBinding,
+    assertInferenceSelectionCurrent: () => {
+      selection?.assertCurrent();
+      authority?.assertCurrent();
+    },
+    disposeInferenceAuthorization: () => authority?.dispose(),
+  };
 }
 
 export function requiresExplicitAgentRuntimeToolsAllow(params: {
@@ -331,7 +343,11 @@ export async function captureCronUpdatedInferenceBinding(
         cfg,
         agentDir: resolveAgentDir(cfg, agentId),
       });
-      authority.dispose();
+      return {
+        inferenceBinding: undefined,
+        assertInferenceSelectionCurrent: () => authority.assertCurrent(),
+        disposeInferenceAuthorization: () => authority.dispose(),
+      };
     }
     return undefined;
   }

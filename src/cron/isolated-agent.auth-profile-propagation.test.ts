@@ -233,7 +233,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         if (!authProfileBinding || !onSuccessfulAuthProfile) {
           throw new Error("Expected live binding and account settlement guard");
         }
-        const assertCurrent = authProfileBinding.assertCurrent;
+        const assertCurrent = () => authProfileBinding.assertCurrent();
         expect(() => assertCurrent()).not.toThrow();
         expect(() => onSuccessfulAuthProfile(profileId)).not.toThrow();
         expect(() => onSuccessfulAuthProfile(other)).toThrow(/inference account changed/i);

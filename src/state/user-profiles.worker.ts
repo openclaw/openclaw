@@ -14,7 +14,7 @@ import { executeUserChannelIdentityChange } from "./user-channel-identities.work
 import { personalCredentialPublication } from "./user-model-account-authority.js";
 import {
   connectUserModelAccount,
-  enrollPersonalAuthProfileAuthorization,
+  enrollPersonalAuthProfileAuthorizationInDatabase,
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
@@ -175,10 +175,20 @@ export const userProfileOperations = {
   ),
   "userProfiles.modelAccount.enrollAuthorization": accountWrite(
     (
-      input: Omit<Parameters<typeof enrollPersonalAuthProfileAuthorization>[0], "assertCurrent">,
+      input: Parameters<typeof enrollPersonalAuthProfileAuthorizationInDatabase>[1],
       options,
       assertCurrent,
-    ) => enrollPersonalAuthProfileAuthorization({ ...input, assertCurrent }, options),
+    ) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          assertCurrent("transaction");
+          const result = enrollPersonalAuthProfileAuthorizationInDatabase(db, input);
+          assertCurrent("commit");
+          return result;
+        },
+        options,
+        { operationLabel: "users.model-accounts.enroll-authorization" },
+      ),
   ),
   "userProfiles.modelAccount.link": accountWrite(
     (
