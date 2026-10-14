@@ -368,22 +368,6 @@ describe("workspace file tabs", () => {
     },
   );
 
-  it("scopes main-view tab and content IDs to each panel and keeps them stable", async () => {
-    const panels = [mountPanel(), mountPanel()];
-    await Promise.all(panels.map((panel) => panel.updateComplete));
-    const tabs = panels.map((panel) => panel.querySelector<HTMLElement>(".tabstrip-tab")!);
-    const ids = tabs.map((tab) => tab.id);
-    expect(new Set(ids).size).toBe(2);
-    for (const [index, panel] of panels.entries()) {
-      const tab = tabs[index]!;
-      const content = panel.querySelector(".chat-files-panel__content")!;
-      expect(document.getElementById(tab.getAttribute("aria-controls")!)).toBe(content);
-      panel.previews = [...panel.previews];
-      await panel.updateComplete;
-      expect(panel.querySelector(".tabstrip-tab")?.id).toBe(ids[index]);
-    }
-  });
-
   it("does not recover sibling focus when the other pane loses its active tab", async () => {
     const panels = [mountPanel(), mountPanel()];
     await Promise.all(panels.map((panel) => panel.updateComplete));

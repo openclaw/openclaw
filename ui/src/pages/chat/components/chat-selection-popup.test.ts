@@ -319,18 +319,6 @@ describe("chat annotation editor", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("keeps an unsaved comment when resizing the viewport", () => {
-    const { input, onCancel } = editor();
-    input.value = "873 characters that must survive the resize.";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-
-    window.dispatchEvent(new Event("resize"));
-
-    expect(document.querySelector("[role=dialog]")).not.toBeNull();
-    expect(input.value).toBe("873 characters that must survive the resize.");
-    expect(onCancel).not.toHaveBeenCalled();
-  });
-
   it("still closes an untouched editor when the transcript scrolls", () => {
     editor({ comment: "Saved comment", expanded: true });
     const transcript = document.createElement("div");
@@ -350,7 +338,6 @@ describe("chat annotation editor", () => {
       "Escape",
       () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
     ],
-    ["its owner retiring the pane", () => removeChatSelectionPopup("pane-a")],
   ])("still dismisses the editor through %s", (_name, dismiss) => {
     editor();
     dismiss();

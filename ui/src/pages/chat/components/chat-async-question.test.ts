@@ -442,7 +442,6 @@ it("does not retain derived completion after authoritative history replaces the 
     createAsyncQuestionPresentation(state, { ...props, messages: [historicalQuestion()] }).pending,
   ).toHaveLength(1);
 });
-
 it("restores every answer in a multi-question submission with UTF-8-bounded quoted titles", () => {
   const promptMessage = {
     role: "assistant",
