@@ -537,6 +537,7 @@ describe("Telegram admitted model input", () => {
     expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
+      ChatType: "group",
       MessageThreadId: 99,
     });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
@@ -586,6 +587,7 @@ describe("Telegram admitted model input", () => {
       expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
         OriginatingTo: "telegram:42001",
         AccountId: "atlas",
+        ChatType: "direct",
         MessageThreadId: threadId,
       });
       expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
