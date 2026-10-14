@@ -44,6 +44,36 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testParallelToolResultsIngestion() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-parallel-results-fixture",
+                "-openclaw.webchat.showAssistantToolActivity", "YES",
+            ])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["Both tools completed."].waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "parallel-results-before-disclosure")
+        let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).count, 1)
+        self.attachScreenshot(named: "parallel-results-collapsed")
+        work.tap()
+        let first = app.buttons["chat-tool-activity-parallel-a"]
+        let second = app.buttons["chat-tool-activity-parallel-b"]
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(second.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-parallel-a").count, 1)
+        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-parallel-b").count, 1)
+        first.tap()
+        second.tap()
+        XCTAssertTrue(app.staticTexts["ALPHA_RESULT_VISIBLE"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["BETA_RESULT_VISIBLE"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Check both tools"].exists)
+        XCTAssertTrue(app.staticTexts["Both tools completed."].exists)
+        self.attachScreenshot(named: "parallel-results-expanded")
+    }
+
     func testReleaseControlScreenshot() {
         self.captureReleaseScreenshot(Self.controlScreenshotTarget)
     }
