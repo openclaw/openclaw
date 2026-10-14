@@ -259,6 +259,15 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
+Durable actor residency retains narrow navigation and exact byte accounting,
+not settled append bodies. Full bodies stay in SQLite and committed append
+receipts; retries read canonical storage when their payload is no longer in the
+current transaction. Actor append slow-hold warnings include `context.payloadBytes`,
+the UTF-8 size of the primary prepared event or message payload (summed message
+bodies for turn appends). This count excludes optional initialization headers.
+The reported `phases.sqlMs` includes synchronous JavaScript work inside the
+transaction; it is not a sum of SQLite statement timings.
+
 Cold input preparation uses the turn planner instead of fetching a full actor
 replica first. The planner carries its recovery expectation into the input
 command; prepared, explicit, and warm replica expectations remain fixed across
@@ -548,7 +557,7 @@ replacement, and content edits continue to invalidate retained context.
 
 Exact metadata rewrites that preserve transcript admission and navigation carry
 their canonical replacement rows in the existing committed authority receipt.
-The resident actor updates its payloads and mutation timestamp in that same
+The resident actor updates its byte accounting and mutation timestamp in that same
 transaction; the main-thread replica installs those rows without another worker
 read. This includes an identical model-prompt capture after hydration. Rollback
 leaves stored messages unchanged and retains the database owner's failed-write
