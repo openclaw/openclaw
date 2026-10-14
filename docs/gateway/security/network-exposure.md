@@ -174,14 +174,11 @@ authority. No reusable device token is issued. Shared Gateway secrets, bootstrap
 credentials, device-less connections, non-operator roles, and scopes above the
 ceiling are refused.
 
-The browser receives an ordinary device token and appears in **Devices** and
-`openclaw devices list`. The token also works on the Gateway's direct listener,
-limited to its issued scopes. This accepted tradeoff means a leaked token can
-exercise the same read or read/write capabilities directly that a compromised
-relay can already exercise through its grant. Revoke individual tokens through
-the existing device revoke operation in **Devices**. Closing or revoking the
-plugin grant closes the ingress path but does not delete paired-device rows or
-revoke their tokens.
+The browser appears in **Devices** and `openclaw devices list` as a paired-device
+row kept for visibility and key checks. It holds no bearer credential that works
+on the Gateway's direct listener; every reconnect is admitted by the live grant.
+Revoke the plugin grant to end delegated access. Revocation closes the ingress
+path and its retained work without deleting the paired-device row.
 
 ### HSTS and origin notes
 
