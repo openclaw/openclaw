@@ -20,6 +20,21 @@ function emptyRows(): AuthProfileRowRead {
   };
 }
 
+it("preserves absent source provenance through first database admission", () => {
+  const databasePath = path.join(tempDirs.make("auth-row-first-admission-"), "auth.sqlite");
+  const cache = createRuntimeAuthProfileRowsCache(() => "1");
+  cache.recordSource(databasePath, "absent", null);
+  expect(cache.hasSource(databasePath)).toBe(true);
+
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec("CREATE TABLE session_fixture (value INTEGER)");
+  expect(cache.hasSource(databasePath)).toBe(true);
+
+  cache.recordSource(databasePath, "created", null);
+  database.exec("INSERT INTO session_fixture VALUES (1)");
+  expect(cache.hasSource(databasePath)).toBe(false);
+});
+
 it("releases retired database baselines while retaining named live owners", async () => {
   const databasePath = path.join(tempDirs.make("auth-row-retirement-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);

@@ -26,7 +26,10 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
   const entries = new Map<string, Entry>();
   const hasCurrentSource = (databasePath: string, entry: Entry) =>
     revisionAtPath(databasePath) === entry.revision &&
-    readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") === entry.writeToken;
+    // First session creation admits a previously absent source without changing auth facts.
+    (entry.writeToken === undefined ||
+      readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") ===
+        entry.writeToken);
   return {
     hasSource(databasePath: string): boolean {
       const entry = entries.get(databasePath);

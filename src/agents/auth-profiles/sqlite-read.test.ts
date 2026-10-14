@@ -3,11 +3,12 @@ import path from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as resources from "../../state/openclaw-agent-db-resources.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
+import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
 import * as rootContext from "../../state/openclaw-state-worker-context.js";
 import * as sharedWorker from "../../state/openclaw-state-worker-store.js";
 import { registerAuthProfileFileChangeListener } from "./file-state.js";
@@ -89,7 +90,7 @@ describe("prepared auth profile row reads", () => {
     "reuses %s rows and installs an owner write without another worker request",
     async (source) => {
       fs.unlinkSync(databasePath);
-      using database = openNodeSqliteDatabase(databasePath);
+      using database = openTrackedStateDatabase(databasePath);
       database.exec(
         "CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT, updated_at INTEGER);" +
           "CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER)",
@@ -124,7 +125,7 @@ describe("prepared auth profile row reads", () => {
                 );
                 binding.admission.service();
                 if (binding.admission.failure) {
-                  throw binding.admission.failure;
+                  throw toErrorObject(binding.admission.failure);
                 }
               }),
             });
@@ -179,6 +180,7 @@ describe("prepared auth profile row reads", () => {
 
   it("serves prepared file authority without filesystem calls on subsequent reads", async () => {
     const reader = prepare();
+    await expect(reader.read()).resolves.toEqual(rows);
     const realpath = vi.spyOn(fs.realpathSync, "native");
     const stat = vi.spyOn(fs, "statSync");
     await expect(reader.read()).resolves.toEqual(rows);
