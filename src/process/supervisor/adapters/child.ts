@@ -100,6 +100,7 @@ const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 type ChildAdapterInput = ProcessAdapterConstruction & {
   /** Retain a local tree owner independently of Gateway service markers. */
   ownProcessTree?: true;
+  terminateOnHostLoss?: true;
   /** Preserve an owner-materialized Windows shell invocation without parsing it again. */
   windowsShell?: true;
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
@@ -112,6 +113,7 @@ type ChildAdapterInput = ProcessAdapterConstruction & {
   argv0?: string;
   windowsVerbatimArguments?: boolean;
   input?: string;
+  prepareInput?: () => void | Promise<void>;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
@@ -183,12 +185,14 @@ export async function createChildAdapter(
       env: preparedSpawn.env,
       stdinMode,
       input: params.input,
+      prepareInput: params.prepareInput,
       secretInput: params.secretInput,
       oomScoreWrapperSelected: preparedSpawn.wrapped,
       abortSignal: params.abortSignal,
       onSpawnCleanup: params.onSpawnCleanup,
       stderrDestination: params.stderrDestination,
       stdoutConsumption: params.stdoutConsumption,
+      terminateOnHostLoss: params.terminateOnHostLoss,
     });
   }
 
@@ -711,6 +715,10 @@ export async function createChildAdapter(
         throw new Error("worker lifecycle IPC channel was not created");
       }
       if (params.input !== undefined) {
+        if (params.prepareInput) {
+          await params.prepareInput();
+          assertCurrent();
+        }
         childStdin?.write(params.input);
         stdin?.end();
       } else if (stdinMode === "pipe-closed") {

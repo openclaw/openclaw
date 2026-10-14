@@ -41,18 +41,17 @@ describe("AppSidebar main-chat metadata", () => {
     };
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    const header = sidebar.querySelector(
-      '[data-agent-group="working"] .sidebar-agent-roster__header',
-    )!;
+    const header = () =>
+      sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__header')!;
     await vi.waitFor(() => {
       // Upstream #168575 makes the agent avatar the header’s only identity.
-      expect(header.querySelector(".session-owner-chip")).toBeNull();
-      expect(header.querySelector(".session-row-draft-indicator")).not.toBeNull();
-      expect(header.querySelector(".session-row-badge--draft")).not.toBeNull();
-      expect(header.querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();
-      expect(header.querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
-      expect(header.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
-      expect(header.querySelector("[data-agent-collapse]")).toBeNull();
+      expect(header().querySelector(".session-owner-chip")).toBeNull();
+      expect(header().querySelector(".session-row-draft-indicator")).not.toBeNull();
+      expect(header().querySelector(".session-row-badge--draft")).not.toBeNull();
+      expect(header().querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();
+      expect(header().querySelectorAll(".session-glyph__ring--queued")).toHaveLength(1);
+      expect(header().querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(header().querySelector("[data-agent-collapse]")).toBeNull();
       expect(sessionKeys(sidebar)).toEqual([]);
     });
     await sidebar.updateComplete;
@@ -82,7 +81,7 @@ describe("AppSidebar main-chat metadata", () => {
       });
       await vi.waitFor(() =>
         expect(
-          header
+          header()
             .querySelector("[data-pull-request-state]")
             ?.getAttribute("data-pull-request-state") ?? null,
         ).toBe(state),
@@ -94,8 +93,8 @@ describe("AppSidebar main-chat metadata", () => {
       hasSessionDraft: () => false,
     };
     await vi.waitFor(() => {
-      expect(header.querySelector(".session-row-badge--draft")).toBeNull();
-      expect(header.querySelector(".session-row-badge--attention")).toBeNull();
+      expect(header().querySelector(".session-row-badge--draft")).toBeNull();
+      expect(header().querySelector(".session-row-badge--attention")).toBeNull();
     });
   });
 
@@ -111,9 +110,8 @@ describe("AppSidebar main-chat metadata", () => {
     ]);
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
-    const header = sidebar.querySelector(
-      '[data-agent-group="working"] .sidebar-agent-roster__header',
-    )!;
+    const header = () =>
+      sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__header')!;
     for (const [owner, visible] of [
       ["profile-sam", false],
       ["profile-ada", true],
@@ -121,9 +119,9 @@ describe("AppSidebar main-chat metadata", () => {
     ] as const) {
       await selectFilter(sidebar, `owner:${owner}`);
       await vi.waitFor(() => {
-        expect(header.querySelector(".session-glyph__ring") !== null).toBe(visible);
-        expect(header.querySelector(".session-row-badge--incognito") !== null).toBe(visible);
-        expect(header.querySelector('[aria-label="Unread"]') !== null).toBe(visible);
+        expect(header().querySelector(".session-glyph__ring") !== null).toBe(visible);
+        expect(header().querySelector(".session-row-badge--incognito") !== null).toBe(visible);
+        expect(header().querySelector('[aria-label="Unread"]') !== null).toBe(visible);
       });
       expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
       expect(sessionKeys(sidebar)).toEqual([]);

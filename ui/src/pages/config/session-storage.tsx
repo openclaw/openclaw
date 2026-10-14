@@ -1,7 +1,7 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -17,12 +17,10 @@ import {
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -47,37 +45,30 @@ type SettingsProps = {
 };
 function SessionStorageSettingsContent(props: SettingsProps) {
   const context = useApplication();
-  const gatewayProjection = projectGateway(context.gateway);
-  const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
-  let disposed = false;
-  let request: AbortController | undefined;
-  const [requestStatus, setRequestStatus] = createSignal<"idle" | "pending" | "complete" | "error">(
-    untrack(client) ? "pending" : "idle",
-  );
-  const [requestError, setRequestError] = createSignal<unknown>();
-  const [result, setResult] = createSignal<
-    { status: SessionsStorageStatusResult; isCurrent: () => boolean } | undefined
-  >();
-  const [refreshRevision, setRefreshRevision] = createSignal(0);
-  function refreshStatus() {
-    setRefreshRevision((value) => value + 1);
-  }
-  function client() {
-    gatewayProjection.read();
-    const snapshot = context.gateway.snapshot;
-    return !disposed &&
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
-      ? snapshot.client
-      : null;
-  }
+  const {
+    client,
+    state: requestStatus,
+    error: requestError,
+    result,
+    refresh: refreshStatus,
+    capture,
+    gatewayProjection,
+    configProjection,
+  } = createSettingsStatus<SessionsStorageStatusResult>(context, {
+    method: "sessions.storage.status",
+    access: hasOperatorAdminAccess,
+    configHash: "appliedConfigHash",
+    onConnectionChange: retireRequests,
+    onStatus: observeMaintenance,
+    onError: () => {
+      stopPolling();
+      setRunOutcome(null);
+    },
+  });
   const [ageDraft, setAgeDraft] = createSignal<string | null>(null);
   const [runError, setRunError] = createSignal<string | null>(null);
   const [runOutcome, setRunOutcome] = createSignal<string | null>(null);
   const [runOperation, setRunOperation] = createSignal<object | null>(null);
-  let previousHello = context.gateway.snapshot.hello;
-  let previousAuth = previousHello?.auth;
   let followingRun = false;
   let maintenanceTimer: ReturnType<typeof setInterval> | undefined;
   function stopPolling() {
@@ -97,7 +88,6 @@ function SessionStorageSettingsContent(props: SettingsProps) {
     }, 2_000);
   }
   function retireRequests() {
-    request?.abort();
     stopPolling();
     followingRun = false;
     setAgeDraft(null);
@@ -105,94 +95,7 @@ function SessionStorageSettingsContent(props: SettingsProps) {
     setRunError(null);
     setRunOutcome(null);
   }
-  function synchronizeConnection() {
-    const snapshot = context.gateway.snapshot;
-    const transition = gateway.transition(snapshot);
-    const identityChanged =
-      previousHello !== snapshot.hello || previousAuth !== snapshot.hello?.auth;
-    if (identityChanged) {
-      gateway.invalidate();
-    }
-    previousHello = snapshot.hello;
-    previousAuth = snapshot.hello?.auth;
-    if (transition || identityChanged) {
-      retireRequests();
-      refreshStatus();
-    }
-  }
-  const unsubscribeGateway = gatewayProjection.subscribe(synchronizeConnection);
-  onCleanup(unsubscribeGateway);
-  const requestKey = createMemo(
-    () => {
-      const snapshot = gatewayProjection.read().snapshot;
-      return [
-        client(),
-        snapshot.phase,
-        snapshot.hello,
-        snapshot.hello?.auth,
-        configProjection.read().state.configSnapshot?.appliedConfigHash,
-        refreshRevision(),
-      ] as const;
-    },
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  createEffect(requestKey, ([currentClient, , hello, auth, hash], previous) => {
-    request?.abort();
-    if (!currentClient) {
-      if (previous) {
-        setRequestStatus("idle");
-      }
-      return undefined;
-    }
-    const controller = new AbortController();
-    request = controller;
-    const scope = gateway.capture();
-    const currentGateway = context.gateway;
-    const isConnectionCurrent = () =>
-      client() === currentClient &&
-      scope !== null &&
-      gateway.isCurrent(scope) &&
-      context.gateway === currentGateway &&
-      currentGateway.snapshot.hello === hello &&
-      hello?.auth === auth &&
-      context.runtimeConfig.state.configSnapshot?.appliedConfigHash === hash;
-    const isCurrent = () =>
-      !controller.signal.aborted && request === controller && isConnectionCurrent();
-    if (previous) {
-      setRequestStatus("pending");
-    }
-    void currentClient
-      .request<SessionsStorageStatusResult>(
-        "sessions.storage.status",
-        {},
-        { signal: controller.signal },
-      )
-      .then(
-        (status) => {
-          if (!isCurrent()) {
-            return;
-          }
-          setResult({ status, isCurrent: isConnectionCurrent });
-          setRequestStatus("complete");
-          observeMaintenance(status);
-        },
-        (error: unknown) => {
-          if (!isCurrent()) {
-            return;
-          }
-          setRequestError(error);
-          setRequestStatus("error");
-          stopPolling();
-          setRunOutcome(null);
-        },
-      );
-    return () => controller.abort();
-  });
-  onCleanup(() => {
-    disposed = true;
-    retireRequests();
-    gateway.dispose();
-  });
+  onCleanup(retireRequests);
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
@@ -277,24 +180,15 @@ function SessionStorageSettingsContent(props: SettingsProps) {
   );
   async function runNow() {
     const currentClient = client();
-    const scope = gateway.capture();
-    if (!canRun() || !currentClient || !scope) {
+    const ownsConnection = capture();
+    if (!canRun() || !currentClient || !ownsConnection()) {
       return;
     }
     const operation = {};
-    const currentGateway = context.gateway;
-    const hello = currentGateway.snapshot.hello;
-    const auth = hello?.auth;
     setRunOperation(operation);
     setRunError(null);
     setRunOutcome(null);
-    const isCurrent = () =>
-      runOperation() === operation &&
-      client() === currentClient &&
-      gateway.isCurrent(scope) &&
-      context.gateway === currentGateway &&
-      currentGateway.snapshot.hello === hello &&
-      hello?.auth === auth;
+    const isCurrent = () => runOperation() === operation && ownsConnection();
     try {
       const response = await currentClient.request<SessionsStorageStatusResult>(
         "sessions.storage.run",

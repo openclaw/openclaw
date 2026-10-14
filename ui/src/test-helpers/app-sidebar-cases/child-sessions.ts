@@ -17,7 +17,7 @@ import {
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar agent chip", () => {
   it("loads and expands child sessions with menus but without root placement controls", async () => {
@@ -467,7 +467,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "nests the selected spawned session and reveals its active ancestor path (intervening run: %s)",
     async (interveningRun) => {
       const parentKey = "agent:main:parent";

@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   readResolvedSessionEntryInWorker,
   resolveSessionEntryCandidateTargetForRuntime,
@@ -32,6 +33,7 @@ it("keeps candidate order and observes a committed replacement through the worke
       cfg: {},
       candidateKeys: ["agent:main:missing", firstKey, secondKey],
     };
+    setRuntimeConfigSnapshot(candidate.cfg);
     await replaceSessionEntry(
       { ...scope, sessionKey: firstKey },
       { sessionId: "first", updatedAt: 1, label: "before" },

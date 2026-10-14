@@ -1,27 +1,24 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { PluginsSkillsReadResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
 import { PluginPreviewController } from "./skill-preview.tsx";
 
 afterEach(() => vi.restoreAllMocks());
 
 function setup() {
-  const host = {
-    addController() {},
-    removeController() {},
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  } satisfies ReactiveControllerHost;
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const request = vi.spyOn(client, "request");
-  const gateway = createGatewayConnectionLifecycle({ client, phase: "connected" });
-  const controller = new PluginPreviewController(host, gateway as unknown as GatewayPageController);
-  return { controller, request, gateway, client };
+  const { gateway, publish } = createApplicationGateway();
+  publish({ ...gateway.snapshot, client, phase: "connected" });
+  const binding = new GatewayPageBinding(vi.fn(), { getGateway: () => gateway });
+  binding.connect();
+  onTestFinished(() => binding.dispose());
+  const controller = new PluginPreviewController({ requestUpdate: vi.fn() }, binding);
+  return { controller, request, gateway, publish, client };
 }
 
 const params = { source: "installed", pluginId: "example", skillName: "guide" } as const;
@@ -114,7 +111,7 @@ it.each([
 ])(
   "retires late preview responses (selected file: $selectedFile, change: $change)",
   async ({ selectedFile, change }) => {
-    const { controller, request, gateway, client } = setup();
+    const { controller, request, gateway, publish } = setup();
     const response = createDeferred<PluginsSkillsReadResult>();
     if (selectedFile) {
       request.mockResolvedValueOnce(lazyResult);
@@ -131,8 +128,8 @@ it.each([
     } else if (change === "selection") {
       await controller.open({ ...params, skillName: "other" });
     } else {
-      gateway.transition({ client, phase: "reconnecting" });
-      gateway.transition({ client, phase: "connected" });
+      publish({ ...gateway.snapshot, phase: "reconnecting" });
+      publish({ ...gateway.snapshot, phase: "connected" });
     }
     response.resolve(selectedFile ? selectedResult("a.md") : result);
     await pending;

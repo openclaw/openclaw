@@ -20,7 +20,13 @@ const fetchOther = vi.fn<typeof fetch>();
 const createObjectURL = vi.fn<typeof URL.createObjectURL>();
 const revokeObjectURL = vi.fn<typeof URL.revokeObjectURL>();
 
-beforeEach(() => {
+beforeEach(({ onTestFailed }) => {
+  onTestFailed(() => {
+    const urls = fetchAvatar.mock.calls.map(([input]) =>
+      input instanceof Request ? input.url : String(input),
+    );
+    console.error(`[settings avatar request URLs] ${JSON.stringify(urls)}`);
+  });
   const nativeFetch = globalThis.fetch;
   fetchAvatar.mockReset();
   fetchOther.mockReset().mockImplementation(nativeFetch);

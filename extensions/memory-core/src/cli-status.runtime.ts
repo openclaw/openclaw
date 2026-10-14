@@ -1,5 +1,6 @@
 import {
   formatMemoryIndexRebuildGuidance,
+  readMemorySearchManagerStatus,
   resolveMemoryIndexIdentityDiagnostic,
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -223,7 +224,7 @@ export async function runMemoryStatus(
       let indexError: string | undefined;
       const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
       if (deep) {
-        const initialStatus = manager.status();
+        const initialStatus = await readMemorySearchManagerStatus(manager);
         const hasVectorStoreProbe =
           initialStatus.backend === "builtin" &&
           typeof manager.probeVectorStoreAvailability === "function";
@@ -261,7 +262,7 @@ export async function runMemoryStatus(
           defaultRuntime.log("Memory backend does not support manual reindex.");
         }
       }
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const scan = await scanMemoryManagerSources(status);
       const workspaceDir = status.workspaceDir;
       let audit: ShortTermAuditSummary | undefined;

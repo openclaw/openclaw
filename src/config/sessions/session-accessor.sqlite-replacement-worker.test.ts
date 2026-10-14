@@ -11,6 +11,7 @@ import {
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -27,6 +28,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -35,22 +37,62 @@ import * as configEnv from "../config-env-vars.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
-  readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
+import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
+
+it("prepares and commits a session while its original creating reference is held", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "fresh", path: state.statePath("fresh.sqlite"), env: state.env };
+    const creator = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+    });
+    const reader = new OpenClawAgentDatabaseReadOnlyScope();
+    const sessionKey = "agent:fresh:first-session";
+    try {
+      await prepareSessionEntryReplacementDatabase(options, () => {});
+      await expect(
+        applySessionEntryCanonicalReplacements({
+          agentId: options.agentId,
+          storePath: options.path,
+          env: options.env,
+          sessionKeys: [sessionKey],
+          update: () => ({
+            result: "committed",
+            replacements: [
+              {
+                sessionKey,
+                previousSessionKeys: [],
+                entry: { sessionId: "first-session", updatedAt: 1, label: "created" },
+              },
+            ],
+          }),
+        }),
+      ).resolves.toBe("committed");
+      expect(
+        reader.read((database) => readExactSessionEntryRow(database, sessionKey)?.entry, options),
+      ).toMatchObject({ found: true, value: { sessionId: "first-session", label: "created" } });
+    } finally {
+      reader.close();
+      await creator.release();
+    }
+  });
+});
 
 it.each([false, true])(
   "retains prepared maintenance protection through replacement settlement (revoke: %s)",
@@ -412,6 +454,30 @@ it("creates a missing durable replacement database entirely through its worker o
   });
 });
 
+it("joins an original absent-target reservation when replacing the first session entry", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("reserved-replacement.sqlite");
+    const options = { agentId: "main", path: storePath };
+    const creator = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: readDatabasePathIdentitySync(storePath),
+    });
+    const sessionKey = "agent:main:reserved-replacement";
+    try {
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey },
+        { sessionId: "reserved-replacement", updatedAt: 1 },
+      );
+      const database = openOpenClawAgentDatabase(options);
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
+        "reserved-replacement",
+      );
+      expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+    } finally {
+      await creator.release();
+    }
+  });
+});
+
 it("joins postcommit follow-up on close without granting a successor authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -707,15 +773,13 @@ it.each([
       expect(followup).not.toHaveBeenCalled();
       expect(committedLifecycle).toHaveBeenCalledTimes(missingReceipt ? 0 : 1);
       expect(observed).toEqual([
-        missingReceipt || nativeUnknown
-          ? undefined
-          : { visibility: "read-only", membership: ["member"] },
+        missingReceipt ? undefined : { visibility: "read-only", membership: ["member"] },
       ]);
       expect(sharing.readCurrent()?.entry?.visibility).toBe(
-        missingReceipt || nativeUnknown ? undefined : "read-only",
+        missingReceipt ? undefined : "read-only",
       );
       expect(preparedPublications).toHaveLength(1);
-      if (missingReceipt || nativeUnknown) {
+      if (missingReceipt) {
         expect(preparedPublications[0]).toBeUndefined();
       } else {
         expect(preparedPublications[0]?.entry).toMatchObject({

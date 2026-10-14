@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
@@ -65,7 +66,10 @@ describe("Gateway GitHub publication boundaries", () => {
       const accepted = await coordinator.requestForSessionV2(input);
       expect(accepted.status).toBe("requested");
       const binding = { publicationKind: "shared" as const, requestId: accepted.requestId };
-      const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
+      const originalLifecycle = readGitHubPublicationSessionLifecycle(
+        binding,
+        openOpenClawStateDatabase().db,
+      );
       expect(originalLifecycle).toEqual({
         lifecycle_revision: session.read().lifecycleRevision,
         requester_authority_json: expect.any(String),
@@ -80,9 +84,9 @@ describe("Gateway GitHub publication boundaries", () => {
       await session.reset(placements);
       const replay = await coordinator.requestForSessionV2(input);
       expect(replay).toMatchObject({ status: "failed", code: "session_changed" });
-      expect(readGitHubPublicationSessionLifecycle(binding)).toEqual(
-        bindingState === "retained" ? originalLifecycle : undefined,
-      );
+      expect(
+        readGitHubPublicationSessionLifecycle(binding, openOpenClawStateDatabase().db),
+      ).toEqual(bindingState === "retained" ? originalLifecycle : undefined);
       await coordinator.resumeSessionRequests();
       expect(await coordinator.readAsync(accepted.requestId)).toMatchObject({
         status: "failed",
@@ -501,20 +505,15 @@ describe("Gateway GitHub publication boundaries", () => {
         "UPDATE github_publication_requests SET worktree_id = ?, session_id = ?, session_key = ? WHERE request_id = ?",
       )
       .run(otherWorktree.id, "session-other", otherSession, "stale");
-    const loadSession = mocks.loadSession.getMockImplementation()!;
-    mocks.loadSession.mockImplementation((key: string) => {
-      const loaded = loadSession(key);
-      return key === otherSession
-        ? {
-            ...loaded,
-            entry: {
-              ...loaded.entry,
-              sessionId: "session-other",
-              worktree: { id: otherWorktree.id, branch: BRANCH, repoRoot: "/repo" },
-            },
-          }
-        : loaded;
-    });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: otherSession },
+      {
+        ...mocks.loadSession(otherSession).entry,
+        sessionId: "session-other",
+        worktree: { id: otherWorktree.id, branch: BRANCH, repoRoot: "/repo" },
+      },
+    );
+    mocks.persistedSessionKeys.add(otherSession);
     const findWorktree = mocks.findWorktree.getMockImplementation()!;
     mocks.findWorktree.mockImplementation((kind: string, key: string) =>
       key === otherSession ? otherWorktree : findWorktree(kind, key),

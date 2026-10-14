@@ -470,6 +470,9 @@ messages, without user-message delimiters. OpenClaw sends
 transcript but consume no input tokens after the next user message. Persistent
 prompt updates need no beta header. Operator system messages follow all other
 context for their user turn, including tool results.
+When replay excludes a Talk consult prompt, OpenClaw inserts a neutral user
+anchor (`.`) before any stranded system updates. This preserves their content,
+order, and lifetime without changing the pinned system prompt.
 Tool results and queued extension context also clear turn-scoped messages, so
 OpenClaw renews the current user turn's runtime context after those continuations.
 
@@ -1067,6 +1070,13 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Claude CLI login could not be verified">
+    OpenClaw waits up to 10 seconds for `claude auth status --json`, including
+    startup on slow hosts. A timeout does not mean that you are logged out.
+    Run that command as the Gateway user on the same host, then retry setup.
+    If it reports `loggedIn: false`, run `claude auth login` first.
+  </Accordion>
+
   <Accordion title="Claude CLI OAuth session expired or could not be refreshed">
     Run these commands as the Gateway user on the Gateway host:
 

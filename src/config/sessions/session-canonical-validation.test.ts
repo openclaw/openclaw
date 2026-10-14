@@ -132,6 +132,7 @@ it("does not retain native admission from a rolled-back repair of an unrelated r
       { sessionId: "damaged", updatedAt: 1 },
     );
     const seeded = openOpenClawAgentDatabase(scope);
+    markCanonicalSessionValidationPending(seeded, ["agent:main:damaged"]);
     seeded.db.exec(
       "UPDATE session_nodes SET entry_json = '{' WHERE session_key = 'agent:main:damaged'; UPDATE session_nodes SET entry_valid = 1 WHERE session_key = 'agent:main:damaged'",
     );

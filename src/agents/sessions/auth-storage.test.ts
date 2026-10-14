@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as sdkDeprecation from "../../plugins/sdk-deprecation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -31,6 +32,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
   };
 });
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { refreshAuthProfileFileState } from "../auth-profiles/file-state.js";
 import {
   assertAuthProfileMigrationReady,
   clearAuthProfileMigrationDiagnostics,
@@ -75,6 +77,25 @@ describe("SQLite auth storage", () => {
     tempDirs.push(agentDir);
     return agentDir;
   }
+
+  it("initializes detached in-memory credentials without a legacy reload warning", () => {
+    const warn = vi.spyOn(sdkDeprecation, "warnPluginSdkDeprecation").mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+    const credential = { type: "api_key" as const, key: "synthetic-initial-key" };
+    const storage = PublicAuthStorage.inMemory({ fixture: credential });
+    credential.key = "synthetic-mutated-key";
+
+    expect(storage.get("fixture")).toEqual({ type: "api_key", key: "synthetic-initial-key" });
+    expect(warn).not.toHaveBeenCalled();
+
+    storage.reload();
+    expect(warn).toHaveBeenCalledWith({
+      family: "auth-profile-sync-operations",
+      method: "AuthStorage.reload",
+      replacement: "AuthStorage.reloadAsync",
+    });
+    expect(storage.get("fixture")).toEqual({ type: "api_key", key: "synthetic-initial-key" });
+  });
 
   it("merges async SDK writes and reloads committed peer changes without host SQLite", async () => {
     await withOpenClawTestState(
@@ -172,6 +193,7 @@ describe("SQLite auth storage", () => {
     const agentDir = makeAgentDir();
     const storage = AuthStorage.forAgent(agentDir);
     writePersistedAuthProfileStoreRaw({ version: 1, profiles: "invalid-profile-map" }, agentDir);
+    await refreshAuthProfileFileState();
     vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
     storage.reload();
 
@@ -562,6 +584,7 @@ describe("SQLite auth storage", () => {
     const storage = AuthStorage.forAgent(agentDir);
     vi.stubEnv("OPENAI_API_KEY", "fake-environment-key");
     fs.writeFileSync(path.join(agentDir, "auth.json"), '{"openai":{"key":"fake-late"}}\n');
+    await refreshAuthProfileFileState();
 
     await expect(storage.getApiKey("openai")).rejects.toThrow(
       "requires legacy credential migration",

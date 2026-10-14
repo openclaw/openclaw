@@ -275,7 +275,7 @@ export async function readChildCompletionFindings(
     children.map(async (observed) => {
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
-      if (!child || !prepared.isCurrent()) {
+      if (!child) {
         throw new SubagentAnnouncePreparationConflictError(
           "A child result changed while preparing the completion batch.",
         );
@@ -291,17 +291,7 @@ export async function readChildCompletionFindings(
   }
   return {
     text: buildChildCompletionFindings(
-      results.map(({ child, text }) => ({
-        childSessionKey: child.childSessionKey,
-        task: child.task,
-        taskName: child.taskName,
-        label: child.label,
-        createdAt: child.createdAt,
-        endedReason: child.endedReason,
-        execution: child.execution,
-        completion: child.completion,
-        announceResult: text,
-      })),
+      results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
     ),
     isCurrent,
   };
@@ -394,24 +384,9 @@ export async function buildCompactAnnounceStatsLine(params: {
   const storePath = agentId
     ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
     : undefined;
-  let entry = storePath
+  const entry = storePath
     ? await readSubagentSessionEntry(storePath, params.sessionKey, agentId)
     : undefined;
-  const tokenWaitAttempts = isFastTestRuntimeEnv() ? 1 : 3;
-  for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
-    if (
-      !storePath ||
-      typeof entry?.inputTokens === "number" ||
-      typeof entry?.outputTokens === "number" ||
-      resolveFreshSessionTotalTokens(entry) !== undefined
-    ) {
-      break;
-    }
-    if (!isFastTestRuntimeEnv()) {
-      await sleep(150);
-    }
-    entry = await readSubagentSessionEntry(storePath, params.sessionKey, agentId);
-  }
 
   const input = entry?.inputTokens;
   const output = entry?.outputTokens;

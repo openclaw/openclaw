@@ -1,5 +1,6 @@
 import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { callGateway } from "../../../gateway/call.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
@@ -48,6 +49,7 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
+import { captureRequesterSettleWakeRecoverySource } from "./subagent-registry-restart-recovery.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
@@ -527,6 +529,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
   isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
+  isTerminalTailActive: subagentLifecycleController.isTerminalTailActive,
   sessionEffectsHostCurrent: (entry) =>
     subagentLifecycleController.sessionEffectsHostCurrent(entry),
   shouldSuppressSessionEffects: (entry, effects) =>
@@ -681,6 +684,17 @@ export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayK
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
 export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
+}
+
+export async function prepareRequesterSettleWakeRecoverySource(
+  params: Omit<Parameters<typeof captureRequesterSettleWakeRecoverySource>[0], "context">,
+) {
+  const context = captureOpenClawStateWorkerContext();
+  await subagentRestorer.restoreOnce(true, context);
+  const physical = await prepareSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: params.requesterAgentId,
+  });
+  return captureRequesterSettleWakeRecoverySource({ ...params, storePath: physical.path, context });
 }
 export function activateSubagentRegistry(resolveGatewayContext: GatewayContextResolver) {
   // Reuse the instance's own fenced closure so late-restored siblings share one

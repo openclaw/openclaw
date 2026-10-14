@@ -6,7 +6,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type {
   TranscriptEntryAnchor,
   SessionTranscriptWriteLockParams,
@@ -276,10 +276,8 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         return;
       }
       const mirrorResult = await mirror({
-        assertCurrent: createNativeSessionBindingAuthority(
-          [],
-          params.params.hostCapabilities.assertActive,
-        ).assertLegacyCurrent,
+        assertCurrent: createNativeSessionBindingScope(params.params.hostCapabilities.assertActive)
+          .assertLegacyCurrent,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,

@@ -11,7 +11,8 @@ import {
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
-import "../../components/app-sidebar.ts";
+import { flush } from "../solid-settle.ts";
+import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 
@@ -408,6 +409,7 @@ describe("AppSidebar viewer presence", () => {
     expect(row.dataset.presenceActivity).toBe("active");
     provider.remove();
     await Promise.resolve();
+    flush();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -531,7 +533,7 @@ describe("AppSidebar viewer presence", () => {
     expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(5);
     expect(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections")).toBe(
-      JSON.stringify([]),
+      JSON.stringify(["online"]),
     );
     await selectSidebarView(sidebar, "sessions");
     expect(sidebar.querySelector(".sidebar-online")).toBeNull();

@@ -25,6 +25,7 @@ export type DraftRepositoryState =
   // Selected GitHub projects offer isolation before checkout exists. Local first
   // turns prepare after admission; remote placement clones on its selected runner.
   | { kind: "pending-clone"; cloneUrl: string }
+  | { kind: "pending-project"; projectId: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
@@ -48,6 +49,7 @@ export type DraftEnvironment = {
   status: EnvironmentStatus;
   platform?: string;
   sessionHost?: boolean;
+  workerHost?: { deviceFolders: boolean };
   workerSlots?: WorkerSlotSummary;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
@@ -216,13 +218,29 @@ export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): Work
   return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
 }
 
-/** Providers that omit a marked default still present their first catalog choice as the default. */
+/** Preserve configured defaults; prefer smaller reported hardware only when unambiguous. */
 export function defaultCloudMachine(
   profile: DraftCloudProfile,
   os = defaultCloudOs(profile),
 ): WorkerMachineOption | undefined {
   const machines = cloudMachinesForOs(profile, os);
-  return machines.find((machine) => machine.default) ?? machines[0];
+  return (
+    machines.find((machine) => machine.default) ??
+    // Class names do not rank capacity across providers or operating systems.
+    // Unknown dimensions or CPU/RAM tradeoffs retain the provider's catalog order.
+    machines.find((machine) =>
+      machines.every(
+        (other) =>
+          machine.cpu !== undefined &&
+          machine.memoryGb !== undefined &&
+          other.cpu !== undefined &&
+          other.memoryGb !== undefined &&
+          machine.cpu <= other.cpu &&
+          machine.memoryGb <= other.memoryGb,
+      ),
+    ) ??
+    machines[0]
+  );
 }
 
 const ENVIRONMENT_STATUSES: readonly EnvironmentStatus[] = [
@@ -293,6 +311,9 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
             ? { sessionHost: environment.sessionHost }
             : {}),
           ...(workerSlots ? { workerSlots } : {}),
+          ...(isRecord(environment.workerHost)
+            ? { workerHost: { deviceFolders: environment.workerHost.deviceFolders === true } }
+            : {}),
           ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
           ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
           ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),

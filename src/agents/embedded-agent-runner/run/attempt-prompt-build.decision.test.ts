@@ -20,6 +20,7 @@ import {
 } from "../../../plugins/runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -35,7 +36,6 @@ import {
   retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";

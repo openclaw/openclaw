@@ -709,19 +709,23 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
   );
 }
 
-defineSolidBridge<ImageLightboxProps>("openclaw-image-lightbox", ImageLightboxContent, {
-  properties: {
-    connectVideo: { default: undefined, attribute: false },
-    gallery: { default: undefined, attribute: false },
-    loadFullResolution: { default: undefined, attribute: false },
-    mediaKind: { default: "image" },
-    src: { default: "" },
-    originalSrc: { default: "" },
-    imageTitle: { default: "", attribute: false },
-    imageWidth: { default: undefined, attribute: false },
-    imageHeight: { default: undefined, attribute: false },
+export const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
+  "openclaw-image-lightbox",
+  ImageLightboxContent,
+  {
+    properties: {
+      connectVideo: { default: undefined, attribute: false },
+      gallery: { default: undefined, attribute: false },
+      loadFullResolution: { default: undefined, attribute: false },
+      mediaKind: { default: "image" },
+      src: { default: "" },
+      originalSrc: { default: "" },
+      imageTitle: { default: "", attribute: false },
+      imageWidth: { default: undefined, attribute: false },
+      imageHeight: { default: undefined, attribute: false },
+    },
   },
-});
+);
 
 declare global {
   interface HTMLElementTagNameMap {

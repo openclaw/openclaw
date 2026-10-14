@@ -5,6 +5,19 @@ import { en } from "./en.ts";
 const enNewSessionSetup = {
   newSession: {
     openClawWorker: "OpenClaw worker",
+    deviceFolder: "Existing folder on device",
+    deviceFolderDescription:
+      "Work in place on the selected device. Files are not copied to the Gateway.",
+    deviceFolderPath: "Absolute path on device",
+    deviceFolderPathPlaceholder: "/path/to/existing/folder",
+    deviceFolderUnavailable:
+      "This device cannot use an existing folder right now. Check its connection and session-hosting support, or choose another workspace.",
+    deviceFolderRuntimeUnsupported:
+      "Existing device folders require a worker-turn runtime. Choose a compatible model/runtime or another workspace; your folder path is kept.",
+    deviceFolderPathRequired:
+      "Enter an absolute path to an existing folder on the selected device.",
+    deviceFolderAttachmentsUnsupported:
+      "Existing device folders cannot receive attachments. Remove them, or choose another workspace.",
     requiredWorkerHint: "Say what you’d like to work on.",
     requiredWorker: "Worker",
     requiredWorkerUnavailable:
@@ -210,6 +223,7 @@ const enNewSessionSetup = {
     noSessionHosts:
       "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
     deviceUnavailable: "Device unavailable. Reconnect it and try again.",
+    environmentUnavailable: "Unavailable",
     sessionHostingDisabled:
       "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
     deviceCapacityUnavailable:

@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
-import {
-  openOpenClawStateDatabase,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -327,17 +324,14 @@ describe("matrix credentials storage", () => {
       revokedAt: "2026-01-01",
     });
     expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
-    store.register(
-      "account:default",
-      {
-        accountId: "default",
-        homeserver: "https://matrix.example.org",
-        userId: "@fixture:example.org",
-        accessToken: "synthetic-fixture-token",
-        createdAt: "2026-01-01",
-      },
-      { ttlMs: 60_000 },
-    );
+    const credentials = {
+      accountId: "default",
+      homeserver: "https://matrix.example.org",
+      userId: "@fixture:example.org",
+      accessToken: "synthetic-fixture-token",
+      createdAt: "2026-01-01",
+    };
+    store.register("account:default", credentials, { ttlMs: 60_000 });
     expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(true);
     expect(
       await hasAnyMatrixAuthAsync({
@@ -345,10 +339,13 @@ describe("matrix credentials storage", () => {
         env: { OPENCLAW_STATE_DIR: path.join(stateDir, "other") },
       }),
     ).toBe(false);
-    const { db } = openOpenClawStateDatabase({ env });
-    db.prepare(
-      "UPDATE plugin_state_entries SET expires_at = 1 WHERE plugin_id = 'matrix' AND namespace = 'credentials' AND entry_key = 'account:default'",
-    ).run();
+    // Commit an expired record through the owner so its receipt invalidates the warm list.
+    const now = vi.spyOn(Date, "now").mockReturnValue(1);
+    try {
+      store.register("account:default", credentials, { ttlMs: 60_000 });
+    } finally {
+      now.mockRestore();
+    }
     expect(await hasAnyMatrixAuthAsync({ cfg: {}, env })).toBe(false);
   });
 

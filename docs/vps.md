@@ -96,7 +96,7 @@ EOF
 source ~/.bashrc
 ```
 
-- `NODE_COMPILE_CACHE` improves repeated command startup times; the first run warms the cache.
+- `NODE_COMPILE_CACHE` improves repeated command and worker startup times; the first run warms the cache. The Gateway main thread stays uncached to avoid synchronous cache writes delaying startup or shutdown; see the [Gateway cache policy](/gateway#module-compile-cache).
 - `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, which avoids extra process handoffs and keeps PID tracking simple on small hosts.
 - For Raspberry Pi specifics, see [Raspberry Pi](/install/raspberry-pi).
 

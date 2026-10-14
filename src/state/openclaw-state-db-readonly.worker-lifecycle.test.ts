@@ -187,7 +187,8 @@ it("retains ordered cleanup for canonical retry after a read failure", async () 
     "snapshot cleanup failed",
   );
   expect(mock.close).toHaveBeenCalledTimes(2);
-  expect(() => captureOpenClawStateDatabaseReadAdmission(options.path)).toThrow(/closed/);
+  // Failed drainage leaves the database live, so reads resume until the retry seals again.
+  captureOpenClawStateDatabaseReadAdmission(options.path).assertCurrent();
   await expect(closeOpenClawStateDatabaseByPathAsync(options.path)).resolves.toBe(false);
   expect(mock.close).toHaveBeenCalledTimes(2);
   expect(mock.cleanup).toHaveBeenCalledTimes(2);

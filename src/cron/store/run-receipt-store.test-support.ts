@@ -63,7 +63,6 @@ export function claimCronRunReceiptForTest(storePath: string, job: CronJob, star
     claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId!,
     }),
   );
 }
@@ -71,32 +70,37 @@ export function claimCronRunReceiptForTest(storePath: string, job: CronJob, star
 export function claimCronRunReceiptInDatabaseForTest(params: {
   database: Parameters<typeof claimCronRunReceiptInDatabase>[0]["database"];
   prepared: ReturnType<typeof prepareCronRunReceiptClaim>;
-  resolveAgentId: (job: CronJob) => string;
 }) {
   const { handle: preparedHandle } = params.prepared;
   const handle = claimCronRunReceiptInDatabase({
     database: params.database,
     handle: preparedHandle,
-    job: loadedCronStoreFromRows(
-      loadCronRows(params.database, preparedHandle.storeKey, new Set([preparedHandle.jobId])),
-    ).store.jobs[0],
     requestRunId: params.prepared.requestRunId,
-    resolveAgentId: params.resolveAgentId,
-    receiptSchema: prepareCronRunReceiptWriteSchema(params.database),
   });
+  if (!handle) {
+    throw new Error("Fixture cron receipt is already claimed");
+  }
   return handle;
 }
 
 export async function finishCronRunReceiptAsync(
-  params: Omit<Parameters<typeof finishCronRunReceiptInDatabase>[0], "database" | "receiptSchema">,
+  params: Omit<
+    Parameters<typeof finishCronRunReceiptInDatabase>[0],
+    "database" | "receiptSchema" | "pendingReceiptId"
+  >,
 ): Promise<void> {
-  runOpenClawStateWriteTransaction(({ db }) =>
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const job = loadedCronStoreFromRows(
+      loadCronRows(db, params.handle.storeKey, new Set([params.handle.jobId])),
+    ).store.jobs[0];
     finishCronRunReceiptInDatabase({
       database: db,
       receiptSchema: prepareCronRunReceiptWriteSchema(db),
+      pendingReceiptId:
+        job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId,
       ...params,
-    }),
-  );
+    });
+  });
 }
 
 export function prepareCronRunReceiptClaim(params: {

@@ -16,6 +16,7 @@ import {
   loadTranscriptEvents,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   markMcpLoopbackRequestFinished,
@@ -40,6 +41,7 @@ import type {
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -65,6 +67,7 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
+import { persistCliSessionBindingResult } from "./cli-session-store.js";
 import * as cliTranscript from "./command/attempt-execution.helpers.js";
 import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -331,7 +334,12 @@ async function warmedPluginContext(
   try {
     await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
     context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
-    return { context, close, attempts: () => attempts };
+    // The warmup is a separate turn and must not consume this run's recovery budget.
+    return {
+      context: { ...context, ...captureCliRunStartTime() },
+      close,
+      attempts: () => attempts,
+    };
   } catch (error) {
     close();
     throw error;
@@ -939,6 +947,97 @@ describe("runCliAgent reliability", () => {
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["writer claim", "caller authority", "cleanup"])(
+    "keeps a committed final reply successful after losing %s",
+    async (failure) => {
+      supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "completed task" }));
+      const { dir, sessionTarget, storePath } = createSessionFixture();
+      const context = makeClaudePreparedContext({
+        sessionKey: sessionTarget.sessionKey,
+        runId: "run-committed-final",
+      });
+      context.authBindingFingerprint = "fixture-auth-binding";
+      context.preparedBackend.backend.command = process.execPath;
+      context.backendResolved.runtimeArtifact = {
+        kind: "bundled-package-tree",
+        packageName: "@fixture/cli-runner",
+        entrypoint: "command",
+        nativeExecutableNames: [path.basename(process.execPath)],
+      };
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "fixture",
+            config: context.preparedBackend.backend,
+            runtimeArtifact: context.backendResolved.runtimeArtifact,
+          },
+        ],
+      });
+      let committed = false;
+      const notifyAuthBinding = vi.fn();
+      const error =
+        failure === "writer claim"
+          ? new SessionTranscriptWriterClaimReboundError()
+          : new Error(`${failure} lost after commit`);
+      const unsubscribe = onInternalSessionTranscriptUpdate((event) => {
+        if (event.runId === context.params.runId && event.message) {
+          committed = true;
+        }
+      });
+      context.preparedBackend.backend.sessionMode = "none";
+      context.backendResolved.config = context.preparedBackend.backend;
+      context.params = {
+        ...context.params,
+        ...sessionParams(sessionTarget, dir),
+        storePath,
+        persistAssistantTranscript: true,
+        onSuccessfulAuthBinding: notifyAuthBinding,
+        assertCurrent: () => {
+          if (committed && failure !== "cleanup") {
+            throw error;
+          }
+        },
+      };
+      context.preparedBackend.cleanup = async () => {
+        expect(committed).toBe(true);
+        if (failure === "cleanup") {
+          throw error;
+        }
+      };
+      try {
+        const result = await runPreparedCliAgent(context);
+        expect(committed).toBe(true);
+        expect(result.payloads).toEqual([{ text: "completed task" }]);
+        expect(result.meta.error).toBeUndefined();
+        expect(notifyAuthBinding).toHaveBeenCalledTimes(failure === "cleanup" ? 1 : 0);
+        expect(result.meta.executionTrace?.attempts).toEqual([
+          expect.objectContaining({ result: "success" }),
+        ]);
+        const settled = await persistCliSessionBindingResult({
+          ...sessionTarget,
+          provider: "claude-cli",
+          result,
+          expectedSession: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+          assertSettlementCurrent: () => {
+            throw error;
+          },
+        });
+        expect(settled).toBe(result);
+        expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+        expect(await readTranscriptMessages(sessionTarget)).toMatchObject([
+          { role: "assistant", stopReason: "stop" },
+        ]);
+        expect(await loadTranscriptEvents(sessionTarget)).not.toContainEqual(
+          expect.objectContaining({ customType: "run-failed-before-reply" }),
+        );
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("surfaces prepared backend cleanup failures when nothing was delivered", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "ok" }));

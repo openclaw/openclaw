@@ -1,6 +1,6 @@
 import "../../../styles/chat/session-rail.css";
 import "./chat-comment-controller.ts";
-import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show, onCleanup, untrack } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
@@ -119,12 +119,19 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
   // The pane consumes its focus intent only when it publishes a new request.
   const focusRequest = createMemo(() => props.focusRequest);
   createEffect(focusRequest, (request) => {
-    const requested = request?.();
-    if (untrack(() => props.presented) && requested) {
-      region
-        .querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")
-        ?.focus({ preventScroll: true });
+    if (!request) {
+      return;
     }
+    // The full-width mobile panel must commit before its input can take focus.
+    // Consume the pane's live intent after that commit, not while still hidden.
+    const frame = requestAnimationFrame(() => {
+      if (untrack(() => props.presented) && request()) {
+        region
+          .querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")
+          ?.focus({ preventScroll: true });
+      }
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
   });
   const scrollKey = createMemo(() =>
     JSON.stringify(props.companion.turns.map((turn) => [turn.question, turn.status])),

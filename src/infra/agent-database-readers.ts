@@ -60,10 +60,6 @@ export function isDeletedAgentDatabasePath(pathname: string): boolean {
   return readers.deleted.has(path.resolve(pathname));
 }
 
-export function hasDeletedAgentDatabases(): boolean {
-  return readers.deleted.size > 0;
-}
-
 /** Task admission carries the parent owner's current fences into every worker generation. */
 export function captureDeletedAgentDatabaseFences(): [string, string][] {
   return [...readers.deleted];

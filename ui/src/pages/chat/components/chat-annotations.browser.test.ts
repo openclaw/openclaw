@@ -60,13 +60,12 @@ async function openComments(trigger: HTMLElement) {
   const tooltip = container.querySelector("openclaw-tooltip")!;
   await tooltip.updateComplete;
   const shown = new Promise<Event>((resolve) => {
-    tooltip.addEventListener("wa-after-show", resolve, { once: true });
+    tooltip.addEventListener("overlay-after-show", resolve, { once: true });
   });
   trigger.focus();
   await shown;
-  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
-  await expect.poll(() => popup.open).toBe(true);
-  const body = popup.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
+  const body = tooltip.shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!;
+  await expect.poll(() => body.matches(":popover-open")).toBe(true);
   await expect.poll(() => body.getBoundingClientRect().height).toBeGreaterThan(0);
   return { tooltip, body };
 }
@@ -194,9 +193,8 @@ describe("annotation chip and hovercard", () => {
           expect(comment.getBoundingClientRect().height).toBeLessThanOrEqual(
             Number.parseFloat(getComputedStyle(comment).lineHeight) * 4 + 1,
           );
-          const nativeTooltip = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
           const hidden = new Promise<Event>((resolve) => {
-            nativeTooltip.addEventListener("wa-after-hide", resolve, { once: true });
+            tooltip.addEventListener("overlay-after-hide", resolve, { once: true });
           });
           await userEvent.keyboard("{Escape}");
           await hidden;

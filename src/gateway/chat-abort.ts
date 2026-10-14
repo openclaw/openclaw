@@ -53,6 +53,7 @@ export { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.
 
 export type RestartRecoveryCandidate = {
   runId: string;
+  sourceRunId?: string;
   lifecycleGeneration: string;
   sessionKey: string;
   sessionId: string;

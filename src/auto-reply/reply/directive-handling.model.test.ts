@@ -80,6 +80,9 @@ vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   return {
     ensureAuthProfileStore: readAuthProfileStoreForTest,
     ensureAuthProfileStoreAsync: async () => readAuthProfileStoreForTest(),
+    prepareAuthProfileProvider: async ({ profileId }: { profileId: string }) => ({
+      provider: authProfilesStoreMock.profiles[profileId]?.provider,
+    }),
     findPersistedAuthProfileCredentialAsync: async ({ profileId }: { profileId: string }) =>
       authProfilesStoreMock.profiles[profileId],
     ensureAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
@@ -217,8 +220,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   };
 });
 
+// mock-isolation: Exercise model directives without sandbox backend or session storage setup.
 vi.mock("../../agents/sandbox.js", () => ({
-  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+  resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
 vi.mock("../../config/sessions.js", () => ({

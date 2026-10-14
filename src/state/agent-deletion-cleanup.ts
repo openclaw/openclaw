@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { AgentDeletionCleanupWorkerAuthority } from "./agent-deletion-cleanup.types.js";
 import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.js";

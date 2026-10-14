@@ -19,6 +19,7 @@ import {
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../src/agents/agent-bundle-mcp-manager-api.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../src/agents/auth-profiles/path-resolve.native.js";
 import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
@@ -187,6 +188,7 @@ async function withFixture(
   } = {},
 ) {
   await withState(async (state) => {
+    prepareSharedAuthStoreOwnershipForNative(state.env);
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -1811,17 +1813,20 @@ describe("canonical descendant lifecycle through real owners", () => {
     ["ignored cut", /did not apply the exact beforeTurnId cut/],
     ["missing model", /model/i],
     ["null model", /model/i],
-    ["model changed during preparation", /canonical Codex source changed/],
-    ["provider changed during preparation", /canonical Codex source changed/],
+    ["model changed during preparation", /The Codex source thread changed during initialization/],
+    [
+      "provider changed during preparation",
+      /The Codex source thread changed during initialization/,
+    ],
     ["request authorization changed after native fork", /request authorization changed/],
     ["sandbox policy changed during initialization", /requires a sandbox/],
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
     ["child catalog", /did not preserve the actual native tool catalog/],
-    ["child model", /did not preserve the exact canonical source and selected native model/],
-    ["child thread model", /did not preserve the exact canonical source and selected native model/],
+    ["child model", /did not preserve the exact source session and selected native model/],
+    ["child thread model", /did not preserve the exact source session and selected native model/],
     [
       "null child thread model",
-      /did not preserve the exact canonical source and selected native model/,
+      /did not preserve the exact source session and selected native model/,
     ],
     ["child lineage", /unsafe native thread identity/],
     ["unsubscribe failure", /unsubscribe|subscription|guarded rollback/i],

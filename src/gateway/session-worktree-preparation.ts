@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -28,10 +27,7 @@ import type {
   WorktreeSourceStage,
 } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  captureSessionEntryMetadataRead,
-  captureSessionEntrySourceAssertion,
-} from "../config/sessions/session-entry-source-authority.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -58,7 +54,7 @@ import { invalidSessionRequest } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 
 /** Resolve registered sources identically for dashboard and native child sessions. */
 export async function resolveSessionProjectRoot(
@@ -117,7 +113,7 @@ async function resolveSpawnParentWorktreeSource(
 }
 
 async function prepareSpawnParentWorktreeSource(
-  parent: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  parent: GatewaySessionEntryRead,
   agentId: string,
   options: { signal?: AbortSignal },
 ): Promise<SpawnParentWorktreeSource | undefined> {
@@ -140,27 +136,17 @@ async function prepareSpawnParentWorktreeSource(
   };
   const scope = { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath };
   const assertRouting = captureSessionMutationRouting(parent.cfg, refuse, [scope]);
-  const metadata = captureSessionEntryMetadataRead(scope);
+  const assertHostCurrent = () => {
+    options.signal?.throwIfAborted();
+    assertRouting(getRuntimeConfig());
+  };
   const parentSource = captureSessionEntrySourceAssertion({
     scope,
     readSource: parent.capturedReadSource,
     expected: parent.entry,
     fields,
-    assertCurrent: () => {
-      const current = metadata
-        ? metadata.readCurrent()
-        : loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId }).entry;
-      if (
-        !current ||
-        fields.some((field) => !isDeepStrictEqual(current?.[field], parent.entry?.[field]))
-      ) {
-        refuse();
-      }
-    },
-    assertHostCurrent: () => {
-      options.signal?.throwIfAborted();
-      assertRouting(getRuntimeConfig());
-    },
+    assertCurrent: assertHostCurrent,
+    assertHostCurrent,
     refuse,
   });
   if (!parent.entry.worktree) {
@@ -316,6 +302,7 @@ export async function prepareSessionWorktree(params: {
       cfg: params.cfg,
       agentId: target.agentId,
       sessionKey: target.key,
+      preparedSessionEntry: target.entry ?? null,
     }).sandboxed;
   let withSource = params.withSource;
   let withRollback = params.withRollback;

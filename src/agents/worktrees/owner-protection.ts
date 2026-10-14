@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { scheduler } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { readResolvedSessionEntriesInWorker } from "../../config/sessions/session-accessor.entry.js";
-import type { ResolvedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
+import { readResolvedSessionStoreTargetsInWorker } from "../../config/sessions/session-accessor.entry-read-runtime.js";
+import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -34,14 +34,14 @@ export function createManagedWorktreeOwnerPolicy(
 > {
   type PlacementFacts = {
     context: SessionWorkerPlacementContext;
-    current: () => readonly WorkerSessionPlacementRecord[];
+    current: (target: ResolvedSessionEntryStoreTarget) => Iterable<WorkerSessionPlacementRecord>;
   };
-  let preparedOwners = new Map<string, ResolvedSessionEntryAccessTarget>();
+  let preparedOwners = new Map<string, ResolvedSessionEntryStoreTarget>();
   const cleanupOwner = new AsyncLocalStorage<{
     ownerId: string;
     scope: string;
     entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">;
-    target: ResolvedSessionEntryAccessTarget;
+    target: ResolvedSessionEntryStoreTarget;
     hasChanged: () => boolean;
     lifecycleHeld?: boolean;
     placements: PlacementFacts;
@@ -50,7 +50,7 @@ export function createManagedWorktreeOwnerPolicy(
     ownerKind: ManagedWorktreeOwnerKind,
     ownerId: string,
     prepared?: {
-      target: ResolvedSessionEntryAccessTarget;
+      target: ResolvedSessionEntryStoreTarget;
       placements: PlacementFacts;
     },
   ) => {
@@ -94,7 +94,7 @@ export function createManagedWorktreeOwnerPolicy(
         return "active";
       }
       // Missing session metadata cannot erase a durable remote worker's ownership.
-      for (const placement of placements.current()) {
+      for (const placement of placements.current(target)) {
         if (
           placement.sessionKey !== target.canonicalKey &&
           placement.sessionId !== entry?.sessionId
@@ -145,12 +145,33 @@ export function createManagedWorktreeOwnerPolicy(
           throw new Error("Worker placement census is unavailable");
         }
         const [targets, placements] = await Promise.all([
-          readResolvedSessionEntriesInWorker({ cfg, sessionKeys: ownerIds }, "worktree"),
+          readResolvedSessionStoreTargetsInWorker({ cfg, sessionKeys: ownerIds }, "worktree"),
           context.workerSessionPlacementService.listAsync(),
         ]);
         preparedOwners = targets;
+        const placementsByKey = new Map<string, WorkerSessionPlacementRecord[]>();
+        const placementsById = new Map<string, WorkerSessionPlacementRecord>();
+        for (const placement of placements) {
+          const matches = placementsByKey.get(placement.sessionKey);
+          if (matches) {
+            matches.push(placement);
+          } else {
+            placementsByKey.set(placement.sessionKey, [placement]);
+          }
+          placementsById.set(placement.sessionId, placement);
+        }
         const prepared = {
-          placements: { context, current: () => placements },
+          placements: {
+            context,
+            // Index census records, not safety decisions: environment authority stays live.
+            *current(target: ResolvedSessionEntryStoreTarget) {
+              yield* placementsByKey.get(target.canonicalKey) ?? [];
+              const placement = placementsById.get(target.entry?.sessionId ?? "");
+              if (placement && placement.sessionKey !== target.canonicalKey) {
+                yield placement;
+              }
+            },
+          },
         };
         for (const [index, id] of ownerIds.entries()) {
           if (index % 32 === 0) {
@@ -188,7 +209,7 @@ export function createManagedWorktreeOwnerPolicy(
       });
       try {
         target = (
-          await readResolvedSessionEntriesInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")
+          await readResolvedSessionStoreTargetsInWorker({ cfg, sessionKeys: [ownerId] }, "worktree")
         ).get(ownerId);
         signal?.throwIfAborted();
         if (!target) {

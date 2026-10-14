@@ -12,16 +12,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  createSessionEntryWithTranscript,
-  persistSessionTranscriptTurn,
-} from "../config/sessions/session-accessor.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -29,8 +23,15 @@ import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { onSessionCostUsageUpdated } from "./session-cost-usage-events.js";
+import {
+  partitionUsageCostRollup,
+  decodeUsageCostPartition,
+  USAGE_COST_PARTITION_SCOPE,
+} from "./session-cost-usage-partitions.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
+import { decodeUsageCostRollup } from "./session-cost-usage-rollup-codec.js";
+import { appendSessionUsageRollupContribution } from "./session-cost-usage-rollup.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   loadCostUsageSummaryFromCache,
@@ -99,6 +100,134 @@ function usageLine(id: string): string {
     },
   })}\n`;
 }
+
+it("refreshes one checkpoint with its partitions after an in-process replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-partition-replacement";
+    const sessionFile = state.path("partition-replacement.jsonl");
+    const september = usageLine("september");
+    const october = usageLine("october").replace("2026-09-18", "2026-10-18");
+    await fs.writeFile(sessionFile, september + october);
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    const row = readSessionCostUsageRollupRows(agentId)[0]!;
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    const body = db
+      .prepare("SELECT blob FROM cache_entries WHERE scope = ? AND key = ?")
+      .get("session-cost-usage-rollup-v3", sessionFile);
+    if (!(body?.blob instanceof Uint8Array)) {
+      throw new Error("Expected stored usage body");
+    }
+    const envelope: unknown = JSON.parse(row.valueJson);
+    if (!isRecord(envelope) || typeof envelope.pricingFingerprint !== "string") {
+      throw new Error("Expected stored usage pricing fingerprint");
+    }
+    const previous = decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob);
+    if (!previous) {
+      throw new Error("Expected stored usage checkpoint");
+    }
+    for (const stored of db
+      .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ?")
+      .all(USAGE_COST_PARTITION_SCOPE)) {
+      if (typeof stored.value_json !== "string" || !(stored.blob instanceof Uint8Array)) {
+        throw new Error("Expected stored usage partition");
+      }
+      const partition = decodeUsageCostPartition(stored.value_json, stored.blob)!;
+      Object.assign(previous.rollup.buckets, partition.buckets);
+    }
+    appendSessionUsageRollupContribution(previous.rollup, {
+      timestamp: Date.UTC(2026, 8, 19),
+      role: "assistant",
+      model: "test",
+      provider: "test",
+      toolNames: [],
+      toolResultCounts: { total: 0, errors: 0 },
+      usageTotals: {
+        ...previous.rollup.untimestamped.totals,
+        input: 1_000,
+        totalTokens: 1_000,
+      },
+    });
+    const replacement = partitionUsageCostRollup({
+      ...previous,
+      scannedAt: row.updatedAt + 1,
+    });
+    // The checkpoint body is unchanged; only the exact metadata match rejects these partitions.
+    expect(
+      decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, replacement.blob),
+    ).toBeDefined();
+    await fs.appendFile(sessionFile, october.replace("october", "october-next"));
+
+    const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
+    let activeLock: ReturnType<typeof prepareLock> | undefined;
+    const locks = vi
+      .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
+      .mockImplementation((...args) => {
+        const lock = prepareLock(...args);
+        if (args[0] === agentId) {
+          activeLock = lock;
+        }
+        return lock;
+      });
+    let replaced = false;
+    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
+    const run = WorkerTaskPool.prototype.run;
+    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
+      this: WorkerTaskPool<unknown, unknown>,
+      input: WorkerTaskInput<unknown>,
+      options: WorkerTaskOptions<unknown>,
+    ) {
+      const onRequest = options.onRequest;
+      if (!onRequest) {
+        return run.call(this, input, options);
+      }
+      return run.call(this, input, {
+        ...options,
+        onRequest: async (value, context) => {
+          if (!replaced && isRecord(value) && value.kind === "refresh-session") {
+            replaced = true;
+            expect(
+              await activeLock!.writeRollup({
+                rollupId: sessionFile,
+                valueJson: new TextEncoder().encode(replacement.valueJson),
+                blob: replacement.blob,
+                partitions: replacement.partitions,
+                updatedAt: row.updatedAt + 1,
+              }),
+            ).toBe(true);
+          }
+          return onRequest(value, context);
+        },
+      });
+    });
+    try {
+      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    } finally {
+      observer.mockRestore();
+      locks.mockRestore();
+    }
+    expect(replaced).toBe(true);
+    await fs.appendFile(sessionFile, usageLine("november").replace("2026-09-18", "2026-11-18"));
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    for (const [month, totalTokens] of [
+      [8, 10],
+      [9, 20],
+      [10, 10],
+    ] as const) {
+      const result = await loadSessionCostSummariesFromCache({
+        config,
+        agentId,
+        sessions: [{ sessionFile }],
+        requestRefresh: false,
+        startMs: Date.UTC(2026, month, 1),
+        endMs: Date.UTC(2026, month + 1, 1) - 1,
+      });
+      expect(result).toMatchObject({
+        cacheStatus: { status: "fresh" },
+        summaries: [{ totalTokens }],
+      });
+    }
+  });
+});
 
 it("rebuilds corrupt report bodies only for the exact rejected metadata snapshot", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -332,122 +461,48 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
   });
 });
 
-it("retains the process-held incognito cache without creating its sentinel file", async () => {
+it("leaves an empty usage store absent until a transcript needs a rollup", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "usage-incognito";
-    const databasePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
-    const sessionId = "incognito-usage";
-    const scope = {
-      agentId,
-      sessionKey: `agent:${agentId}:dashboard:incognito-usage`,
-      storePath: databasePath,
-      env: state.env,
-    };
-    await createSessionEntryWithTranscript(
-      scope,
-      () => ({ ok: true, entry: { incognito: true as const, sessionId, updatedAt: 1 } }),
-      { cwd: state.workspaceDir },
-    );
-    await persistSessionTranscriptTurn(
-      { ...scope, sessionId },
-      {
-        config,
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: "incognito usage",
-              timestamp: Date.parse("2026-09-18T00:00:00Z"),
-              usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-            },
-          },
-        ],
-        touchSessionEntry: false,
-      },
-    );
-    const sessionFile = formatSqliteSessionFileMarker({
-      agentId,
-      sessionId,
-      storePath: databasePath,
-    });
-    const prepared = prepareUsageCostWorker({
-      config,
-      agentId,
-      databasePath,
-      storePath: databasePath,
-      sessionFiles: [sessionFile],
-    });
-    const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-      undefined,
-      prepared.agentDir,
-    );
-    expect(
-      await runUsageCostWorker(prepared, {
-        kind: "refresh",
-        sessionFiles: [sessionFile],
-      }),
-    ).toMatchObject({ kind: "refresh" });
-    expect(
-      await runUsageCostWorker(prepared, {
-        kind: "sessions",
-        pricingFingerprint,
-        sessions: [{ sessionId, sessionFile }],
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-      }),
-    ).toMatchObject({
-      kind: "sessions",
-      summaries: [{ sessionId, sessionFile, totalTokens: 10, totalCost: 1 }],
-      cacheStatus: { status: "fresh", cachedFiles: 1 },
-    });
-    const { db } = openOpenClawAgentDatabase({ agentId, path: databasePath, env: state.env });
-    for (const changes of [1, Number.POSITIVE_INFINITY]) {
-      let changed = 0;
-      // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-      const run = WorkerTaskPool.prototype.run;
-      const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-        this: WorkerTaskPool<unknown, unknown>,
-        input: WorkerTaskInput<unknown>,
-        options: WorkerTaskOptions<unknown>,
-      ) {
-        const onRequest = options.onRequest;
-        if (!onRequest) {
-          return run.call(this, input, options);
-        }
-        return run.call(this, input, {
-          ...options,
-          onRequest: (value, context) => {
-            if (changed < changes && isRecord(value) && value.kind === "memory-cache-body") {
-              db.prepare(`UPDATE cache_entries SET
-                value_json = json_set(value_json, '$.scannedAt', json_extract(value_json, '$.scannedAt') + 1),
-                updated_at = updated_at + 1 WHERE scope = 'session-cost-usage-rollup-v3'`).run();
-              changed++;
-            }
-            return onRequest(value, context);
-          },
-        });
-      });
-      try {
-        const reading = runUsageCostWorker(prepared, {
-          kind: "sessions",
-          pricingFingerprint,
-          sessions: [{ sessionId, sessionFile }],
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        });
-        if (changes === 1) {
-          await expect(reading).resolves.toMatchObject({
-            summaries: [{ totalTokens: 10, totalCost: 1 }],
-            cacheStatus: { status: "fresh", cachedFiles: 1 },
-          });
-          expect(changed).toBe(1);
-        } else {
-          await expect(reading).rejects.toMatchObject({ code: "unavailable" });
-          expect(changed).toBe(3);
-        }
-      } finally {
-        observer.mockRestore();
-      }
-    }
+    const agentId = "usage-empty-refresh";
+    const { databasePath } = prepareUsageCostWorker({ config, agentId }).location;
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const sessionsDir = state.sessionsDir(agentId);
+    const sessionFile = path.join(sessionsDir, "recorded.jsonl");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(sessionFile, usageLine("recorded"));
+    expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
+    expect(
+      await loadSessionCostSummariesFromCache({
+        config,
+        agentId,
+        sessions: [{ sessionFile }],
+        requestRefresh: false,
+      }),
+    ).toMatchObject({ summaries: [{ totalTokens: 10 }], cacheStatus: { status: "fresh" } });
+  });
+  // A cache-miss worker retains no database; runtime shutdown owns its retirement.
+  await closeStateDatabaseForTest();
+});
+
+it("prunes legacy-only usage caches during a full refresh", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const agentId = "usage-legacy-only-refresh";
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    const insert = db.prepare(
+      "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, '{}', NULL, NULL, 1)",
+    );
+    insert.run("session-cost-usage", "cache");
+    insert.run("session-cost-usage-rollup-v1", "retired-v1");
+    insert.run("session-cost-usage-rollup-v2", "retired-v2");
+    insert.run("other", "keep");
+
+    expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
+    expect(db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all()).toEqual([
+      { scope: "other", key: "keep" },
+    ]);
   });
 });
 

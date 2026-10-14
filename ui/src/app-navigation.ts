@@ -4,7 +4,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
-import type { IconName } from "./components/icons.ts";
+import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;

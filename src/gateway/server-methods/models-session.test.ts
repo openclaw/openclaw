@@ -166,6 +166,7 @@ function fixture() {
 
 const isolated = {
   layout: "state-only",
+  prepareProfileCatalog: true,
   prefix: "direct-session-catalog-",
   env: WITHOUT_OPENAI_ENV_AUTH,
 } as const;
@@ -212,7 +213,6 @@ describe("direct session model catalogs", () => {
           preparedAcpMeta: null,
           preparedRepositoryWorkspace: null,
           activeModel: null,
-          skipTranscriptUsageFallback: true,
         });
         expect(
           buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true }),

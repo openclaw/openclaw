@@ -35,6 +35,12 @@ type FeishuStreamingCloseResult = {
   visibleReplySent: boolean;
   content?: string;
   messageId?: string;
+  /**
+   * False when the card rejected the final text (for example after CardKit closed
+   * streaming mode). Earlier accepted preview text may still be visible, but it is
+   * not the completed answer, so the dispatcher must deliver that answer another way.
+   */
+  finalTextAccepted?: boolean;
 };
 
 /** Provider finalization failed after a streaming card may already be visible. */
@@ -563,6 +569,7 @@ export class FeishuStreamingSession {
       visibleReplySent: visibleContentSent,
       ...(visibleContentSent ? { content: finalState.sentText } : {}),
       ...(finalState.messageId ? { messageId: finalState.messageId } : {}),
+      ...(finalWriteError === undefined ? {} : { finalTextAccepted: false }),
     };
     if (finalWriteError !== undefined || closeError !== undefined) {
       const cause =

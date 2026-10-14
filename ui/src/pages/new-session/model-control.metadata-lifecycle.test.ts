@@ -91,7 +91,7 @@ describe("new-session model metadata lifecycle", () => {
   it("retires a consumed personal-account model before the next configured draft", async () => {
     const { context, control, neutral, connected, preview, draw, chooseAccount } =
       retainedAccountDraft();
-    Object.assign(context, { config: { current: { newSessionModelDefaults: "configured" } } });
+    Object.assign(context.config.current, { newSessionModelDefaults: "configured" });
     const alternate = {
       id: "alternate",
       name: "Alternate",
@@ -157,7 +157,7 @@ describe("new-session model metadata lifecycle", () => {
       chooseAccount,
       savePreference,
     } = retainedAccountDraft();
-    Object.assign(context, { config: { current: { newSessionModelDefaults: "configured" } } });
+    Object.assign(context.config.current, { newSessionModelDefaults: "configured" });
     const other = { id: "other", name: "Other provider", provider: "openai", available: true };
     neutral.models.push(other);
     connected.models.push(other);

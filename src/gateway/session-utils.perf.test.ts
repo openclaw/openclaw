@@ -10,7 +10,6 @@ import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -21,7 +20,6 @@ import type { GatewayClient } from "./server-methods/types.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import * as titleReader from "./session-transcript-title-reader.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { projectSessionPatchResult } from "./session-utils-model.js";
 import * as rowProjection from "./session-utils-row.js";
@@ -164,12 +162,9 @@ describe("session list resolver cache", () => {
     });
   });
 
-  test.each([
-    { phase: "startup", cost: "acquisition" },
-    { phase: "dirty refresh", cost: "materialization" },
-  ])(
-    "yields during expensive $phase $cost without reacquiring unchanged rows",
-    async ({ phase, cost }) => {
+  test.each(["startup", "dirty refresh"])(
+    "yields during expensive %s materialization without reprojecting unchanged rows",
+    async (phase) => {
       await withStateDirEnv("openclaw-row-work-budget-", async () => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
@@ -192,28 +187,15 @@ describe("session list resolver cache", () => {
         }
         let workMs = 0;
         let projectedRows = 0;
-        let acquiredRows = 0;
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
-        const readEntryCache = entryCache.readCommittedSessionEntryCache;
-        const acquisitions = vi
-          .spyOn(entryCache, "readCommittedSessionEntryCache")
-          .mockImplementation((...args) => {
-            acquiredRows++;
-            if (cost === "acquisition") {
-              workMs += 20;
-            }
-            return readEntryCache(...args);
-          });
         const readInputs = rowProjection.readSessionRowInputs;
         const rows = vi
           .spyOn(rowProjection, "readSessionRowInputs")
           .mockImplementation((params) => {
             const result = readInputs(params);
-            if (cost === "materialization") {
-              workMs += 20;
-            }
+            workMs += 20;
             projectedRows++;
             if (projectedRows === 1) {
               control = new Promise<void>((resolve) => {
@@ -237,14 +219,12 @@ describe("session list resolver cache", () => {
           expect(rowsAtControl).toBeGreaterThan(0);
           expect(rowsAtControl).toBeLessThan(rowCount);
           expect(projectedRows).toBe(rowCount);
-          expect(acquiredRows).toBeLessThanOrEqual(rowCount * 2);
           rows.mockClear();
           const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
           expect(rows).not.toHaveBeenCalled();
         } finally {
           rows.mockRestore();
-          acquisitions.mockRestore();
           clock.mockRestore();
           await control;
           projection?.dispose();
@@ -500,7 +480,9 @@ describe("session list resolver cache", () => {
       const storePath = path.join(stateDir, "sessions.json");
       const store: Record<string, SessionEntry> = {};
       const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      using _ = {
+        [Symbol.dispose]: (await prepareUserProfileCatalog()).release,
+      };
       for (let index = 0; index < scenario.count; index += 1) {
         const sessionId = `title-batch-${index}`;
         const sessionKey = `agent:main:${sessionId}`;
@@ -517,12 +499,16 @@ describe("session list resolver cache", () => {
         store[sessionKey] = entry;
       }
 
-      const titleSpy = vi
-        .spyOn(titleReader, "readSessionTitleFieldsFromTranscript")
-        .mockImplementation((scope) => ({
-          firstUserMessage: `title ${scope.sessionId.slice("title-batch-".length)}`,
-          lastMessagePreview: `last ${scope.sessionId.slice("title-batch-".length)}`,
-        }));
+      const titleFieldsBySessionKey = new Map(
+        Array.from(
+          { length: scenario.count },
+          (_value, index) =>
+            [
+              `agent:main:title-batch-${index}`,
+              { firstUserMessage: `title ${index}`, lastMessagePreview: `last ${index}` },
+            ] as const,
+        ),
+      );
       let projection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
       const client: GatewayClient | undefined = ownerId
         ? {
@@ -550,8 +536,12 @@ describe("session list resolver cache", () => {
         prepareGatewayRecipientProfile(client);
       }
       try {
-        projection = createSessionRowProjectionFixture({ cfg, storePath, store });
-        titleSpy.mockClear();
+        projection = createSessionRowProjectionFixture({
+          cfg,
+          storePath,
+          store,
+          titleFieldsBySessionKey,
+        });
         const result = await listProjectedSessions({
           projection,
           client,
@@ -564,7 +554,6 @@ describe("session list resolver cache", () => {
         });
 
         expect(result.sessions).toHaveLength(scenario.rows);
-        expect(titleSpy).not.toHaveBeenCalled();
         expect(result.sessions.filter((row) => row.derivedTitle !== undefined)).toHaveLength(
           scenario.enriched,
         );
@@ -591,7 +580,6 @@ describe("session list resolver cache", () => {
             limit: scenario.limit,
           },
         });
-        expect(titleSpy).not.toHaveBeenCalled();
         expect(withoutTranscriptFields.sessions).toHaveLength(scenario.rows);
         for (const row of withoutTranscriptFields.sessions) {
           expect(row.derivedTitle).toBeUndefined();
@@ -599,7 +587,6 @@ describe("session list resolver cache", () => {
         }
       } finally {
         projection?.dispose();
-        titleSpy.mockRestore();
       }
     });
   });

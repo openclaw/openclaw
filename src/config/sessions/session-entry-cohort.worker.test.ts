@@ -8,6 +8,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { loadAgentEntryReadOperations } from "../../state/openclaw-agent-execution-operations.js";
+import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
@@ -20,6 +21,121 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
+
+it("retains complete reply-initialization cohorts and observes parent edits, reparenting and creation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:reply-child";
+    const parentKey = "agent:main:reply-parent";
+    const replacementParentKey = "agent:main:reply-replacement-parent";
+    const missingParentKey = "agent:main:reply-missing-parent";
+    const scope = { agentId: "main", env, storePath: database.path, sessionKey };
+    const child = {
+      sessionId: "reply-child",
+      lifecycleRevision: "original",
+      updatedAt: 1,
+      parentSessionKey: parentKey,
+    };
+    replaceSessionEntrySync(scope, child);
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: parentKey },
+      { sessionId: "reply-parent", updatedAt: 1, label: "original parent" },
+    );
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: replacementParentKey },
+      { sessionId: "reply-replacement-parent", updatedAt: 1, label: "replacement parent" },
+    );
+    let entryRequests = 0;
+    const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+    const requests = vi
+      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
+      .mockImplementation((...args) => {
+        const execution = capture(...args);
+        return {
+          ...execution,
+          get fileIdentity() {
+            return execution.fileIdentity;
+          },
+          runExisting: (source, operation, options) =>
+            execution.runExisting(
+              source,
+              (worker) =>
+                operation({
+                  execute: (command, requestOptions) => {
+                    if (command.type === "session.entry.read") {
+                      entryRequests += 1;
+                    }
+                    return worker.execute(command, requestOptions);
+                  },
+                }),
+              options,
+            ),
+        };
+      });
+    const admission = await loadSessionEntryForAdmission(scope);
+    try {
+      const claim = admission.databaseClaim;
+      if (!("reader" in claim) || !claim.reader) {
+        throw new Error("Expected an admitted reply-initialization reader");
+      }
+      const reader = claim.reader;
+      const read = () =>
+        reader.withRead(
+          { sessionKeys: [sessionKey], replyInitializationSessionKey: sessionKey },
+          () => {},
+          (result, assertCurrent) => {
+            assertCurrent();
+            return result.entries;
+          },
+        );
+      const original = [
+        { sessionKey, entry: { parentSessionKey: parentKey } },
+        { sessionKey: parentKey, entry: { label: "original parent" } },
+      ];
+      expect(await read()).toMatchObject(original);
+      entryRequests = 0;
+      expect(await read()).toMatchObject(original);
+      expect(entryRequests).toBe(0);
+
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: parentKey },
+        { sessionId: "reply-parent", updatedAt: 2, label: "updated parent" },
+      );
+      expect(await read()).toMatchObject([
+        { sessionKey, entry: { parentSessionKey: parentKey } },
+        { sessionKey: parentKey, entry: { label: "updated parent" } },
+      ]);
+      replaceSessionEntrySync(scope, { ...child, parentSessionKey: replacementParentKey });
+      expect(await read()).toMatchObject([
+        { sessionKey, entry: { parentSessionKey: replacementParentKey } },
+        { sessionKey: replacementParentKey, entry: { label: "replacement parent" } },
+      ]);
+      entryRequests = 0;
+      expect((await read()).map((row) => row.sessionKey)).toEqual([
+        sessionKey,
+        replacementParentKey,
+      ]);
+      expect(entryRequests).toBe(0);
+
+      replaceSessionEntrySync(scope, { ...child, parentSessionKey: missingParentKey });
+      expect((await read()).map((row) => row.sessionKey)).toEqual([sessionKey]);
+      entryRequests = 0;
+      expect((await read()).map((row) => row.sessionKey)).toEqual([sessionKey]);
+      expect(entryRequests).toBe(0);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: missingParentKey },
+        { sessionId: "reply-created-parent", updatedAt: 3, label: "newly created parent" },
+      );
+      expect(await read()).toMatchObject([
+        { sessionKey, entry: { parentSessionKey: missingParentKey } },
+        { sessionKey: missingParentKey, entry: { label: "newly created parent" } },
+      ]);
+    } finally {
+      await admission.databaseClaim.release();
+      requests.mockRestore();
+    }
+  });
+});
 
 it.each([false, true])("reads complete cold entry facts with lifecycle=%s", async (lifecycle) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -64,9 +180,7 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
     try {
       const first = read();
       expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
-        lifecycle ? ["BEGIN", "COMMIT"] : [],
-      );
+      expect(transactions.mock.calls).toEqual([]);
       expect(first.entries).toMatchObject([
         {
           sessionKey,
@@ -92,11 +206,35 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
         ],
       });
       expect(first.source.databaseIdentity).toBe(first.databaseIdentity.identity);
+      expect(first.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 1, lastInteractionAt: undefined } : {},
+      );
       statements.counts.all = 0;
       expect(read([]).entries[0]?.entry.skillsSnapshot).toBeUndefined();
       expect(statements.counts.all).toBe(1);
+      statements.counts.all = 0;
+      const target = operations["session.entry.read"](
+        {
+          sessionKeys: [sessionKey],
+          runtimeTarget: { agentId: "main", sessionId: "fused", sessionKey },
+        },
+        context,
+      );
+      expect(target.runtimeTarget).toEqual({
+        agentId: "main",
+        sessionId: "fused",
+        sessionKey,
+        storePath: database.path,
+      });
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls).toEqual([]);
       recordSessionParticipant(scope, { ...contribution, promptedAt: 4 });
       removeSessionMember(scope, "member");
+      replaceSessionEntrySync(scope, {
+        sessionId: "fused",
+        updatedAt: 5,
+        sessionStartedAt: 5,
+      });
       statements.counts.all = 0;
       transactions.mockClear();
       const next = read();
@@ -105,8 +243,9 @@ it.each([false, true])("reads complete cold entry facts with lifecycle=%s", asyn
         { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
       ]);
       expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
-        lifecycle ? ["BEGIN", "COMMIT"] : [],
+      expect(transactions.mock.calls).toEqual([]);
+      expect(next.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 5, lastInteractionAt: undefined } : {},
       );
       database.db
         .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")

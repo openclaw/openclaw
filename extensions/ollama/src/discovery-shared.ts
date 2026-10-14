@@ -67,7 +67,7 @@ export function readOllamaStringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function isOllamaApiKeyMarker(value: string): boolean {
+export function isOllamaApiKeyMarker(value: string | undefined): boolean {
   return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
 }
 

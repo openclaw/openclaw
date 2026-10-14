@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

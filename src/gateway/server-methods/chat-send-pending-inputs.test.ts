@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -25,8 +25,6 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readPendingInput } from "../../config/sessions/session-pending-input-operations.kernel.js";
-import type { PendingInputSnapshot } from "../../config/sessions/session-pending-input-operations.types.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
@@ -34,14 +32,12 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createMentionInbox } from "../mention-inbox.js";
 import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
@@ -53,6 +49,10 @@ import type { GatewayClient, RespondFn } from "./types.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
+const prepareProfileCatalog = useUserProfileCatalogForTest();
+beforeEach(async () => {
+  await prepareProfileCatalog();
+});
 
 describe("ordinary chat input admission", () => {
   async function createMentionFixture(
@@ -297,10 +297,10 @@ describe("ordinary chat input admission", () => {
     { id: "cli", mode: "cli", displayName: "CLI", storage: "durable" },
     { id: "openclaw-macos", mode: "ui", displayName: "macOS", storage: "durable" },
     { id: "gateway-client", mode: "backend", displayName: "Automation", storage: "durable" },
-    { id: "openclaw-control-ui", mode: "webchat", displayName: "Web", storage: "native-incognito" },
+    { id: "openclaw-control-ui", mode: "webchat", displayName: "Web", storage: "memory" },
   ] satisfies Array<
     Pick<GatewayClientInfo, "id" | "mode" | "displayName"> & {
-      storage: "durable" | "native-incognito";
+      storage: "durable" | "memory";
     }
   >)(
     "stages the approved $id $storage follow-up and its source before ACK without changing the active transcript",
@@ -322,7 +322,6 @@ describe("ordinary chat input admission", () => {
       let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
       let pendingAtAck: ReturnType<typeof readPending> | undefined;
       let pendingAtNotification: ReturnType<typeof readPending> | undefined;
-      let nativePendingAtAck: PendingInputSnapshot | undefined;
       fixture.context.getSessionEventSubscriberConnIds = () => new Set(["observer"]);
       vi.spyOn(fixture.context, "broadcastToConnIds").mockImplementation((event, payload) => {
         if (event === "sessions.changed" && isRecord(payload) && payload.reason === "send") {
@@ -331,28 +330,8 @@ describe("ordinary chat input admission", () => {
       });
       const respond = vi.fn<RespondFn>((ok) => {
         if (ok) {
-          transcriptAtAck = loadTranscriptEventsSync(scope);
+          transcriptAtAck = fixture.readTranscript();
           pendingAtAck = readPending();
-          if (storage === "native-incognito") {
-            const database = getOpenClawAgentDatabaseIfOpen({
-              agentId: scope.agentId,
-              path: scope.storePath,
-            });
-            if (!database) {
-              throw new Error("Native incognito input must remain in its existing owner");
-            }
-            const snapshot = readPendingInput(database, {
-              kind: "stage",
-              sessionKey: scope.sessionKey,
-              sessionId: scope.sessionId,
-              idempotencyKey: `${params.idempotencyKey}:user`,
-              trackCompletion: true,
-            });
-            if (snapshot.kind !== "stage") {
-              throw new Error("Native incognito ACK must retain its staged input");
-            }
-            nativePendingAtAck = snapshot;
-          }
         }
       });
       try {
@@ -369,22 +348,6 @@ describe("ordinary chat input admission", () => {
         );
         expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
         expect(transcriptAtAck).toEqual(activeTranscript);
-        if (storage === "native-incognito") {
-          expect(nativePendingAtAck).toMatchObject({
-            current: true,
-            existing: { state: "queued", run_id: params.idempotencyKey },
-          });
-          const accepted = nativePendingAtAck?.existing;
-          if (!accepted) {
-            throw new Error("Native incognito ACK omitted its pending input custody");
-          }
-          expect(JSON.parse(accepted.message_json)).toMatchObject({
-            role: "user",
-            content: approvedContent,
-            idempotencyKey: `${params.idempotencyKey}:user`,
-            __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
-          });
-        }
         expect(await pendingAtAck).toMatchObject({
           status: "fulfilled",
           value: {
@@ -729,6 +692,8 @@ describe("ordinary chat input admission", () => {
         await fixture.finishDispatch();
         await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
         const legacyMessage = structuredClone(message);
+        // Legacy receipts predate the admitted request identity.
+        delete legacyMessage["__openclaw"]?.chatRequestIdentity;
         if (!recordedClient) {
           // Shipped Gateway receipts predate transport.clients. Seed only after
           // collection, whose live owner still requires its exact accepted bytes.

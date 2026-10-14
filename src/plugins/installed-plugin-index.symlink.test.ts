@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -14,8 +14,8 @@ import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { inspectPluginRegistry } from "./plugin-registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
     cleanup();
   }),
 );
@@ -142,7 +142,7 @@ describe("installed plugin manifest identity", () => {
     await withPluginCache(createPluginCache(), () =>
       refreshPluginRegistry({ ...params, reason: "manual" }),
     );
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     const persisted = withPluginCache(createPluginCache(), () =>
       readPersistedInstalledPluginIndexSync(params),
     );

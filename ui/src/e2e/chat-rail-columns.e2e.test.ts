@@ -229,7 +229,7 @@ async function openFromPlus(page: Page, label: string) {
 }
 
 async function selectTab(page: Page, label: string) {
-  await sidePanel(page).locator("wa-tab").filter({ hasText: label }).click();
+  await sidePanel(page).locator(".tabstrip-tab").filter({ hasText: label }).click();
 }
 
 async function tabLabels(page: Page): Promise<string[]> {
@@ -246,25 +246,36 @@ async function narrowestRailTabLabel(page: Page): Promise<number> {
     );
 }
 
-async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
+async function expectExpandedSidePanelFillsRegion(
+  page: Page,
+  placement: "main" | "side" = "main",
+): Promise<void> {
   const geometry = await page
-    .locator('.sidebar-region [data-region="main"]')
-    .evaluate((element) => {
+    .locator(`.sidebar-region [data-region="${placement}"]:not([hidden])`)
+    .evaluate((element, slot) => {
       const panel = element.getBoundingClientRect();
       const shell = element.closest(".sidebar-region");
       const region = shell?.getBoundingClientRect();
       const header = shell?.querySelector(".chat-pane__header")?.getBoundingClientRect();
+      const tabs =
+        slot === "side"
+          ? shell?.querySelector('[data-region-header="side"]')?.getBoundingClientRect()
+          : undefined;
       if (!region || !header) {
         throw new Error("Focused panel requires its task toolbar and sidebar region");
+      }
+      if (slot === "side" && !tabs) {
+        throw new Error("A full-width side panel keeps its tab strip below the task toolbar");
       }
       return {
         bottom: Math.abs(panel.bottom - region.bottom),
         left: Math.abs(panel.left - region.left),
         right: Math.abs(panel.right - region.right),
         top: Math.abs(header.top - region.top),
-        headerGap: Math.abs(panel.top - header.bottom),
+        headerGap: Math.abs(panel.top - (tabs?.bottom ?? header.bottom)),
+        tabGap: tabs ? Math.abs(tabs.top - header.bottom) : 0,
       };
-    });
+    }, placement);
   for (const delta of Object.values(geometry)) {
     expect(delta).toBeLessThanOrEqual(1);
   }
@@ -378,7 +389,7 @@ suite.define(() => {
 
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
-          expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
+          expect(await sidePanel(page).locator(".tabstrip-tab").count()).toBe(0);
           await captureRichPanel(page, `rails-tabs-empty-${themeMode}`);
 
           await openFromEmpty(page, "Files");
@@ -417,10 +428,8 @@ suite.define(() => {
                   const geometry = icons.map((icon) => {
                     const iconRect = icon.getBoundingClientRect();
                     const glyphRect = icon.querySelector("svg")?.getBoundingClientRect();
-                    const tab = icon.closest("wa-tab");
-                    const baseRect = tab?.shadowRoot
-                      ?.querySelector<HTMLElement>('[part~="base"]')
-                      ?.getBoundingClientRect();
+                    const tab = icon.closest(".tabstrip-tab");
+                    const baseRect = tab?.getBoundingClientRect();
                     return {
                       baseDelta: Math.abs(
                         iconRect.y +
@@ -447,7 +456,7 @@ suite.define(() => {
               centerSpread: 0,
               glyphs: Array.from({ length: 6 }, () => [15, 15]),
             });
-          const filesTab = sidePanel(page).locator("wa-tab").filter({ hasText: "Files" });
+          const filesTab = sidePanel(page).locator(".tabstrip-tab").filter({ hasText: "Files" });
           const filesClose = sidePanel(page).getByRole("button", {
             name: "Close Files",
             exact: true,
@@ -473,10 +482,9 @@ suite.define(() => {
           await expect
             .poll(() =>
               filesTab.evaluate((tab) => {
-                const base = tab.shadowRoot?.querySelector<HTMLElement>('[part~="base"]');
                 const close = tab.nextElementSibling as HTMLElement | null;
-                return base && close
-                  ? getComputedStyle(base).backgroundColor ===
+                return close
+                  ? getComputedStyle(tab).backgroundColor ===
                       getComputedStyle(close).backgroundColor
                   : false;
               }),
@@ -486,10 +494,9 @@ suite.define(() => {
           await expect
             .poll(() =>
               filesTab.evaluate((tab) => {
-                const base = tab.shadowRoot?.querySelector<HTMLElement>('[part~="base"]');
                 const close = tab.nextElementSibling as HTMLElement | null;
-                return base && close
-                  ? getComputedStyle(base).backgroundColor ===
+                return close
+                  ? getComputedStyle(tab).backgroundColor ===
                       getComputedStyle(close).backgroundColor
                   : false;
               }),
@@ -526,33 +533,29 @@ suite.define(() => {
             "openclaw-tooltip",
           );
           expect(
-            await overflowingLabel.locator("xpath=ancestor::wa-tab").getAttribute("title"),
+            await overflowingLabel
+              .locator("xpath=ancestor::button[@role='tab']")
+              .getAttribute("title"),
           ).toBeNull();
           await tooltipTrigger.hover();
           await expect
             .poll(() =>
               labelTooltip
-                .locator("wa-tooltip")
-                .evaluate((tooltip) => Reflect.get(tooltip, "open")),
+                .locator(".tooltip-surface[popover]")
+                .evaluate((tooltip) => tooltip.matches(":popover-open")),
             )
             .toBe(true);
-          expect(await labelTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
-            fullLabel,
-          );
+          expect(await labelTooltip.locator(".tooltip-content").textContent()).toContain(fullLabel);
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator('[data-region-header="side"] wa-tab-group.tabstrip')
+                .locator('[data-region-header="side"] .tabstrip')
                 .evaluate((group) => {
-                  const tabsPart = group.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
-                  if (!tabsPart) {
-                    return null;
-                  }
-                  const tabsRect = tabsPart.getBoundingClientRect();
+                  const tabsRect = group.getBoundingClientRect();
                   const rightmostItem = Math.max(
                     ...[
                       ...group.querySelectorAll<HTMLElement>(
-                        "wa-tab, .tabstrip-tab__close, .tabstrip-separator",
+                        ".tabstrip-tab, .tabstrip-tab__close, .tabstrip-separator",
                       ),
                     ].map((item) => Math.min(item.getBoundingClientRect().right, tabsRect.right)),
                   );
@@ -712,7 +715,7 @@ suite.define(() => {
             .toBeCloseTo(resizedWidth, 0);
           expect(
             await sidePanel(page)
-              .locator('[data-region-header="side"] wa-tab[active] .tabstrip-tab__label')
+              .locator('[data-region-header="side"] .tabstrip-tab[active] .tabstrip-tab__label')
               .textContent(),
           ).toContain("Files");
 
@@ -724,7 +727,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               sidePanel(page)
-                .locator('[data-region-header="side"] wa-tab[active] .tabstrip-tab__label')
+                .locator('[data-region-header="side"] .tabstrip-tab[active] .tabstrip-tab__label')
                 .textContent(),
             )
             .toBe("zsh");
@@ -747,7 +750,7 @@ suite.define(() => {
             .toBe(false);
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
-          expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
+          expect(await sidePanel(page).locator(".tabstrip-tab").count()).toBe(0);
           const emptyDividerBox = await divider.boundingBox();
           expect(emptyDividerBox).not.toBeNull();
           await page.mouse.move(
@@ -802,9 +805,8 @@ suite.define(() => {
             )
             .toEqual({ fits: true, mask: "none" });
           const terminalTabGeometry = await terminalLabel.evaluate((label) => {
-            const tab = label.closest<HTMLElement>("wa-tab");
-            const group = tab?.closest("wa-tab-group");
-            const tabs = group?.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
+            const tab = label.closest<HTMLElement>(".tabstrip-tab");
+            const tabs = tab?.closest(".tabstrip");
             return {
               availableWidth: tabs?.getBoundingClientRect().width ?? 0,
               tabWidth: tab?.getBoundingClientRect().width ?? 0,
@@ -896,10 +898,13 @@ suite.define(() => {
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
         const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+        expect(await mainComposer.isVisible()).toBe(false);
+        await selectChatLayoutAction(page, "Minimize side panel");
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );
+        await selectChatLayoutAction(page, "Side panel");
         const input = companion.getByRole("textbox", { name: "Ask in side chat" });
         await input.fill("Can I use side chat here?");
         await companion.getByRole("button", { name: "Ask", exact: true }).click();
@@ -917,7 +922,6 @@ suite.define(() => {
         await captureRichPanel(page, "rails-side-chat-mobile-light");
         await closeChatLayoutMenu(page);
 
-        await focusChatSidePanel(page);
         await expect
           .poll(() =>
             page
@@ -925,7 +929,7 @@ suite.define(() => {
               .evaluate((element) => getComputedStyle(element).display),
           )
           .toBe("none");
-        await expectExpandedSidePanelFillsRegion(page);
+        await expectExpandedSidePanelFillsRegion(page, "side");
         await captureRichPanel(page, "rails-tabs-mobile-light");
       },
     );

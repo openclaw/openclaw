@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createAuthProfileStoreFixture as authStore,
@@ -6,6 +6,7 @@ import {
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { createOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 
 const authProfileMocks = vi.hoisted(() => ({ resolveApiKeyForProfile: vi.fn() }));
 vi.mock("./auth-profiles.js", async (importActual) => ({
@@ -13,6 +14,9 @@ vi.mock("./auth-profiles.js", async (importActual) => ({
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
 }));
 const { resolveApiKeyForProviderCore } = await import("./model-auth.js");
+beforeAll(() => {
+  prepareSharedAuthStoreOwnershipForNative();
+});
 afterEach(() => authProfileMocks.resolveApiKeyForProfile.mockReset());
 
 describe("resolveApiKeyForProviderCore OAuth refresh failure ordering", () => {

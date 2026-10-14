@@ -249,6 +249,7 @@ export function createAsyncQuestionPresentation(
     sessionKey: string;
     currentAgentId?: string;
     connectionEpoch?: number;
+    connected?: boolean;
     asyncQuestionStorage?: DurableComposerDraftScope | null;
     onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"];
     onReopen?: (itemId: string, scope: string) => void;
@@ -411,26 +412,18 @@ export function createAsyncQuestionPresentation(
       if (durableDismissal) {
         // Do not present Undo/Answer as restored while reload still reads dismissed.
         // The existing writer serializes this intent behind any dismissal in flight.
-        for (;;) {
-          onChange();
-          await durableDismissal.write;
-          const latest = state.asyncQuestionPresentation;
-          if (drafts.get(itemId) !== current || current.status !== "reopening") {
-            return;
-          }
-          if (!isCurrent() || latest?.resolved.has(itemId)) {
-            current.status = undefined;
-            durableDismissal.onChange();
-            return;
-          }
-          const boundary = latest?.archived.get(itemId);
-          if (current.reopenedAfterBoundary === boundary) {
-            break;
-          }
-          // History can advance during the save; persist that latest reopen boundary
-          // before revealing an untouched answer that would otherwise age out again.
-          current.reopenedAfterBoundary = boundary;
+        onChange();
+        await durableDismissal.write;
+        if (drafts.get(itemId) !== current || current.status !== "reopening") {
+          return;
         }
+        if (!isCurrent() || state.asyncQuestionPresentation?.resolved.has(itemId)) {
+          current.status = undefined;
+          durableDismissal.onChange();
+          return;
+        }
+        // A completion arriving during this save may archive the reminder again;
+        // its Answer action can reopen it against that newer boundary.
         current.status = undefined;
       }
       // Failed storage still permits answering, with the existing unsaved notice.
@@ -460,10 +453,12 @@ export function createAsyncQuestionPresentation(
         item.sendError,
       ]),
       Boolean(props.onAsyncQuestionSubmit && props.onQueueRetry),
+      props.connected,
     ]),
     drafts,
     resolved,
     delivery,
+    connected: props.connected,
     discard: (item) => {
       if (!isCurrent()) {
         return;

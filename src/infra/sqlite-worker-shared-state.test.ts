@@ -60,6 +60,11 @@ function databaseOptions(captured: ReturnType<typeof context>) {
   return { path: captured.admission.databasePath, env: captured.environment };
 }
 
+const readBindingApprovals = {
+  type: "plugins.conversationBindingApprovals.read",
+  input: undefined,
+} as const;
+
 const readProvenance = {
   type: "claws.install-schema-versions",
   input: { artifactPreservingReadOnly: true },
@@ -245,6 +250,50 @@ describe("canonical shared-state worker admission", () => {
           .prepare("SELECT name FROM sqlite_schema WHERE name = ?")
           .get("idx_subagent_runs_child_session_key"),
       ).toEqual({ name: "idx_subagent_runs_child_session_key" });
+    },
+  );
+
+  it.each(["Web Push", "GitHub publication"] as const)(
+    "keeps writer inspection and the first %s operation in the same actor",
+    async (operation) => {
+      const captured = context();
+      await seedMetadata(captured);
+      const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
+      const messages = vi.spyOn(Worker.prototype, "postMessage");
+      await runOpenClawStateWorkerOperation(
+        reopened,
+        async (scope) => {
+          expect(await scope.execute(readBindingApprovals)).toEqual([]);
+          const actorWorker = messages.mock.contexts[0];
+          expect(actorWorker).toBeInstanceOf(Worker);
+          messages.mockClear();
+          if (operation === "Web Push") {
+            expect(
+              await scope.execute({
+                type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+                input: {},
+              }),
+            ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+          } else {
+            expect(
+              await scope.execute({
+                type: "githubRepository.personalPending",
+                input: {
+                  ownerProfileId: "profile-first-use",
+                  sessionKey: "agent:main:github-first-use",
+                  agentId: "main",
+                },
+              }),
+            ).toBeUndefined();
+          }
+          expect(messages.mock.contexts.length).toBeGreaterThan(0);
+          expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
+          expect(await scope.execute(readBindingApprovals)).toEqual([]);
+        },
+        { existingOnly: true },
+      );
+      await closeOpenClawStateDatabaseAsync();
+      messages.mockRestore();
     },
   );
 

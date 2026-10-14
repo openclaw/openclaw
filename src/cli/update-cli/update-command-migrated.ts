@@ -134,10 +134,9 @@ export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
 ): Promise<
-  Pick<
-    MigratedUpdateFinalizationResult,
-    "result" | "exitCode" | "automaticTriage" | "candidateStartAttempted"
-  > & { databaseRollbackAvailable?: true }
+  Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "candidateStartAttempted"> & {
+    databaseRollbackAvailable?: true;
+  }
 > {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
@@ -262,6 +261,7 @@ export async function continueMigratedUpdateInFreshProcess(
       requesterAuthority,
       executorFence,
       sourceArtifactLock: _sourceArtifactLock,
+      deadline: _deadline,
       ...runIdentity
     } = run;
     const input: MigratedUpdateFinalizationInput = {
@@ -295,7 +295,7 @@ export async function continueMigratedUpdateInFreshProcess(
         beforeInput: bindChild,
         // Only an operator deadline bounds forward finalization. Probes and
         // cancellation settlement keep their separate finite allowances.
-        timeoutMs: run.activationTimeoutMs,
+        timeoutMs: run.deadline?.remainingMs() ?? run.activationTimeoutMs,
         maxOutputBytes: 1024 * 1024,
       });
     await releaseLegacySourceLock(root, run.sourceArtifactLock);
@@ -328,7 +328,6 @@ export async function continueMigratedUpdateInFreshProcess(
     const finalization = {
       result: response.result,
       exitCode: response.exitCode,
-      automaticTriage: response.automaticTriage,
       candidateStartAttempted: response.candidateStartAttempted,
     };
     const restoreDatabases =

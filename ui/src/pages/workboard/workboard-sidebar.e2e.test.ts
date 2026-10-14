@@ -149,7 +149,7 @@ suite.define(() => {
       }
       const sessionsView = sidebar.getByRole("button", { name: "Sessions", exact: true });
       const newConversation = sidebar.getByRole("link", { name: "New conversation", exact: true });
-      if (!(await newConversation.isVisible())) {
+      if (!(await sidebar.locator(".sidebar-session-toolbar").isVisible())) {
         await sessionsView.click();
       }
       await newConversation.click();

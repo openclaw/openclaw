@@ -199,6 +199,69 @@ describe("worker turn execution loading", () => {
     },
   );
 
+  it("keeps required-profile execution current during workspace result publication", async () => {
+    await fixture.seedActivePlacement();
+    const { setRuntimeConfigSnapshot } = await import("../../config/io.js");
+    const publicationOwner = await import("./placement-turn-authority.js");
+    const stageResult = publicationOwner.stagePlacementWorkspaceResultWorkerPublication;
+    const config = {
+      session: { store: fixture.sessionTarget.storePath },
+      cloudWorkers: { requiredProfile: "development" },
+    };
+    let checkedPendingPublication = false;
+    // mock-isolation: drive the launcher guard without starting real worker execution.
+    vi.doMock("./worker-turn-execution.js", () => ({
+      executeWorkerTurn: async (params: {
+        onHandoff: () => void;
+        onTerminal: () => void;
+        turnClaim: WorkerSessionTurnClaim;
+        assertRunCurrent: () => void;
+      }) => {
+        setRuntimeConfigSnapshot(config);
+        using stage = vi.spyOn(publicationOwner, "stagePlacementWorkspaceResultWorkerPublication");
+        stage.mockImplementationOnce((...args) => {
+          const publication = stageResult(...args);
+          try {
+            // Exercise the launcher's effect guard while the real writer awaits its commit.
+            params.assertRunCurrent();
+            setRuntimeConfigSnapshot({
+              ...config,
+              cloudWorkers: { requiredProfile: "another-profile" },
+            });
+            expect(params.assertRunCurrent).toThrow("required worker profile policy");
+            setRuntimeConfigSnapshot(config);
+            params.assertRunCurrent();
+            checkedPendingPublication = true;
+            return publication;
+          } catch (error) {
+            publication.rollback();
+            throw error;
+          }
+        });
+        params.onHandoff();
+        await fixture.placements.markWorkspaceResultPending(params.turnClaim);
+        params.onTerminal();
+        await fixture.placements.acceptWorkspaceResult(params.turnClaim);
+        await fixture.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+        return { meta: { durationMs: 1 } };
+      },
+    }));
+    const provider = fixture.createWorkerSessionTurnPlacementProvider({
+      environments: {
+        ...fixture.unusedEnvironments(),
+        get: fixture.attachedEnvironment,
+      },
+      placements: fixture.placements,
+    });
+    const runId = "run-required-result-publication";
+    const runLocal = vi.fn();
+    await expect(
+      provider.executeTurn({ ...fixture.sessionTarget, runId }, fixture.turn(runId), runLocal),
+    ).resolves.toEqual({ meta: { durationMs: 1 } });
+    expect(checkedPendingPublication).toBe(true);
+    expect(runLocal).not.toHaveBeenCalled();
+  });
+
   it("keeps local turns outside execution loading with an active interception", async () => {
     const failure = new Error("selected execution load reached");
     const load = vi.fn(() => {

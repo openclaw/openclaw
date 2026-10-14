@@ -223,7 +223,7 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
-  /** Current facts from the original process-owned actor, never a replacement. */
+  /** Current facts from the original actor or its receipt-backed delivery preparation. */
   readCurrentSession?: () =>
     | {
         sessionId: string;
@@ -352,7 +352,11 @@ export type ReplyPayloadMetadata = {
   /** Payload preparation generated this provider error; it is not an authored answer. */
   terminalProviderError?: true;
   /** Model fallback uses observed failure facts, never the displayed wording. */
-  providerFailure?: { reason: FailoverReason | null; rawError?: string };
+  providerFailure?: {
+    reason: FailoverReason | null;
+    rawError?: string;
+    rateLimitRetriesExhausted?: number;
+  };
   /** The warning owner observed this tool failure; presentation text is not evidence. */
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */

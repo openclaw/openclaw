@@ -6,7 +6,12 @@ import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh
 
 const timestamp = Date.parse("2026-09-23T12:00:00.000Z");
 type Row = { seq: number; event: Record<string, unknown> };
-function message(id: string, parentId: string | null, tokens: number): Row["event"] {
+function message(
+  id: string,
+  parentId: string | null,
+  tokens: number,
+  incomplete = false,
+): Row["event"] {
   return {
     type: "message",
     id,
@@ -14,7 +19,13 @@ function message(id: string, parentId: string | null, tokens: number): Row["even
     timestamp: new Date(timestamp).toISOString(),
     message: {
       role: "assistant",
-      usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens } },
+      usage: {
+        input: tokens,
+        output: 0,
+        totalTokens: tokens,
+        cost: { total: tokens },
+        ...(incomplete ? { usageReport: { state: "unavailable" } } : {}),
+      },
     },
   };
 }
@@ -27,6 +38,7 @@ async function scan(
   previous?: UsageCostRollupEntry,
   generation = "initial",
   readSequences?: number[],
+  checkProgress?: () => void,
 ) {
   const storePath = path.resolve("synthetic-usage-paging.sqlite");
   const filePath = formatSqliteSessionFileMarker({
@@ -54,6 +66,7 @@ async function scan(
     pricingFingerprint: "synthetic-pricing",
     resolveCosts: async (pairs) => pairs.map(() => undefined),
     readGeneration: async () => generation,
+    checkProgress,
     // A short page does not mean end-of-range; decoded byte limits can cut any page.
     readRows: async (_marker, afterSeq, throughSeq) => {
       const page = rows.filter((row) => row.seq > afterSeq && row.seq <= throughSeq).slice(0, 2);
@@ -75,6 +88,50 @@ function expectUsage(entry: UsageCostRollupEntry, tokens: number, records: numbe
 }
 
 describe("paged SQLite usage rollups", () => {
+  it("stops reading subsequent transcript pages when its owner cancels", async () => {
+    const controller = new AbortController();
+    const reason = new Error("usage client disconnected");
+    const readSequences: number[] = [];
+    await expect(
+      scan(
+        [...initial, { seq: 9, event: message("b", "a", 4) }],
+        undefined,
+        "initial",
+        readSequences,
+        () => {
+          if (readSequences.length > 0) {
+            controller.abort(reason);
+          }
+          controller.signal.throwIfAborted();
+        },
+      ),
+    ).rejects.toBe(reason);
+    expect(readSequences).toEqual([1, 4]);
+  });
+
+  it("keeps known billing separate from unavailable usage across incremental refreshes", async () => {
+    const before = await scan(initial);
+    const interrupted = [...initial, { seq: 9, event: message("aborted", "a", 100, true) }];
+    const afterAbort = await scan(interrupted, before);
+    expect(afterAbort.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
+      usageReport: { state: "unavailable" },
+      totalTokens: 3,
+      totalCost: 3,
+      missingCostEntries: 1,
+    });
+
+    const afterSuccess = await scan(
+      [...interrupted, { seq: 12, event: message("completed", "aborted", 4) }],
+      afterAbort,
+    );
+    expect(afterSuccess.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
+      usageReport: { state: "unavailable" },
+      totalTokens: 7,
+      totalCost: 7,
+      missingCostEntries: 1,
+    });
+  });
+
   it("selects a branch after reading all short pages and preserves sparse sequence numbers", async () => {
     const result = await scan([
       { seq: 1, event: message("root", null, 1) },

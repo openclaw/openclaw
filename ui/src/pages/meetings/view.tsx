@@ -1,11 +1,9 @@
-import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, createEffect } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncTabGroupLabel } from "../../components/web-awesome-tabs.ts";
-import "../../styles/hub-tabs.css";
 import { registerMeetingsEnglish } from "../../i18n/locales/en-meetings.ts";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -306,11 +304,6 @@ function Library(props: TranscriptsViewProps) {
 }
 
 function Reader(props: TranscriptsViewProps) {
-  let tabGroup: WaTabGroup | undefined;
-  createEffect(
-    () => t("transcripts.reader"),
-    (label) => syncTabGroupLabel(tabGroup, label),
-  );
   const params = () => new URLSearchParams(props.search);
   const transcriptPage = () => props.reader.pages.at(-1);
   const page = () => props.reader.summary ?? transcriptPage();
@@ -423,44 +416,18 @@ function Reader(props: TranscriptsViewProps) {
               </p>
             ) : null}
           </header>
-          <wa-tab-group
-            ref={(element) => {
-              tabGroup = element;
-              syncTabGroupLabel(element, t("transcripts.reader"));
-            }}
-            class="hub-tabs hub-tabs--sub transcript-reader-hub-tabs"
-            aria-label={t("transcripts.reader")}
-            prop:active={props.readerTab}
-            activation="manual"
-            without-scroll-controls
-          >
-            <For each={["summary", "text"] as const} keyed={(tab) => tab}>
-              {(tab) => (
-                <wa-tab
-                  id={`transcript-reader-tab-${tab()}`}
-                  panel={tab()}
-                  aria-controls="transcript-reader-panel"
-                  class="hub-tab"
-                  prop:active={props.readerTab === tab()}
-                  prop:tabIndex={props.readerTab === tab() ? 0 : -1}
-                  aria-selected={props.readerTab === tab() ? "true" : "false"}
-                  onClick={(event) => {
-                    if (event.detail > 0 || event.isTrusted) {
-                      props.onReaderTab(tab());
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (!event.repeat && (event.key === "Enter" || event.key === " ")) {
-                      event.preventDefault();
-                      props.onReaderTab(tab());
-                    }
-                  }}
-                >
-                  {t(tab() === "summary" ? "transcripts.summary" : "transcripts.text")}
-                </wa-tab>
-              )}
-            </For>
-          </wa-tab-group>
+          <HubTabs<TranscriptsViewProps["readerTab"]>
+            id="transcript-reader"
+            active={props.readerTab}
+            tabs={[
+              { value: "summary", label: t("transcripts.summary") },
+              { value: "text", label: t("transcripts.text") },
+            ]}
+            ariaLabel={t("transcripts.reader")}
+            panelId="transcript-reader-panel"
+            variant="sub"
+            onSelect={(tab) => props.onReaderTab(tab)}
+          />
           <div
             id="transcript-reader-panel"
             role="tabpanel"

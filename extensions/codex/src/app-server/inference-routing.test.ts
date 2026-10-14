@@ -1,3 +1,4 @@
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import {
@@ -92,16 +93,33 @@ async function prepare(
 }
 
 describe("managed inference route ownership", () => {
+  it.each(["thread/closed", "thread/archived", "thread/deleted"] as const)(
+    "releases bounded thread provenance on %s without revoking peers",
+    async (method) => {
+      const h = harness();
+      ownCodexInferenceClient(h.client);
+      const route = await prepare(h, "apiKey");
+      for (let index = 0; index < 256; index += 1) {
+        bindCodexInferenceThread(h.client, `thread-${index}`, route);
+      }
+      expect(() => bindCodexInferenceThread(h.client, "replacement", route)).toThrow(
+        "thread limit reached",
+      );
+      h.send({ method, params: { threadId: "thread-0" } });
+      expect(getCodexInferenceThread(h.client, "thread-0")).toBeUndefined();
+      expect(getCodexInferenceThread(h.client, "thread-1")).toBe(route);
+      expect(() => bindCodexInferenceThread(h.client, "replacement", route)).not.toThrow();
+      expect(getCodexInferenceThread(h.client, "replacement")).toBe(route);
+    },
+  );
+
   it.each([false, true])(
     "admits only config/account writes and route publications (prepared config=%s)",
     async (preparedConfig) => {
       let retained = false;
       let admissions = 0;
       const authority: CodexBindingAuthority = {
-        lineage: [],
-        prepareMutation: async () => ({ assertCurrent: () => {} }),
-        assertCurrent: () => {},
-        assertLegacyCurrent: () => {},
+        ...createNativeSessionBindingScope(() => {}),
         withCurrent: async (consume) => {
           admissions += 1;
           retained = true;
@@ -153,10 +171,7 @@ describe("managed inference route ownership", () => {
       let accountType = "apiKey";
       const failure = new Error("route owner superseded");
       const authority: CodexBindingAuthority = {
-        lineage: [],
-        prepareMutation: async () => ({ assertCurrent: () => {} }),
-        assertCurrent: () => {},
-        assertLegacyCurrent: () => {},
+        ...createNativeSessionBindingScope(() => {}),
         withCurrent: async (consume) => {
           admissions += 1;
           if (admissions === rejectAdmission) {

@@ -295,7 +295,7 @@ describe("sessions cleanup --fix-missing", () => {
               ...owner,
               read: async (fixMissing) => {
                 const result = await owner.read(fixMissing);
-                if (fixMissing && ++classified === 2) {
+                if (fixMissing && ++classified === 1) {
                   appendTranscriptMessageSync(scope, {
                     eventId: "foreign-message-after-inspection",
                     message: {
@@ -317,7 +317,7 @@ describe("sessions cleanup --fix-missing", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(classified).toBe(2);
+    expect(classified).toBe(1);
     expect(result.appliedSummaries[0]?.missing).toBe(0);
     expect(inspectTranscriptEventsSync(scope).events).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "foreign-message-after-inspection" })]),
@@ -364,7 +364,7 @@ describe("sessions cleanup --fix-missing", () => {
   });
 
   it.each([false, true])(
-    "refuses physical replacement between cleanup preview and apply (initially absent=%s)",
+    "refuses physical replacement after cleanup classification (initially absent=%s)",
     async (initiallyAbsent) => {
       const scope = {
         sessionKey: "agent:main:replaced-cleanup",
@@ -406,17 +406,26 @@ describe("sessions cleanup --fix-missing", () => {
       let replaced = false;
       let replacementBytes: Buffer | undefined;
       vi.spyOn(cleanupReads, "withSessionCleanupStore").mockImplementation(
-        async (target, consume, options) => {
-          const result = await readStore(target, consume, options);
-          if (!replaced) {
-            expect(result).toMatchObject({ result: { summary: { beforeCount: 1, missing: 1 } } });
-            fs.renameSync(sqlitePath, savedPath);
-            fs.copyFileSync(savedPath, sqlitePath);
-            replacementBytes = fs.readFileSync(sqlitePath);
-            replaced = true;
-          }
-          return result;
-        },
+        (target, consume, options) =>
+          readStore(
+            target,
+            (owner) =>
+              consume({
+                ...owner,
+                read: async (fixMissing) => {
+                  const snapshot = await owner.read(fixMissing);
+                  if (!replaced) {
+                    expect(snapshot.missing).toHaveLength(1);
+                    fs.renameSync(sqlitePath, savedPath);
+                    fs.copyFileSync(savedPath, sqlitePath);
+                    replacementBytes = fs.readFileSync(sqlitePath);
+                    replaced = true;
+                  }
+                  return snapshot;
+                },
+              }),
+            options,
+          ),
       );
       try {
         await expect(

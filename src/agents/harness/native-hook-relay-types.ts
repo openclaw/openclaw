@@ -82,6 +82,8 @@ export type NativeHookRelayRegistration = {
   requester?: PluginHookToolRequesterContext;
   approvalContext?: NativeHookRelayApprovalContext;
   allowedEvents: readonly NativeHookRelayEvent[];
+  /** Keep host policy active for every native tool even without plugin hooks. */
+  requirePreToolUse?: boolean;
   expiresAtMs: number;
   signal?: AbortSignal;
   /** Exact host policy capability for authority-bearing native callbacks. */
@@ -130,6 +132,8 @@ export type RegisterNativeHookRelayParams = {
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;
+  /** Never prune the all-tool PreToolUse policy relay. Requires runBeforeToolCall. */
+  requirePreToolUse?: boolean;
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;

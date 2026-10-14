@@ -66,6 +66,7 @@ const GENERATED_LOCALES = [
   ["pl"],
   ["th"],
   ["ru"],
+  ["sv"],
 ].map(([language, dir = language]) => ({
   language,
   dir,
@@ -272,14 +273,17 @@ function collectNavPages(entry, pages = new Set()) {
   return pages;
 }
 
-function findBestNavMatchIndex(candidates, overlayEntry, excludedIndexes = new Set()) {
+function findBestNavMatchIndex(
+  candidates,
+  overlayEntry,
+  excludedIndexes = new Set(),
+  requireUniqueMatch = false,
+) {
   const overlayPages = collectNavPages(overlayEntry);
   let bestIndex = -1;
   let bestScore = 0;
+  let matches = 0;
   for (const [index, candidate] of candidates.entries()) {
-    if (excludedIndexes.has(index)) {
-      continue;
-    }
     const candidatePages = collectNavPages(candidate);
     let score = 0;
     for (const page of overlayPages) {
@@ -287,22 +291,20 @@ function findBestNavMatchIndex(candidates, overlayEntry, excludedIndexes = new S
         score += 1;
       }
     }
-    if (score > bestScore) {
+    if (score > 0) {
+      matches += 1;
+    }
+    if (!excludedIndexes.has(index) && score > bestScore) {
       bestIndex = index;
       bestScore = score;
     }
   }
-  return bestIndex;
+  return requireUniqueMatch && matches > 1 ? -1 : bestIndex;
 }
 
 export function applyLocaleNavLabelOverlay(fullNav, labelOverlay) {
-  const tabs = Array.isArray(fullNav.tabs)
-    ? fullNav.tabs.map((tab) => ({
-        ...tab,
-        groups: Array.isArray(tab.groups) ? tab.groups.map((group) => ({ ...group })) : tab.groups,
-      }))
-    : fullNav.tabs;
-  const composed = { ...fullNav, tabs };
+  const composed = structuredClone(fullNav);
+  const { tabs } = composed;
   if (!Array.isArray(tabs) || !Array.isArray(labelOverlay?.tabs)) {
     return composed;
   }
@@ -319,16 +321,53 @@ export function applyLocaleNavLabelOverlay(fullNav, labelOverlay) {
     if (!Array.isArray(tab.groups) || !Array.isArray(overlayTab.groups)) {
       continue;
     }
-    const matchedGroupIndexes = new Set();
-    for (const overlayGroup of overlayTab.groups) {
-      const groupIndex = findBestNavMatchIndex(tab.groups, overlayGroup, matchedGroupIndexes);
-      if (groupIndex >= 0 && typeof overlayGroup.group === "string") {
-        tab.groups[groupIndex].group = overlayGroup.group;
-        matchedGroupIndexes.add(groupIndex);
-      }
-    }
+    applyNavGroupLabelOverlay(tab.groups, overlayTab.groups);
   }
   return composed;
+}
+
+function isNavGroup(entry) {
+  return (
+    Boolean(entry) &&
+    typeof entry === "object" &&
+    !Array.isArray(entry) &&
+    typeof entry.group === "string"
+  );
+}
+
+function applyNavGroupLabelOverlay(candidateGroups, overlayGroups, requireUniqueMatch = false) {
+  if (!Array.isArray(candidateGroups) || !Array.isArray(overlayGroups)) {
+    return;
+  }
+
+  const matchedGroupIndexes = new Set();
+  for (const overlayGroup of overlayGroups) {
+    // An aggregate overlay can span sibling groups. Do not give one child's
+    // translated name to an arbitrary sibling just because it shares a route.
+    const groupIndex = findBestNavMatchIndex(
+      candidateGroups,
+      overlayGroup,
+      matchedGroupIndexes,
+      requireUniqueMatch,
+    );
+    if (groupIndex < 0) {
+      continue;
+    }
+
+    const candidateGroup = candidateGroups[groupIndex];
+    if (typeof overlayGroup.group === "string") {
+      candidateGroup.group = overlayGroup.group;
+    }
+    matchedGroupIndexes.add(groupIndex);
+
+    const candidateNestedGroups = Array.isArray(candidateGroup.pages)
+      ? candidateGroup.pages.filter(isNavGroup)
+      : [];
+    const overlayNestedGroups = Array.isArray(overlayGroup.pages)
+      ? overlayGroup.pages.filter(isNavGroup)
+      : [];
+    applyNavGroupLabelOverlay(candidateNestedGroups, overlayNestedGroups, true);
+  }
 }
 
 function composeLocaleNav(locale, englishNav) {

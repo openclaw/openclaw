@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-registry.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -61,6 +62,12 @@ vi.mock("../../config/sessions/session-accessor.js", () => {
     loadTranscriptEvents: hoisted.loadTranscriptEventsMock,
   };
 });
+
+// mock-isolation: Export orchestration reads fixture-owned session rows without opening a store.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (scope: { storePath?: string; sessionKey: string }) =>
+    (hoisted.loadSessionStoreMock(scope.storePath) as Record<string, unknown>)[scope.sessionKey],
+}));
 
 vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
@@ -226,6 +233,21 @@ describe("buildExportSessionReply", () => {
     }
     hoisted.sessionTranscriptEvents = [];
   });
+
+  it.each(["monthly report.html", "reports/monthly  report.html"])(
+    "preserves the complete structured export path %j",
+    async (outputPath) => {
+      const command = expectDefined(findCommandByNativeName("export-session"), "export command");
+      const params = makeParams();
+      params.command.commandBodyNormalized = buildCommandTextFromArgs(command, {
+        values: { path: outputPath },
+      });
+
+      await buildExportSessionReply(params);
+
+      expect(hoisted.writeSessionExportFileMock.mock.calls[0]?.[0].requestedPath).toBe(outputPath);
+    },
+  );
 
   it("preserves an explicitly empty branch selected by a terminal leaf control", async () => {
     const entries = [

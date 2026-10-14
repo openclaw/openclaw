@@ -378,6 +378,7 @@ jobs:
           NO_STRIP: "true"
           LDAI_RUNTIME_FILE: ${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate_release.outputs.tag_sha }}
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: |
           set -euo pipefail
@@ -655,6 +656,7 @@ jobs:
         working-directory: apps/linux/src-tauri
         env:
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate_release.outputs.tag_sha }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -744,6 +746,7 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.validate_release.outputs.tag_sha }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -1127,6 +1130,7 @@ jobs:
           GH_TOKEN: ${{ steps.publication_token.outputs.token }}
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
+          LOCAL_INPUTS: ${{ needs.validate_release.outputs.already_published != 'true' }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           WORKFLOW_REF: ${{ github.ref_name }}
@@ -1136,6 +1140,7 @@ jobs:
         run: |
           set -euo pipefail
           input_args=()
+          local_args=(--assets dist/release --signature "dist/input/linux/signatures/OpenClaw-${RELEASE_TAG#v}-amd64.AppImage.sig")
           publication_state="$(node scripts/linux-updater-manifest.mjs status \
             --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" \
             --output "$RUNNER_TEMP/linux-release-before-upload")"
@@ -1144,9 +1149,16 @@ jobs:
               echo "Linux bundles already exist; refusing to replace published bytes. Recover only the missing desktop assets." >&2
               exit 1
             fi
-            echo "- Linux: a complete same-tag release appeared during the build; reusing its published bytes." >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$LOCAL_INPUTS" == true ]]; then
+              # This run's signed inputs are the only copy of unpublished desktop metadata
+              # after an interrupted publication; the publisher refuses any byte mismatch.
+              input_args+=("${local_args[@]}")
+              echo "- Linux: complete same-tag bundles exist; verifying this run's signed inputs against them before completing publication." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- Linux: a complete same-tag release exists; reusing its published bytes." >> "$GITHUB_STEP_SUMMARY"
+            fi
           elif [[ "$(jq -er '.state' <<< "$publication_state")" == pending ]]; then
-            input_args+=(--assets dist/release --signature "dist/input/linux/signatures/OpenClaw-${RELEASE_TAG#v}-amd64.AppImage.sig")
+            input_args+=("${local_args[@]}")
           else
             echo "Linux publication state does not permit a new upload." >&2
             exit 1

@@ -4,26 +4,47 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { mockIpv4OnlyLocalhostLookup } from "../../test/helpers/loopback-dns.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 const TICKET = "a".repeat(48);
 const cleanups: Array<() => Promise<void>> = [];
+
+/** Resolves false when the host has no IPv6 (some containers) instead of hanging. */
+async function listenUnlessIpv6Unavailable(
+  server: net.Server,
+  options: net.ListenOptions,
+): Promise<boolean> {
+  return await new Promise<boolean>((resolve, reject) => {
+    const onError = (error: Error) =>
+      hasErrnoCode(error, "EAFNOSUPPORT") || hasErrnoCode(error, "EADDRNOTAVAIL")
+        ? resolve(false)
+        : reject(error);
+    server.once("error", onError);
+    server.listen(options, () => {
+      server.off("error", onError);
+      resolve(true);
+    });
+  });
+}
 
 async function listenGateway(
   onConnection: (ws: WebSocket, request: http.IncomingMessage) => void,
   contextPath = "",
 ) {
   const server = http.createServer();
+  // Reserve both families so this HTTP peer cannot take the IPv6 target's
+  // numeric port on IPv4 and win localhost connection selection. Without IPv6
+  // there is no IPv6 target to protect.
+  if (!(await listenUnlessIpv6Unavailable(server, { port: 0, host: "::", ipv6Only: false }))) {
+    await listenUnlessIpv6Unavailable(server, { port: 0, host: "127.0.0.1" });
+  }
+  // Attach after listening: ws re-emits server listen errors on the WebSocketServer.
   const wss = new WebSocketServer({
     server,
     path: `${contextPath.replace(/\/$/u, "")}/node-portal/attach`,
   });
   wss.on("connection", onConnection);
-  await new Promise<void>((resolve) => {
-    // Reserve both families so this HTTP peer cannot take the IPv6 target's
-    // numeric port on IPv4 and win localhost connection selection.
-    server.listen({ port: 0, host: "::", ipv6Only: false }, resolve);
-  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("expected Gateway test address");
@@ -75,14 +96,14 @@ describe("node worker portal stream command", () => {
     ).rejects.toThrow("INVALID_REQUEST");
   });
 
-  it.each([
+  it.for([
     ["127.0.0.1", ""],
     ["::1", ""],
     ["127.0.0.1", "/openclaw-gw"],
     ["127.0.0.1", "/openclaw-gw/"],
-  ])(
+  ] as const)(
     "attaches %s loopback through Gateway context %j and closes on cancellation",
-    async (host, contextPath) => {
+    async ([host, contextPath], { skip }) => {
       if (host === "::1") {
         mockIpv4OnlyLocalhostLookup();
       }
@@ -94,9 +115,9 @@ describe("node worker portal stream command", () => {
           socket.write(Buffer.concat([Buffer.from("echo:"), Buffer.from(chunk)])),
         );
       });
-      await new Promise<void>((resolve) => {
-        local.listen(0, host, resolve);
-      });
+      if (!(await listenUnlessIpv6Unavailable(local, { port: 0, host }))) {
+        skip("IPv6 loopback is unavailable on this host");
+      }
       const address = local.address();
       if (!address || typeof address === "string") {
         throw new Error("expected portal loopback test address");

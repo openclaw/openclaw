@@ -463,7 +463,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
   };
   state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
   const devicePicker = state.microphonePicker;
-  devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
+  devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected, props.sessionKey);
   const startRealtimeTalk = () => {
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
@@ -519,6 +519,7 @@ export function createChatComposerContext(props: ChatComposerProps) {
     : undefined;
   const dictationOptions = {
     client: props.gatewayClient ?? null,
+    sessionKey: props.sessionKey,
     connected: props.connected,
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",

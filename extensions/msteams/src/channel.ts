@@ -3,7 +3,7 @@ import {
   readPositiveIntegerParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
@@ -160,11 +160,11 @@ function resolveGraphActionTarget(
   return currentChatType === "channel" ? "" : (currentChannelTarget ?? "");
 }
 
-function resolveMSTeamsActionMessageId(
-  ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
+function resolveMSTeamsActionMessage(
+  ctx: Pick<ChannelMessageActionContext, "params" | "toolContext">,
   to: string,
   allowCurrentMessageIdFallback = false,
-): string {
+): { messageId: string; threadRootId?: string } {
   const canUseCurrentMessageId =
     allowCurrentMessageIdFallback &&
     msteamsContextTargetsMatch(to, {
@@ -173,13 +173,24 @@ function resolveMSTeamsActionMessageId(
         normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
         normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
     });
-  const messageId = canUseCurrentMessageId
+  const resolved = canUseCurrentMessageId
     ? resolveReactionMessageId({
         args: ctx.params,
         toolContext: { currentMessageId: ctx.toolContext?.currentMessageId ?? undefined },
       })
     : (normalizeOptionalString(ctx.params.messageId) ?? "");
-  return messageId == null ? "" : String(messageId).trim();
+  const messageId = resolved == null ? "" : String(resolved).trim();
+  // Graph addresses a channel reply only beneath its thread root. Carry the root for
+  // the current message; never infer one for another explicit message id.
+  const currentMessageId = ctx.toolContext?.currentMessageId;
+  const threadRootId =
+    canUseCurrentMessageId &&
+    ctx.toolContext?.currentChatType === "channel" &&
+    currentMessageId != null &&
+    messageId === String(currentMessageId).trim()
+      ? normalizeOptionalString(ctx.toolContext.currentThreadTs)
+      : undefined;
+  return { messageId, ...(threadRootId ? { threadRootId } : {}) };
 }
 
 const msteamsChannelOutbound: ChannelOutboundAdapter = {
@@ -264,112 +275,89 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             note: undefined as string | undefined,
           }));
           type ResolveTargetResultEntry = (typeof results)[number];
-          type PendingTargetEntry = { query: string; index: number };
-          const resolvePending = async <T>(
-            pending: PendingTargetEntry[],
-            resolveEntries: (entries: string[]) => Promise<T[]>,
-            applyResolvedEntry: (target: ResolveTargetResultEntry, entry: T) => void,
-          ) => {
-            if (pending.length === 0) {
-              return;
+          const pending: { query: string; target: ResolveTargetResultEntry }[] = [];
+          for (const entry of results) {
+            const trimmed = entry.input.trim();
+            if (!trimmed) {
+              entry.note = "empty input";
+              continue;
             }
-            try {
-              const resolved = await resolveEntries(pending.map((entry) => entry.query));
-              resolved.forEach((entry, idx) => {
-                const target = results[pending[idx]?.index ?? -1];
-                if (!target) {
-                  return;
-                }
-                applyResolvedEntry(target, entry);
-              });
-            } catch (err) {
-              runtime.error?.(`msteams resolve failed: ${String(err)}`);
-              for (const { index } of pending) {
-                results[index]!.note = "lookup failed";
-              }
-            }
-          };
-
-          if (kind === "user") {
-            const pending: PendingTargetEntry[] = [];
-            results.forEach((entry, index) => {
-              const trimmed = entry.input.trim();
-              if (!trimmed) {
-                entry.note = "empty input";
-                return;
-              }
+            if (kind === "user") {
               const cleaned = normalizeMSTeamsUserInput(trimmed);
               if (/^[0-9a-fA-F-]{16,}$/.test(cleaned) || cleaned.includes("@")) {
                 entry.resolved = true;
                 entry.id = cleaned;
-                return;
+              } else {
+                pending.push({ query: cleaned, target: entry });
               }
-              pending.push({ query: cleaned, index });
-            });
-
-            await resolvePending(
-              pending,
-              (entries) => resolveMSTeamsUserAllowlist({ cfg, accountId, entries }),
-              (target, entry) => {
-                target.resolved = entry.resolved;
-                target.id = entry.id;
-                target.name = entry.name;
-                target.note = entry.note;
-              },
-            );
-
-            return results;
-          }
-
-          const pending: PendingTargetEntry[] = [];
-          results.forEach((entry, index) => {
-            const trimmed = entry.input.trim();
-            if (!trimmed) {
-              entry.note = "empty input";
-              return;
+              continue;
             }
             const conversationId = parseMSTeamsConversationId(trimmed);
             if (conversationId !== null) {
               entry.resolved = Boolean(conversationId);
               entry.id = conversationId || undefined;
               entry.note = conversationId ? "conversation id" : "empty conversation id";
-              return;
+              continue;
             }
             const parsed = parseMSTeamsTeamChannelInput(trimmed);
             if (!parsed.team) {
               entry.note = "missing team";
-              return;
+              continue;
             }
             const query = parsed.channel ? `${parsed.team}/${parsed.channel}` : parsed.team;
-            pending.push({ query, index });
-          });
-
-          await resolvePending(
-            pending,
-            (entries) => resolveMSTeamsChannelAllowlist({ cfg, accountId, entries }),
-            (target, entry) => {
-              if (!entry.resolved || !entry.teamId) {
-                target.resolved = false;
-                target.note = entry.note;
-                return;
-              }
-              target.resolved = true;
-              if (entry.channelId) {
-                target.id = `${entry.teamId}/${entry.channelId}`;
-                target.name =
-                  entry.channelName && entry.teamName
-                    ? `${entry.teamName}/${entry.channelName}`
-                    : (entry.channelName ?? entry.teamName);
-              } else {
-                target.id = entry.teamId;
-                target.name = entry.teamName;
-                target.note = "team id";
-              }
-              if (entry.note) {
-                target.note = entry.note;
-              }
-            },
-          );
+            pending.push({ query, target: entry });
+          }
+          if (pending.length === 0) {
+            return results;
+          }
+          const entries = pending.map((entry) => entry.query);
+          try {
+            if (kind === "user") {
+              const resolved = await resolveMSTeamsUserAllowlist({ cfg, accountId, entries });
+              resolved.forEach((entry, index) => {
+                const target = pending[index]?.target;
+                if (target) {
+                  target.resolved = entry.resolved;
+                  target.id = entry.id;
+                  target.name = entry.name;
+                  target.note = entry.note;
+                }
+              });
+            } else {
+              const resolved = await resolveMSTeamsChannelAllowlist({ cfg, accountId, entries });
+              resolved.forEach((entry, index) => {
+                const target = pending[index]?.target;
+                if (!target) {
+                  return;
+                }
+                if (!entry.resolved || !entry.teamId) {
+                  target.resolved = false;
+                  target.note = entry.note;
+                  return;
+                }
+                target.resolved = true;
+                if (entry.channelId) {
+                  target.id = `${entry.teamId}/${entry.channelId}`;
+                  target.name =
+                    entry.channelName && entry.teamName
+                      ? `${entry.teamName}/${entry.channelName}`
+                      : (entry.channelName ?? entry.teamName);
+                } else {
+                  target.id = entry.teamId;
+                  target.name = entry.teamName;
+                  target.note = "team id";
+                }
+                if (entry.note) {
+                  target.note = entry.note;
+                }
+              });
+            }
+          } catch (err) {
+            runtime.error?.(`msteams resolve failed: ${String(err)}`);
+            for (const { target } of pending) {
+              target.note = "lookup failed";
+            }
+          }
 
           return results;
         },
@@ -509,7 +497,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
 
           if (ctx.action === "read" || ctx.action === "pin" || ctx.action === "reactions") {
             const action = ctx.action;
-            const messageId = resolveMSTeamsActionMessageId(ctx, graphTo, action === "reactions");
+            const { messageId, threadRootId } = resolveMSTeamsActionMessage(
+              ctx,
+              graphTo,
+              action === "reactions",
+            );
             if (!graphTo || !messageId) {
               return actionError(
                 `${{ read: "Read", pin: "Pin", reactions: "Reactions" }[action]} requires a target (to) and messageId.`,
@@ -517,7 +509,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             }
             const to = await authorizeActionTarget(graphTo);
             const runtime = await loadMSTeamsChannelRuntime();
-            const params = { cfg: ctx.cfg, accountId: actionAccountId, to, messageId };
+            const params = {
+              cfg: ctx.cfg,
+              accountId: actionAccountId,
+              to,
+              messageId,
+              threadRootId,
+            };
             if (action === "read") {
               const message = await runtime.getMessageMSTeams(params);
               return jsonMSTeamsOkActionResult(action, { message });
@@ -558,7 +556,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "react") {
-            const messageId = resolveMSTeamsActionMessageId(ctx, graphTo, true);
+            const { messageId, threadRootId } = resolveMSTeamsActionMessage(ctx, graphTo, true);
             if (!graphTo || !messageId) {
               return actionError("React requires a target (to) and messageId.");
             }
@@ -584,6 +582,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               accountId: actionAccountId,
               to,
               messageId,
+              threadRootId,
               reactionType: emoji,
             });
             return jsonMSTeamsActionResult("react", {

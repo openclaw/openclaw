@@ -14,7 +14,7 @@ import {
 
 const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(file: string) => string>(),
-  readdir: vi.fn<() => Promise<string[]>>(),
+  readdir: vi.fn<() => string[]>(),
 }));
 
 const observedProcess: PosixProcess = {
@@ -59,7 +59,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "inspects selected procfs identities and commands despite filesystem worker starvation",
+  "inspects procfs identities, commands and full trees despite filesystem worker starvation",
   async () => {
     const stdout = await new Promise<string>((resolve, reject) => {
       execFile(
@@ -86,6 +86,7 @@ it.skipIf(process.platform === "win32")(
       outcomes: [
         { operation: "selected-identity", status: "fulfilled", observerPresent: true },
         { operation: "selected-command", status: "fulfilled", commandBytes: expect.any(Number) },
+        { operation: "full-snapshot", status: "fulfilled", observerPresent: true },
       ],
     });
   },
@@ -98,29 +99,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...original,
     execFile: vi.fn(
-      createProcfsCommandFixture(original, (file) =>
-        procfs.readFile.getMockImplementation() ? procfs.readFile(file) : undefined,
+      createProcfsCommandFixture(
+        original,
+        (file) => (procfs.readFile.getMockImplementation() ? procfs.readFile(file) : undefined),
+        () => (procfs.readdir.getMockImplementation() ? procfs.readdir() : undefined),
       ),
     ),
-  };
-});
-
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...original,
-    readFile: (...args: Parameters<typeof original.readFile>) => {
-      const file = args[0];
-      return typeof file === "string" &&
-        file.startsWith("/proc/") &&
-        procfs.readFile.getMockImplementation()
-        ? Promise.resolve().then(() => procfs.readFile(file))
-        : original.readFile(...args);
-    },
-    readdir: (...args: Parameters<typeof original.readdir>) =>
-      args[0] === "/proc" && procfs.readdir.getMockImplementation()
-        ? procfs.readdir()
-        : original.readdir(...args),
   };
 });
 
@@ -341,7 +325,7 @@ describe("Codex procfs process inspector", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const bootId = "00000000-0000-0000-0000-000000000001";
       const neighborPid = process.pid + 1;
-      procfs.readdir.mockResolvedValue([String(process.pid), String(neighborPid)]);
+      procfs.readdir.mockReturnValue([String(process.pid), String(neighborPid)]);
       procfs.readFile.mockImplementation((file) => {
         if (file === "/proc/sys/kernel/random/boot_id") {
           return bootId;

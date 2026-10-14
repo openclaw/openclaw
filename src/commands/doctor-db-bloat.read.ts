@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { SqlConnection } from "../infra/sql-connection.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { readRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
@@ -50,7 +50,7 @@ function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
   }
 }
 
-function readPragmaNumber(db: DatabaseSync, pragma: string): number | null {
+function readPragmaNumber(db: SqlConnection, pragma: string): number | null {
   const row = db.prepare(`PRAGMA ${pragma}`).get();
   return asFiniteNumber(row?.[pragma]) ?? null;
 }

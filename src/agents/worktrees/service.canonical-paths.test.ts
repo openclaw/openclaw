@@ -70,6 +70,7 @@ describe("ManagedWorktreeService canonical paths", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     resetConfigRuntimeState();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -87,6 +88,10 @@ describe("ManagedWorktreeService canonical paths", () => {
     await expect(service.resolveRepositoryIdentity(repo)).rejects.toThrow(
       "synthetic repository read failure",
     );
+    await expect(service.resolveRepositoryPaths(repo)).resolves.toEqual({
+      canonicalRoot: repo,
+      sourceRoot: repo,
+    });
   });
 
   it("repairs the live repository before snapshotting and a queued restore", async ({ signal }) => {
@@ -289,6 +294,7 @@ describe("configured managed worktree root", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });

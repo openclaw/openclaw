@@ -22,8 +22,8 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import {
   readPreparedSessionTranscriptChange,
   publishUnchangedSessionTranscriptAuthority,
-  type SessionTranscriptAuthority,
 } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 
 const rollbackFault = useSqliteWorkerFault([
   {

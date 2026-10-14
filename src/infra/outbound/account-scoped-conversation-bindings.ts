@@ -65,34 +65,34 @@ export type AccountScopedConversationBindingRecord<TKind extends string = string
 };
 
 /**
- * Released synchronous thread-bindings-runtime SDK contract, retained until the next SDK major.
- * @deprecated Use AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major.
+ * Released synchronous thread-bindings-runtime SDK contract retained during deprecation.
+ * @deprecated Use AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31.
  */
 export type AccountScopedConversationBindingManager<TKind extends string = string> = {
   accountId: string;
-  /** @deprecated Use getByConversationIdAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use getByConversationIdAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
   getByConversationId: (
     conversationId: string,
   ) => AccountScopedConversationBindingRecord<TKind> | undefined;
-  /** @deprecated Use listBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use listBySessionKeyAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
   listBySessionKey: (targetSessionKey: string) => AccountScopedConversationBindingRecord<TKind>[];
-  /** @deprecated Use bindConversationAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use bindConversationAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
   bindConversation: (params: {
     conversationId: string;
     targetKind: BindingTargetKind;
     targetSessionKey: string;
     metadata?: Record<string, unknown>;
   }) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use touchConversationAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use touchConversationAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
   touchConversation: (
     conversationId: string,
     at?: number,
   ) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use unbindConversationAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use unbindConversationAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
   unbindConversation: (
     conversationId: string,
   ) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use unbindBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+  /** @deprecated Use unbindBySessionKeyAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
   unbindBySessionKey: (targetSessionKey: string) => AccountScopedConversationBindingRecord<TKind>[];
   stop: () => void;
 };
@@ -122,12 +122,15 @@ export type AccountScopedConversationBindingManagerV2<TKind extends string = str
   stop: () => void;
 };
 
-type AccountBindingManager<TKind extends string> = AccountScopedConversationBindingManager<TKind> &
-  AccountScopedConversationBindingManagerV2<TKind>;
+type AccountBindingOwner<TKind extends string> = {
+  manager: AccountScopedConversationBindingManagerV2<TKind>;
+  preparation: ReturnType<typeof prepareAccountBindingManager<TKind>>;
+  legacy?: AccountScopedConversationBindingManager<TKind>;
+};
 
 function getState<TKind extends string>(stateKey: symbol) {
   return resolveGlobalSingleton(stateKey, () => ({
-    managersByAccountId: new Map<string, AccountBindingManager<TKind>>(),
+    managersByAccountId: new Map<string, AccountBindingOwner<TKind>>(),
   }));
 }
 
@@ -140,32 +143,108 @@ type AccountBindingManagerParams<TKind extends string> = {
   toSessionBindingTargetKind: (raw: TKind) => BindingTargetKind;
 };
 
-/** @deprecated Use createAccountScopedConversationBindingManagerV2; removed in the next Plugin SDK major. */
+/** @deprecated Use createAccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
 export function createAccountScopedConversationBindingManager<TKind extends string>(
   params: AccountBindingManagerParams<TKind>,
 ): AccountScopedConversationBindingManager<TKind> {
-  return createAccountBindingManager(params);
+  const owner = createAccountBindingManager(params);
+  if (owner.legacy) {
+    return owner.legacy;
+  }
+  const { accountId, accountScope, conversationRef, asAccountBindingRecord, prepareBind } =
+    owner.preparation;
+  const legacy: AccountScopedConversationBindingManager<TKind> = {
+    accountId,
+    getByConversationId: (conversationId) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "AccountScopedConversationBindingManager.getByConversationId",
+        replacement: "AccountScopedConversationBindingManagerV2.getByConversationIdAsync",
+        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+      });
+      const record = resolveCurrentConversationBindingRecord(conversationRef(conversationId));
+      return record ? asAccountBindingRecord(record) : undefined;
+    },
+    listBySessionKey: (targetSessionKey) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "AccountScopedConversationBindingManager.listBySessionKey",
+        replacement: "AccountScopedConversationBindingManagerV2.listBySessionKeyAsync",
+        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+      });
+      return listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope).map(
+        asAccountBindingRecord,
+      );
+    },
+    bindConversation: (input) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "AccountScopedConversationBindingManager.bindConversation",
+        replacement: "AccountScopedConversationBindingManagerV2.bindConversationAsync",
+        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+      });
+      const prepared = prepareBind(input);
+      const record = prepared
+        ? updateCurrentConversationBindingRecord(prepared.record.conversation, (current) =>
+            applyCurrentConversationBindingBind(current, prepared, (requiresAgentId) => {
+              if (requiresAgentId) {
+                prepared.assertAgentResolved?.();
+              }
+            }),
+          ).current
+        : null;
+      return record ? asAccountBindingRecord(record) : null;
+    },
+    touchConversation: (conversationId, at = Date.now()) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "AccountScopedConversationBindingManager.touchConversation",
+        replacement: "AccountScopedConversationBindingManagerV2.touchConversationAsync",
+        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+      });
+      return touchAccountBindingConversation(owner.preparation, conversationId, at);
+    },
+    unbindConversation: (conversationId) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "AccountScopedConversationBindingManager.unbindConversation",
+        replacement: "AccountScopedConversationBindingManagerV2.unbindConversationAsync",
+        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+      });
+      const { previous } = updateCurrentConversationBindingRecord(
+        conversationRef(conversationId),
+        () => null,
+      );
+      return previous ? asAccountBindingRecord(previous) : null;
+    },
+    unbindBySessionKey: (targetSessionKey) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "AccountScopedConversationBindingManager.unbindBySessionKey",
+        replacement: "AccountScopedConversationBindingManagerV2.unbindBySessionKeyAsync",
+        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
+      });
+      return deleteCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope).map(
+        asAccountBindingRecord,
+      );
+    },
+    stop: owner.manager.stop,
+  };
+  owner.legacy = legacy;
+  return legacy;
 }
 
 /** Creates the worker-owned manager and registers its required async adapter. */
 export function createAccountScopedConversationBindingManagerV2<TKind extends string>(
   params: AccountBindingManagerParams<TKind>,
 ): AccountScopedConversationBindingManagerV2<TKind> {
-  return createAccountBindingManager(params);
+  return createAccountBindingManager(params).manager;
 }
 
-function createAccountBindingManager<TKind extends string>(
+function prepareAccountBindingManager<TKind extends string>(
   params: AccountBindingManagerParams<TKind>,
-): AccountBindingManager<TKind> {
+) {
   const accountId = normalizeAccountId(params.accountId);
-  const state = getState<TKind>(params.stateKey);
-  const existingManager = state.managersByAccountId.get(accountId);
-  if (existingManager) {
-    // Manager state is account-scoped and process-global so repeated channel
-    // setup calls reuse the same binding adapter instead of double-registering.
-    return existingManager;
-  }
-
   const accountScope = { channel: params.channel, accountId };
   const policyScope = { cfg: params.cfg, ...accountScope };
   const idleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel(policyScope);
@@ -249,9 +328,63 @@ function createAccountBindingManager<TKind extends string>(
       accountPolicy: { inferredAgentId },
     };
   };
+  return {
+    accountId,
+    accountScope,
+    idleTimeoutMs,
+    maxAgeMs,
+    asSessionBindingRecord,
+    asAccountBindingRecord,
+    conversationRef,
+    conversationIdFromBinding,
+    prepareBind,
+  };
+}
+
+function touchAccountBindingConversation<TKind extends string>(
+  preparation: ReturnType<typeof prepareAccountBindingManager<TKind>>,
+  conversationId: string,
+  at: number,
+): AccountScopedConversationBindingRecord<TKind> | null {
+  const { conversationRef, asAccountBindingRecord, asSessionBindingRecord } = preparation;
+  const { current } = updateCurrentConversationBindingRecord(
+    conversationRef(conversationId),
+    (existing) => {
+      if (!existing) {
+        return null;
+      }
+      const updated = { ...asAccountBindingRecord(existing), lastActivityAt: at };
+      return asSessionBindingRecord(updated, existing.metadata);
+    },
+  );
+  return current ? asAccountBindingRecord(current) : null;
+}
+
+function createAccountBindingManager<TKind extends string>(
+  params: AccountBindingManagerParams<TKind>,
+): AccountBindingOwner<TKind> {
+  const accountId = normalizeAccountId(params.accountId);
+  const state = getState<TKind>(params.stateKey);
+  const existingManager = state.managersByAccountId.get(accountId);
+  if (existingManager) {
+    // Manager state is account-scoped and process-global so repeated channel
+    // setup calls reuse the same binding adapter instead of double-registering.
+    return existingManager;
+  }
+
+  const preparation = prepareAccountBindingManager(params);
+  const {
+    accountScope,
+    idleTimeoutMs,
+    maxAgeMs,
+    asAccountBindingRecord,
+    conversationRef,
+    conversationIdFromBinding,
+    prepareBind,
+  } = preparation;
   const assertCurrent = () => {
     if (
-      state.managersByAccountId.get(accountId) !== manager ||
+      state.managersByAccountId.get(accountId)?.manager !== manager ||
       !isSessionBindingAdapterCurrent(sessionBindingAdapter)
     ) {
       throw new SessionBindingError(
@@ -285,7 +418,7 @@ function createAccountBindingManager<TKind extends string>(
   const unsubscribePublication = currentConversationBindingPublication.subscribeFacts(() => {
     publicationRevision++;
   });
-  const manager: AccountBindingManager<TKind> = {
+  const manager: AccountScopedConversationBindingManagerV2<TKind> = {
     getByConversationIdAsync: async (conversationId) => {
       const record = await readAccountBindingAsync(conversationRef(conversationId), false);
       return record ? asAccountBindingRecord(record) : undefined;
@@ -336,93 +469,10 @@ function createAccountBindingManager<TKind extends string>(
         )
       ).map(asAccountBindingRecord),
     accountId,
-    getByConversationId: (conversationId) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "AccountScopedConversationBindingManager.getByConversationId",
-        replacement: "AccountScopedConversationBindingManagerV2.getByConversationIdAsync",
-        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-      });
-      const record = resolveCurrentConversationBindingRecord(conversationRef(conversationId));
-      return record ? asAccountBindingRecord(record) : undefined;
-    },
-    listBySessionKey: (targetSessionKey) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "AccountScopedConversationBindingManager.listBySessionKey",
-        replacement: "AccountScopedConversationBindingManagerV2.listBySessionKeyAsync",
-        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-      });
-      return listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope).map(
-        asAccountBindingRecord,
-      );
-    },
-    bindConversation: (input) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "AccountScopedConversationBindingManager.bindConversation",
-        replacement: "AccountScopedConversationBindingManagerV2.bindConversationAsync",
-        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-      });
-      const prepared = prepareBind(input);
-      const record = prepared
-        ? updateCurrentConversationBindingRecord(prepared.record.conversation, (current) =>
-            applyCurrentConversationBindingBind(current, prepared, (requiresAgentId) => {
-              if (requiresAgentId) {
-                prepared.assertAgentResolved?.();
-              }
-            }),
-          ).current
-        : null;
-      return record ? asAccountBindingRecord(record) : null;
-    },
-    touchConversation: (conversationId, at = Date.now()) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "AccountScopedConversationBindingManager.touchConversation",
-        replacement: "AccountScopedConversationBindingManagerV2.touchConversationAsync",
-        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-      });
-      const { current } = updateCurrentConversationBindingRecord(
-        conversationRef(conversationId),
-        (existing) => {
-          if (!existing) {
-            return null;
-          }
-          const updated = { ...asAccountBindingRecord(existing), lastActivityAt: at };
-          return asSessionBindingRecord(updated, existing.metadata);
-        },
-      );
-      return current ? asAccountBindingRecord(current) : null;
-    },
-    unbindConversation: (conversationId) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "AccountScopedConversationBindingManager.unbindConversation",
-        replacement: "AccountScopedConversationBindingManagerV2.unbindConversationAsync",
-        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-      });
-      const { previous } = updateCurrentConversationBindingRecord(
-        conversationRef(conversationId),
-        () => null,
-      );
-      return previous ? asAccountBindingRecord(previous) : null;
-    },
-    unbindBySessionKey: (targetSessionKey) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "AccountScopedConversationBindingManager.unbindBySessionKey",
-        replacement: "AccountScopedConversationBindingManagerV2.unbindBySessionKeyAsync",
-        compatibility: "Synchronous binding operations retain commit-before-return compatibility.",
-      });
-      return deleteCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope).map(
-        asAccountBindingRecord,
-      );
-    },
     stop: () => {
       unsubscribePublication();
       // Registrations are process-local; SQLite-owned bindings must survive manager shutdown.
-      if (state.managersByAccountId.get(accountId) === manager) {
+      if (state.managersByAccountId.get(accountId)?.manager === manager) {
         state.managersByAccountId.delete(accountId);
       }
       unregisterSessionBindingAdapter({
@@ -467,16 +517,36 @@ function createAccountBindingManager<TKind extends string>(
     channel: params.channel,
     accountId,
     capabilities: { placements: ["current"] },
-    listBySession: (targetSessionKey) =>
-      listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope),
-    resolveByConversation: (ref) =>
-      ref.channel === params.channel
+    /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. */
+    listBySession: (targetSessionKey) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.listBySession",
+        replacement: "SessionBindingAdapterV2.listBySessionAsync",
+      });
+      return listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope);
+    },
+    /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. */
+    resolveByConversation: (ref) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.resolveByConversation",
+        replacement: "SessionBindingAdapterV2.resolveByConversationAsync",
+      });
+      return ref.channel === params.channel
         ? resolveCurrentConversationBindingRecord(conversationRef(ref.conversationId))
-        : null,
+        : null;
+    },
+    /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. */
     touch: (bindingId, at) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.touch",
+        replacement: "SessionBindingAdapterV2.touchAsync",
+      });
       const conversationId = conversationIdFromBinding(bindingId);
       if (conversationId) {
-        manager.touchConversation(conversationId, at);
+        touchAccountBindingConversation(preparation, conversationId, at ?? Date.now());
       }
     },
     bind: async (input: SessionBindingBindInput & CurrentSessionBindingExpectation) => {
@@ -549,10 +619,17 @@ function createAccountBindingManager<TKind extends string>(
         assertCurrent,
         context,
       ),
-    inspectByConversation: (ref) =>
-      ref.channel === params.channel
+    /** @deprecated Use inspectByConversationAsync; final compatibility day: 2026-12-31. */
+    inspectByConversation: (ref) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "SessionBindingAdapter.inspectByConversation",
+        replacement: "SessionBindingAdapterV2.inspectByConversationAsync",
+      });
+      return ref.channel === params.channel
         ? inspectCurrentConversationBindingRecord(conversationRef(ref.conversationId))
-        : null,
+        : null;
+    },
     inspectByConversationAsync: (ref) => readAccountBindingAsync(ref, true),
     resolveByConversationAsync: (ref) => readAccountBindingAsync(ref, false),
     touchAsync: async (bindingId, at) => {
@@ -564,14 +641,15 @@ function createAccountBindingManager<TKind extends string>(
   };
 
   registerSessionBindingAdapterV2(sessionBindingAdapter);
-  state.managersByAccountId.set(accountId, manager);
-  return manager;
+  const owner = { manager, preparation };
+  state.managersByAccountId.set(accountId, owner);
+  return owner;
 }
 
 /** Stops registered account-scoped adapters for one test key without clearing durable bindings. */
 export function resetAccountScopedConversationBindingsForTests(params: { stateKey: symbol }) {
   const state = getState(params.stateKey);
-  for (const manager of state.managersByAccountId.values()) {
+  for (const { manager } of state.managersByAccountId.values()) {
     manager.stop();
   }
   state.managersByAccountId.clear();

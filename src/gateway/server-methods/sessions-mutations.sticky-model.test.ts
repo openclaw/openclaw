@@ -14,6 +14,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -69,6 +70,7 @@ import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.n
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
+import * as sessionPatchErrors from "./sessions-patch-errors.js";
 
 const defaultAgents: Record<string, AgentEntryConfig> = {
   main: {},
@@ -88,6 +90,7 @@ let openClawTestState: OpenClawTestState;
 let accountOwnerId: string;
 let otherPersonId: string;
 let personalAuthProfileId: string;
+let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
 
 const modelCatalog: ModelCatalogEntry[] = [
   { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
@@ -203,6 +206,7 @@ beforeAll(async () => {
     },
     assertCurrent: () => {},
   }).authProfileId;
+  profileCatalog = await prepareUserProfileCatalog();
   // Persisted runtime pins need installed owners even when a patch changes only permissions.
   pluginMetadata.snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
@@ -238,6 +242,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+  profileCatalog?.release();
   closeOpenClawAgentDatabasesForTest();
   await openClawTestState.cleanup();
 });
@@ -486,6 +491,21 @@ describe("sessions.patch personal model-account ownership", () => {
         return catalog.promise;
       });
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
+      const failures: Array<{ name: string; frames: string[] }> = [];
+      const unexpectedPatchError = sessionPatchErrors.unexpectedPatchError;
+      vi.spyOn(sessionPatchErrors, "unexpectedPatchError").mockImplementation((key, error) => {
+        failures.push({
+          name: error instanceof Error ? error.name : typeof error,
+          frames:
+            error instanceof Error
+              ? (error.stack ?? "")
+                  .split("\n")
+                  .slice(1, 6)
+                  .map((frame) => frame.split(/[\\/]/).at(-1) ?? "")
+              : [],
+        });
+        return unexpectedPatchError(key, error);
+      });
       const pending = patchSession(
         {
           key: sessionKey,
@@ -499,8 +519,15 @@ describe("sessions.patch personal model-account ownership", () => {
       try {
         await Promise.race([
           catalogEntered.promise,
-          pending.then(() => {
-            throw new Error("Session patch completed before loading the model catalog");
+          pending.then((response) => {
+            throw new Error(
+              `Session patch completed before loading the model catalog: ${JSON.stringify({
+                loss,
+                ok: response[0],
+                error: response[2],
+                failures,
+              })}`,
+            );
           }),
         ]);
         expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();

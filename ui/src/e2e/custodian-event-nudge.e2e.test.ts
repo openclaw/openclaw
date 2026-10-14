@@ -565,7 +565,7 @@ suite.define(() => {
     );
   });
 
-  it("stays silent during onboarding", async () => {
+  it("keeps health-event nudges silent during onboarding", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],

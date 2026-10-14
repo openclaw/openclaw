@@ -186,7 +186,10 @@ describe("Pi session catalog", () => {
     let provider: TestSessionCatalogProvider | undefined;
     registerPiSessionCatalog({
       pluginConfig: {},
-      runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+      runtime: {
+        config: { current: () => ({}) },
+        nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
+      },
       registerSessionCatalog: (
         value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
       ) => {
@@ -490,7 +493,10 @@ describe("Pi session catalog", () => {
     const commands: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0][] = [];
     registerPiSessionCatalog({
       pluginConfig: {},
-      runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+      runtime: {
+        config: { current: () => ({}) },
+        nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
+      },
       registerSessionCatalog: (
         value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0],
       ) => {

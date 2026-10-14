@@ -14,8 +14,48 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup, type NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { renderActivityGroup } from "./chat-message-group.ts";
+import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
+
+it.each([false, true])(
+  "does not present a partial response group as complete usage (unavailable: %s)",
+  (unavailable) => {
+    const first = {
+      role: "assistant",
+      content: "First answer.",
+      timestamp: 1000,
+      usage: { input: 100, output: 20, cost: { total: 1 } },
+    };
+    const group = createMessageGroup(first, "assistant", {
+      messages: [
+        { key: "first", message: first },
+        {
+          key: "second",
+          message: {
+            ...first,
+            content: "Second answer.",
+            usage: {
+              input: 50,
+              output: 50,
+              cost: { total: 2 },
+              ...(unavailable ? { usageReport: { state: "unavailable" } } : {}),
+            },
+          },
+        },
+      ],
+    });
+    const view = mountSolid(() => (
+      <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 1000 }} />
+    ));
+    flush();
+    const metadata = view.container.querySelector(".msg-meta__details");
+    expect(
+      [...(metadata?.querySelectorAll(".msg-meta__tokens") ?? [])].map((node) => node.textContent),
+    ).toEqual(unavailable ? ["Token usage and cost unavailable"] : ["↑150", "↓70"]);
+    expect(metadata?.querySelector(".msg-meta__cost") === null).toBe(unavailable);
+    expect(metadata?.querySelector(".msg-meta__ctx") === null).toBe(unavailable);
+  },
+);
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
   const imageData =

@@ -9,6 +9,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "../../config/sessions/session-entry-lineage.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -440,20 +441,33 @@ export function createCronRunContinuationSession(params: {
   };
   const owns = (entry: SessionEntry | undefined) =>
     entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
+  let sealed = false;
+  let persistedSnapshot: { source: SessionEntry; continuation: typeof continuation } | undefined;
   const persist = async (
     create: boolean,
     phase: "running" | "ready",
     basePersisted = false,
     assertCommitAllowed?: () => void,
   ) => {
+    if (sealed) {
+      if (phase === "ready") {
+        return;
+      }
+      throw new CronSessionLifecycleClaimError(params.runSessionKey);
+    }
     const source = structuredClone(params.cronSession.sessionEntry);
     delete source.createdVia;
     delete source.createdActor;
     delete source.createdAt;
-    // Node-local lineage must not leak across keys: the base row's generation
-    // chain and fork ancestry describe the cron root, not this :run: node.
+    // Node-local lineage must not leak across keys: generation history and
+    // fork ancestry describe the cron root, not this :run: node.
     delete source.previousSessionId;
     delete source.forkSource;
+    delete source.usageFamilySessionIds;
+    const snapshot = { source, continuation: structuredClone(continuation) };
+    if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
+      return;
+    }
     let persisted = false;
     let alreadySealed = false;
     await params.persistSessionEntry({
@@ -477,7 +491,13 @@ export function createCronRunContinuationSession(params: {
         persisted = true;
         return {
           ...current,
-          ...source,
+          ...(current
+            ? preserveSqliteSameKeySessionRolloverLineage({
+                next: source,
+                previous: current,
+                sessionKey: params.runSessionKey,
+              })
+            : source),
           // Snapshot merges remove cleared keys; continuity copies must carry
           // their absence too, or this row resurrects an invalid native handle.
           cliSessionBindings: source.cliSessionBindings,
@@ -505,6 +525,10 @@ export function createCronRunContinuationSession(params: {
     if (!persisted && !alreadySealed) {
       throw new CronSessionLifecycleClaimError(params.runSessionKey);
     }
+    // Only acknowledged writes advance the snapshot. After handoff the cron
+    // owner has no further writes, including its unconditional final cleanup.
+    persistedSnapshot = snapshot;
+    sealed = phase === "ready";
   };
   return {
     initialize: async () => await persist(true, "running"),

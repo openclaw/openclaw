@@ -163,7 +163,7 @@ export function registerShutdownBudgetTests({
               nativeStopBudget: true,
             });
             expect(waitForGatewayActiveWork).toHaveBeenCalledWith(
-              stopTimeoutMs - 15_000 - inspectionMs,
+              Math.min(20_000, stopTimeoutMs - 15_000 - inspectionMs),
               expect.any(Object),
             );
             if (shutdownStopMs === "unavailable") {

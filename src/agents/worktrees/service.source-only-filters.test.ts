@@ -12,6 +12,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -105,6 +106,22 @@ async function configure(scope: string, kind: string, cwd: string) {
     await git(repo, "config", `filter.late.${kind}`, command);
   }
 }
+
+it.each(["sha1", "sha256"])(
+  "keeps source-only object writes in %s storage without requiring a HEAD commit",
+  async (format) => {
+    const empty = path.join(root, `empty-${format}`);
+    await git(root, "init", "--template=", `--object-format=${format}`, empty);
+    await fs.writeFile(path.join(empty, "source.txt"), "source-only object\n");
+    const expected = await git(empty, "hash-object", "source.txt");
+    const oid = await withWorktreeGitConfig(empty, true, {}, (policy) =>
+      policy.require(empty, ["hash-object", "-w", "source.txt"]),
+    );
+    expect(oid).toBe(expected);
+    expect(await git(empty, "cat-file", "blob", oid)).toBe("source-only object");
+    await expect(git(empty, "rev-parse", "--verify", "HEAD")).rejects.toThrow();
+  },
+);
 
 it("keeps source-only clones away from an inherited external Git index", async () => {
   const externalIndex = path.join(root, "external-index");

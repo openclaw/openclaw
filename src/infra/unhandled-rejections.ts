@@ -273,7 +273,7 @@ export function installUnhandledRejectionHandler(): void {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState(reason, { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(exitCode);
+    exitAfterSignalExitBarriers(exitCode, reason);
   };
 
   process.on("unhandledRejection", (reason, _promise) => {

@@ -8,7 +8,7 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
@@ -43,7 +43,7 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
   afterEach(async () => {
     resetConfigRuntimeState();
     runLeaseTesting.resetForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 

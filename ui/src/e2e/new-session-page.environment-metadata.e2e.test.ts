@@ -112,7 +112,7 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
       await gateway.waitForRequest("environments.list");
       const whereTrigger = page.locator("#new-session-where-trigger");
-      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const where = page.locator(".oc-popover.new-session-page__where-popover");
       const device = where.locator('[data-value="device:build-mac"]');
       const restrictedDevice = where.locator('[data-value="device:restricted-mac"]');
       const modelSelect = page.locator('[data-chat-model-select="true"]');
@@ -254,7 +254,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const place = page.locator("wa-popover.new-session-page__where-popover");
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
       await openEnvironmentPicker(page);
       const row = (id: string) => place.locator(`[data-value="device:${id}"]`);
       await row("alpha-device").waitFor();
@@ -367,7 +367,7 @@ suite.define(() => {
         })),
       ).toEqual({ connected: true, focused: true, device: "device:alpha-device" });
       await page.keyboard.press("Enter");
-      expect(await place.getAttribute("open")).not.toBeNull();
+      expect(await place.evaluate((element) => element.matches(":popover-open"))).toBe(true);
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       for (let cycle = 1; cycle <= 4; cycle += 1) {
         await gateway.deferNext("environments.list");

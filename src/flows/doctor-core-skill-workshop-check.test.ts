@@ -18,6 +18,39 @@ function getSkillWorkshopCheck(): HealthCheck {
 }
 
 describe("core/doctor/skill-workshop-tool-policy", () => {
+  it.each([true, false])("respects a reader's Workshop opt-out (deny=%s)", async (denied) => {
+    const result = await runDoctorLintChecks(
+      {
+        mode: "lint",
+        runtime,
+        cfg: {
+          skills: { workshop: { autonomous: { mode: "auto" } } },
+          agents: {
+            entries: {
+              reader: {
+                tools: { profile: "minimal", ...(denied ? { deny: ["group:agents"] } : {}) },
+              },
+            },
+          },
+        },
+      },
+      { checks: [getSkillWorkshopCheck()] },
+    );
+
+    expect(result.findings).toEqual(
+      denied
+        ? []
+        : [
+            expect.objectContaining({
+              severity: "warning",
+              target: "reader",
+              path: "agents.entries.reader.tools.profile",
+              fixHint: 'Add agents.entries.reader.tools.alsoAllow: ["skill_workshop"].',
+            }),
+          ],
+    );
+  });
+
   it("warns when autonomous capture is enabled but policy hides its tool", async () => {
     const findings = await getSkillWorkshopCheck().detect({
       mode: "doctor",

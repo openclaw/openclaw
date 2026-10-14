@@ -10,6 +10,7 @@ import type { ModelAuthStatusProfile, WizardNextResult } from "../../api/types.t
 import type { ConfigPatchAck } from "../../lib/config/config-draft-model.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import "../../lib/toast-host.ts";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,

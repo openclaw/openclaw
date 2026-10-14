@@ -11,7 +11,7 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type AgentDatabaseOwner = { db: DatabaseSync };
-export type OpenClawAgentDatabaseIdentity = string | symbol;
+export type OpenClawAgentDatabaseIdentity = string;
 
 const identities = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseIdentities"),
@@ -24,12 +24,16 @@ const identities = resolveGlobalSingleton(
         incarnation: string;
         filename: string;
         canonicalPath: string;
+        ownerDatabasePath?: string;
       }
     >(),
 );
 
 /** Prepare physical and connection identity once at open; cached aliases are not resolved again. */
-export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
+export function registerOpenClawAgentDatabaseIdentity(
+  db: DatabaseSync,
+  ownerDatabasePath?: string,
+): void {
   const filename = normalizeDatabasePath(db.location() ?? "");
   const admitted = filename ? getSqliteDatabaseAdmissionIdentityForPath(filename) : undefined;
   const file = admitted
@@ -37,16 +41,17 @@ export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
     : filename
       ? readDatabasePathIdentitySync(filename)
       : undefined;
-  if (file && !file.key.startsWith("file:")) {
-    throw new Error("OpenClaw agent database disappeared before identity registration");
+  if (!file || !file.key.startsWith("file:")) {
+    throw new Error("OpenClaw agent database requires a physical file for identity registration");
   }
-  const identity = file ? file.key.slice("file:".length) : Symbol("incognito-agent-database");
+  const identity = file.key.slice("file:".length);
   identities.set(db, {
     identity,
-    birthtime: file?.birthtime,
+    birthtime: file.birthtime,
     incarnation: randomUUID(),
     filename,
-    canonicalPath: file?.canonicalPath ?? filename,
+    canonicalPath: file.canonicalPath,
+    ownerDatabasePath: ownerDatabasePath ? resolveDatabasePathKey(ownerDatabasePath) : undefined,
   });
 }
 
@@ -72,9 +77,6 @@ export function isOpenClawAgentDatabasePathCurrent(
     return false;
   }
   const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity === "symbol") {
-    return true;
-  }
   if (normalizeDatabasePath(database.db.location() ?? "") !== filename) {
     return false;
   }
@@ -88,7 +90,7 @@ export function assertOpenClawAgentDatabaseIdentity(
 ): void {
   const identity = readOpenClawAgentDatabaseIdentity(database);
   if (
-    `file:${String(identity.identity)}` !== expected.key ||
+    `file:${identity.identity}` !== expected.key ||
     (expected.birthtime !== undefined && identity.birthtime !== expected.birthtime) ||
     !isOpenClawAgentDatabasePathCurrent(database)
   ) {

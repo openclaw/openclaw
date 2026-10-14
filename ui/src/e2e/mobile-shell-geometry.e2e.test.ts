@@ -380,7 +380,7 @@ suite.define(() => {
         }
         const firstMessage = page.locator(".chat-group.user").first();
         const bubble = firstMessage.locator(".chat-bubble").first();
-        const details = page.locator(".chat-details-toggle");
+        const details = page.locator(".chat-pane__layout-trigger");
         const initialFrame = await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
           animations: "disabled",
         });
@@ -413,7 +413,7 @@ suite.define(() => {
                 box.x + box.width <= detailsBox.x ||
                 detailsBox.y + detailsBox.height <= box.y ||
                 box.y + box.height <= detailsBox.y),
-            `${name}: Details must clear the first message and its actions`,
+            `${name}: Header controls must clear the first message and its actions`,
           ).toBe(true);
         }
         await waitForWatchedSessionKey(gateway, "agent:main:main");

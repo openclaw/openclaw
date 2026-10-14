@@ -56,7 +56,7 @@ async function openUpdateCard(page: Page, baseUrl: string) {
   await updateIssue.locator("summary").click();
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
-  // Expansion checks freshness; a disabled button cannot receive keyboard focus.
+  // Expansion refreshes the target; the action stays disabled until that check settles.
   await expect.poll(() => updateButton.isEnabled()).toBe(true);
   return { gateway, updateButton };
 }
@@ -439,9 +439,9 @@ suite.define(() => {
                 .filter((className) => typeof className === "string" && className.length > 0),
             ),
         ).toEqual(["sr-only", "sidebar-issues-button"]);
-        await page.locator(".sidebar-shell__footer").screenshot({
+        await page.locator(".sidebar-issues-button").screenshot({
           animations: "disabled",
-          path: path.join(PROOF_DIR, "00-footer-inbox-badge.png"),
+          path: path.join(PROOF_DIR, "00-inbox-badge.png"),
         });
 
         await page.locator(".sidebar-issues-button").click();
@@ -607,8 +607,7 @@ suite.define(() => {
       async ({ page }) => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
 
-        await updateButton.focus();
-        await page.keyboard.press("Enter");
+        await updateButton.press("Enter");
         const dialog = confirmationDialog(page);
         await dialog.waitFor();
 
@@ -632,7 +631,7 @@ suite.define(() => {
           animations: "disabled",
           path: path.join(PROOF_DIR, "06-confirmation-confirm-focus.png"),
         });
-        await page.keyboard.press("Enter");
+        await confirm.press("Enter");
 
         await gateway.waitForRequest("update.run");
         expect(await gateway.getRequests("update.run")).toHaveLength(1);

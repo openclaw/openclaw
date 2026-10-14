@@ -11,7 +11,7 @@ import {
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -781,9 +781,7 @@ describe("chat history recovery cursor eligibility", () => {
       expect(await readDelta(scope, cursor)).toEqual({ kind: "reset" });
 
       const pending = await readTail(scope, offset);
-      expect(pending.messages).toContainEqual(
-        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "failed-attempt" }) }),
-      );
+      expect(pending.messages).toEqual([]);
       expect(pending).not.toHaveProperty("deltaCursor");
 
       await appendTranscriptMessage(scope, {

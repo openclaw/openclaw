@@ -59,7 +59,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     setCodexTestModelSupportsTools(params, true);
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     // Keep fixture I/O from spending the attempt clock before the command starts.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     let response: ReturnType<typeof callTool> | undefined;
     try {

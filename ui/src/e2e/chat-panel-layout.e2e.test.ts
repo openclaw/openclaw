@@ -100,7 +100,9 @@ suite.define(() => {
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       for (const pane of await panes.all()) {
-        await pane.locator('.side-panel__header wa-tab[panel="dashboard"]').waitFor();
+        await pane
+          .locator('.side-panel__header .tabstrip-tab[data-tab-value="dashboard"]')
+          .waitFor();
       }
       const roots = await panes
         .locator('.sidebar-region__primary, .side-panel__panel[data-panel-slot="dashboard"]')
@@ -109,7 +111,7 @@ suite.define(() => {
       const targets = () =>
         panes.evaluateAll((elements) =>
           elements.map((pane) => {
-            const tab = pane.querySelector(".side-panel__header wa-tab[active]")!;
+            const tab = pane.querySelector(".side-panel__header .tabstrip-tab[active]")!;
             const target = document.getElementById(tab.getAttribute("aria-controls")!);
             return {
               tabId: tab.id,
@@ -245,7 +247,7 @@ suite.define(() => {
         };
         await expectPaneHeaderGeometry(page, "right");
         // Side focus never swaps or reparents either live view.
-        const dashboardTab = sideHeader.locator('wa-tab[panel="dashboard"]');
+        const dashboardTab = sideHeader.locator('.tabstrip-tab[data-tab-value="dashboard"]');
         await page.screenshot({ path: path.join(suite.artifactDir, "side-before.png") });
         for (const dock of ["right", "left", "bottom"] as const) {
           await dockChatSidePanel(page, dock);
@@ -359,7 +361,7 @@ suite.define(() => {
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await page.locator('[data-panel-slot="terminal"][data-region="main"]').waitFor();
-        const chatTab = sideHeader.locator('wa-tab[panel="conversation"]');
+        const chatTab = sideHeader.locator('.tabstrip-tab[data-tab-value="conversation"]');
         await chatTab.click();
         await chat.waitFor();
         await chatTab.focus();
@@ -385,6 +387,16 @@ suite.define(() => {
 
         await page.setViewportSize({ width: 400, height: 900 });
         await page.locator(".sidebar-region--narrow").waitFor();
+        await dashboard.waitFor();
+        await terminal.waitFor({ state: "hidden" });
+        expect(await regionSize(dashboard)).toBeCloseTo(
+          await regionSize(page.locator(".sidebar-region")),
+          0,
+        );
+        // Mobile presents one tool at a time. Minimize the selected Dashboard
+        // before measuring the retained Terminal that is still the saved main.
+        await selectChatLayoutAction(paneHeader, "Minimize side panel");
+        await terminal.waitFor();
         await expect
           .poll(
             async () =>
@@ -392,11 +404,16 @@ suite.define(() => {
           )
           .toBeGreaterThan(30);
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(400);
-        await expectPaneHeaderGeometry(page, "bottom");
+        await selectChatLayoutAction(paneHeader, "Side panel");
+        await dashboard.waitFor();
+        await terminal.waitFor({ state: "hidden" });
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
-        await expectPaneHeaderGeometry(page, "bottom");
+        await terminal.waitFor();
+        await dashboard.waitFor({ state: "hidden" });
         await selectChatLayoutAction(paneHeader, "Focus");
+        await dashboard.waitFor();
+        await terminal.waitFor({ state: "hidden" });
         await selectChatLayoutAction(paneHeader, "Restore split");
         await terminal.locator(".tp-host canvas").waitFor();
         await selectChatLayoutAction(paneHeader, /^Swap /);
@@ -405,9 +422,13 @@ suite.define(() => {
         await dashboardTab.click();
         await terminal.waitFor({ state: "hidden" });
         await selectChatLayoutAction(paneHeader, "Restore split");
-        await terminal.waitFor();
+        await dashboard.waitFor();
+        await terminal.waitFor({ state: "hidden" });
         expect(await dashboard.boundingBox()).toEqual(narrowSize);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await terminal.waitFor();
+        await expectPaneHeaderGeometry(page, "right");
       },
     );
   }, 120_000);

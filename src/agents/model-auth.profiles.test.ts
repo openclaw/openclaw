@@ -17,7 +17,9 @@ import {
   createApiKeyCredential as keyCredential,
   createAuthProfileStoreFixture as authStore,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { clearAuthProfileMigrationDiagnostics } from "./auth-profiles/legacy-source-diagnostic.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -154,6 +156,7 @@ const cliCredentialMocks = vi.hoisted(() => ({
 vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
+  prepareSharedAuthStoreOwnershipForNative();
   clearRuntimeAuthProfileStoreSnapshots();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
@@ -744,6 +747,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
             for (const removeSource of [false, true]) {
               if (removeSource) {
                 await fs.rm(legacyPath);
+                await refreshAuthProfileFileState();
               }
               await expect(
                 resolveAuth({ provider: "litellm", agentDir, cfg }),

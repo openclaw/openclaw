@@ -25,7 +25,7 @@ import type { MatrixAuth, MatrixStoragePaths } from "./client/types.js";
 import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-  type MatrixThreadBindingManager,
+  type MatrixThreadBindingManagerV2,
 } from "./thread-bindings-shared.js";
 import { createMatrixThreadBindingManager } from "./thread-bindings.js";
 
@@ -52,7 +52,7 @@ describe("matrix thread bindings", () => {
   const accountId = "ops";
   const idleTimeoutMs = 24 * 60 * 60 * 1000;
   const matrixClient = {} as never;
-  const trackedManagers = new Set<MatrixThreadBindingManager>();
+  const trackedManagers = new Set<MatrixThreadBindingManagerV2>();
 
   async function resetThreadBindingAdapters() {
     await Promise.all([...trackedManagers].map((manager) => manager.stop()));

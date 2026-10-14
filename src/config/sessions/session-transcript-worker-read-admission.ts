@@ -79,6 +79,7 @@ export async function withSessionHistoryReadAdmission<T>(
             true,
             undefined,
             signal,
+            "history.cold-read",
           );
         } finally {
           clearTimeout(timer);

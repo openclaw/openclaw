@@ -14,9 +14,11 @@ import {
 import { findLegacyConfigRuleIssues } from "../config/legacy.js";
 import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
+import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
+import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -69,11 +71,14 @@ async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
+  retiredStateAdmitted?: boolean;
+  stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
 }) {
+  await using preparingResources = new AsyncDisposableStack();
   const shouldRepair = params.options.repair === true || params.options.yes === true;
   const preflight = await withProgress(
     {
@@ -83,14 +88,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     },
     (progress) =>
       runDoctorConfigPreflight({
+        retiredStateAdmitted: params.retiredStateAdmitted,
+        stateSchemaPreparation: params.stateSchemaPreparation,
         observe: false,
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
         preparePluginMetadataSnapshot: true,
-        ...(params.agentDatabaseMigrationDiscovery
-          ? { agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery }
-          : {}),
+        agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
         beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
           params.prompter,
           progress.done,
@@ -102,13 +107,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }),
   );
   const { snapshot, baseConfig: baseCfg } = preflight;
+  preparingResources.use(preflight.pluginCache);
+  if (!snapshot.exists || snapshot.valid) {
+    await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
+  }
   const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
   };
   const { createDoctorPluginMetadataSnapshotScope } =
     await import("./doctor/shared/plugin-metadata-snapshot-scope.js");
-  await using preparingResources = new AsyncDisposableStack();
   const pluginMetadataSnapshotScope = preparingResources.use(
     createDoctorPluginMetadataSnapshotScope({
       getBaseSnapshot: () => pluginMetadataSnapshotState.current,
@@ -631,6 +639,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // write drops them — its blocking note already states nothing was changed.
   const pendingChangePanels = changesPanelSink.drain();
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
+  await setAppliedRuntimeConfigSnapshot(cfg, cfg);
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 

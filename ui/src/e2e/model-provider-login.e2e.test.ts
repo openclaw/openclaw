@@ -165,9 +165,9 @@ suite.define(() => {
         await expect
           .poll(() => keyInput.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        expect(
-          await page.locator('.model-setup-provider-select [slot="trigger"]').textContent(),
-        ).toContain("Anthropic API key");
+        expect(await page.locator(".model-setup-provider-select__trigger").textContent()).toContain(
+          "Anthropic API key",
+        );
         expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
         await captureProviderProof("first-run-anthropic-key-form.png", keyInput);
         await keyInput.fill("synthetic-anthropic-api-key");

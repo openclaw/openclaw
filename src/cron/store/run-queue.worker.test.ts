@@ -164,16 +164,47 @@ it("deduplicates committed slots and drains persisted job order within worker ca
   expect((await queue.drain()).launches.map((entry) => entry.job.id)).toEqual(["a-second"]);
 });
 
+it("advances a consumed scheduled slot without reclaiming its terminal receipt", async () => {
+  const current = job("consumed");
+  const queue = await store("consumed", [current]);
+  const request = scheduled(queue.storeKey, current);
+  await queue.request([request]);
+  await queue.cancel([request.receiptId], "superseded");
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now);
+  const retry = await queue.request([request]);
+  expect(retry.accepted).toEqual([]);
+  expect(retry.rejected).toEqual([
+    { jobId: current.id, receiptId: request.receiptId, reason: "already-requested" },
+  ]);
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
+  expect((await queue.drain()).launches).toEqual([]);
+});
+
 it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
   const original = job("edited");
   const queue = await store("edit", [original]);
   const request = scheduled(queue.storeKey, original);
   const claimed = (await queue.request([request])).accepted[0]!;
   expect(await queue.readReceipt(claimed.runReceipt)).toEqual(claimed.runReceipt);
-  await queue.update(original.id, {
+  const edited = await queue.update(original.id, {
     payload: { kind: "command", argv: ["echo", "new payload"] },
     agentId: "edited-agent",
   });
+  expect(edited).toMatchObject({
+    outcome: {
+      store: {
+        jobs: [
+          {
+            id: original.id,
+            agentId: "edited-agent",
+            payload: { kind: "command", argv: ["echo", "new payload"] },
+            state: { queuedAtMs: now },
+          },
+        ],
+      },
+    },
+  });
+  expect(edited).toMatchObject({ outcome: { store: await queue.read() } });
   const activated = (await queue.drain()).launches[0]!;
   expect(activated.job.payload).toEqual({
     kind: "command",
@@ -200,7 +231,13 @@ it("returns durable receipt handles across queued edits and records disabled req
     configRevision: resolveCronJobConfigRevision(cancelJob),
   };
   await cancelled.request([manual]);
-  await cancelled.update(cancelJob.id, { enabled: false });
+  const disabled = await cancelled.update(cancelJob.id, { enabled: false });
+  expect(disabled).toMatchObject({ outcome: { store: await cancelled.read() } });
+  if (!("outcome" in disabled)) {
+    throw new Error("Expected the queued disable to commit");
+  }
+  expect(disabled.outcome.store.jobs[0]?.enabled).toBe(false);
+  expect(disabled.outcome.store.jobs[0]?.state.queuedAtMs).toBeUndefined();
   const drained = await cancelled.drain([manual]);
   expect(drained.launches).toEqual([]);
   expect(drained.skipped.map((entry) => entry.runReceipt.receiptId)).toEqual([manual.receiptId]);

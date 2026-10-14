@@ -20,7 +20,7 @@ import { workerService } from "../server-methods/environments.test-support.js";
 import { resolveRepositoryWorkspaceAccess } from "../server-methods/session-repository-workspace-access.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
   createPlacementFailureActions,
   type WorkerDispatchEnvironmentService,
@@ -56,6 +56,55 @@ vi.mock("./worker-github-binding.js", () => ({
 
 describe("repository workspace result ownership", () => {
   const { fixture, readArtifact } = useRepositoryWorkspaceResultFixture();
+
+  it("refuses repository effects after a committed session change without host SQL", async () => {
+    const f = await fixture("worker-turn");
+    const context = createGatewayRequestContext(makeContextParams());
+    context.workerSessionPlacementService = placements;
+    context.workerEnvironmentService = { ...workerService(), ...f.environments };
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: context.getRuntimeConfig(),
+      key: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
+    });
+    const execute = vi.spyOn(f.tunnel, "runWorkspaceCommand");
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      using access = await resolveRepositoryWorkspaceAccess(loaded, context, () => {});
+      if (access?.kind !== "active") {
+        throw new Error("Expected live repository editor access");
+      }
+      await access.inspect("get", { path: "missing.txt", files: [] });
+      expect(execute).toHaveBeenCalledTimes(1);
+      sql.expectIdle();
+      await expect(
+        f.mutations.mutate({
+          ...sessionTarget,
+          assertCurrent: () => {},
+          mutate: async (assertCurrent) => {
+            assertCurrent();
+            sql.expectIdle();
+            // Repository binding is write-once; rollover changes the live session owner.
+            await patchSessionEntryCore(sessionTarget, () => ({
+              sessionId: `${SESSION_ID}-replacement`,
+            }));
+            expect(assertCurrent).toThrow("lost its exact session placement owner");
+            await expect(access.inspect("get", { path: "missing.txt", files: [] })).rejects.toThrow(
+              "owner changed",
+            );
+            expect(execute).toHaveBeenCalledTimes(1);
+            sql.expectIdle();
+            return { changed: false, value: undefined };
+          },
+        }),
+      ).rejects.toThrow("lost its exact session placement owner");
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+      execute.mockRestore();
+    }
+  });
 
   it.for([
     { executionMode: "worker-turn", boundary: "ref-queue" },
@@ -289,9 +338,14 @@ describe("repository workspace result ownership", () => {
         await fs.writeFile(path.join(f.remote, `edit-${index}.txt`), content(index));
       }
       await fs.writeFile(path.join(f.remote, "edit-0.txt"), "before\n");
-      const access = await resolveRepositoryWorkspaceAccess(
-        loadGatewaySessionEntryReadOnly(sessionTarget.sessionKey),
+      using access = await resolveRepositoryWorkspaceAccess(
+        await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: context.getRuntimeConfig(),
+          key: sessionTarget.sessionKey,
+          agentId: sessionTarget.agentId,
+        }),
         context,
+        authorize,
       );
       if (access?.kind !== "active") {
         throw new Error("Expected live repository editor access");

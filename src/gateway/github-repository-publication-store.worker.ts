@@ -4,6 +4,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type {
   RepositoryGitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
@@ -34,12 +35,8 @@ const checkpointColumns = [
   "workspace_tree",
 ] satisfies (keyof RepositoryGitHubPublicationRow)[];
 const table = "github_repository_publication_requests";
-const query = (db: Parameters<typeof getNodeSqliteKysely>[0]) =>
-  getNodeSqliteKysely<Pick<DB, typeof table>>(db);
-function changed(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
-  row: RepositoryGitHubPublicationRow,
-) {
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+function changed(db: EngineConnection, row: RepositoryGitHubPublicationRow) {
   checked(row);
   githubPublicationReceipts.stageRow(db, "repository", row);
   deferSharedGitHubPublicationChanged(db, row);
@@ -69,7 +66,7 @@ export function readRepositoryGitHubPublicationBranchInDatabase(
 }
 
 export function readRepositoryGitHubPublicationInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   requestId: string,
 ): RepositoryGitHubPublicationRow | undefined {
   if (!tableExists(db, table)) {
@@ -83,7 +80,7 @@ export function readRepositoryGitHubPublicationInDatabase(
 }
 
 export function readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   row: RepositoryGitHubPublicationReceiptTarget,
 ): string[] {
   const known = new Set(row.pull_request_url ? [row.pull_request_url] : []);

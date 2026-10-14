@@ -14,14 +14,16 @@ import {
 } from "../agents/worktrees/registry.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  loadSessionEntryReadOnly,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubPublicationRequesterSnapshot } from "../state/github-publication-requester.js";
-import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -52,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   findWorktreeById: vi.fn(),
   resolveRepository: vi.fn(),
   loadSession: vi.fn(),
+  persistedSessionKeys: new Set<string>(),
   getConfigSnapshot: vi.fn(),
   attribution: vi.fn(),
   prepareAttribution: vi.fn(),
@@ -130,20 +133,18 @@ vi.mock("../agents/worktrees/registry-read.js", async (importOriginal) => ({
   readLiveRegistryWorktreeByOwner: mocks.readWorktree,
 }));
 
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: mocks.loadSession,
-}));
-
-// Preparation and live authority checks use the same fixture session state.
-vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (
-    params: Parameters<
-      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
-    >[0],
-  ) => mocks.loadSession(params.key, { agentId: params.agentId }),
-}));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils-store-worker.js")>();
+  return {
+    ...actual,
+    loadGatewaySessionEntryReadOnlyInWorker: async (
+      params: Parameters<typeof actual.loadGatewaySessionEntryReadOnlyInWorker>[0],
+    ) =>
+      mocks.persistedSessionKeys.has(params.key)
+        ? actual.loadGatewaySessionEntryReadOnlyInWorker(params)
+        : mocks.loadSession(params.key, { agentId: params.agentId }),
+  };
+});
 
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -404,8 +405,6 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
     // Publication fixtures exercise lifecycle writes without unrelated maintenance workers.
     session: { maintenance: { mode: "warn" } },
   });
-  const { loadGatewaySessionEntryReadOnly } =
-    await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   const original = mocks.loadSession.getMockImplementation()!;
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
@@ -426,13 +425,18 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
       lastActiveAt: Date.now(),
     });
   }
-  mocks.loadSession.mockImplementation(
-    (key: string, options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1]) =>
-      key === sessionKey ? loadGatewaySessionEntryReadOnly(key, options) : original(key, options),
+  const storePath = resolveSessionStorePathCore(currentGitHubPublicationConfig().session?.store, {
+    agentId: "main",
+  });
+  const read = () => loadSessionEntryReadOnly({ agentId: "main", sessionKey, storePath })!;
+  mocks.loadSession.mockImplementation((key: string, options?: { agentId?: string }) =>
+    key === sessionKey
+      ? { ...original(key, options), storePath, entry: read() }
+      : original(key, options),
   );
-  const read = () => loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).entry!;
+  mocks.persistedSessionKeys.add(sessionKey);
   return {
-    storePath: loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).storePath,
+    storePath,
     read,
     async reset(placements: WorkerSessionPlacementStore) {
       const before = read();
@@ -473,6 +477,7 @@ export function installGitHubPublicationTestHarness(
     }),
   );
   beforeEach(async () => {
+    mocks.persistedSessionKeys.clear();
     root = tempDirs.make("openclaw-publication-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     realWorktree = harnessOptions.realWorktree ?? false;
@@ -623,8 +628,8 @@ export function installGitHubPublicationTestHarness(
           const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
           return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
         }
-        if (command === "git show -s --format=%B HEAD") {
-          return commandResult("existing commit\n");
+        if (command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD") {
+          return commandResult(`${OLD_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nexisting commit\n`);
         }
         if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
           return commandResult("", 1);
@@ -658,14 +663,8 @@ export function installGitHubPublicationTestHarness(
         if (command.endsWith("write-tree")) {
           return commandResult(`${WORKSPACE_TREE}\n`);
         }
-        if (command === "git rev-parse HEAD^{tree}") {
-          return commandResult(`${WORKSPACE_TREE}\n`);
-        }
         if (command === `git rev-parse ${BASE_HEAD}^{tree}`) {
           return commandResult("e".repeat(40) + "\n");
-        }
-        if (command === "git rev-parse HEAD^") {
-          return commandResult(`${OLD_HEAD}\n`);
         }
         if (command.startsWith("git commit-tree ")) {
           return commandResult(`${NEW_HEAD}\n`);

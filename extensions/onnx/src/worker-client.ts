@@ -1,6 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
-import { resolveRuntimeWorkerArgv } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolveRuntimeWorkerArgv,
+  spawnOomScoreAdjusted as spawn,
+} from "openclaw/plugin-sdk/process-runtime";
 import type { WorkerConfig } from "./config.js";
 import type { ClassificationInput, ClassificationResult } from "./models/types.js";
 import {

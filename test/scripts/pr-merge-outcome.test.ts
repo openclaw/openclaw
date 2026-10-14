@@ -7,6 +7,56 @@ const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix, unknown
   createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each([
+    { phase: "initial", settles: true },
+    { phase: "initial", settles: false },
+    { phase: "stability", settles: true },
+    { phase: "stability", settles: false },
+  ])(
+    "starts the full settle window after a slow first UNKNOWN read during $phase (settles=$settles)",
+    ({ phase, settles }) => {
+      const f = fixture();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      f.save({
+        ...f.state(),
+        mode: "unapplied",
+        observations: [
+          ...(phase === "stability" ? [{}] : []),
+          { main, pr: unknownProjection, advanceSeconds: 65 },
+          ...(settles
+            ? [
+                {
+                  pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+                  advanceSeconds: 55,
+                },
+              ]
+            : []),
+        ],
+      });
+
+      const result = f.run();
+
+      expect(result.status, result.output).toBe(1);
+      if (settles) {
+        expect(f.state().settlementSleeps).toEqual([2]);
+        expect(result.output).toContain("prior dispatch unresolved");
+        expect(f.state().mutations).toBe(1);
+        expect(f.record()).toMatchObject({ phase: "intent", head: f.head, accepted: false });
+      } else {
+        expect(f.state().settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(60);
+        expect(result.output).toContain(
+          phase === "initial"
+            ? "mergeability remained UNKNOWN"
+            : "mergeability recalculation remained UNKNOWN",
+        );
+        expect(f.state().mutations).toBe(0);
+        expect(f.captures()).toEqual([]);
+        expect(() => f.record()).toThrow();
+      }
+      expect(f.state().posts).toBe(0);
+    },
+  );
+
   it("explicitly completes a reconciled merge after cleanup without another merge dispatch", () => {
     const f = reconciledMergeAfterCleanup();
     const landed = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
@@ -77,20 +127,21 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(readFileSync(capture, "utf8")).toBe(output);
     expect(run.output).toContain("Legacy .local/merge-output.log: present");
     expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
-    expect(run.output).not.toContain("lock-recover, then rerun merge-run");
+    expect(run.output).not.toContain("rerun merge-run; if the operation lock was retained");
     expect(() => f.record()).toThrow();
   });
 
-  it("does not repeat applied 502 + OPEN after main advance and exact lock recovery", () => {
+  it("does not repeat applied 502 + OPEN after main advance and lock release", () => {
     const f = fixture();
     f.save({ ...f.state(), mode: "applied-open" });
     const first = f.run();
     expect(first.status, first.output).toBe(1);
     expect(f.state().pr.state).toBe("OPEN");
     f.advance();
-    expect(f.recover()).toBe(true);
+    // The drained failure released the process lock; the outcome record still blocks a repeat.
+    expect(f.recover()).toBe(false);
     const second = f.run();
-    expect(f.state().mutations, "one mutation across exact lock recovery").toBe(1);
+    expect(f.state().mutations, "one mutation across lock release").toBe(1);
     expect(second.status, second.output).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(second.output).toContain("prior dispatch unresolved");

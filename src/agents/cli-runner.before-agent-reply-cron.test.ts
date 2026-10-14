@@ -445,6 +445,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(authSuccessMock).toHaveBeenCalledWith({
       store,
       profileId,
+      modelId: runParams.model,
       provider: "google-gemini-cli",
       agentDir: "/tmp/agent",
     });
@@ -648,6 +649,20 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executeMock).not.toHaveBeenCalled();
   });
 
+  it("marks a hook-claimed turn as never reaching a provider so capture skips its silence", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    replyMock.mockResolvedValue({ handled: true });
+
+    const result = await runCliAgent({ ...runParams, trigger: "cron" });
+
+    expect(result.meta).toMatchObject({
+      finalAssistantRawText: "NO_REPLY",
+      providerStarted: false,
+    });
+    const { resolveDiagnosticModelResponse } = await import("./diagnostic-model-response.js");
+    expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
+  });
+
   it("dispatches a declining hook once when model fallback re-enters the CLI runner", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     replyMock.mockResolvedValue(undefined);
@@ -758,7 +773,11 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("preserves delivery after failed MCP retirement", async () => {
-    executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+    executeMock.mockResolvedValue({
+      text: "",
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
     retireMock.mockImplementation(async ({ onError }: { onError?: (error: unknown) => void }) => {
       onError?.(new Error("session mcp retire failed"));
       return false;

@@ -98,9 +98,8 @@ export function hasTranscriptMessage(event: unknown): boolean {
 
 /** Control facts still belong in bounded context acquisition, even without a replay message. */
 export function transcriptEventContextEligibility(event: unknown): 0 | 1 {
-  return isRecord(event) && isRecord(event.message) && event.message.excludeFromContext === true
-    ? 0
-    : 1;
+  const message = isRecord(event) && (event.type === "custom_message" ? event : event.message);
+  return isRecord(message) && message.excludeFromContext === true ? 0 : 1;
 }
 
 export function shouldProjectActiveEvent(event: unknown): boolean {

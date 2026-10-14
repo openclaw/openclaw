@@ -103,7 +103,7 @@ import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
-  runGatewayCronFailureRepair,
+  createGatewayCronFailureRepair,
 } from "./server-cron-notifications.js";
 import { toPluginCronJob } from "./server-cron-plugin-job.js";
 import {
@@ -371,7 +371,7 @@ export function buildGatewayCronService(params: {
       if (cronEnabled) {
         exitWatchers.reconcile(jobs);
       } else {
-        void exitWatchers.cancelAll();
+        await exitWatchers.cancelAll();
       }
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
@@ -739,8 +739,7 @@ export function buildGatewayCronService(params: {
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
       }),
-    runCronFailureRepair: (request) =>
-      runGatewayCronFailureRepair(request, scheduledGatewayContextResolver),
+    ...createGatewayCronFailureRepair(params.cfg, scheduledGatewayContextResolver),
     log: toPinoLikeLogger(
       getChildLogger({ module: "cron", storeKey: storePath }),
       getResolvedLoggerSettings().level,
@@ -1120,7 +1119,15 @@ export function buildGatewayCronService(params: {
     // Fence new requests before cancellation so stopped children cannot respawn.
     exitWatchersStopped = true;
     exitWatcherGeneration += 1;
-    exitWatchersStopPromise ??= exitWatchers?.cancelAll() ?? Promise.resolve();
+    if (!exitWatchersStopPromise) {
+      exitWatchersStopPromise = exitWatchers?.cancelAll() ?? Promise.resolve();
+      void exitWatchersStopPromise.catch((err: unknown) => {
+        cronLogger.warn(
+          { err: formatErrorMessage(err) },
+          "cron-exit: asynchronous teardown failed",
+        );
+      });
+    }
   };
   // cron.stop launches this teardown asynchronously and stopAndDrain awaits
   // it; memoizing keeps that one drain instead of queueing every owner a

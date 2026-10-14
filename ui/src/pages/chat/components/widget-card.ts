@@ -5,7 +5,6 @@ import { ref } from "lit/directives/ref.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons } from "../../../components/icons.ts";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
-import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
@@ -23,10 +22,16 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
+import { postWidgetTheme } from "../../../lib/widget-theme.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { canvasWidgetMount } from "./canvas-widget-mount.ts";
-import { exportWidget } from "./widget-export.ts";
 import "./browser-tab-card.tsx";
+import {
+  WidgetCardMenu,
+  type WidgetAction,
+  type WidgetRawDetailsLabel,
+} from "./widget-card-menu.tsx";
+import { exportWidget } from "./widget-export.ts";
 
 registerMcpAppEnglish();
 
@@ -261,7 +266,6 @@ class WidgetFrameDirective extends Directive {
 
   render(params: PreviewFrameParams) {
     installWidgetSizeListener();
-    installWidgetThemeObserver();
     const sandbox = params.sandbox ?? "";
     // HTTP error pages also fire load. Until the widget bridge is adopted,
     // replace a stale frame; afterwards keep its document and interactive state.
@@ -394,32 +398,22 @@ function renderWidgetContent(
 }
 
 function handleWidgetExportAction(
-  event: CustomEvent<{ item: { value?: string } }>,
+  value: WidgetAction,
+  dropdown: HTMLElement,
   title: string | undefined,
-) {
-  const value = event.detail.item.value;
-  const dropdown = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+): WidgetRawDetailsLabel | void {
   if (value === "raw-details") {
-    const host = dropdown?.closest(".chat-tool-card__widget-host");
+    const host = dropdown.closest(".chat-tool-card__widget-host");
     const toggle = host?.querySelector<HTMLButtonElement>(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
     toggle?.click();
-    const label = dropdown?.querySelector("[data-raw-label]");
-    label?.replaceChildren(
-      t(
-        toggle && toggle.getAttribute("aria-expanded") === "true"
-          ? "chat.toolCards.hideRawDetails"
-          : "chat.toolCards.showRawDetails",
-      ),
-    );
-    return;
-  }
-  if (value !== "copy" && value !== "download") {
-    return;
+    return toggle && toggle.getAttribute("aria-expanded") === "true"
+      ? "chat.toolCards.hideRawDetails"
+      : "chat.toolCards.showRawDetails";
   }
   const frame = dropdown
-    ?.closest(".chat-tool-card__preview")
+    .closest(".chat-tool-card__preview")
     ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
   if (!frame) {
     showToast({ message: t("chat.toolCards.widgetExportFailed") });
@@ -474,50 +468,16 @@ function widgetActionsPlacementRef() {
   };
 }
 
-function renderWidgetAction(value: "copy" | "download" | "raw-details") {
-  const { icon, labelKey } = {
-    copy: { icon: icons.copyImage, labelKey: "chat.toolCards.copyAsImage" },
-    download: { icon: icons.download, labelKey: "chat.toolCards.downloadAsImage" },
-    "raw-details": { icon: icons.fileText, labelKey: "chat.toolCards.showRawDetails" },
-  }[value];
-  const label = t(labelKey);
-  // Menu actions replace this text, so it must not contain Lit child markers.
-  return html`<wa-dropdown-item class="session-menu__item" value=${value}>
-    <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-    <span
-      class="session-menu__text"
-      ?data-raw-label=${value === "raw-details"}
-      .textContent=${label}
-    ></span>
-  </wa-dropdown-item>`;
-}
-
 function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean) {
   const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
-  if (!canExportImage && !hasRawDetails) {
-    return nothing;
-  }
-  return html`
-    <wa-dropdown
-      class="chat-tool-card__widget-actions"
-      placement="bottom-end"
-      aria-label=${t("chat.toolCards.widgetActions")}
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) =>
-        handleWidgetExportAction(event, preview.title)}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="btn btn--ghost btn--icon chat-tool-card__widget-actions-trigger"
-        aria-label=${t("chat.toolCards.widgetActions")}
-        title=${t("chat.toolCards.widgetActions")}
-      >
-        ${icons.moreHorizontal}
-      </button>
-      ${canExportImage ? (["copy", "download"] as const).map(renderWidgetAction) : nothing}
-      ${hasRawDetails ? renderWidgetAction("raw-details") : nothing}
-    </wa-dropdown>
-  `;
+  return canExportImage || hasRawDetails
+    ? solidContent(WidgetCardMenu, {
+        canExportImage,
+        hasRawDetails,
+        onAction: (value: WidgetAction, menu: HTMLElement) =>
+          handleWidgetExportAction(value, menu, preview.title),
+      })
+    : nothing;
 }
 
 export function renderToolPreview(

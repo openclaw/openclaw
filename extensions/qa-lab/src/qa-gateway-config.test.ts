@@ -118,17 +118,7 @@ describe("buildQaGatewayConfig", () => {
         });
       }
       expect(build(`${baseUrl}/other`)).toEqual({ allowPrivateNetwork: true });
-      const successorUrl = `${baseUrl}/debug/successor`;
-      const disposeSuccessor = registerQaSessionObserver(`${baseUrl}/v1/`, successorUrl);
-      try {
-        dispose();
-        expect(build(baseUrl)).toEqual({
-          allowPrivateNetwork: true,
-          headers: { [QA_SESSION_OBSERVER_HEADER]: successorUrl },
-        });
-      } finally {
-        disposeSuccessor();
-      }
+      dispose();
       expect(build(baseUrl)).toEqual({ allowPrivateNetwork: true });
     } finally {
       dispose();

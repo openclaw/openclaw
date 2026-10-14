@@ -26,64 +26,70 @@ export async function prepareLocalSandboxWorkspace(params: {
   if (!owner) {
     return undefined;
   }
-  markManagedWorktreePreparation();
-  if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
-    throw new Error(
-      "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
-    );
-  }
-  const existing = await withLocalWorkspaceProjection(owner, (state) => state.reuse());
-  let workspaceDir: string;
-  if (existing) {
-    setWorktreePreparationTemplate("reused");
-    workspaceDir = existing;
-  } else if (params.cfg.worktreeAcceleration === false) {
-    workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-  } else {
-    const allocated = startWorktreePreparationPhase("allocate");
-    try {
-      workspaceDir = await withWorktreeAllocationLease(
-        {
-          env: owner.env ?? process.env,
-          signal: params.signal,
-          commitGuard: owner.assertCurrent,
-          workerAuthority: owner.workerAuthority,
-        },
-        (allocation) => {
-          allocated();
-          return withLocalWorkspaceProjection(
-            { ...owner, workerAuthority: allocation.workerAuthority },
-            (state) => state.prepare({ sandbox: params.sandbox, allocation }),
-          );
-        },
+  try {
+    markManagedWorktreePreparation();
+    if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
+      throw new Error(
+        "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
       );
-    } finally {
-      allocated();
     }
-  }
-  owner.assertCurrent();
-  return {
-    workspaceDir,
-    workspaceCwd: path.join(
+    const existing = await withLocalWorkspaceProjection(owner, (state) => state.reuse());
+    let workspaceDir: string;
+    if (existing) {
+      setWorktreePreparationTemplate("reused");
+      workspaceDir = existing;
+    } else if (params.cfg.worktreeAcceleration === false) {
+      workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    } else {
+      const allocated = startWorktreePreparationPhase("allocate");
+      try {
+        workspaceDir = await withWorktreeAllocationLease(
+          {
+            env: owner.env ?? process.env,
+            signal: params.signal,
+            commitGuard: owner.assertCurrent,
+            workerAuthority: owner.workerAuthority,
+          },
+          (allocation) => {
+            allocated();
+            return withLocalWorkspaceProjection(
+              { ...owner, workerAuthority: allocation.workerAuthority },
+              (state) => state.prepare({ sandbox: params.sandbox, allocation }),
+            );
+          },
+        );
+      } finally {
+        allocated();
+      }
+    }
+    owner.assertCurrent();
+    return {
       workspaceDir,
-      path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
-    ),
-    assertCurrent: owner.assertCurrent,
-    provision: async <T>(run: () => Promise<T>) =>
-      await withLocalWorkspaceProjection(
-        owner,
-        async () => {
-          owner.assertCurrent();
-          const result = await run();
-          owner.assertCurrent();
-          return result;
-        },
-        { provision: true },
+      workspaceCwd: path.join(
+        workspaceDir,
+        path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
       ),
-    checkpoint: async () => {
-      await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-    },
-  };
+      assertCurrent: owner.assertCurrent,
+      provision: async <T>(run: () => Promise<T>, signal?: AbortSignal) =>
+        await withLocalWorkspaceProjection(
+          owner,
+          async () => {
+            owner.assertCurrent();
+            const result = await run();
+            owner.assertCurrent();
+            return result;
+          },
+          { provision: true, signal },
+        ),
+      checkpoint: async () => {
+        await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+      },
+      [Symbol.dispose]: () => owner[Symbol.dispose](),
+    };
+  } catch (error) {
+    owner[Symbol.dispose]();
+    throw error;
+  }
 }
 
 /** All harnesses use the same backend/bridge, including native Codex execution. */
@@ -103,35 +109,43 @@ export function bindLocalSandboxWorkspace(
     };
   }
   const shell = backend.runShellCommand.bind(backend);
-  backend.runShellCommand = async (params) => {
-    // Path preparation can await host and container probes after tool entry.
-    projection.assertCurrent();
-    return await shell(params);
-  };
+  backend.runShellCommand = (params) =>
+    projection.provision(async () => {
+      // A preceding background command may still have the runtime paused for checkpointing.
+      params.signal?.throwIfAborted();
+      projection.assertCurrent();
+      return await shell(params);
+    }, params.signal);
   const build = backend.buildExecSpec.bind(backend);
   const finalize = backend.finalizeExec?.bind(backend);
   backend.buildExecSpec = async (params) => {
-    projection.assertCurrent();
-    const spec = await build(params);
+    let spec: Awaited<ReturnType<typeof build>> | undefined;
     try {
-      projection.assertCurrent();
-    } catch (error) {
-      await finalize?.({
-        status: "failed",
-        exitCode: null,
-        timedOut: false,
-        token: spec.finalizeToken,
+      // Release preparation custody before the command's background lifetime begins.
+      return await projection.provision(async () => {
+        projection.assertCurrent();
+        spec = await build(params);
+        projection.assertCurrent();
+        const assertCurrent = spec.assertCurrent;
+        return {
+          ...spec,
+          assertCurrent: () => {
+            projection.assertCurrent();
+            assertCurrent?.();
+          },
+        };
       });
+    } catch (error) {
+      if (spec) {
+        await finalize?.({
+          status: "failed",
+          exitCode: null,
+          timedOut: false,
+          token: spec.finalizeToken,
+        });
+      }
       throw error;
     }
-    const assertCurrent = spec.assertCurrent;
-    return {
-      ...spec,
-      assertCurrent: () => {
-        projection.assertCurrent();
-        assertCurrent?.();
-      },
-    };
   };
   backend.finalizeExec = async (params) => {
     await finalize?.(params);

@@ -501,6 +501,102 @@ describe("config observe recovery", () => {
     await expect(readObserveEvents(auditPath)).resolves.toEqual([]);
   });
 
+  it.each(["async", "sync"] as const)(
+    "%s backup recovery defers while the forensic snapshot lock is held",
+    async (mode) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
+      const backupRaw = await fsp.readFile(`${configPath}.bak`, "utf-8");
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+      const lockPath = `${configPath}.clobber.lock`;
+      await fsp.mkdir(lockPath);
+      const input = { deps, configPath, ...clobbered, prepareBackup: approveRecoveryCandidate };
+      const recover = async () => {
+        const work = new AsyncWorkScope();
+        try {
+          return await work.run(() =>
+            mode === "async"
+              ? maybeRecoverSuspiciousConfigRead(input)
+              : maybeRecoverSuspiciousConfigReadSync(input),
+          );
+        } finally {
+          await work.drain();
+        }
+      };
+
+      await recover();
+
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(clobbered.raw);
+      expect(await listClobberFiles(configPath)).toEqual([]);
+      expect(await readObserveEvents(auditPath)).toEqual([]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("recovery deferred"));
+      await fsp.rmdir(lockPath);
+
+      await recover();
+
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(backupRaw);
+      expect(await listClobberFiles(configPath)).toHaveLength(1);
+      expect((await readObserveEvents(auditPath)).at(-1)?.restoredFromBackup).toBe(true);
+    },
+  );
+
+  it("prefix recovery defers while the forensic snapshot lock is held", async () => {
+    const { io, configPath, warn } = createTestConfigIO(home, vi.fn(), { observe: false });
+    const cleanRaw = `${JSON.stringify({ gateway: { mode: "local" } })}\n`;
+    const pollutedRaw = `status output\n${cleanRaw}`;
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, pollutedRaw);
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(false);
+    const lockPath = `${configPath}.clobber.lock`;
+    await fsp.mkdir(lockPath);
+
+    await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).resolves.toBe(false);
+
+    expect(await fsp.readFile(configPath, "utf-8")).toBe(pollutedRaw);
+    expect(await listClobberFiles(configPath)).toEqual([]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("recovery deferred"));
+    await fsp.rmdir(lockPath);
+
+    await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).resolves.toBe(true);
+    expect(await fsp.readFile(configPath, "utf-8")).toBe(cleanRaw);
+    const clobbered = await listClobberFiles(configPath);
+    expect(clobbered).toHaveLength(1);
+    expect(await fsp.readFile(path.join(path.dirname(configPath), clobbered[0]!), "utf-8")).toBe(
+      pollutedRaw,
+    );
+  });
+
+  it("last-known-good recovery defers while the forensic snapshot lock is held", async () => {
+    const { deps, configPath, auditPath, warn } = makeDeps(home);
+    const snapshot = await makeSnapshot(configPath, recoverableCoreConfig);
+    await expect(promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot })).resolves.toBe(true);
+    const brokenRaw = "{ gateway: { mode: 123 } }\n";
+    await fsp.writeFile(configPath, brokenRaw);
+    const healthBefore = readConfigHealthStateFromStore(deps);
+    const lockPath = `${configPath}.clobber.lock`;
+    await fsp.mkdir(lockPath);
+    const input = {
+      deps,
+      snapshot: invalidSnapshot(snapshot, brokenRaw),
+      reason: "test-invalid-config",
+      prepareCandidate: approveRecoveryCandidate,
+    };
+
+    await expect(recoverConfigFromLastKnownGoodCore(input)).resolves.toBe(false);
+
+    expect(await fsp.readFile(configPath, "utf-8")).toBe(brokenRaw);
+    expect(await listClobberFiles(configPath)).toEqual([]);
+    expect(await readObserveEvents(auditPath)).toEqual([]);
+    expect(readConfigHealthStateFromStore(deps)).toEqual(healthBefore);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("recovery deferred"));
+    await fsp.rmdir(lockPath);
+
+    await expect(recoverConfigFromLastKnownGoodCore(input)).resolves.toBe(true);
+    expect(await fsp.readFile(configPath, "utf-8")).toBe(snapshot.raw);
+    expect((await readObserveEvents(auditPath)).at(-1)?.restoredFromBackup).toBe(true);
+  });
+
   it("recovery uses canonical metadata fingerprints", async () => {
     const { deps, configPath } = makeDeps(home);
     const backup = { meta: { authoredBy: "operator" }, gateway: { mode: "local" } };

@@ -9,12 +9,13 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
   preflightWorkerWorkspace: workspace.preflight,
 }));
 
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -41,7 +42,11 @@ describe("worker automatic resume", () => {
       );
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({ read: vi.fn(), version: () => 0 });
 
-      const { root, stateDb, config } = support.testState;
+      const { root, stateDb } = support.testState;
+      const config = {
+        ...support.testState.config,
+        session: { store: path.join(root, "sessions.sqlite") },
+      };
       const runId = `resumed-${executionMode}-turn`;
       const entry = {
         sessionId: REQUEST.sessionId,
@@ -59,8 +64,16 @@ describe("worker automatic resume", () => {
       };
       await upsertSessionEntryCore(target, entry);
       const worktree = { id: entry.worktree.id, ownerId: REQUEST.sessionKey, path: root };
+      setRuntimeConfigSnapshot(config, config);
       moveDestinationMocks.getRuntimeConfig.mockReturnValue(config);
-      moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(target);
+      moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(
+        await resolveGatewaySessionStoreTargetWithStoreAsync({
+          cfg: config,
+          key: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+          exactRead: true,
+        }),
+      );
       moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);
       moveDestinationMocks.findManagedWorktree.mockReturnValue(worktree);
       moveDestinationMocks.resolveExecutionMode.mockReturnValue(executionMode);
@@ -70,6 +83,12 @@ describe("worker automatic resume", () => {
       const targetOwner = await vi.importActual<
         typeof import("./server-worker-placement-session-target.js")
       >("./server-worker-placement-session-target.js");
+      const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+        "./session-utils-store-worker.js",
+      );
+      moveDestinationMocks.prepareGatewaySessionTarget
+        .mockReset()
+        .mockImplementation(targetReader.resolveGatewaySessionStoreTargetInWorker);
       moveDestinationMocks.resolveSessionTarget.mockImplementation(
         targetOwner.resolveWorkerPlacementSessionTarget,
       );

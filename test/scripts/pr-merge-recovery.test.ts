@@ -6,6 +6,98 @@ import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-suppor
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each(["pass", "pending", "fail"])(
+    "recovers a deferred same-head immediate intent only with completed green checks: %s",
+    (checks) => {
+      const f = fixture();
+      writeFileSync(
+        join(f.worktree, ".local/gates.env"),
+        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+      );
+      f.save({ ...f.state(), mode: "unapplied", requiredCheckName: "openclaw/ci-gate" });
+      const first = f.run(true);
+      expect(first.status, first.output).toBe(1);
+      const previous = f.git(["rev-parse", outcomeRef]);
+      const previousRecord = f.record();
+      const captures = f.captures();
+      expect(previousRecord).toMatchObject({
+        phase: "intent",
+        route: "immediate",
+        accepted: false,
+        head: f.head,
+      });
+      f.recover();
+      f.save({ ...f.state(), mode: "success", gates: checks });
+
+      const recovered = f.run(false, f.repo, "squash", previous);
+
+      expect(recovered.status, recovered.output).toBe(checks === "pass" ? 0 : 1);
+      expect(f.state().mutations).toBe(checks === "pass" ? 2 : 1);
+      expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
+      if (checks === "pass") {
+        expect(f.record()).toMatchObject({
+          phase: "complete",
+          route: "immediate",
+          head: f.head,
+          recovery: { outcome: previous, attempt: previousRecord.attempt },
+        });
+        f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
+        for (const [name, contents] of captures) {
+          expect(f.git(["rev-parse", `${outcomeRef}:${name}`])).toBe(
+            f.git(["hash-object", "--stdin"], contents),
+          );
+        }
+        expect(f.state().graphqlMergePayloads[1]?.expectedHeadOid).toBe(f.head);
+      } else {
+        expect(recovered.output).toContain(
+          checks === "pending"
+            ? "Required checks are still pending"
+            : "Required checks are failing",
+        );
+        expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+        expect(f.captures()).toEqual(captures);
+      }
+    },
+  );
+
+  it.each(["stale-gate-head", "review-during-checks", "prepared-head-during-checks", "behind"])(
+    "deferred same-head recovery preserves its intent when evidence changes: %s",
+    (fault) => {
+      const f = fixture();
+      writeFileSync(
+        join(f.worktree, ".local/gates.env"),
+        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+      );
+      f.save({ ...f.state(), mode: "unapplied", requiredCheckName: "openclaw/ci-gate" });
+      expect(f.run(true).status).toBe(1);
+      const previous = f.git(["rev-parse", outcomeRef]);
+      const captures = f.captures();
+      f.recover();
+      const next = { ...f.state(), mode: "success" };
+      if (fault === "stale-gate-head") {
+        writeFileSync(
+          join(f.worktree, ".local/gates.env"),
+          `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.base}\n`,
+        );
+      } else if (fault === "review-during-checks") {
+        next.duringChecks = { artifact: "review.json" };
+      } else if (fault === "prepared-head-during-checks") {
+        next.duringChecks = { preparedHead: f.base };
+      } else {
+        next.pr.mergeStateStatus = "BEHIND";
+      }
+      f.save(next);
+
+      const recovered = f.run(false, f.repo, "squash", previous);
+
+      expect(recovered.status, recovered.output).toBe(1);
+      expect(f.state().mutations).toBe(1);
+      expect(f.state().posts).toBe(0);
+      expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+      expect(f.captures()).toEqual(captures);
+    },
+  );
+
   it("recovers a REST projection refusal through one pinned GraphQL squash", () => {
     const f = fixture();
     f.save({

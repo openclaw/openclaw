@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -27,6 +28,14 @@ export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
       }
     },
 );
+
+const setupChanges = resolveGlobalSingleton(
+  Symbol.for("openclaw.devicePairSetupChanges"),
+  () => new Set<(databasePath: string) => void>(),
+);
+
+export const onDevicePairSetupChange = (listener: (databasePath: string) => void) =>
+  registerListener(setupChanges, listener);
 
 // The broker owns this private channel; domain kernels supply the discriminated facts.
 function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
@@ -170,6 +179,15 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       } finally {
         mutation?.finish(!admission || admission.settlement?.kind === "completed");
         removeService?.();
+        // Unknown outcomes can have committed; retry discovery without reviving authority.
+        if (
+          captured.type === "bootstrap.consume" ||
+          captured.type === "bootstrap.confirm" ||
+          captured.type === "bootstrap.ensure" ||
+          captured.type === "bootstrap.readCompletion"
+        ) {
+          notifyListeners(setupChanges, context.admission.databasePath);
+        }
       }
     }
   });

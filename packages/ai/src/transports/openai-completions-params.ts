@@ -4,6 +4,7 @@ import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   isOpenAIGpt54MiniModel,
@@ -63,6 +64,10 @@ import {
   estimateStringChars,
   supportsModelTools,
 } from "./transport-utils.js";
+
+type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
+  openclawThinkingExplicit?: boolean;
+};
 
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
   if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
@@ -198,26 +203,14 @@ function convertTools(
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
-        const functionTool: {
-          name: string;
-          description: string | undefined;
-          parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
-          strict?: boolean;
-        } = {
-          name: tool.name,
-          description: tool.description,
-          parameters:
-            mode === "direct"
-              ? tool.parameters
-              : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
-        };
-        if (strict !== undefined) {
-          functionTool.strict = strict;
-        }
-        return {
-          type: "function" as const,
-          function: functionTool,
-        };
+        return prepareOpenAIFunctionTool(
+          tool.name,
+          tool.description,
+          mode === "direct"
+            ? tool.parameters
+            : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
+          strict,
+        ).completions;
       }),
     };
   };
@@ -283,7 +276,7 @@ export function resolveCompletionsContextOutputBudget(
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
   context: Context,
-  options: OpenAICompletionsOptions | undefined,
+  options: OpenAIThinkingProvenanceOptions | undefined,
   policy: CompletionsRequestPolicy,
 ): CompletionsRequest {
   let contextOutputCap: number | undefined;
@@ -459,11 +452,14 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(
-    model,
-    requestedEffort,
-    compat.reasoningEffortForOff,
-  );
+  // Keep raw selection separate from the managed effort fallback.
+  const thinkingExplicit =
+    options?.openclawThinkingExplicit ??
+    (options?.reasoningEffort !== undefined || options?.reasoning !== undefined);
+  const reasoning = {
+    ...resolveOpenAIRequestReasoning(model, requestedEffort, compat.reasoningEffortForOff),
+    thinkingExplicit,
+  };
   const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =

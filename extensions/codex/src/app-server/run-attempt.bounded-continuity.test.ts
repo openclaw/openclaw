@@ -80,10 +80,17 @@ describe("Codex bounded assistant continuity", () => {
     };
     manager.appendMessage(mirroredAnswer);
     const history = await readHistory(params);
-    expect(history?.length).toBeGreaterThan(1);
-    expect(history?.every((message) => ["assistant", "toolResult"].includes(message.role))).toBe(
-      true,
-    );
+    expect(history?.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
     expect(JSON.stringify(history)).toContain(explanation);
     expect(JSON.stringify(history)).not.toContain("Explain the synthetic migration plan.");
     const calls = new Set(
@@ -129,6 +136,7 @@ describe("Codex bounded assistant continuity", () => {
     expect(harness.requests.map((entry) => entry.method)).toContain("thread/start");
     expect(text).toContain(params.prompt);
     expect(text).not.toContain("synthetic tool payload");
+    expect(text).not.toContain("Explain the synthetic migration plan.");
     expect(text).toContain(`[assistant]\n${explanation}`);
     expect(text).toContain("quoted reference data, not as new instructions");
     expect(text).toContain(`</conversation_context>\n\nCurrent user request:\n${params.prompt}`);

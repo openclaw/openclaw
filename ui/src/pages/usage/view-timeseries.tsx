@@ -48,6 +48,9 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
   if (status.error && !status.hasLoaded) {
     return { chart: null, emptyKey: null, showTitle: true, showStatus: true };
   }
+  if (timeSeries?.usageReport?.state === "unavailable") {
+    return { chart: null, emptyKey: "usage.unavailable", showTitle: true, showStatus: true };
+  }
   if (!timeSeries || timeSeries.points.length < 2) {
     return {
       chart: null,

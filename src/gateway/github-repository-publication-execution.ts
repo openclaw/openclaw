@@ -2,7 +2,6 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { encodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   bindPersonalGitHubPublicationSelection,
   preparePersonalGitHubPublicationSelection,
@@ -28,6 +27,7 @@ import { terminalRepositoryGitHubPublication } from "./github-repository-publica
 import {
   assertReceiptOwner,
   captureCheckpoint,
+  prepareReceiptOwner,
 } from "./github-repository-publication-workspace.js";
 
 export function createRepositoryGitHubPublicationExecution(params: {
@@ -56,7 +56,8 @@ export function createRepositoryGitHubPublicationExecution(params: {
     }
     const { assertCustody, action } = context;
     assertCustody();
-    const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id);
+    const preparedOwner = await prepareReceiptOwner(row);
+    using _ = { [Symbol.dispose]: () => preparedOwner.release() };
     assertCustody();
     context.assertCurrent?.();
     const { loaded } = assertReceiptOwner(row, preparedOwner);

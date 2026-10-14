@@ -907,9 +907,7 @@ openclaw-pending-session-create {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  width: auto;
-  white-space: nowrap;
+  width: 24px;
   height: 24px;
   padding: 0;
   border-radius: var(--radius-full);
@@ -3080,9 +3078,9 @@ openclaw-chat-ci-details {
 
   .agent-chat__input--chat .context-ring {
     justify-content: center;
-    width: auto;
+    width: var(--chat-composer-control-size);
     height: var(--chat-composer-chip-height);
-    gap: 5px;
+    gap: 0;
     padding-inline: 0;
   }
 
@@ -3324,6 +3322,38 @@ openclaw-chat-ci-details {
   line-height: 1;
 }
 
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-pane__layout-trigger {
+    min-height: 44px;
+  }
+
+  /* Keep the complete action list scrollable without covering the conversation. */
+  .chat-panel-layout-menu::part(menu) {
+    /* Web Awesome consumes this variable in its important max-height rule. */
+    --auto-size-available-height: min(360px, 50dvh);
+
+    width: min(264px, calc(100dvw - 24px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .chat-panel-layout-menu .session-menu__item {
+    min-height: 44px;
+  }
+
+  .chat-panel-layout-menu .session-menu__text {
+    display: block;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* The desktop shortcut rail consumes label space but offers no touch action. */
+  .chat-panel-layout-menu .side-panel-type-option__shortcut,
+  .chat-panel-layout-menu .session-menu__item::part(details) {
+    display: none;
+  }
+}
+
 .chat-pane__layout-trigger svg,
 .chat-pane__sharing-trigger svg,
 .chat-pane__subagents-running svg {
@@ -3344,4 +3374,15 @@ openclaw-chat-ci-details {
 .chat-pane__header--stacked-status > .chat-pane__subagents-running {
   flex-basis: 100%;
   padding-bottom: 6px;
+}
+
+.chat-pr__accounts-panel .oc-menu-item__check {
+  display: none;
+}
+
+.chat-pr__checks-overlay {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
 }

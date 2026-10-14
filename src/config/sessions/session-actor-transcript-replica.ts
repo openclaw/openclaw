@@ -6,7 +6,10 @@ import {
 } from "./session-actor-bounded-history.js";
 import type { SessionActorHotState, SessionActorOutcome } from "./session-actor-contract.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
+import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
 type Limits = { maxBytes: number; maxEvents: number };
@@ -18,11 +21,15 @@ export type SessionActorTranscriptReplica = {
   tail: { events: SessionActorTranscriptRow[]; coveredAfterSeq: number };
   context?: {
     limits: Limits;
-    exact: Bounded;
-    admission?: UserTurnTranscriptAdmissionReceipt;
-    /** Complete active path only; a bounded/truncated cold read stays an exact-view cache. */
-    rows?: SessionActorTranscriptRow[];
-  };
+  } & (
+    | {
+        rows: SessionActorTranscriptRow[];
+        activeLeafEntryId: string | null;
+        exact?: never;
+        admission?: never;
+      }
+    | { rows?: never; exact: Bounded; admission?: UserTurnTranscriptAdmissionReceipt }
+  );
 };
 
 export function sameSessionActorTranscriptVersion(
@@ -36,28 +43,29 @@ export function sameSessionActorTranscriptVersion(
   );
 }
 
-function simplePath(rows: SessionActorTranscriptRow[]): boolean {
+function simplePath(rows: SessionActorTranscriptRow[]) {
   let parent: string | null = null;
   for (const { event } of rows) {
     if (!isRecord(event)) {
-      return false;
+      return undefined;
     }
     if (event.type === "session") {
       continue;
     }
-    // Controls can change ancestry, retention or display policy. The canonical reader owns them.
+    // Boundary controls need the canonical reader; ordinary metadata stays in the complete path.
     if (
-      !["message", "model_change", "thinking_level_change"].includes(String(event.type)) ||
+      !isCanonicalSessionTranscriptEntry(event) ||
+      ["reset", "compaction", "branch_summary"].includes(event.type) ||
       event.appendMode === "side" ||
       typeof event.id !== "string" ||
       event.parentId !== parent ||
-      (isRecord(event.message) && event.message.excludeFromContext === true)
+      transcriptEventContextEligibility(event) === 0
     ) {
-      return false;
+      return undefined;
     }
     parent = event.id;
   }
-  return true;
+  return { activeLeafEntryId: parent };
 }
 
 function fits(rows: SessionActorTranscriptRow[], limits: Limits): boolean {
@@ -66,6 +74,52 @@ function fits(rows: SessionActorTranscriptRow[], limits: Limits): boolean {
       limits.maxEvents &&
     rows.reduce((bytes, row) => bytes + row.serializedBytes, 0) <= limits.maxBytes
   );
+}
+
+function boundedTail(events: SessionActorTranscriptRow[], coveredAfterSeq: number) {
+  // A reply only needs the recent suffix. Large/old tails fall back to the bounded history owner.
+  let bytes = events.reduce((sum, row) => sum + row.serializedBytes, 0);
+  let afterSeq = coveredAfterSeq;
+  while (events.length > 128 || bytes > 512 * 1024) {
+    const removed = events.shift()!;
+    bytes -= removed.serializedBytes;
+    afterSeq = removed.rawSeq;
+  }
+  return { events, coveredAfterSeq: afterSeq };
+}
+
+export function rewriteSessionActorTranscriptReplica(
+  previous: SessionActorTranscriptReplica | undefined,
+  rewrite: NonNullable<SessionTranscriptAuthority["actorRewrite"]>,
+): SessionActorTranscriptReplica | undefined {
+  const { postimage } = rewrite;
+  if (
+    !previous ||
+    previous.sessionId !== postimage.entry?.sessionId ||
+    !sameSessionActorTranscriptVersion(previous.version, rewrite.before)
+  ) {
+    return undefined;
+  }
+  const rewritten = new Map(rewrite.rows.map((row) => [row.rawSeq, row]));
+  const patch = (rows: SessionActorTranscriptRow[]) =>
+    rows.map((row) => rewritten.get(row.rawSeq) ?? row);
+  const next: SessionActorTranscriptReplica = {
+    version: postimage.transcript.version,
+    sessionId: previous.sessionId,
+    tail: boundedTail(patch(previous.tail.events), previous.tail.coveredAfterSeq),
+  };
+  if (previous.context?.rows) {
+    const rows = patch(previous.context.rows);
+    const path = simplePath(rows);
+    if (path && fits(rows, previous.context.limits)) {
+      next.context = {
+        ...previous.context,
+        rows,
+        ...path,
+      };
+    }
+  }
+  return next;
 }
 
 export function seedSessionActorTranscriptContext(
@@ -89,9 +143,11 @@ export function seedSessionActorTranscriptContext(
   if (!prepared.residentRows && current.context) {
     return current;
   }
+  // Own one detached window; row views share it, and worker/cohort facts stay with the read.
+  const snapshot = structuredClone(prepared.snapshot);
   const rows = prepared.residentRows?.map((row, index) => ({
     ...row,
-    event: structuredClone(prepared.snapshot.events[index]),
+    event: snapshot.events[index],
   }));
   let complete: SessionActorTranscriptRow[] | undefined;
   if (rows && !prepared.snapshot.truncated && prepared.snapshot.boundaryCount === 0) {
@@ -102,10 +158,7 @@ export function seedSessionActorTranscriptContext(
       }
     }
     const candidates = [...known.values()].toSorted((a, b) => a.rawSeq - b.rawSeq);
-    const context = hot.transcript.modelContext;
     if (
-      context.kind === "resident" &&
-      context.entries.every((row) => known.has(row.rawSeq)) &&
       candidates.filter((row) => isRecord(row.event) && row.event.type !== "session").length ===
         prepared.snapshot.totalEvents &&
       simplePath(candidates) &&
@@ -116,12 +169,17 @@ export function seedSessionActorTranscriptContext(
   }
   return {
     ...current,
-    context: {
-      limits: { ...limits },
-      exact: structuredClone(prepared),
-      admission: admission && { ...admission },
-      rows: complete,
-    },
+    context: complete
+      ? {
+          limits: { ...limits },
+          rows: complete,
+          activeLeafEntryId: prepared.snapshot.activeLeafEntryId,
+        }
+      : {
+          limits: { ...limits },
+          exact: { kind: "bounded", snapshot },
+          admission: admission && { ...admission },
+        },
   };
 }
 
@@ -147,32 +205,22 @@ export function advanceSessionActorTranscriptReplica(
     !transcript.projectionNeedsReconcile &&
     transcript.before.generation === transcript.after.generation;
   const events = [...(contiguous ? retained.tail.events : []), ...(appended ?? [])];
-  let coveredAfterSeq = contiguous
+  const coveredAfterSeq = contiguous
     ? retained.tail.coveredAfterSeq
     : (transcript.before.rawSeq ?? -1);
-  // A reply only needs the recent suffix. Large/old tails fall back to the bounded history owner.
-  let bytes = events.reduce((sum, row) => sum + row.serializedBytes, 0);
-  while (events.length > 128 || bytes > 512 * 1024) {
-    const removed = events.shift()!;
-    bytes -= removed.serializedBytes;
-    coveredAfterSeq = removed.rawSeq;
-  }
   const next: SessionActorTranscriptReplica = {
     version: transcript.after,
     sessionId: postimage.entry?.sessionId,
-    tail: { events, coveredAfterSeq: appended ? coveredAfterSeq : (transcript.after.rawSeq ?? -1) },
+    tail: boundedTail(events, appended ? coveredAfterSeq : (transcript.after.rawSeq ?? -1)),
   };
   if (contiguous && retained.context?.rows) {
     const rows = [...retained.context.rows, ...appended];
-    if (simplePath(rows) && fits(rows, retained.context.limits)) {
+    const path = simplePath(rows);
+    if (path && fits(rows, retained.context.limits)) {
       next.context = {
-        ...retained.context,
+        limits: retained.context.limits,
         rows,
-        exact: readSessionActorBoundedHistory(
-          { hot: postimage, events: rows },
-          retained.context.limits,
-        ),
-        admission: undefined,
+        ...path,
       };
     }
   }

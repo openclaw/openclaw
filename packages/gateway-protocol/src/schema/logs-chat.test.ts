@@ -109,6 +109,14 @@ describe("ChatStatusEventSchema", () => {
       phase: "starting_model",
     };
     const retry = { attempt: 2, maxAttempts: 10, reason: "rate_limit" };
+    for (const reason of ["rate_limit", "overloaded", "server_error", "timeout", "output_limit"]) {
+      expect(
+        Value.Check(ChatEventSchema, {
+          ...event,
+          retry: { ...retry, reason, retryAt: 1_800_000_000_000 },
+        }),
+      ).toBe(true);
+    }
     for (const maxAttempts of [2, 10]) {
       expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, maxAttempts } })).toBe(
         true,
@@ -122,6 +130,8 @@ describe("ChatStatusEventSchema", () => {
       { maxAttempts: 2.5 },
       { maxAttempts: 11 },
       { reason: "unknown" },
+      { retryAt: -1 },
+      { retryAt: Infinity },
       { errorBody: "provider data" },
     ]) {
       expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, ...invalid } })).toBe(

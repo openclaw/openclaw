@@ -80,7 +80,6 @@ export function recordPostCoreUpdateEvidence(
 /** Correct only a proven interrupted completion; all other terminal outcomes remain immutable. */
 export async function reconcileInterruptedUpdateRuns(
   input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; candidate?: UpdateRunRecord } = {},
-  onCandidate?: (runId: string) => void,
 ): Promise<UpdateRunRecord[]> {
   const env = { ...(input.env ?? process.env) };
   const options = { env, path: resolveOpenClawStateSqlitePath(env) };
@@ -96,7 +95,6 @@ export async function reconcileInterruptedUpdateRuns(
     return [];
   }
   input.signal?.throwIfAborted();
-  onCandidate?.(expected.runId);
   const managed = expected.steps.some(
     (step) => step.step === "restarting" && step.status === "completed",
   );

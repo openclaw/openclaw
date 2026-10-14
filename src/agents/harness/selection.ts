@@ -26,7 +26,6 @@ import {
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
-import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -45,6 +44,7 @@ import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
+  preparePluginHarnessToolPolicies,
   resolvePluginHarnessDenyAllToolPolicyPrompt,
   resolvePluginHarnessToolPolicies,
   type ResolvedPluginHarnessToolPolicies,
@@ -54,6 +54,7 @@ import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
+import { withoutPluginHarnessPrivateState } from "./plugin-private-state.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
@@ -272,7 +273,6 @@ export async function runAgentHarnessAttempt(
       modelExecution?.release();
     }
   };
-  assertAgentHarnessExecutionEnvironment(harness, params);
   if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
     throw new AgentHarnessPreflightError(
       "Native session runtime changed before dispatch. Reattach the original native session before retrying.",
@@ -360,16 +360,19 @@ export async function runAgentHarnessAttempt(
   let result: EmbeddedRunAttemptResult;
   try {
     result = await runAgentHarnessOperation(harness, params, () =>
-      runWithAgentRingZeroTools(ringZeroTools, () => {
+      runWithAgentRingZeroTools(ringZeroTools, async () => {
         // Resolve plugin policy after entering the host scope. Ring-zero tools are
         // trusted setup authority and must survive ordinary deny-all policy.
         const hostOpenClawAuthority =
           isHostScopedAgentToolActive("openclaw") &&
           isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
-        const nativePermissionsConsented = assertAgentHarnessExecutionEnvironment(harness, params);
+        const nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(
+          harness,
+          params,
+        );
         const preparedParams = selection.builtIn
           ? pluginAttempt.params
-          : preparePluginHarnessParams(
+          : await preparePluginHarnessParams(
               pluginAttempt.params,
               harness,
               nativePermissionsConsented,
@@ -392,15 +395,20 @@ export async function runAgentHarnessAttempt(
               effectiveAttemptParams,
               selection.builtIn
                 ? undefined
-                : (input) => {
-                    const policies = resolvePluginHarnessToolPolicies({
-                      ...input.run,
-                      modelId: input.run.model,
-                      sandboxSessionKey: input.run.runtimePolicySessionKey,
-                      messageChannel: input.originatingChannel,
-                      toolsAllow: input.toolsAllow,
-                      disableTools: input.disableTools,
-                    });
+                : (input, sandbox) => {
+                    const policies = resolvePluginHarnessToolPolicies(
+                      {
+                        ...input.run,
+                        modelId: input.run.model,
+                        sandboxSessionKey: input.run.runtimePolicySessionKey,
+                        messageChannel: input.originatingChannel,
+                        toolsAllow: input.toolsAllow,
+                        disableTools: input.disableTools,
+                      },
+                      undefined,
+                      undefined,
+                      sandbox,
+                    );
                     return resolvePluginHarnessDenyAllToolPolicyPrompt(policies)
                       ? { ...input, toolsAllow: [] }
                       : input;
@@ -615,40 +623,12 @@ function prepareHarnessFinalizationParams(
   };
 }
 
-function withoutPluginHarnessPrivateState(
-  params: EmbeddedRunAttemptInternalParams,
-): Omit<import("./types.js").AgentHarnessAttemptParamsV2, "hostCapabilities"> {
-  // Keep mutable host-owned state behind one projection for every plugin handoff;
-  // separate projections can drift and expose authority on less common operations.
-  const {
-    admittedRunContext: _admittedRunContext,
-    runtimePluginToolGrant: _runtimePluginToolGrant,
-    assistantErrorTranscript: _assistantErrorTranscript,
-    compactionCountOwner: _compactionCountOwner,
-    completionCheck: _completionCheck,
-    preparedSessionTarget: _preparedSessionTarget,
-    onContextAccountingEvent: _onContextAccountingEvent,
-    onCompactionRequestBudget: _onCompactionRequestBudget,
-    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
-    hostCapabilities: _hostCapabilities,
-    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
-    trajectoryRecorder: _trajectoryRecorder,
-    inputAttachmentMedia: _inputAttachmentMedia,
-    supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
-    __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
-    ...pluginParams
-  } = params as EmbeddedRunAttemptInternalParams & {
-    __openclawSourceReplyDeliveryRuntime?: unknown;
-  };
-  return pluginParams;
-}
-
-function preparePluginHarnessParams(
+async function preparePluginHarnessParams(
   params: import("./types.js").AgentHarnessAttemptParamsV2,
   harness: AgentHarness,
   nativePermissionsConsented: boolean,
   setInputAttachmentReadAllowed: (allowed: boolean) => void,
-): import("./types.js").AgentHarnessAttemptParamsV2 {
+): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
@@ -658,7 +638,7 @@ function preparePluginHarnessParams(
     model === params.model && resolvedApiKey === params.resolvedApiKey
       ? params
       : { ...params, model, resolvedApiKey };
-  const policies = resolvePluginHarnessToolPolicies(
+  const policies = await preparePluginHarnessToolPolicies(
     preparedParams,
     harness.conversationToolPolicySupport === "exact"
       ? harness.conversationToolPolicySafeDenyTools

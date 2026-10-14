@@ -39,6 +39,15 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 
 Choose your plan type and follow the setup steps.
 
+If you supply only `QWEN_API_KEY` (or `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY`),
+without `models.providers.qwen.baseUrl`, OpenClaw uses the Global Coding Plan
+endpoint: `https://coding-intl.dashscope.aliyuncs.com/v1`. The environment variable
+name does not select a plan or region. For a Standard pay-as-you-go key, run
+`openclaw onboard --auth-choice qwen-standard-api-key` or set
+`models.providers.qwen.baseUrl` to
+`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`. Explicit endpoint
+configuration takes precedence; use the matching plan and regional key.
+
 <Tabs>
   <Tab title="Coding Plan (subscription)">
     **Best for:** subscription-based access through the Qwen Coding Plan.
@@ -252,21 +261,19 @@ appear without a plugin update. For locally hosted models, use the
 ### Token Plan catalog
 
 Token Plan uses a separate exact-string allowlist. The built-in catalog shows
-Alibaba's currently recommended plan models and keeps the newer Qwen3-Coder
-compatibility tier selectable but hidden. Other allowlisted model IDs remain
+Alibaba's currently recommended plan models. Other allowlisted model IDs remain
 available as custom model refs. Image-generation-only plan models are not
 included here because they use different APIs.
 
-| Model ref                          | Input       | Context   | Picker status |
-| ---------------------------------- | ----------- | --------- | ------------- |
-| `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-flash`    | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
-| `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
-| `qwen-token-plan/glm-5`            | text        | 202,752   | visible       |
-| `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
+| Model ref                       | Input       | Context   | Picker status |
+| ------------------------------- | ----------- | --------- | ------------- |
+| `qwen-token-plan/qwen3.7-plus`  | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-max`   | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-flash` | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.6-plus`  | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/kimi-k2.5`     | text, image | 262,144   | visible       |
+| `qwen-token-plan/glm-5`         | text        | 202,752   | visible       |
+| `qwen-token-plan/MiniMax-M2.5`  | text        | 196,608   | visible       |
 
 ## Thinking controls
 
@@ -290,7 +297,12 @@ family, the provider maps OpenClaw thinking levels to DashScope's top-level
 `enable_thinking` request flag: disabled thinking sends `enable_thinking: false`,
 any other level sends `enable_thinking: true`. Custom models can opt into an
 alternate chat-template thinking payload by setting
-`compat.thinkingFormat: "qwen-chat-template"` on the model entry.
+`compat.thinkingFormat: "qwen-chat-template"` on the model entry. Declaring
+`compat.supportedReasoningEfforts: ["low", "medium", "xhigh"]` with
+`compat.reasoningEffortMap: { "high": "xhigh" }` also sends
+`chat_template_kwargs.reasoning_effort` with the Qwen 3.8 tier mapping above
+when a turn, session, or configuration selects a thinking level. With no selection,
+OpenClaw omits the nested effort and preserves the server template default.
 
 Token Plan models are also marked reasoning-capable. `kimi-k2.7-code` and
 `MiniMax-M2.5` are thinking-only, so OpenClaw keeps thinking enabled even when

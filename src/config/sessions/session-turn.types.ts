@@ -122,11 +122,3 @@ export type SessionTurnCommitted = {
   authority?: import("./session-pending-input-authority.js").SessionPendingInputAuthorityFacts;
   publication?: SessionEntryReplacementPublication;
 };
-
-export type IncognitoSessionTurnOperations = {
-  "session.turn.prepare": {
-    input: SessionTurnPlan;
-    output: ReturnType<typeof import("./session-turn.worker.js").prepareSessionTurn>;
-  };
-  "session.turn.commit": { input: SessionTurnPlan; output: SessionTurnCommitted };
-};

@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { consumeTooltipEscape } from "./tooltip.ts";
 import { trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -60,10 +60,10 @@ export function connectDropdownMenu(
   };
 }
 
-export class DropdownMenuController implements ReactiveController {
+export class DropdownMenuController implements SolidController {
   private disconnect?: () => void;
   constructor(
-    private readonly host: ReactiveControllerHost & HTMLElement,
+    private readonly host: SolidControllerHost & HTMLElement,
     private readonly options: DropdownMenuOptions,
   ) {
     host.addController(this);

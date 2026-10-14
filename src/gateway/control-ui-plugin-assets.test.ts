@@ -486,8 +486,12 @@ describe("native Control UI browser assets", () => {
     expect(catalog.plugins[0]?.imports).toEqual([]);
   });
 
-  it("serves authenticated immutable builds and preserves the last working revision on failure", async () => {
+  it("serves hardlinked bundled assets, reloads a hardlinked manifest, and preserves working revisions", async () => {
     const fixture = activateFixture();
+    fs.linkSync(
+      path.join(fixture.directory, "index.js"),
+      path.join(fixture.rootDir, "linked-entry.js"),
+    );
     const firstChunk = "export const value = 'first';";
     fs.writeFileSync(path.join(fixture.directory, "lazy.js"), firstChunk);
     const first = await listControlUiPluginCatalog();
@@ -534,6 +538,10 @@ describe("native Control UI browser assets", () => {
         fs.writeFileSync(path.join(fixture.directory, "index.js"), nextSource);
         expect(await listControlUiPluginCatalog()).toEqual(first);
         expect((await read(entry.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+        fs.linkSync(
+          path.join(fixture.rootDir, "openclaw.plugin.json"),
+          path.join(fixture.rootDir, "linked-manifest.json"),
+        );
         const next = await reloadControlUiPluginCatalog("native-ui");
         expect(next.plugins[0]!.revision).not.toBe(entry.revision);
         expect((await read(next.plugins[0]!.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(
@@ -871,24 +879,59 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(["symlink", "hardlink"])(
-    "rejects %s browser files outside their built owner",
-    async (kind) => {
-      const fixture = activateFixture();
-      const privatePath = path.join(fixture.rootDir, "private.js");
-      fs.writeFileSync(privatePath, "private source");
-      const entry = path.join(fixture.directory, "index.js");
-      fs.unlinkSync(entry);
-      if (kind === "symlink") {
-        fs.symlinkSync(privatePath, entry);
-      } else {
+  it("rejects symlink browser files outside their built owner", async () => {
+    const fixture = activateFixture();
+    const privatePath = path.join(fixture.rootDir, "private.js");
+    fs.writeFileSync(privatePath, "private source");
+    const entry = path.join(fixture.directory, "index.js");
+    fs.unlinkSync(entry);
+    fs.symlinkSync(privatePath, entry);
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins).toEqual([]);
+    expect(catalog.diagnostics).toEqual([{ pluginId: "native-ui", message: expect.any(String) }]);
+  });
+
+  it("rejects hardlink browser files for untrusted plugin roots", async () => {
+    await withTempConfig({
+      cfg: {},
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
+        const privatePath = path.join(fixture.rootDir, "private.js");
+        fs.writeFileSync(privatePath, "private source");
+        const entry = path.join(fixture.directory, "index.js");
+        fs.unlinkSync(entry);
         fs.linkSync(privatePath, entry);
-      }
-      const catalog = await listControlUiPluginCatalog();
-      expect(catalog.plugins).toEqual([]);
-      expect(catalog.diagnostics).toEqual([{ pluginId: "native-ui", message: expect.any(String) }]);
-    },
-  );
+        const catalog = await listControlUiPluginCatalog();
+        expect(catalog.plugins).toEqual([]);
+        expect(catalog.diagnostics).toEqual([
+          { pluginId: "native-ui", message: expect.any(String) },
+        ]);
+      },
+    });
+  });
+
+  it("rejects a hardlinked workspace manifest on reload and retains the working build", async () => {
+    await withTempConfig({
+      cfg: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        const first = await listControlUiPluginCatalog();
+        expect(first.plugins).toHaveLength(1);
+        fs.linkSync(
+          path.join(fixture.rootDir, "openclaw.plugin.json"),
+          path.join(fixture.rootDir, "linked-manifest.json"),
+        );
+        const reloaded = await reloadControlUiPluginCatalog("native-ui");
+        expect(reloaded.plugins).toEqual(first.plugins);
+        expect(reloaded.diagnostics).toEqual([
+          { pluginId: "native-ui", message: expect.stringContaining("Build the plugin") },
+        ]);
+      },
+    });
+  });
 
   it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {
     const fixture = activateFixture();

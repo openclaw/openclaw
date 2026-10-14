@@ -302,7 +302,7 @@ describe("runCli exit behavior", () => {
         password: "password-from-exec",
       });
       await expect(fs.access(tokenMarker)).rejects.toThrow();
-      await expect(fs.access(passwordMarker)).resolves.toBeUndefined();
+      await fs.access(passwordMarker);
       expectBoundTui({
         url: "ws://127.0.0.1:18789",
         password: "password-from-exec",

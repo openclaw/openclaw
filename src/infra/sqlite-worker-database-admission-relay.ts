@@ -5,6 +5,7 @@ import {
   readSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission-record.js";
+import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 
 const REQUESTED = 0;
@@ -55,6 +56,8 @@ export function exchangeDatabaseAdmissions(
 ): SqliteDatabaseAdmissions {
   const { port1, port2 } = new MessageChannel();
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  const timing = currentSqliteOperationTiming();
+  const startedAt = Date.now();
   try {
     port.postMessage(
       {
@@ -87,6 +90,9 @@ export function exchangeDatabaseAdmissions(
     }
     return reply;
   } finally {
+    if (timing) {
+      timing.databaseAdmissionWaitMs += Date.now() - startedAt;
+    }
     port1.close();
     port2.close();
   }

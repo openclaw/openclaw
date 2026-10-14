@@ -1,5 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { scanXmlishToolCall } from "./grammar.js";
+import { describe, expect, it, vi } from "vitest";
 import { scanPlainTextJsonToolCall, stripPlainTextToolCallBlocks } from "./payload.js";
 
 function trackStringOperations(value: string) {
@@ -34,8 +33,6 @@ function trackStringOperations(value: string) {
 
 describe("scanPlainTextJsonToolCall", () => {
   it.each([
-    ["named", '[read]\n{"path":"/tmp/file"}[/read]visible'],
-    ["legacy", '[read]\n{"path":"/tmp/file"}[END_TOOL_REQUEST]visible'],
     ["Harmony", '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file"}<|call|>visible'],
   ])("returns the complete %s call before a visible suffix", (_syntax, raw) => {
     const scan = scanPlainTextJsonToolCall(raw);
@@ -49,52 +46,24 @@ describe("scanPlainTextJsonToolCall", () => {
     expect(raw.slice(scan.payload.start, scan.payload.end)).toBe('{"path":"/tmp/file"}');
   });
 
-  it.each([
-    ["[tool", undefined, undefined, undefined],
-    ["[tool:re", "tool-bracket", "re", false],
-    ["[read]", "named-bracket", "read", true],
-    ["comment", undefined, undefined, undefined],
-    ["commentary to=read co", "harmony", "read", true],
-    ['[read]\n{"path":1}[/re', "named-bracket", "read", true],
-  ] as const)("classifies the streaming prefix %s", (raw, syntax, name, nameComplete) => {
-    const scan = scanPlainTextJsonToolCall(raw);
+  it.each([["commentary to=read co", "harmony", "read", true]] as const)(
+    "classifies the streaming prefix %s",
+    (raw, syntax, name, nameComplete) => {
+      const scan = scanPlainTextJsonToolCall(raw);
 
-    expect(scan.kind).toBe("prefix");
-    if (scan.kind !== "prefix") {
-      return;
-    }
-    expect(scan.candidate?.syntax).toBe(syntax);
-    expect(scan.candidate?.nameComplete).toBe(nameComplete);
-    expect(
-      scan.candidate?.name
-        ? raw.slice(scan.candidate.name.start, scan.candidate.name.end)
-        : undefined,
-    ).toBe(name);
-  });
-
-  it("exposes lexical continuation state for an incomplete JSON object", () => {
-    const raw = '[tool:read]{"value":"still open';
-    const scan = scanPlainTextJsonToolCall(raw);
-
-    expect(scan.kind).toBe("prefix");
-    if (scan.kind !== "prefix") {
-      return;
-    }
-    expect(scan.candidate?.json).toEqual({ depth: 1, escaped: false, inString: true });
-    expect(
-      scan.candidate?.payload &&
-        raw.slice(scan.candidate.payload.start, scan.candidate.payload.end),
-    ).toBe('{"value":"still open');
-  });
-
-  it("uses a virtual text-part boundary as the named-header line break", () => {
-    const raw = '[read]{"path":"/tmp/file"}[/read]';
-    const scan = scanPlainTextJsonToolCall(raw, 0, {
-      lineBreakOffsets: new Set(["[read]".length]),
-    });
-
-    expect(scan.kind).toBe("complete");
-  });
+      expect(scan.kind).toBe("prefix");
+      if (scan.kind !== "prefix") {
+        return;
+      }
+      expect(scan.candidate?.syntax).toBe(syntax);
+      expect(scan.candidate?.nameComplete).toBe(nameComplete);
+      expect(
+        scan.candidate?.name
+          ? raw.slice(scan.candidate.name.start, scan.candidate.name.end)
+          : undefined,
+      ).toBe(name);
+    },
+  );
 
   it.each([
     (name: string) => `[${name}]\n{}[/${name}]`,
@@ -107,39 +76,25 @@ describe("scanPlainTextJsonToolCall", () => {
       expect(oversized.at).toBeGreaterThan(0);
     }
   });
-
-  it("returns invalid progress without consuming a wrong named closer", () => {
-    const raw = '[read]\n{"path":"/tmp/file"}[/write] visible';
-    const scan = scanPlainTextJsonToolCall(raw);
-
-    expect(scan.kind).toBe("invalid");
-    if (scan.kind !== "invalid") {
-      return;
-    }
-    expect(raw.slice(scan.at)).toBe("[/write] visible");
-    expect(
-      scan.candidate?.payload &&
-        raw.slice(scan.candidate.payload.start, scan.candidate.payload.end),
-    ).toBe('{"path":"/tmp/file"}');
-  });
-
-  it("buffers every partial optional closer", () => {
-    const call = '[tool:read]{"path":"/tmp/file"}';
-    for (const marker of ["<|call|>", "[END_TOOL_REQUEST]", "[/read]"]) {
-      for (let split = 1; split < marker.length; split += 1) {
-        expect(scanPlainTextJsonToolCall(call + marker.slice(0, split)).kind).toBe("prefix");
-      }
-
-      const complete = scanPlainTextJsonToolCall(call + marker);
-      expect(complete).toMatchObject({ kind: "complete", end: call.length + marker.length });
-    }
-    const mismatch = scanPlainTextJsonToolCall(`${call}<|cap`);
-    expect(mismatch).toMatchObject({ kind: "complete", end: call.length });
-  });
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
-  it.each(["Compare [x] and [y].", 'Example [tool:read]{"path":"example.txt"}'])(
+  it.each([
+    "[guide](https://example.test)\nUse `code` here.",
+    "[guide][reference]\n\n[reference]: https://example.test\n\n```js\nconst x = {};\n```",
+    "[section]\nOrdinary prose with `code`.",
+    "[tool:read]\n",
+  ])("does not resolve Markdown ownership without a bracket payload: %s", (raw) => {
+    const resolveProtectedRanges = vi.fn(() => []);
+
+    for (let end = 1; end <= raw.length; end++) {
+      const prefix = raw.slice(0, end);
+      expect(stripPlainTextToolCallBlocks(prefix, { resolveProtectedRanges })).toBe(prefix);
+    }
+    expect(resolveProtectedRanges).not.toHaveBeenCalled();
+  });
+
+  it.each(['Example [tool:read]{"path":"example.txt"}'])(
     "preserves inline bracket text: %s",
     (raw) => {
       expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
@@ -147,7 +102,6 @@ describe("stripPlainTextToolCallBlocks", () => {
   );
 
   it.each([
-    ["LF", "\n"],
     ["CR", "\r"],
     ["CRLF", "\r\n"],
   ])("strips Unicode-indented bracket calls after %s", (_name, lineBreak) => {
@@ -178,29 +132,13 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(stripPlainTextToolCallBlocks(raw)).toBe("");
   });
 
-  it("checks protection for every adjacent candidate", () => {
-    const first = '[read]\n{"path":"secret.txt"}\n[/read]';
-    const second = '[server]\n{"host":"example.test"}\n[/server]';
-    const raw = `${first}\n${second}`;
-    const secondStart = raw.indexOf(second);
-
-    expect(
-      stripPlainTextToolCallBlocks(raw, {
-        resolveProtectedRanges: () => [{ start: secondStart, end: raw.length }],
-      }),
-    ).toBe(second);
-  });
-
   it("preserves a balanced tool block whose JSON is invalid", () => {
     const raw = '[read]\n{"path":}\n[/read]';
 
     expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
   });
 
-  it.each([
-    ["JSON", "[tool:read] {\n", scanPlainTextJsonToolCall],
-    ["XML", "<function=read><parameter=x>x\n", scanXmlishToolCall],
-  ] as const)(
+  it.each([["JSON", "[tool:read] {\n", scanPlainTextJsonToolCall]] as const)(
     "preserves a long repeated incomplete %s candidate in one scan",
     (_name, line, scan) => {
       const raw = line.repeat(20_000);

@@ -268,7 +268,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
           database,
           pathname: f.databasePath,
           start: { generation: "", sessionId: "" },
-          transformContent: transformMediaArchiveContent,
+          transformLine: transformMediaArchiveContent,
         });
         const elapsed = performance.now() - started;
         expect(result).toEqual({ rewrittenArchives: 0, warnings: [] });

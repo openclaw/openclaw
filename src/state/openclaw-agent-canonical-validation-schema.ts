@@ -1,9 +1,4 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SQLITE_CANONICAL_DEFINITIONS_KEY } from "../infra/bun-sqlite-library.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -29,40 +24,15 @@ const validatedSchemas = resolveGlobalSingleton(
   Symbol.for("openclaw.agentCanonicalValidationSchemas"),
   () => new WeakMap<DatabaseSync, { cookie: number; schema?: SqliteSchemaFacts }>(),
 );
-const canonicalContracts = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentCanonicalValidationSchemaContracts"),
-  () => new Map<string, ReadonlyMap<string, string | null>>(),
-);
-
-export type PreparedCanonicalSessionValidationSchema = {
-  schemaSql: string;
-  definitions: ReadonlyMap<string, string | null>;
-};
-
-/** Capture existing canonical facts without constructing a comparison database on the host. */
-export function captureCanonicalSessionValidationSchema():
-  | PreparedCanonicalSessionValidationSchema
-  | undefined {
-  const definitions = canonicalContracts.get(OPENCLAW_AGENT_SCHEMA_SQL);
-  return definitions
-    ? {
-        schemaSql: OPENCLAW_AGENT_SCHEMA_SQL,
-        definitions: new Map(definitions),
-      }
-    : undefined;
-}
-
-/** Private worker requests carry expected definitions, never observed database schemas. */
-export function adoptPreparedCanonicalSessionValidationSchema(
-  contract: PreparedCanonicalSessionValidationSchema,
-): void {
-  if (
-    contract.schemaSql === OPENCLAW_AGENT_SCHEMA_SQL &&
-    !canonicalContracts.has(contract.schemaSql)
-  ) {
-    canonicalContracts.set(contract.schemaSql, new Map(contract.definitions));
-  }
-}
+// Canonical writers no longer install validation triggers; only the pending table is expected.
+const expectedDefinitions = new Map([
+  [
+    "session_canonical_validation_pending",
+    normalizeSchemaSql(
+      extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_canonical_validation_pending"),
+    ),
+  ],
+]);
 
 function readDefinitions(
   database: DatabaseSync,
@@ -91,57 +61,6 @@ function readDefinitions(
   return definitions;
 }
 
-function expectedDefinitions(): ReadonlyMap<string, string | null> {
-  const cached = canonicalContracts.get(OPENCLAW_AGENT_SCHEMA_SQL);
-  if (cached) {
-    return cached;
-  }
-  const sourceHash = createHash("sha256").update(OPENCLAW_AGENT_SCHEMA_SQL).digest("hex");
-  const inherited: unknown = getEnvironmentData(SQLITE_CANONICAL_DEFINITIONS_KEY);
-  if (
-    isRecord(inherited) &&
-    inherited.format === 1 &&
-    inherited.pid === process.pid &&
-    inherited.sourceHash === sourceHash &&
-    inherited.definitions instanceof Map &&
-    [...inherited.definitions].every(
-      ([name, sql]) => typeof name === "string" && (sql === null || typeof sql === "string"),
-    )
-  ) {
-    const definitions = new Map(inherited.definitions);
-    canonicalContracts.set(OPENCLAW_AGENT_SCHEMA_SQL, definitions);
-    return definitions;
-  }
-  const database = openNodeSqliteDatabase(":memory:");
-  let definitions: Map<string, string | null>;
-  try {
-    // sqlite-allow-raw -- Bootstrap the canonical DDL in an isolated schema comparison database.
-    database.exec(
-      [
-        extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_nodes"),
-        extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_windows"),
-        extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_key_contract", {
-          endMarker: "CREATE TABLE IF NOT EXISTS session_windows (",
-          includeEndMarker: false,
-        }),
-        canonicalSessionValidationSchemaSql(),
-      ].join("\n"),
-    );
-    definitions = readDefinitions(database);
-  } finally {
-    database.close();
-  }
-  // Publish only newly constructed canonical facts, never target rows or a prior code generation's map.
-  setEnvironmentData(SQLITE_CANONICAL_DEFINITIONS_KEY, {
-    format: 1,
-    pid: process.pid,
-    sourceHash,
-    definitions: new Map(definitions),
-  });
-  canonicalContracts.set(OPENCLAW_AGENT_SCHEMA_SQL, definitions);
-  return definitions;
-}
-
 /** Require the canonical admission schema before consuming its pending work. */
 export function assertCanonicalSessionValidationSchema(database: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -154,10 +73,9 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
     return;
   }
   validatedSchemas.delete(database);
-  const expected = expectedDefinitions();
   const actual = readDefinitions(database, schema);
-  for (const name of new Set([...expected.keys(), ...actual.keys()])) {
-    if (expected.get(name) !== actual.get(name)) {
+  for (const name of new Set([...expectedDefinitions.keys(), ...actual.keys()])) {
+    if (expectedDefinitions.get(name) !== actual.get(name)) {
       throw classifyOpenClawAgentDatabaseReadError(
         database,
         new Error(

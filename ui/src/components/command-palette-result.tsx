@@ -8,11 +8,11 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { LitContent } from "../lit/solid-bridge.ts";
-import { renderArtTile } from "../pages/plugins/consent-dialog.ts";
+import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
-import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
 import { Icon } from "./solid/icon.tsx";
+import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 // Preserve source offsets when case folding expands Unicode characters.
@@ -153,9 +153,7 @@ export function CommandPaletteResult(props: {
               />
               <Show when={owner()?.id}>
                 <span class="cmd-palette__owner">
-                  <LitContent
-                    render={() => renderSessionOwnerAvatar({ ...owner()!, id: owner()!.id! })}
-                  />
+                  {renderSessionOwnerAvatar({ ...owner()!, id: owner()!.id! })}
                 </span>
               </Show>
             </span>
@@ -163,14 +161,12 @@ export function CommandPaletteResult(props: {
         </Match>
         <Match when={props.item.pluginId} keyed>
           {(pluginId) => (
-            <LitContent
-              render={() =>
-                renderArtTile(pluginId, props.item.label, {
-                  iconUrl: props.pluginIconUrls?.[pluginId],
-                  onIconError: () => props.onPluginIconError?.(pluginId),
-                  className: "cmd-palette__plugin-icon",
-                })
-              }
+            <PluginArtTile
+              slug={pluginId}
+              name={props.item.label}
+              iconUrl={props.pluginIconUrls?.[pluginId]}
+              onIconError={() => props.onPluginIconError?.(pluginId)}
+              class="cmd-palette__plugin-icon"
             />
           )}
         </Match>

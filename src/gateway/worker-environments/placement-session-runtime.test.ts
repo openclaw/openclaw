@@ -1,22 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { resolveSessionWorkerPlacementPatchError } from "../server-methods/sessions-shared.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareSessionWorkerPlacementPatchValidation } from "../server-methods/sessions-shared.js";
 import {
   projectWorkerPlacementAgentRuntime,
   resolveDefaultWorkerPlacementExecutionMode,
   resolveWorkerPlacementCapabilities,
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
-  resolveWorkerPlacementSessionRuntimeCapabilities,
+  resolveWorkerPlacementSessionRuntimeAsync,
 } from "./placement-session-runtime.js";
+
+async function preparePatchError(
+  params: Parameters<typeof prepareSessionWorkerPlacementPatchValidation>[0],
+) {
+  const prepared = await prepareSessionWorkerPlacementPatchValidation(params);
+  try {
+    return prepared.validate();
+  } finally {
+    prepared.release();
+  }
+}
 
 const originalPluginRegistry = getActivePluginRegistry();
 
@@ -28,6 +43,7 @@ describe("worker placement runtime capabilities", () => {
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeConfigSnapshot();
     if (originalPluginRegistry) {
       setActivePluginRegistry(originalPluginRegistry, "placement-runtime-test-restore", "default");
       return;
@@ -71,9 +87,11 @@ describe("worker placement runtime capabilities", () => {
       agentId: "main",
       sessionKey: "agent:main:dashboard:browser-created-codex",
     };
-    expect(resolveWorkerPlacementSessionRuntimeCapabilities(session).executionMode).toBe(
-      "remote-exec",
-    );
+    expect(
+      resolveWorkerPlacementCapabilities(
+        resolveWorkerPlacementSessionRuntime({ ...session, readSourceEntry: () => undefined }),
+      ).executionMode,
+    ).toBe("remote-exec");
     expect(resolveDefaultWorkerPlacementExecutionMode({ cfg, agentId: "main" })).toBe(
       "remote-exec",
     );
@@ -126,8 +144,42 @@ describe("worker placement runtime capabilities", () => {
         },
         agentId: "main",
         sessionKey: "agent:main:placement-runtime",
+        readSourceEntry: () => undefined,
       }),
     ).toBe(expected);
+  });
+
+  it("reads inherited runtime selection off-thread and observes a committed parent update", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const parent = { agentId: "main", sessionKey: "agent:main:parent-runtime" };
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent-runtime",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      const input = {
+        cfg: {},
+        agentId: "main",
+        sessionKey: "agent:main:child-runtime",
+        entry: { sessionId: "child-runtime", updatedAt: 1, parentSessionKey: parent.sessionKey },
+      };
+      const observed = observeHostDataSql();
+      try {
+        expect(await resolveWorkerPlacementSessionRuntimeAsync(input)).toBe("codex");
+        expect(observed.queries).toEqual([]);
+      } finally {
+        observed.restore();
+      }
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent-runtime",
+        updatedAt: 2,
+        providerOverride: "anthropic",
+        modelOverride: "claude-test",
+      });
+      expect(await resolveWorkerPlacementSessionRuntimeAsync(input)).toBe("openclaw");
+    });
   });
 
   it("does not let a persisted runtime override bypass required worker inference", () => {
@@ -143,6 +195,7 @@ describe("worker placement runtime capabilities", () => {
         },
         agentId: "main",
         sessionKey: "agent:main:required-placement-runtime",
+        readSourceEntry: () => undefined,
       }),
     ).toBe("openclaw");
   });
@@ -247,7 +300,7 @@ describe("worker placement runtime capabilities", () => {
   });
 });
 
-describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
+describe("worker placement runtime capability projection", () => {
   beforeEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     setActivePluginRegistry(createEmptyPluginRegistry(), "placement-runtime-test", "default");
@@ -255,6 +308,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeConfigSnapshot();
     if (originalPluginRegistry) {
       setActivePluginRegistry(originalPluginRegistry, "placement-runtime-test-restore", "default");
       return;
@@ -278,17 +332,20 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s-cli",
-        updatedAt: 0,
-        providerOverride: "claude-cli",
-        modelOverride: "claude-fable-5-1",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-cli",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s-cli",
+          updatedAt: 0,
+          providerOverride: "claude-cli",
+          modelOverride: "claude-fable-5-1",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-cli",
+      }),
+    );
     expect(caps.executionMode).toBeUndefined();
     expect(caps.devicePlacement).toBeUndefined();
   });
@@ -307,18 +364,21 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s-override",
-        updatedAt: 0,
-        providerOverride: "claude-cli",
-        modelOverride: "opus-4.7",
-        agentRuntimeOverride: "openclaw",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-override",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s-override",
+          updatedAt: 0,
+          providerOverride: "claude-cli",
+          modelOverride: "opus-4.7",
+          agentRuntimeOverride: "openclaw",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-override",
+      }),
+    );
     expect(caps.executionMode).toBe("worker-turn");
   });
 
@@ -335,26 +395,29 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        auth: {
-          order: { anthropic: ["anthropic:claude-cli", "anthropic:api"] },
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {
+          auth: {
+            order: { anthropic: ["anthropic:claude-cli", "anthropic:api"] },
+            profiles: {
+              "anthropic:api": { provider: "anthropic", mode: "api_key" },
+              "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+            },
           },
         },
-      },
-      entry: {
-        sessionId: "s-auth-direct",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "opus-4.7",
-        authProfileOverride: "anthropic:api",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-auth-direct",
-    });
+        entry: {
+          sessionId: "s-auth-direct",
+          updatedAt: 0,
+          providerOverride: "anthropic",
+          modelOverride: "opus-4.7",
+          authProfileOverride: "anthropic:api",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-auth-direct",
+      }),
+    );
     expect(caps.executionMode).toBe("worker-turn");
   });
 
@@ -371,26 +434,29 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        auth: {
-          order: { anthropic: ["anthropic:api"] },
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {
+          auth: {
+            order: { anthropic: ["anthropic:api"] },
+            profiles: {
+              "anthropic:api": { provider: "anthropic", mode: "api_key" },
+              "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+            },
           },
         },
-      },
-      entry: {
-        sessionId: "s-auth-cli",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "opus-4.7",
-        authProfileOverride: "anthropic:claude-cli",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-auth-cli",
-    });
+        entry: {
+          sessionId: "s-auth-cli",
+          updatedAt: 0,
+          providerOverride: "anthropic",
+          modelOverride: "opus-4.7",
+          authProfileOverride: "anthropic:claude-cli",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-auth-cli",
+      }),
+    );
     expect(caps.executionMode).toBeUndefined();
   });
 
@@ -411,27 +477,30 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       },
     });
 
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        models: {
-          providers: {
-            "device-harness": {
-              baseUrl: "https://device-harness.example/v1",
-              models: [],
-              agentRuntime: { id: "device-harness" },
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {
+          models: {
+            providers: {
+              "device-harness": {
+                baseUrl: "https://device-harness.example/v1",
+                models: [],
+                agentRuntime: { id: "device-harness" },
+              },
             },
           },
         },
-      },
-      entry: {
-        sessionId: "s3",
-        updatedAt: 0,
-        providerOverride: "device-harness",
-        modelOverride: "model-x",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s3",
-    });
+        entry: {
+          sessionId: "s3",
+          updatedAt: 0,
+          providerOverride: "device-harness",
+          modelOverride: "model-x",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s3",
+      }),
+    );
     expect(caps.executionMode).toBe("remote-exec");
     expect(caps.devicePlacement).toEqual({
       requiredNodeCommands: ["runtime.exec-server.v1"],
@@ -460,17 +529,20 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       },
     });
 
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s4",
-        updatedAt: 0,
-        providerOverride: "auto-provider",
-        modelOverride: "auto-model",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s4",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s4",
+          updatedAt: 0,
+          providerOverride: "auto-provider",
+          modelOverride: "auto-model",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s4",
+      }),
+    );
     expect(caps.executionMode).toBe("remote-exec");
     expect(caps.devicePlacement).toEqual({
       requiredNodeCommands: ["runtime.exec-server.v1"],
@@ -499,17 +571,20 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       },
     });
 
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s5",
-        updatedAt: 0,
-        providerOverride: "unsupported-provider",
-        modelOverride: "unsupported-model",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s5",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s5",
+          updatedAt: 0,
+          providerOverride: "unsupported-provider",
+          modelOverride: "unsupported-model",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s5",
+      }),
+    );
     expect(caps.executionMode).toBe("worker-turn");
     expect(caps.devicePlacement).toEqual({
       requiredNodeCommands: [],
@@ -517,7 +592,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
     });
   });
 
-  it("sessions.patch boundary: rejects an incompatible model change for an active worker-turn placement", () => {
+  it("sessions.patch boundary: rejects an incompatible model change for an active worker-turn placement", async () => {
     // An active worker-turn placement must reject a model whose effective
     // runtime is a CLI harness with no cloud placement support. The harness
     // claims the provider via autoSelection so resolveAutoAgentHarnessId
@@ -555,9 +630,14 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
     const context = {
       workerSessionPlacementService: {
         getMany: () => new Map([[sessionId, placement]]),
+        prepareSessionPlacement: async () => ({
+          prepareRead: () => undefined,
+          current: () => placement,
+          release() {},
+        }),
       },
     };
-    const error = resolveSessionWorkerPlacementPatchError({
+    const error = await preparePatchError({
       agentId: "main",
       cfg: {} as never,
       context: context as never,
@@ -575,7 +655,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
     expect(error).toContain("cannot select a runtime without cloud placement support");
   });
 
-  it("sessions.patch boundary: allows an unclaimed auto model with openclaw fallback for an active worker-turn placement", () => {
+  it("sessions.patch boundary: allows an unclaimed auto model with openclaw fallback for an active worker-turn placement", async () => {
     // An "auto" model with no registered supporting harness falls back to the
     // built-in openclaw runtime, which supports worker-turn placement. The
     // guard must not reject it — this is the compatibility regression fixed
@@ -601,12 +681,18 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       createdAtMs: 0,
       updatedAtMs: 0,
     };
+    let executionMode: "worker-turn" | "remote-exec" = "worker-turn";
     const context = {
       workerSessionPlacementService: {
-        getMany: () => new Map([[sessionId, placement]]),
+        getMany: () => new Map([[sessionId, { ...placement, executionMode }]]),
+        prepareSessionPlacement: async () => ({
+          prepareRead: () => undefined,
+          current: () => ({ ...placement, executionMode }),
+          release() {},
+        }),
       },
     };
-    const error = resolveSessionWorkerPlacementPatchError({
+    const prepared = await prepareSessionWorkerPlacementPatchValidation({
       agentId: "main",
       cfg: {} as never,
       context: context as never,
@@ -621,6 +707,12 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       sessionKey: "agent:main:s8",
       validateModelRuntime: true,
     });
-    expect(error).toBeUndefined();
+    try {
+      expect(prepared.validate()).toBeUndefined();
+      executionMode = "remote-exec";
+      expect(prepared.validate()).toContain("cannot change cloud placement execution mode");
+    } finally {
+      prepared.release();
+    }
   });
 });

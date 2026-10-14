@@ -46,16 +46,16 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install checksum-pinned Crabbox v0.46.0
+      - name: Install checksum-pinned Crabbox v0.77.0
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          asset=crabbox_0.46.0_linux_amd64.tar.gz
-          checksum=6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90
-          install_dir="$RUNNER_TEMP/crabbox-v0.46.0"
+          asset=crabbox_0.77.0_linux_amd64.tar.gz
+          checksum=cbf6cb74251a454c65d13d7a92b070cf8c37ee81c300c97123063b9d21206d5f
+          install_dir="$RUNNER_TEMP/crabbox-v0.77.0"
           mkdir -p "$install_dir"
-          gh release download v0.46.0 \
+          gh release download v0.77.0 \
             --repo openclaw/crabbox \
             --pattern "$asset" \
             --pattern checksums.txt \
@@ -65,7 +65,7 @@ jobs:
             '$1 == checksum && $2 == asset { found = 1 } END { exit !found }' \
             "$install_dir/checksums.txt"
           tar -xzf "$install_dir/$asset" -C "$install_dir"
-          test "$("$install_dir/crabbox" version | awk '{print $NF}')" = "0.46.0"
+          test "$("$install_dir/crabbox" version | awk '{print $NF}')" = "0.77.0"
           printf 'CRABBOX_BIN=%s\n' "$install_dir/crabbox" >> "$GITHUB_ENV"
 
       - name: Create organization membership token
@@ -87,7 +87,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-members: read
 
-      - name: Run immutable Crabbox proof
+      - name: Run immutable Crabbox proof and confirm cleanup
         id: proof
         env:
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
