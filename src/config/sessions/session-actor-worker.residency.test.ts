@@ -70,5 +70,22 @@ it("retains an oversized sole actor across commits and accounts its bytes when a
     const displaced = f.read(other);
     expect(displaced.version.epoch).not.toBe(competing.version.epoch);
     expect(displaced.entry).toMatchObject({ sessionId: "byte-budget-other", updatedAt: 1 });
+    const neighboring = f.read(companion);
+    expect(f.read(other).version).toEqual(displaced.version);
+    expect(f.read(companion).version).toEqual(neighboring.version);
+
+    f.read();
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        sessionId: f.scope.sessionId,
+        updatedAt: 3,
+        label: "small replacement",
+      });
+    });
+    const smaller = f.read();
+    f.read(other);
+    f.read(companion);
+    expect(f.read().version).toEqual(smaller.version);
+    expect(f.read().entry?.label).toBe("small replacement");
   });
 });
