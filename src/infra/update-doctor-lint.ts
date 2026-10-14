@@ -147,5 +147,18 @@ export function applyUpdateDoctorLintReport(
   if (warnings.length) {
     step.warnings = warnings;
   }
+  const deferredInspections = (report?.warnings ?? []).filter(
+    (warning) => warning.errorCode === "update-inspection-deferred",
+  ).length;
+  // A passing report that still deferred inspections is incomplete, not a clean
+  // pass. This includes a partial run. Failed exits keep their failure.
+  if (code === 0 && report?.ok === true && deferredInspections > 0 && step.advisory === undefined) {
+    const message = `Doctor deferred ${deferredInspections} inspection${deferredInspections === 1 ? "" : "s"} until after activation (${report.checksRun} ran). Run \`openclaw doctor --fix\` after the update.`;
+    step.advisory = { kind: "recoverable-maintenance", message };
+    // Progress prints advisory.message. The final report repeats step warnings.
+    if (!step.warnings?.includes(message)) {
+      step.warnings = [...(step.warnings ?? []), message];
+    }
+  }
   return report;
 }
