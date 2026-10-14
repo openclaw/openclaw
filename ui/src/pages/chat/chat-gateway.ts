@@ -281,7 +281,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       terminalStatus === "completed"
         ? ("done" as const)
         : terminalStatus === "aborted"
-          ? ("killed" as const)
+          ? payload.stopReason === "restart"
+            ? ("interrupted" as const)
+            : ("killed" as const)
           : terminalStatus === "timeout"
             ? ("timeout" as const)
             : ("failed" as const);

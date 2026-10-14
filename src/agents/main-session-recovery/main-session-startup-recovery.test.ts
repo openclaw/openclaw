@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -13,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -29,6 +31,7 @@ import {
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
   createRestartRecoveryStoreFixture,
@@ -93,6 +96,76 @@ afterEach(() => {
 });
 
 describe("main-session startup recovery", () => {
+  it("automatically dispatches a continuation from a persisted restart-admission refusal", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    await writeStore(sessionsDir, {
+      [sessionKey]: mainSessionEntry({
+        status: undefined,
+        abortedLastRun: false,
+        mainRestartRecovery: undefined,
+        lifecycleRunId: "refused-turn",
+        startedAt: 1,
+      }),
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "Finish the review." },
+    ]);
+    const cfg = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
+    gatewayWorkAdmission.markGatewayRestartDraining();
+    const error = new gatewayWorkAdmission.GatewayDrainingError();
+    await persistGatewaySessionLifecycleEvent({
+      sessionKey,
+      agentId: "main",
+      event: {
+        runId: "refused-turn",
+        sessionId: "main-session",
+        ts: Date.now(),
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        data: {
+          phase: "error",
+          error: error.message,
+          ...resolveAgentRunErrorLifecycleFields(error, undefined),
+        },
+      },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+      status: "interrupted",
+      abortedLastRun: true,
+    });
+    expect(
+      (await loadTranscriptEvents({ storePath, sessionKey, sessionId: "main-session" })).some(
+        (event) =>
+          isRecord(event) &&
+          event.type === "custom_message" &&
+          event.customType === "run-failed-before-reply",
+      ),
+    ).toBe(false);
+    resetGatewayWorkAdmission();
+    resetAgentEventsForTest();
+    await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: tmpDir });
+    const recovery = await recoverRestartAbortedMainSessions({ cfg, stateDir: tmpDir });
+    expect(recovery).toMatchObject({ started: 1, failed: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey,
+          inputProvenance: {
+            kind: "internal_system",
+            sourceSessionKey: sessionKey,
+            sourceTool: "main_session_restart_recovery",
+          },
+        }),
+      }),
+    );
+    await recoverRestartAbortedMainSessions({ cfg, stateDir: tmpDir });
+    expect(callGateway).toHaveBeenCalledOnce();
+    dispatchSettlement.resolve();
+  });
   it("preserves a claimless delivered continuation but marks one with only older receipts", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
