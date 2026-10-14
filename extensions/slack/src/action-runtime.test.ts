@@ -12,6 +12,11 @@ import type { SlackSendResult } from "./send.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
+const createSlackChannel = vi.fn(async (..._args: unknown[]) => ({
+  channelId: "C456",
+  name: "proj-channel-create-proof",
+  target: "team:T123:channel:C456",
+}));
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const downloadSlackFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -119,6 +124,27 @@ describe("handleSlackAction", () => {
     });
     expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", { cfg, teamId: "T123" });
     expect(result.details).toEqual({ ok: true, info });
+  });
+
+  it("requires explicit channel-management admission before creating a channel", async () => {
+    await expect(
+      handleSlackAction({ action: "createChannel", name: "proj-channel-create-proof" }, cfg, {
+        ...trustedContext,
+        requesterSenderId: "U456",
+      }),
+    ).rejects.toThrow("Slack channel creation is disabled.");
+    expect(createSlackChannel).not.toHaveBeenCalled();
+  });
+
+  it("allows channel creation when message actions are disabled", async () => {
+    cfg = slackConfig({ actions: { channels: true, messages: false } });
+    await expect(
+      handleSlackAction({ action: "createChannel", name: "proj-channel-create-proof" }, cfg, {
+        ...trustedContext,
+        requesterSenderId: "U456",
+      }),
+    ).resolves.toMatchObject({ details: { ok: true, target: "team:T123:channel:C456" } });
+    expect(createSlackChannel).toHaveBeenCalled();
   });
 
   it.each([
@@ -342,6 +368,7 @@ describe("handleSlackAction", () => {
     resolveSlackConversationName.mockReset().mockResolvedValue(undefined);
     resolveSlackConversationInfo.mockClear();
     Object.assign(slackActionRuntime, originalSlackActionRuntime, {
+      createSlackChannel,
       deleteSlackMessage,
       downloadSlackFile,
       editSlackMessage,
