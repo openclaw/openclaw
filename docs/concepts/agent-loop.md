@@ -323,6 +323,12 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
 
+Pending Code Mode `exec` and `wait` calls remain active tool work until they
+settle, including `awaitResults: true` calls waiting for nested work. Nested tool
+completion does not retire the outer call. The normal blocked-tool recovery
+allowance and enforced run/tool deadlines still apply; after the outer call
+settles, an embedded run that stops making progress remains recoverable.
+
 Attention and recovery log lines read optional session context only when their
 log level is enabled. Transcript enrichment runs in the background read worker
 and returns at most 140 characters; it never delays classification or recovery.
