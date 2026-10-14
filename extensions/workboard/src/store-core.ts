@@ -285,6 +285,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       if (!parent) {
         throw new Error(`card not found: ${parentId}`);
       }
+      assertCanMutateClaimedCard(parent, scope);
       return parent;
     });
     const childAutomation =
