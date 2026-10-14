@@ -80,7 +80,7 @@ describe("guarded request release", () => {
             ["/start", "/complete"].map((path) => ({
               path,
               body: payload,
-              type: new Headers(init.headers).get("content-type") ?? "text/plain",
+              type: new Headers(init.headers).get("content-type") ?? body.type,
               length: String(Buffer.byteLength(payload)),
             })),
           );
