@@ -85,7 +85,7 @@ it.each([false, true])(
           return "prepared";
         },
       );
-      await expect(reading).resolves.toEqual({ kind: "complete", value: "prepared" });
+      await expect(reading).resolves.toEqual("prepared");
       expect(consumed).toBe(1);
     } finally {
       owner.dispose();
@@ -194,7 +194,7 @@ it("refreshes placement facts invalidated after the read settles but before cons
     releaseFacts.resolve();
     expect(
       await withTestTimeout(reading, 2_000, "Invalidated placement facts did not refresh"),
-    ).toEqual({ kind: "complete", value: true });
+    ).toEqual(true);
     expect(consumed).toEqual([true]);
   } finally {
     owner.dispose();
@@ -369,9 +369,9 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
     await withTestTimeout(newer.entered.promise, 2_000, "Newer queued read did not enter");
     expect(dispatched).toEqual([["first"], ["second"], ["older"], ["resident"], ["newer"]]);
     newer.release.resolve();
-    await expect(olderRead).resolves.toEqual({ kind: "complete", value: true });
+    await expect(olderRead).resolves.toEqual(true);
     await preparing;
-    await expect(newerRead).resolves.toEqual({ kind: "complete", value: true });
+    await expect(newerRead).resolves.toEqual(true);
   } finally {
     owner.dispose();
     for (const step of steps) {
@@ -424,7 +424,7 @@ it("refreshes an invalidated exact snapshot before adopting its resident row", a
     await owner.prepare();
     expect(dispatched).toEqual([[id], [id]]);
     releaseMaterialization.resolve();
-    expect(await reading).toEqual({ kind: "complete", value: true });
+    expect(await reading).toEqual(true);
     expect(owner.getProjectionFacts(id)?.workspaceResultReconciling).toBe(true);
   } finally {
     owner.dispose();

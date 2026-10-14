@@ -17,12 +17,12 @@ For an eligible repository with committed content, OpenClaw:
 
 1. Provisions the session's machine and runs optional profile setup.
 2. Prepares the selected commit and its [repository environment recipe](/gateway/cloud-workers/environment-file), with a verified Node toolchain and the current OpenClaw runtime.
-3. Removes worker identity and session state, then captures the prepared machine before node enrollment.
+3. Removes worker identity and session state, then fixes the snapshot capture point before node enrollment.
 4. Enrolls the node, binds the session workspace, runs post-create/start commands, and starts the first turn.
 
-The first session waits for capture to finish. New Session shows **Preparing cloud environment…**, then **Saving snapshot…**. Later sessions can reuse the snapshot immediately; the first session does not have to stop. Daytona may stop and restore the source machine during capture.
+With Crabbox 0.78.0 or newer on AWS, the first session continues to enrollment once Crabbox confirms the capture point is fixed. The snapshot upload finishes in the background; later sessions start cold until it is available. Older Crabbox, refresh captures, reserves, and other backends still wait for completion. Daytona may stop and restore the source machine during capture.
 
-This works for both Gateway checkouts and repository-only GitHub sessions. Only committed repository content enters preparation. Session edits and enrollment credentials arrive after capture. Private repository preparation transfers Git content without putting GitHub credentials in worker files or snapshots; it needs temporary Gateway disk space, and the outgoing pack is limited to 4 GiB.
+This works for both Gateway checkouts and repository-only GitHub sessions. Only committed repository content enters preparation. Session edits and enrollment credentials arrive after the capture point is fixed. Private repository preparation transfers Git content without putting GitHub credentials in worker files or snapshots; it needs temporary Gateway disk space, and the outgoing pack is limited to 4 GiB.
 
 Setup-generated dependencies and build output survive into the session. Session changes are applied over that prepared content, with session edits taking precedence. Explicit checkpoint restores and accepted reconciliation snapshots retain their exact contents, including deletions.
 

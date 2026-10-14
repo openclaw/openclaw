@@ -141,7 +141,8 @@ describe("test runtime prerequisites", () => {
     ],
     ["tui-pty", ["--exclude", "tui/tui-session-identity-pty.e2e.test.ts"], undefined],
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
-    ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
+    ["gateway-core", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
     ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [

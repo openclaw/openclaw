@@ -5875,9 +5875,8 @@ definition-generation, expiry, and exact-operation checks. Cancellation, expiry,
 failed launch, and unknown consumption never refund or replay usage. A fallback
 proven to precede initiation revalidates the same grant without consuming again.
 Close refuses new effects and joins accepted accounting before retiring workers.
-An unconfirmed native launch makes drain and close fail while retaining database
-custody and the admission seal. The Gateway process must retire before that
-authority can be reopened; an uncertain launch is never replayed or refunded.
+An unconfirmed native launch keeps the exec-policy mutation fence until canonical
+close releases that use; an uncertain launch is never replayed or refunded.
 Grant eligibility, released SDK contracts, schemas, retention, and update behavior
 are unchanged.
 

@@ -17,7 +17,7 @@ The suggested `cloud` profile uses Linux, the smallest advertised standard class
 
 ### First session
 
-For an eligible Linux repository, the first session provisions its own machine, prepares the selected commit and dependencies, installs the OpenClaw runtime, and captures a snapshot before enrolling the node. The startup line shows **Preparing cloud environment…**, then **Saving snapshot…**. That first session waits for capture; later sessions can reuse the snapshot without waiting for it to stop.
+For an eligible Linux repository, the first session provisions its own machine, prepares the selected commit and dependencies, installs the OpenClaw runtime, and starts snapshot capture before enrolling the node. The startup line shows **Preparing cloud environment…**, then **Saving snapshot…**. On supported AWS workers, upload can finish while the session runs; later sessions reuse the snapshot once available. See [first-capture requirements](/gateway/cloud-workers/warm-images#first-session-for-a-repository).
 
 A repository-only GitHub session needs no Gateway checkout. A session started from a Gateway checkout preserves local and unpublished content through its [managed worktree](/concepts/managed-worktrees), applying session changes after capture. **New workspace** starts empty and uses shared runtime images instead of a repository snapshot.
 
