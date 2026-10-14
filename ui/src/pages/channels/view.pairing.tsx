@@ -1,9 +1,9 @@
 import { createMemo, For, Show } from "solid-js";
 // DM sender access request queue shared by the Channels hub and detail panels.
 import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/types.ts";
-import { renderChannelPicker } from "../../components/channel-picker.ts";
 import { Picker } from "../../components/select-picker.ts";
 import "../../components/modal-dialog.ts";
+import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -12,7 +12,6 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { ChannelRefresh } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 
@@ -41,18 +40,14 @@ function renderFilters(props: ChannelsProps) {
     <div class="channels-pairing-filters">
       <label>
         <span>{t("channels.pairing.channelFilter")}</span>
-        <LitContent
-          render={() =>
-            renderChannelPicker({
-              label: t("channels.pairing.channelFilter"),
-              value: props.pairingChannelFilter ?? "",
-              options: [
-                { value: "", label: t("channels.pairing.allChannels"), kind: "neutral" },
-                ...channels().map(([value, label]) => ({ value, label })),
-              ],
-              onChange: (value) => props.onPairingFilterChange(value || null, null),
-            })
-          }
+        <ChannelPicker
+          label={t("channels.pairing.channelFilter")}
+          value={props.pairingChannelFilter ?? ""}
+          options={[
+            { value: "", label: t("channels.pairing.allChannels"), kind: "neutral" },
+            ...channels().map(([value, label]) => ({ value, label })),
+          ]}
+          onChange={(value) => props.onPairingFilterChange(value || null, null)}
         />
       </label>
       <label>
