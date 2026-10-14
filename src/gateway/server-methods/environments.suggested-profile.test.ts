@@ -92,6 +92,7 @@ beforeEach(() => {
       writeOptions: ConfigWriteOptions;
     }) => {
       writeOptions.assertCurrent?.();
+      writeOptions.assertBeforePublish?.();
       if (snapshot.hash !== storedHash) {
         throw new ConfigMutationConflictError("config changed since last load");
       }
@@ -332,6 +333,7 @@ describe("suggested cloud profile adoption", () => {
       async ({ writeOptions }: { writeOptions: ConfigWriteOptions }) => {
         current = false;
         writeOptions.assertCurrent?.();
+        writeOptions.assertBeforePublish?.();
         throw new Error("revoked request reached config publication");
       },
     );

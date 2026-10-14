@@ -1,5 +1,6 @@
 // A config writer receives the committed revision before its own policy retires its socket.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as configWriteMetadata from "../config/io.meta.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import * as restartSentinel from "../infra/restart-sentinel.js";
@@ -78,6 +79,8 @@ describe("config writer policy-close ordering", () => {
       });
       await server.startupSettled;
       const held = createDeferredCore();
+      const filePublished = createDeferredCore();
+      const finishMetadata = createDeferredCore();
       const published = createDeferredCore<restartSentinel.RestartSentinelPayload>();
       const writeSentinel = restartSentinel.writeRestartSentinel;
       const connect = async (credential: string, browser = false, browserOrigin = origin) => {
@@ -130,6 +133,15 @@ describe("config writer policy-close ordering", () => {
         await held.promise;
         return await writeSentinel(payload);
       });
+      const recordMetadata = configWriteMetadata.recordConfigWriteMetadata;
+      vi.spyOn(configWriteMetadata, "recordConfigWriteMetadata").mockImplementationOnce(
+        async (...args) => {
+          // Let the real watcher revoke the requester after publication but before reread.
+          filePublished.resolve();
+          await finishMetadata.promise;
+          await recordMetadata(...args);
+        },
+      );
       try {
         const writer = await connect(token, browserPolicy);
         const peer = await connect(token, browserPolicy);
@@ -159,6 +171,15 @@ describe("config writer policy-close ordering", () => {
           raw: JSON.stringify(method === "config.apply" ? nextConfig : change),
         });
         void result.catch(() => {});
+        await Promise.race([
+          filePublished.promise,
+          result.then(() => {
+            throw new Error("RPC completed before config publication");
+          }),
+        ]);
+        await peer.closed;
+        expect(writer.didClose()).toBe(false);
+        finishMetadata.resolve();
         const publication = await Promise.race([
           published.promise,
           result.then(() => {
@@ -186,6 +207,7 @@ describe("config writer policy-close ordering", () => {
         );
         expect((await fresh.client.request<ConfigSnapshot>("config.get")).hash).toBe(response.hash);
       } finally {
+        finishMetadata.resolve();
         held.resolve();
       }
     },

@@ -1,7 +1,11 @@
+import { channel } from "node:diagnostics_channel";
+import { errorMonitor } from "node:events";
 import fs from "node:fs";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Worker } from "node:worker_threads";
+import { threadId, type Worker } from "node:worker_threads";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
@@ -60,6 +64,7 @@ import {
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { registerStartupHttpDiagnostic } from "./startup-http-diagnostic.test-support.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
 import {
@@ -71,6 +76,8 @@ import {
 } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
+registerStartupHttpDiagnostic("src/gateway/server-agent-database-startup.test.ts");
+
 let pendingFixtureCleanup: Promise<void> | undefined;
 afterEach(async () => {
   try {
@@ -737,6 +744,401 @@ it.for([
   },
 );
 
+// Temporary diagnosis: observe the original requests without replacing fetch,
+// consuming bodies, changing the dispatcher, or changing listener error handling.
+function traceStartupHttp(signal: AbortSignal) {
+  const started = process.hrtime.bigint();
+  const events: Record<string, unknown>[] = [];
+  const cleanup: (() => void)[] = [];
+  const identities = new WeakMap<object, number>();
+  const requests = new WeakMap<object, number>();
+  const sockets = new WeakSet<Socket>();
+  const servers = new WeakSet<Server>();
+  const responses = new WeakSet<ServerResponse>();
+  const connections = new Map<number, number>();
+  let nextIdentity = 0;
+  let port = 0;
+  let ordinal = 0;
+  let phase = "acquisition";
+  let dropped = 0;
+  let printed = 0;
+  const identity = (value: unknown) => {
+    if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+      return null;
+    }
+    if (!identities.has(value)) {
+      identities.set(value, ++nextIdentity);
+    }
+    return identities.get(value);
+  };
+  const errorCodes = (error: unknown, depth = 0): unknown => {
+    if (typeof error !== "object" || error === null || depth === 4) {
+      return null;
+    }
+    const code: unknown = Reflect.get(error, "code");
+    const name: unknown = Reflect.get(error, "name");
+    return {
+      name: typeof name === "string" ? name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 64) : null,
+      code: typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : null,
+      cause: errorCodes(Reflect.get(error, "cause"), depth + 1),
+    };
+  };
+  const record = (event: string, facts: Record<string, unknown> = {}) => {
+    if (events.length === 256) {
+      dropped += 1;
+      return;
+    }
+    events.push({
+      ms: Number(process.hrtime.bigint() - started) / 1e6,
+      ordinal,
+      phase,
+      event,
+      ...facts,
+    });
+  };
+  const initiator = () => {
+    // Retain source identities only; raw stacks can contain private checkout paths.
+    const owners = [
+      "http-request-authority.ts",
+      "server-http-request.ts",
+      "server-lifecycle.ts",
+      "http-request-lifecycle.ts",
+      "server-request-entry.ts",
+      "server-close.ts",
+      "node:_http_server",
+      "node:_http_outgoing",
+      "node:net",
+      "node:internal/streams/destroy",
+    ];
+    const frames = [];
+    for (const frame of (new Error().stack ?? "").split("\n").slice(1)) {
+      const owner = owners.find((candidate) => frame.includes(`${candidate}:`));
+      if (!owner) {
+        continue;
+      }
+      const location = frame.slice(frame.indexOf(owner) + owner.length);
+      const line = /^:(\d+):\d+/.exec(location)?.[1];
+      frames.push({ owner, line: line ? Number(line) : null });
+      if (frames.length === 6) {
+        break;
+      }
+    }
+    return frames.length ? frames : [{ owner: "other", line: null }];
+  };
+  const recordCall = (event: string, facts: Record<string, unknown>, error?: unknown) => {
+    // Observers must never prevent or replace the native call, including its throw.
+    try {
+      if (events.length === 256) {
+        dropped += 1;
+        return;
+      }
+      record(event, { ...facts, initiator: initiator(), error: errorCodes(error) });
+    } catch {
+      // Native forwarding remains authoritative if diagnostic serialization fails.
+    }
+  };
+  const flush = () => {
+    try {
+      console.error(
+        "[startup-http-diagnostic]",
+        JSON.stringify({ events: events.slice(printed), dropped }),
+      );
+      printed = events.length;
+    } catch {
+      // Logging failure must not replace the request or native cleanup outcome.
+    }
+  };
+  const watchSocket = (socket: Socket, side: "client" | "server") => {
+    if (sockets.has(socket)) {
+      return;
+    }
+    sockets.add(socket);
+    const clientPort = side === "client" ? socket.localPort : socket.remotePort;
+    if (clientPort !== undefined && !connections.has(clientPort)) {
+      connections.set(clientPort, connections.size + 1);
+    }
+    const facts = {
+      side,
+      socket: identity(socket),
+      connection: clientPort === undefined ? null : connections.get(clientPort),
+    };
+    record("socket.observed", facts);
+    const onError = (error: Error) =>
+      record("socket.error", { ...facts, error: errorCodes(error) });
+    const onClose = (hadError: boolean) => record("socket.close", { ...facts, hadError });
+    socket.on(errorMonitor, onError);
+    socket.on("close", onClose);
+    if (side === "server") {
+      const destroy = socket.destroy;
+      const destroySpy = vi.spyOn(socket, "destroy").mockImplementation(function (
+        this: Socket,
+        ...args
+      ) {
+        recordCall("socket.destroy-entry", { ...facts, destroyed: this.destroyed }, args[0]);
+        return destroy.apply(this, args);
+      });
+      cleanup.push(() => destroySpy.mockRestore());
+    }
+    cleanup.push(() => {
+      socket.off(errorMonitor, onError);
+      socket.off("close", onClose);
+    });
+  };
+  const subscribe = (name: string, listener: (message: unknown) => void) => {
+    const diagnostic = channel(name);
+    const observe = (message: unknown) => {
+      try {
+        listener(message);
+      } catch (error) {
+        record("observer.error", { channel: name, error: errorCodes(error) });
+      }
+    };
+    diagnostic.subscribe(observe);
+    cleanup.push(() => diagnostic.unsubscribe(observe));
+  };
+  const watchServer = (server: Server) => {
+    if (servers.has(server)) {
+      return;
+    }
+    servers.add(server);
+    record("server.observed", {
+      server: identity(server),
+      keepAliveTimeout: server.keepAliveTimeout,
+      keepAliveTimeoutBuffer: server.keepAliveTimeoutBuffer,
+    });
+    const close = server.close;
+    const closeSpy = vi.spyOn(server, "close").mockImplementation(function (this: Server, ...args) {
+      recordCall("server.close-entry", { server: identity(server), listening: server.listening });
+      return close.apply(this, args);
+    });
+    const onClose = () => record("server.close", { server: identity(server) });
+    server.on("close", onClose);
+    cleanup.push(() => {
+      server.off("close", onClose);
+      closeSpy.mockRestore();
+    });
+  };
+  // Payload contracts inspected in Node v24.21.0 and its bundled Undici source.
+  subscribe("tracing:net.server.listen:asyncEnd", (message) => {
+    const { server } = message as { server: Server };
+    const address = server.address();
+    if (port && address && typeof address === "object" && address.port === port) {
+      watchServer(server);
+    }
+  });
+  subscribe("net.server.socket", (message) => {
+    const { socket } = message as { socket: Socket };
+    if (port && socket.localPort === port) {
+      watchSocket(socket, "server");
+    }
+  });
+  subscribe("http.server.request.start", (message) => {
+    const { request, response, socket, server } = message as {
+      request: IncomingMessage;
+      response: ServerResponse;
+      socket: Socket;
+      server: Server;
+    };
+    if (!port || socket.localPort !== port) {
+      return;
+    }
+    const facts = {
+      ordinal,
+      request: identity(request),
+      socket: identity(socket),
+      path: request.url === "/healthz" || request.url === "/readyz" ? request.url : "other",
+    };
+    record("server.arrival", facts);
+    watchSocket(socket, "server");
+    watchServer(server);
+    if (!responses.has(response)) {
+      responses.add(response);
+      const destroy = response.destroy;
+      const destroySpy = vi.spyOn(response, "destroy").mockImplementation(function (
+        this: ServerResponse,
+        ...args
+      ) {
+        recordCall(
+          "response.destroy-entry",
+          { ...facts, finished: this.writableFinished, destroyed: this.destroyed },
+          args[0],
+        );
+        return destroy.apply(this, args);
+      });
+      cleanup.push(() => destroySpy.mockRestore());
+    }
+    const onFinish = () => record("response.finish", { ...facts, status: response.statusCode });
+    const onClose = () =>
+      record("response.close", {
+        ...facts,
+        finished: response.writableFinished,
+        destroyed: response.destroyed,
+      });
+    response.on("finish", onFinish);
+    response.on("close", onClose);
+    cleanup.push(() => {
+      response.off("finish", onFinish);
+      response.off("close", onClose);
+    });
+  });
+  for (const name of [
+    "undici:request:create",
+    "undici:client:sendHeaders",
+    "undici:request:headers",
+    "undici:request:trailers",
+    "undici:request:error",
+  ]) {
+    subscribe(name, (message) => {
+      const { request, socket, error, response } = message as {
+        request: { origin: string; path: string };
+        socket?: Socket;
+        error?: Error;
+        response?: { statusCode: number };
+      };
+      if (!port || String(request.origin) !== `http://127.0.0.1:${port}`) {
+        return;
+      }
+      if (!requests.has(request)) {
+        requests.set(request, ordinal);
+      }
+      if (socket) {
+        watchSocket(socket, "client");
+      }
+      // Read the actual global slot; importing another Undici could initialize it.
+      const dispatcher: unknown = Reflect.get(globalThis, Symbol.for("undici.globalDispatcher.1"));
+      record(name, {
+        ordinal: requests.get(request),
+        request: identity(request),
+        socket: identity(socket),
+        dispatcher: identity(dispatcher),
+        dispatcherClass:
+          typeof dispatcher === "object" && dispatcher !== null
+            ? dispatcher.constructor.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 64)
+            : null,
+        status: response?.statusCode,
+        error: errorCodes(error),
+      });
+    });
+  }
+  const onAbort = () => {
+    record("test.abort", { error: errorCodes(signal.reason) });
+    flush();
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  cleanup.push(() => signal.removeEventListener("abort", onAbort));
+  record("runtime", {
+    node: process.versions.node,
+    undici: process.versions.undici,
+    fetch: identity(globalThis.fetch),
+    pid: process.pid,
+    threadId,
+    file: "src/gateway/server-agent-database-startup.test.ts",
+    workerId: /^\d+$/.test(process.env.VITEST_WORKER_ID ?? "")
+      ? Number(process.env.VITEST_WORKER_ID)
+      : null,
+    poolId: /^\d+$/.test(process.env.VITEST_POOL_ID ?? "")
+      ? Number(process.env.VITEST_POOL_ID)
+      : null,
+  });
+  return {
+    observeTransport(module: typeof import("./server-runtime-state.js")) {
+      const createTransport = module.createGatewayHttpTransport;
+      const seen = new WeakSet<object>();
+      const factory = vi.spyOn(module, "createGatewayHttpTransport").mockImplementation(function (
+        this: typeof module,
+        ...args
+      ) {
+        try {
+          const params = args[0];
+          if (port && params.port === port) {
+            const lifetime = params.httpRequestLifetime?.requestEntryLifetime;
+            if (lifetime && !seen.has(lifetime)) {
+              seen.add(lifetime);
+              const facts = { lifetime: identity(lifetime) };
+              record("request-lifetime.observed", { ...facts, aborted: lifetime.signal.aborted });
+              const onAbort = () =>
+                recordCall("request-lifetime.abort", facts, lifetime.signal.reason);
+              lifetime.signal.addEventListener("abort", onAbort, { once: true });
+              cleanup.push(() => lifetime.signal.removeEventListener("abort", onAbort));
+              const beginClose = lifetime.beginClose;
+              const closing = vi.spyOn(lifetime, "beginClose").mockImplementation(function (
+                this: typeof lifetime,
+                ...closeArgs
+              ) {
+                recordCall("request-lifetime.close-entry", facts);
+                return beginClose.apply(this, closeArgs);
+              });
+              cleanup.push(() => closing.mockRestore());
+            } else if (!lifetime) {
+              record("request-lifetime.missing");
+            }
+          }
+        } catch (error) {
+          recordCall("observer.transport-error", {}, error);
+        }
+        // Preserve the original promise and synchronous exception; do not await or wrap.
+        return createTransport.apply(this, args);
+      });
+      cleanup.push(() => factory.mockRestore());
+    },
+    bindPort(value: number) {
+      port = value;
+    },
+    mark(nextPhase: string, nextOrdinal = ordinal) {
+      phase = nextPhase;
+      ordinal = nextOrdinal;
+      record("phase");
+    },
+    failed(error: unknown) {
+      record("test.failure", { error: errorCodes(error) });
+      flush();
+    },
+    dispose(failed: boolean) {
+      for (const dispose of cleanup.reverse()) {
+        try {
+          dispose();
+        } catch (error) {
+          recordCall("observer.cleanup-error", {}, error);
+        }
+      }
+      if (failed) {
+        flush();
+      }
+      // Emit coverage only after the fixture close attempt and observer cleanup.
+      // A passing run must show whether the relevant taps actually fired.
+      try {
+        console.error(
+          "[startup-http-coverage]",
+          JSON.stringify({
+            failed,
+            retainedEvents: events.length,
+            dropped,
+            counts: Object.fromEntries(
+              [
+                "undici:request:create",
+                "undici:request:headers",
+                "server.arrival",
+                "response.finish",
+                "request-lifetime.observed",
+                "request-lifetime.close-entry",
+                "request-lifetime.abort",
+                "server.close-entry",
+                "response.destroy-entry",
+                "socket.destroy-entry",
+                "observer.error",
+                "observer.transport-error",
+                "observer.cleanup-error",
+              ].map((event) => [event, events.filter((entry) => entry.event === event).length]),
+            ),
+          }),
+        );
+      } catch {
+        // Diagnostic reporting cannot change the original test or cleanup result.
+      }
+    },
+  };
+}
+
 it("admits an unsealed fleet in parallel without gating readiness on an unconfigured leftover", async ({
   signal,
 }) => {
@@ -805,7 +1207,10 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
     }
   });
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+  const trace = traceStartupHttp(signal);
+  let failed = false;
   try {
+    trace.observeTransport(await import("./server-runtime-state.js"));
     const started = await withAgentDatabaseStartupAdmission(async (admission) => {
       const scheduling = admission.scheduling.bind(admission);
       vi.spyOn(admission, "scheduling").mockImplementation((...args) => ({
@@ -832,6 +1237,7 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
       );
       await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      trace.bindPort(portClaim.port);
       return {
         port: portClaim.port,
         server: await startTestGatewayServer(portClaim, {
@@ -842,8 +1248,11 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
     });
     server = started.server;
     await server.startupSettled;
+    trace.mark("health/startup-settled", 1);
     expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
+    trace.mark("ready/pending-initial", 2);
     expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
+    trace.mark("inspect-pending-and-create-absent");
     for (const agentId of agentIds) {
       expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
         code: "agent-database-inspection-pending",
@@ -858,7 +1267,9 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
     expect(fs.readFileSync(leftover)).toEqual(leftoverBytes);
     await withinTest(openingEntered[1]!.promise, signal);
     expect(openings).toHaveLength(2);
+    trace.mark("ready/two-openings", 3);
     expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
+    trace.mark("release-and-await-admission");
     openingReleases.get(openings[0]!)!.resolve();
     await withinTest(openingEntered[2]!.promise, signal);
     expect(openings).toHaveLength(3);
@@ -881,13 +1292,29 @@ it("admits an unsealed fleet in parallel without gating readiness on an unconfig
     }
     expect(readAgentDatabaseAdmissionRefusal("openclaw", { env })).toBeUndefined();
     expect(fs.readFileSync(leftover)).toEqual(leftoverBytes);
+    trace.mark("ready/all-admitted", 4);
     expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
+    trace.mark("assertions-complete");
+  } catch (error) {
+    failed = true;
+    trace.failed(error);
+    throw error;
   } finally {
     unsubscribe();
     for (const release of openingReleases.values()) {
       release.resolve();
     }
-    await server?.close();
+    trace.mark("fixture-close-entry");
+    try {
+      await server?.close();
+      trace.mark("fixture-close-settled");
+    } catch (error) {
+      failed = true;
+      trace.failed(error);
+      throw error;
+    } finally {
+      trace.dispose(failed);
+    }
   }
 });
 

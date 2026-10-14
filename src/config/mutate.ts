@@ -637,6 +637,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             },
             assertOwnerForRollback: assertScopedOwner,
             beforeCommit: params.writeOptions?.beforeCommit,
+            assertBeforePublish: params.writeOptions?.assertBeforePublish,
             skipOutputLogs: params.writeOptions?.skipOutputLogs,
             preCommitRuntimePreflight: async () => {
               await callerPreCommit?.(runtimeConfigToWrite);

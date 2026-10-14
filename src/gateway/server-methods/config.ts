@@ -960,8 +960,10 @@ export const configHandlers: GatewayRequestHandlers = {
         ...writeSnapshot,
         writeOptions: {
           ...writeOptions,
-          assertCurrent: () => {
-            writeOptions.assertCurrent?.();
+          // The committed policy may revoke this requester before canonical reread.
+          // Admit publication synchronously; retain the writer's own guards through completion.
+          assertBeforePublish: () => {
+            writeOptions.assertBeforePublish?.();
             authority.assertCurrent();
           },
         },

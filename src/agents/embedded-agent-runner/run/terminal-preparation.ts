@@ -316,6 +316,7 @@ export function prepareEmbeddedRunTerminal(input: {
   return {
     agentMeta,
     replyDeliveryState,
+    sourceReplyDeliveryState,
     reportedModelRef,
     finalAssistantVisibleText,
     finalAssistantRawText,

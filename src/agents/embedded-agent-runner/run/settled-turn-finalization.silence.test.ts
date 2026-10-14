@@ -59,6 +59,12 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       phased: false,
     },
     {
+      name: "recovery answer visible in transcript",
+      expectation: "required",
+      delivery: "visible-during-recovery",
+      phased: false,
+    },
+    {
       name: "retained source mirror",
       expectation: "required",
       delivery: "missing",
@@ -156,6 +162,9 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
     let observations = 0;
     input.terminalBase.runParams.resolveReplyDelivery = async () => {
       observations += 1;
+      if (delivery === "visible-during-recovery") {
+        return observations === 1 ? "missing" : "delivered";
+      }
       if (delivery === "pending-during-recovery" || delivery === "unknown-during-recovery") {
         if (observations === 1) {
           return "missing";
@@ -170,6 +179,14 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       }
       return delivery;
     };
+    if (delivery === "visible-during-recovery") {
+      const resolveTerminalDelivery = input.terminalBase.runParams.resolveReplyDelivery;
+      input.terminalBase.runParams.resolveReplyDeliveryFacts = async (minimum) => ({
+        source: "missing",
+        terminal: await resolveTerminalDelivery(minimum),
+      });
+      input.terminalBase.runParams.resolveReplyDelivery = undefined;
+    }
     const finalText = "The note is saved.";
     backendMocks.runSettledFinalization.mockResolvedValueOnce({
       outcome: "answered",
@@ -206,7 +223,10 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
     }
     const pendingDuringRecovery =
       delivery === "pending-during-recovery" || delivery === "unknown-during-recovery";
-    if (expectation === "required" && (delivery === "missing" || pendingDuringRecovery)) {
+    if (
+      expectation === "required" &&
+      (delivery === "missing" || delivery === "visible-during-recovery" || pendingDuringRecovery)
+    ) {
       expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
       const [preparedAttempt] = backendMocks.runSettledFinalization.mock.calls[0] ?? [];
       expect(preparedAttempt).toMatchObject({
@@ -220,7 +240,11 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
         pendingDuringRecovery ? [] : [expect.objectContaining({ text: finalText })],
       );
       expect(result.prepared.replyDeliveryState).toBe(
-        pendingDuringRecovery ? "pending" : "missing",
+        delivery === "visible-during-recovery"
+          ? "delivered"
+          : pendingDuringRecovery
+            ? "pending"
+            : "missing",
       );
     } else {
       expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();

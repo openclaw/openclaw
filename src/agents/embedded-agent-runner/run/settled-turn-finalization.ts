@@ -351,10 +351,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   // Tool-free finalization cannot resolve failures from the settled tools.
   prepared = {
     ...finalizedPrepared,
-    // Recovery can itself commit the source reply (notably WebChat history).
-    // Preserve supplements, but never hand an already-owned final to a second sender.
+    // A visible recovery answer still needs its final artifacts. Suppress only
+    // source-owned or pending delivery, not transcript completion alone.
     payloadsWithToolMedia:
-      finalizedPrepared.replyDeliveryState === "missing"
+      finalizedPrepared.sourceReplyDeliveryState === "missing"
         ? finalizedPrepared.payloadsWithToolMedia
         : finalizedPrepared.payloadsWithToolMedia?.filter(
             (payload) => !isReplyPayloadTerminalContent(payload),

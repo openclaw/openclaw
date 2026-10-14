@@ -187,6 +187,7 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
     resolveEmbeddedRunTerminalTimeout({
       terminalPrepared: {
         replyDeliveryState: "missing",
+        sourceReplyDeliveryState: "missing",
         reportedModelRef: { provider: "runtime-provider", model: "runtime-model" },
         finalAssistantVisibleText: undefined,
         finalAssistantRawText: undefined,

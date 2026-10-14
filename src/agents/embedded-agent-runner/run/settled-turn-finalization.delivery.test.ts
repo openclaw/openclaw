@@ -13,6 +13,51 @@ import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 import { createPendingToolMediaCarry } from "./tool-media-payloads.js";
 
 describe("terminal preparation delivery custody", () => {
+  it.each(["missing", "delivered", "pending"] as const)(
+    "keeps visible transcript completion separate from %s source custody",
+    async (sourceReplyDeliveryState) => {
+      const text = "The spoken answer stays visible.";
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text }],
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [text],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+        sourceReplyDeliveryState,
+        ...(sourceReplyDeliveryState === "delivered"
+          ? {
+              messagingToolSourceReplyPayloads: [
+                { text: "Committed tool reply.", sourceReplyFinal: true },
+              ],
+            }
+          : {}),
+      });
+      const input = createSettledFinalizationTestInput(
+        attempt,
+        createTestAdmittedRunContext("run-visible-answer"),
+      );
+      input.terminalBase.runParams.trigger = "user";
+      input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
+      input.terminalBase.runParams.resolveReplyDeliveryFacts = async () => ({
+        source: "missing",
+        terminal: "delivered",
+      });
+      const settled = await prepareTerminalWithSettledTurnFinalization(input);
+      expect(settled.prepared.replyDeliveryState).toBe("delivered");
+      expect(settled.prepared.payloadsWithToolMedia).toEqual(
+        sourceReplyDeliveryState === "pending"
+          ? []
+          : [
+              expect.objectContaining({
+                text: sourceReplyDeliveryState === "delivered" ? "Committed tool reply." : text,
+              }),
+            ],
+      );
+    },
+  );
+
   it.each(
     (["response", "failed-response", "failure-only"] as const).flatMap((output) =>
       (["pending", "observation-failed", "missing"] as const).map((observation) => ({

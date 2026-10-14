@@ -18,6 +18,9 @@ import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
+import { registerStartupHttpDiagnostic } from "./startup-http-diagnostic.test-support.js";
+
+registerStartupHttpDiagnostic("src/gateway/server-close.model-acquisition.test.ts");
 
 const auditMaintenance = vi.hoisted(() => ({
   gate: undefined as { entered: () => void; release: Promise<void> } | undefined,

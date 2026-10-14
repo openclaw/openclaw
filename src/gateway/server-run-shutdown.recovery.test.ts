@@ -59,7 +59,10 @@ import {
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { projectGatewaySessionActiveRun } from "./session-utils-display.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
+import { registerStartupHttpDiagnostic } from "./startup-http-diagnostic.test-support.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
+
+registerStartupHttpDiagnostic("src/gateway/server-run-shutdown.recovery.test.ts");
 
 const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;

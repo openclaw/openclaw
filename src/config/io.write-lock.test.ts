@@ -39,6 +39,65 @@ function deferred() {
 }
 
 describe("direct config writer exclusion", () => {
+  it.each(["root", "include"] as const)(
+    "rechecks requester admission after asynchronous preparation of a %s write",
+    async (target) => {
+      const stateDir = tempDirs.make("openclaw-config-publication-admission-");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const includePath = path.join(stateDir, "gateway.json5");
+      const gatewayRaw = '{"mode":"local","port":18789}\n';
+      const rootRaw =
+        target === "include"
+          ? '{"gateway":{"$include":"./gateway.json5"}}\n'
+          : `{"gateway":${gatewayRaw.trim()}}\n`;
+      const writtenPath = target === "include" ? includePath : configPath;
+      await fs.writeFile(configPath, rootRaw);
+      if (target === "include") {
+        await fs.writeFile(includePath, gatewayRaw);
+      }
+      await fs.writeFile(`${writtenPath}.bak`, "retained backup\n");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        async () => {
+          const io = createConfigIO({ observe: false, pluginValidation: "skip" });
+          const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+          const sourceConfig = structuredClone(snapshot.sourceConfig);
+          sourceConfig.gateway = { ...sourceConfig.gateway, port: 19001 };
+          let current = true;
+          const assertBeforePublish = vi.fn(() => {
+            if (!current) {
+              throw new Error("requester revoked before publication");
+            }
+          });
+          await expect(
+            replaceConfigFile({
+              snapshot,
+              sourceConfig,
+              writeOptions: {
+                ...writeOptions,
+                observe: false,
+                skipPluginValidation: true,
+                skipRuntimeSnapshotRefresh: true,
+                beforeCommit: async () => {
+                  await Promise.resolve();
+                  current = false;
+                },
+                assertBeforePublish,
+              },
+            }),
+          ).rejects.toThrow("requester revoked before publication");
+          expect(assertBeforePublish).toHaveBeenCalledOnce();
+          expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+          expect(await fs.readFile(writtenPath, "utf8")).toBe(
+            target === "include" ? gatewayRaw : rootRaw,
+          );
+          expect(await fs.readFile(`${writtenPath}.bak`, "utf8")).toBe("retained backup\n");
+          await expect(fs.stat(`${writtenPath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
   it.each(["snapshot", "retry"] as const)(
     "rejects changed %s path provenance before creating the canonical lock directory",
     async (flow) => {

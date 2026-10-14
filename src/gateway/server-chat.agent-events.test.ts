@@ -38,6 +38,9 @@ import {
 } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { registerStartupHttpDiagnostic } from "./startup-http-diagnostic.test-support.js";
+
+registerStartupHttpDiagnostic("src/gateway/server-chat.agent-events.test.ts");
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const loadGatewaySessionLifecycleSnapshotMock = vi.hoisted(() => vi.fn());

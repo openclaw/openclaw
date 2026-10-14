@@ -7,6 +7,9 @@ import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+import { registerStartupHttpDiagnostic } from "./startup-http-diagnostic.test-support.js";
+
+registerStartupHttpDiagnostic("src/gateway/server-aux-methods.test.ts");
 
 describe("core and auxiliary method handler parity", () => {
   it("wires a dispatchable core or auxiliary handler for every core descriptor", async () => {

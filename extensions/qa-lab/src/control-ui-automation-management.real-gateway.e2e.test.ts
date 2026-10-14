@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
@@ -206,8 +207,7 @@ suite.define(() => {
           delivery: { mode: "none" },
         },
       });
-      const errors: unknown[] = [];
-      try {
+      const run = async () => {
         const repoRoot = process.cwd();
         const gateway = await owner.start({
           repoRoot,
@@ -403,20 +403,13 @@ suite.define(() => {
             );
           },
         );
-      } catch (error) {
-        errors.push(error);
-      }
-      errors.push(
-        ...(await owner.stop({ preserveToDir: path.join(proofDir, "recovery-gateway") })).errors,
+      };
+      await runQaGatewayFixture(
+        run,
+        () =>
+          stopQaGatewayFixture(owner, { preserveToDir: path.join(proofDir, "recovery-gateway") }),
+        () => provider.stop(),
       );
-      try {
-        await provider.stop();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length) {
-        throw new AggregateError(errors, "Control UI restart automation proof failed");
-      }
     },
   );
   it(
@@ -428,18 +421,21 @@ suite.define(() => {
       const proofDir = suite.artifactDir;
       const provider = await startAutomationProvider();
       const owner = createQaGatewayChild();
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir: proofDir,
-        transportPolicy: { senderAllowlist: ["100001", "100002", "100003"] },
-        selection: {
-          channel: "telegram",
-          channelDriver: "crabline",
-          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-          providerReadinessArtifactPath: "crabline-provider-readiness.json",
-        },
-      });
-      const errors: unknown[] = [];
-      try {
+      let acquiredTransport:
+        | Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>
+        | undefined;
+      const run = async () => {
+        const transport = await createQaCrablineTransportAdapter({
+          outputDir: proofDir,
+          transportPolicy: { senderAllowlist: ["100001", "100002", "100003"] },
+          selection: {
+            channel: "telegram",
+            channelDriver: "crabline",
+            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+            providerReadinessArtifactPath: "crabline-provider-readiness.json",
+          },
+        });
+        acquiredTransport = transport;
         const repoRoot = process.cwd();
         const gateway = await owner.start({
           repoRoot,
@@ -703,21 +699,14 @@ suite.define(() => {
             2,
           )}\n`,
         );
-      } catch (error) {
-        errors.push(error);
-      }
-      const stopped = await owner.stop({ preserveToDir: path.join(proofDir, "gateway") });
-      errors.push(...stopped.errors);
-      for (const stop of [() => transport.cleanupAfterGatewayStop(), () => provider.stop()]) {
-        try {
-          await stop();
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length) {
-        throw new AggregateError(errors, "Cross-channel automation management proof failed");
-      }
+      };
+      await runQaGatewayFixture(
+        run,
+        // Gateway shutdown must settle before its transport and provider disappear.
+        () => stopQaGatewayFixture(owner, { preserveToDir: path.join(proofDir, "gateway") }),
+        () => acquiredTransport?.cleanupAfterGatewayStop(),
+        () => provider.stop(),
+      );
     },
   );
 });
