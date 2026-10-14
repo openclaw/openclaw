@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -535,7 +539,7 @@ describe("local sandbox workspace reconciliation", () => {
     },
   );
 
-  it("waits for checkpoint resume before preparing the next guest command", async () => {
+  it("waits for checkpoint resume before preparing the next guest command", async ({ signal }) => {
     const [
       projectionOwner,
       { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
@@ -639,6 +643,17 @@ describe("local sandbox workspace reconciliation", () => {
         checkpoint,
         "Checkpoint did not pause runtime",
       );
+      const controller = new AbortController();
+      const reason = new Error("cancelled during checkpoint");
+      const cancelled = backend.runShellCommand({ script: "true", signal: controller.signal });
+      commands = [cancelled];
+      controller.abort(reason);
+      await expect(withinTest(cancelled, signal)).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_ABORTED",
+        cause: reason,
+      });
+      expect(runtimePaused).toBe(true);
+      expect(events).toEqual(["paused"]);
       commands = [
         backend.runShellCommand({ script: "true" }),
         backend.buildExecSpec({ command: "true", env: {}, usePty: false }),

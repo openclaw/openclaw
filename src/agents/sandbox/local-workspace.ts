@@ -70,7 +70,7 @@ export async function prepareLocalSandboxWorkspace(params: {
         path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
       ),
       assertCurrent: owner.assertCurrent,
-      provision: async <T>(run: () => Promise<T>) =>
+      provision: async <T>(run: () => Promise<T>, signal?: AbortSignal) =>
         await withLocalWorkspaceProjection(
           owner,
           async () => {
@@ -79,7 +79,7 @@ export async function prepareLocalSandboxWorkspace(params: {
             owner.assertCurrent();
             return result;
           },
-          { provision: true },
+          { provision: true, signal },
         ),
       checkpoint: async () => {
         await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
@@ -115,7 +115,7 @@ export function bindLocalSandboxWorkspace(
       params.signal?.throwIfAborted();
       projection.assertCurrent();
       return await shell(params);
-    });
+    }, params.signal);
   const build = backend.buildExecSpec.bind(backend);
   const finalize = backend.finalizeExec?.bind(backend);
   backend.buildExecSpec = async (params) => {

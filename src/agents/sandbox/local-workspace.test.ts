@@ -112,20 +112,6 @@ it.runIf(process.platform !== "win32")(
       await expect(fs.stat(path.join(root, "blocked.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-      revoked = false;
-      const cancelledAdmission = createDeferred();
-      waitForAdmission = cancelledAdmission.promise;
-      const controller = new AbortController();
-      const cancelled = backend.runShellCommand({
-        script: `touch "${root}/cancelled.txt"`,
-        signal: controller.signal,
-      });
-      controller.abort(new Error("cancelled while waiting"));
-      cancelledAdmission.resolve();
-      await expect(cancelled).rejects.toThrow("cancelled while waiting");
-      await expect(fs.stat(path.join(root, "cancelled.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
