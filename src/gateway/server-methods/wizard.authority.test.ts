@@ -36,7 +36,7 @@ it.each([
       const context = createContext();
       Object.assign(context, createWizardSessionTracker());
       const connection = new AbortController();
-      const continueProbe = createDeferredCore<void>();
+      const continueProbe = createDeferredCore();
       let captureError: unknown;
       let probe: Awaited<ReturnType<typeof runSetupInferenceTurn>> | undefined;
       context.wizardRunner = async (_opts, _runtime, prompter) => {
@@ -111,6 +111,15 @@ it.each([
           connection.signal,
         );
         const respond = vi.fn();
+        const options: GatewayRequestHandlerOptions = {
+          req: { type: "req", id: method, method, params },
+          params,
+          respond,
+          context,
+          client,
+          isWebchatConnect: () => false,
+          hasCurrentClientAuthority: authority.isCurrent,
+        };
         try {
           await withPluginRuntimeGatewayRequestScope(
             {
@@ -119,18 +128,7 @@ it.each([
               isWebchatConnect: () => false,
               hasCurrentClientAuthority: authority.isCurrent,
             },
-            () =>
-              expectDefined(
-                wizardHandlers[method],
-                method,
-              )({
-                params,
-                respond,
-                context,
-                client,
-                isWebchatConnect: () => false,
-                hasCurrentClientAuthority: authority.isCurrent,
-              } as GatewayRequestHandlerOptions),
+            () => expectDefined(wizardHandlers[method], method)(options),
           );
           expect(respond).toHaveBeenCalledOnce();
           expect(respond.mock.calls[0]?.[0]).toBe(true);
