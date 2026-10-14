@@ -47,6 +47,19 @@ export const GATEWAY_CLIENT_MODES = {
   TEST: "test",
 } as const;
 
+export function isNativeAppUiClient(client?: {
+  id?: string | null;
+  mode?: string | null;
+}): boolean {
+  return (
+    client?.mode === GATEWAY_CLIENT_MODES.UI &&
+    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
+      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
+  );
+}
+
 export type GatewayClientMode = (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
 
 export type GatewayClientInfo = {
