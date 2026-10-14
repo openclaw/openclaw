@@ -203,6 +203,9 @@ export function activateGatewayAgentDatabaseStartup(params: {
             agentIds,
             catalogMode: "static",
             allowGatewaySubagentBinding: true,
+            // Gateway-wide startup publication can begin after this deferred admission does.
+            // The admission must follow that replacement rather than leave the database degraded.
+            joinSupersedingPublication: true,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
             isPublicationCurrent: () => {
               try {

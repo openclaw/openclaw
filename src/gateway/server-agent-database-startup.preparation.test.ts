@@ -230,6 +230,25 @@ it("admits configured ACP-only stores without native runtime publication", async
   });
 });
 
+it("joins a succeeding configured runtime publication while admitting an agent", async ({
+  signal,
+}) => {
+  const fleet = createFleet(["main"]);
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(admission.waitForAgentPreparation("main", fleet)!, signal);
+    expect(mocks.refreshModels).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        agentIds: new Set(["main"]),
+        catalogMode: "static",
+        joinSupersedingPublication: true,
+      }),
+    );
+    expect(readAgentDatabaseAdmissionRefusal("main", fleet)).toBeUndefined();
+  });
+});
+
 it("admits agents before transcript repair and joins repair on shutdown", async ({ signal }) => {
   const fleet = createFleet();
   const entered = createDeferredCore();
