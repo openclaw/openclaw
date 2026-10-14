@@ -630,7 +630,7 @@ exec ${JSON.stringify(native)} "$@"
 import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
 if (process.argv[2] === "boundary") {
   const graphs = await checkCoreTsgoGraphBoundary();
-  console.log(JSON.stringify(graphs.find(({ name }) => name === "core-test-ui-e2e-chat")?.files));
+  console.log(JSON.stringify(Object.fromEntries(graphs.map(({ name, files }) => [name, files]))));
 } else {
   const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}, ...JSON.parse(process.argv[3])], {
     cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
@@ -676,38 +676,48 @@ if (process.argv[2] === "boundary") {
         )
         .join("\n");
       write(uiConsumer, `${presentationImports}\n`);
-      const uiConfig = TSGO_CORE_GRAPHS.find(
-        ({ name }) => name === "core-test-ui-e2e-chat",
-      )!.config;
+      const uiGraphs = TSGO_CORE_GRAPHS.filter(
+        ({ name }) => name === "ui" || name.startsWith("core-test-"),
+      );
       const coreConfig = TSGO_CORE_GRAPHS.find(({ name }) => name === "core")!.config;
-      const originalUiConfig = fs.readFileSync(path.join(root, uiConfig), "utf8");
-      const originalCoreConfig = fs.readFileSync(path.join(root, coreConfig), "utf8");
-      const setGraphFiles = (config: string, original: string, files: string[]) => {
-        const value = JSON.parse(original);
+      const originalConfigs = new Map(
+        [...uiGraphs.map(({ config }) => config), coreConfig].map((config) => [
+          config,
+          fs.readFileSync(path.join(root, config), "utf8"),
+        ]),
+      );
+      const addGraphFiles = (config: string, files: string[]) => {
+        const value = JSON.parse(originalConfigs.get(config)!);
         value.compilerOptions.resolveJsonModule = true;
-        value.files = files.map((file) => path.join(root, file));
+        value.files.push(...files.map((file) => path.join(root, file)));
         write(config, JSON.stringify(value));
       };
-      setGraphFiles(uiConfig, originalUiConfig, [uiConsumer]);
+      for (const { config } of uiGraphs) {
+        addGraphFiles(config, [uiConsumer]);
+      }
       const presentationBoundary = await inspectExtension("boundary");
       expect(presentationBoundary.status, presentationBoundary.stderr).toBe(0);
-      expect(JSON.parse(presentationBoundary.stdout.trim())).toEqual(
-        expect.arrayContaining(presentationPaths),
-      );
+      const presentationGraphFiles = JSON.parse(presentationBoundary.stdout.trim());
+      for (const { name } of uiGraphs) {
+        expect(presentationGraphFiles[name]).toEqual(expect.arrayContaining(presentationPaths));
+      }
       const unrelatedJson = "extensions/example/other.json";
       write(unrelatedJson, "{}\n");
       write(
         uiConsumer,
         `${presentationImports}\nimport '../../${extension}';\nimport other from '../../${unrelatedJson}' with { type: 'json' };\n`,
       );
-      setGraphFiles(coreConfig, originalCoreConfig, [presentationPaths[0]!]);
+      addGraphFiles(coreConfig, [presentationPaths[0]!]);
       const rejectedExtensionInputs = await inspectExtension("boundary");
       expect(rejectedExtensionInputs.status).not.toBe(0);
-      expect(rejectedExtensionInputs.stderr).toContain(`core-test-ui-e2e-chat: ${extension}`);
-      expect(rejectedExtensionInputs.stderr).toContain(`core-test-ui-e2e-chat: ${unrelatedJson}`);
+      for (const { name } of uiGraphs) {
+        expect(rejectedExtensionInputs.stderr).toContain(`${name}: ${extension}`);
+        expect(rejectedExtensionInputs.stderr).toContain(`${name}: ${unrelatedJson}`);
+      }
       expect(rejectedExtensionInputs.stderr).toContain(`core: ${presentationPaths[0]}`);
-      write(uiConfig, originalUiConfig);
-      write(coreConfig, originalCoreConfig);
+      for (const [config, original] of originalConfigs) {
+        write(config, original);
+      }
       for (const serial of ["", "1"]) {
         const extensionPlan = await inspectExtension("plan", serial, deletedNonCompilerPaths);
         expect(extensionPlan.status, extensionPlan.stderr).toBe(0);

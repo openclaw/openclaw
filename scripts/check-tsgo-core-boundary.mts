@@ -206,7 +206,7 @@ async function validateCoreGraphs(cwd: string, query: GraphQuery): Promise<CoreT
       (file) =>
         file.startsWith("extensions/") &&
         !(
-          graph.name === "core-test-ui-e2e-chat" &&
+          (graph.name === "ui" || graph.name.startsWith("core-test-")) &&
           (file === "extensions/active-memory/control-ui.presentation.json" ||
             file === "extensions/memory-wiki/control-ui.presentation.json")
         ),
