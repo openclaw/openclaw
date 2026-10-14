@@ -93,8 +93,11 @@ export function ownCodexInferenceClient(
   };
   client.addCloseHandler(close);
   client.addNotificationHandler((notification) => {
+    // Unsubscribe releases the subscription, but native configuration stays loaded until teardown.
     if (
-      notification.method === "thread/closed" &&
+      (notification.method === "thread/closed" ||
+        notification.method === "thread/archived" ||
+        notification.method === "thread/deleted") &&
       isJsonObject(notification.params) &&
       typeof notification.params.threadId === "string"
     ) {

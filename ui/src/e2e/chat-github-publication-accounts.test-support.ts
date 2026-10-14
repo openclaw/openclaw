@@ -194,7 +194,7 @@ export function defineGitHubPublicationAccountTests({
         includeHidden: true,
       });
       await arrow.waitFor();
-      const menu = page.locator(".chat-pr wa-dropdown");
+      const menu = page.locator(".chat-pr__accounts-panel");
       const shared = menu.getByRole("menuitemradio", { name: "@system-bot", exact: true });
       const personal = menu.getByRole("menuitemradio", { name: "@alice-tools", exact: true });
       expect(await shared.isVisible()).toBe(false);
@@ -274,7 +274,7 @@ export function defineGitHubPublicationAccountTests({
     expect(
       await page.getByRole("button", { name: "Publication account", exact: true }).count(),
     ).toBe(0);
-    expect(await page.locator(".chat-pr wa-dropdown").count()).toBe(0);
+    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
     expect(await page.locator(".chat-pr__publication-note").count()).toBe(0);
     expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     await gateway.deferNext("sessions.github.publish");
@@ -330,7 +330,9 @@ export function defineGitHubPublicationAccountTests({
       await showPublicationBranch(gateway);
       await openDetailsPullRequests(page);
       await page.getByRole("button", { name: "Publication account" }).click();
-      await page.locator('wa-dropdown-item[value="personal"]').click();
+      await page
+        .locator('.chat-pr__accounts-panel [role="menuitemradio"][value="personal"]')
+        .click();
       const publish = page.getByRole("button", { name: "Publish PR" });
       await publish.waitFor();
       if (captureUiProof) {

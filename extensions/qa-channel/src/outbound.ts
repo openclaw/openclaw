@@ -63,9 +63,6 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
 export async function sendQaChannelMediaBatch(
   params: QaChannelTextSendParams & QaChannelMediaAccessParams & { mediaUrls: readonly string[] },
 ) {
-  if (params.mediaUrls.length === 0) {
-    throw new Error("QA channel media batch requires at least one media URL");
-  }
   const { mediaMaxBytes: maxBytes } = resolveQaChannelAccount(params);
   const attachments: QaBusAttachment[] = await Promise.all(
     params.mediaUrls.map(async (mediaUrl) => {

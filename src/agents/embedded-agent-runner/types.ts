@@ -166,6 +166,13 @@ export type EmbeddedAgentRunMeta = {
   finalPromptText?: string;
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
+  /**
+   * Raw text of only the model's own latest message; "" when that message had
+   * no final text (empty, or it ended in a tool call). finalAssistantRawText can
+   * be cumulative (CLI) or runner-substituted earlier text, so diagnostics prefer
+   * this field. Unset when the runtime exposes no message (assistantTexts only).
+   */
+  finalAssistantMessageRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;

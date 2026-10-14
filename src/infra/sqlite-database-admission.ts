@@ -6,7 +6,13 @@ import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
+import {
+  isPostgresSqlConnection,
+  sqlPublicationAnchor,
+  type PostgresSqlConnection,
+} from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import { createSqliteDatabaseAdmissionReader } from "./sqlite-database-admission-read.js";
 import {
   SqliteDatabaseGenerationSlot,
   SqliteDatabaseAdmissionRegistry,
@@ -19,7 +25,6 @@ import {
   advanceSqliteDatabaseGeneration,
   publishSqliteDatabaseFact,
   isSqliteDatabaseAdmissionRetired as isRetired,
-  isSqliteDatabaseAdmissionFactCurrent as valid,
   type Admission,
   type SqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissionKey,
@@ -401,83 +406,8 @@ function releaseReference(record: Admission): void {
   }
 }
 
-export function getSqliteDatabaseAdmission<T>(
-  database: DatabaseSync,
-  key: SqliteDatabaseAdmissionKey<T>,
-  options: { existingOnly?: boolean } = {},
-): T | undefined {
-  if (!database.isOpen || state.suspended.has(database)) {
-    return undefined;
-  }
-  const record = admission(database, options.existingOnly !== true);
-  if (!record) {
-    return undefined;
-  }
-  const local =
-    getSqliteNativeAdmissionFacts(database)?.get(key.name) ??
-    state.local.get(database)?.get(key.name);
-  if (
-    local &&
-    local.revision === readSqliteDatabaseFactRevision(record, local.schemaDependent) &&
-    (!local.schemaDependent || local.ddlRevision === (state.ddlRevisions.get(database) ?? 0))
-  ) {
-    return key.read(local.value);
-  }
-  if (key.schemaDependent && state.schemaDirty.has(database)) {
-    return undefined;
-  }
-  if (state.rolledBack.has(database)) {
-    if (database.isTransaction) {
-      return undefined;
-    }
-    state.rolledBack.delete(database);
-  }
-  let fact = record.facts.get(key.name);
-  if (!fact || !valid(record, fact)) {
-    if (key.writer === "host") {
-      if (
-        database.isTransaction ||
-        threadId === 0 ||
-        record.hostRevision === readSqliteDatabaseGeneration(record, "hostRevision")
-      ) {
-        return undefined;
-      }
-      exchange(record);
-      fact = record.facts.get(key.name);
-      return fact && valid(record, fact) ? key.read(fact.value) : undefined;
-    }
-    const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
-    const misses = state.misses.get(record) ?? new Map<string, number>();
-    state.misses.set(record, misses);
-    if (!database.isTransaction && misses.get(key.name) !== revision) {
-      exchange(record);
-      fact = record.facts.get(key.name);
-      misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
-    }
-  }
-  return fact && valid(record, fact) ? key.read(fact.value) : undefined;
-}
-
-export function getOrLoadSqliteDatabaseAdmissionForPath<T>(
-  location: string,
-  key: SqliteDatabaseAdmissionKey<T>,
-  load: () => T | undefined,
-): T | undefined {
-  const record = pathAdmission(location);
-  const fact = record?.facts.get(key.name);
-  const cached = record && fact && valid(record, fact) ? key.read(fact.value) : undefined;
-  if (cached !== undefined) {
-    return cached;
-  }
-  const generation = record
-    ? readSqliteDatabaseFactRevision(record, key.schemaDependent)
-    : undefined;
-  const value = load();
-  if (record && generation !== undefined && value !== undefined) {
-    publishFact(record, key, value, generation);
-  }
-  return value;
-}
+export const { getSqliteDatabaseAdmission, getOrLoadSqliteDatabaseAdmissionForPath } =
+  createSqliteDatabaseAdmissionReader({ state, admission, pathAdmission, exchange, publishFact });
 
 function publishFact<T>(
   record: Admission,
@@ -576,24 +506,28 @@ export function readSqliteDatabaseSiblingWriteRevision(database: DatabaseSync): 
 /** A stopped worker may have committed before delivering its row-cache receipt. */
 export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
-  once(event: "exit", listener: () => void): unknown;
+  once(event: "exit", listener: (code: number | undefined) => void): unknown;
 }): void {
   const owner = worker.threadId;
   worker.once("exit", () => state.registry.releaseWorker(owner));
 }
 
-export function hasPendingSqliteDatabaseSchemaMutation(database: DatabaseSync): boolean {
-  return database.isTransaction && state.schemaDirty.has(database);
+export function hasPendingSqliteDatabaseSchemaMutation(
+  database: DatabaseSync | PostgresSqlConnection,
+): boolean {
+  const anchor = sqlPublicationAnchor(database);
+  return database.isTransaction && state.schemaDirty.has(anchor);
 }
 
 export function publishSqliteDatabaseAdmission<T>(
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   key: SqliteDatabaseAdmissionKey<T>,
   value: T,
   options: { schemaRevision?: number } = {},
 ): void {
-  const record = admission(database);
-  if (!record || isRetired(record) || state.suspended.has(database)) {
+  const anchor = sqlPublicationAnchor(database);
+  const record = admission(anchor, !database.isTransaction);
+  if (!record || isRetired(record) || state.suspended.has(anchor)) {
     return;
   }
   if (key.writer === "host" && threadId !== 0) {
@@ -602,7 +536,9 @@ export function publishSqliteDatabaseAdmission<T>(
   const revision =
     (key.schemaDependent ? options.schemaRevision : undefined) ??
     readSqliteDatabaseFactRevision(record, key.schemaDependent);
-  const native = getSqliteNativeAdmissionFacts(database);
+  const native = isPostgresSqlConnection(database)
+    ? undefined
+    : getSqliteNativeAdmissionFacts(database);
   if (!native && !database.isTransaction) {
     publishFact(record, key, value, revision);
     return;
@@ -611,17 +547,17 @@ export function publishSqliteDatabaseAdmission<T>(
     value,
     revision,
     schemaDependent: key.schemaDependent === true,
-    ddlRevision: state.ddlRevisions.get(database) ?? 0,
+    ddlRevision: state.ddlRevisions.get(anchor) ?? 0,
   };
   if (native) {
     native.set(key.name, staged);
     return;
   }
-  const local = state.local.get(database) ?? new Map<string, StagedAdmissionFact>();
-  state.local.set(database, local);
+  const local = state.local.get(anchor) ?? new Map<string, StagedAdmissionFact>();
+  state.local.set(anchor, local);
   const previous = local.get(key.name);
   const restore = () => {
-    if (state.local.get(database) !== local) {
+    if (state.local.get(anchor) !== local) {
       return;
     }
     if (previous === undefined) {
@@ -630,16 +566,15 @@ export function publishSqliteDatabaseAdmission<T>(
       local.set(key.name, previous);
     }
   };
-  stageSqliteTransactionState(database, {
+  stageSqliteTransactionState(anchor, {
     stage: () => local.set(key.name, staged),
     rollback: restore,
     commit: () => {
-      if (state.local.get(database) === local && local.get(key.name) === staged) {
+      if (state.local.get(anchor) === local && local.get(key.name) === staged) {
         local.delete(key.name);
         if (
           staged.revision === readSqliteDatabaseFactRevision(record, staged.schemaDependent) &&
-          (!staged.schemaDependent ||
-            staged.ddlRevision === (state.ddlRevisions.get(database) ?? 0))
+          (!staged.schemaDependent || staged.ddlRevision === (state.ddlRevisions.get(anchor) ?? 0))
         ) {
           publishFact(record, key, value, staged.revision);
         }
@@ -649,21 +584,24 @@ export function publishSqliteDatabaseAdmission<T>(
 }
 
 /** Track uncommitted DDL separately so it cannot revive a receipt validated before a later change. */
-export function invalidateLocalSqliteSchemaAdmissions(database: DatabaseSync): void {
-  const revision = state.ddlRevisions.get(database) ?? 0;
-  const dirty = state.schemaDirty.has(database);
+export function invalidateLocalSqliteSchemaAdmissions(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const anchor = sqlPublicationAnchor(database);
+  const revision = state.ddlRevisions.get(anchor) ?? 0;
+  const dirty = state.schemaDirty.has(anchor);
   const stage = () => {
-    state.ddlRevisions.set(database, revision + 1);
-    state.schemaDirty.add(database);
+    state.ddlRevisions.set(anchor, revision + 1);
+    state.schemaDirty.add(anchor);
   };
   if (
-    !stageSqliteTransactionState(database, {
+    !stageSqliteTransactionState(anchor, {
       stage,
       commit: () => {},
       rollback: () => {
-        state.ddlRevisions.set(database, revision);
+        state.ddlRevisions.set(anchor, revision);
         if (!dirty) {
-          state.schemaDirty.delete(database);
+          state.schemaDirty.delete(anchor);
         }
       },
     })
@@ -673,9 +611,15 @@ export function invalidateLocalSqliteSchemaAdmissions(database: DatabaseSync): v
 }
 
 /** Raw rollback cannot restore staging boundaries; require new facts in any remaining transaction. */
-export function discardSqliteDatabaseTransactionAdmissions(database: DatabaseSync): void {
-  const record = admission(database, false);
-  for (const pending of [getSqliteNativeAdmissionFacts(database), state.local.get(database)]) {
+export function discardSqliteDatabaseTransactionAdmissions(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const anchor = sqlPublicationAnchor(database);
+  const record = admission(anchor, false);
+  for (const pending of [
+    isPostgresSqlConnection(database) ? undefined : getSqliteNativeAdmissionFacts(database),
+    state.local.get(anchor),
+  ]) {
     for (const key of pending?.keys() ?? []) {
       const previous = record?.facts.get(key);
       if (previous) {
@@ -684,26 +628,29 @@ export function discardSqliteDatabaseTransactionAdmissions(database: DatabaseSyn
     }
     pending?.clear();
   }
-  state.local.delete(database);
-  state.rolledBack.add(database);
+  state.local.delete(anchor);
+  state.rolledBack.add(anchor);
   if (!database.isTransaction) {
-    state.schemaDirty.delete(database);
+    state.schemaDirty.delete(anchor);
   }
 }
 
 /** The DDL owner advances committed format and acknowledges only its final validated receipts. */
-export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void {
-  const record = admission(database, false);
+export function publishSqliteDatabaseSchemaChange(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
+  const anchor = sqlPublicationAnchor(database);
+  const record = admission(anchor, false);
   if (record) {
     const previous = advanceSqliteDatabaseGeneration(record, "schemaRevision");
-    const ddlRevision = state.ddlRevisions.get(database) ?? 0;
-    for (const fact of state.local.get(database)?.values() ?? []) {
+    const ddlRevision = state.ddlRevisions.get(anchor) ?? 0;
+    for (const fact of state.local.get(anchor)?.values() ?? []) {
       if (fact.schemaDependent && fact.revision === previous && fact.ddlRevision === ddlRevision) {
         fact.revision = previous + 1;
       }
     }
   } else {
-    const fileIdentity = state.openedIdentities.get(database);
+    const fileIdentity = state.openedIdentities.get(anchor);
     if (fileIdentity) {
       // Unhosted threads still share committed schema changes between their own handles.
       state.localSchemaRevisions.set(
@@ -713,7 +660,7 @@ export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void 
     }
   }
   if (!database.isTransaction) {
-    state.schemaDirty.delete(database);
+    state.schemaDirty.delete(anchor);
   }
 }
 

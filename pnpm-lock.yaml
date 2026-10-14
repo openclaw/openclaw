@@ -1798,6 +1798,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/muse:
+    dependencies:
+      '@muse-code/sdk':
+        specifier: 1.4.2
+        version: 1.4.2(@types/node@26.6.4)
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/mxc:
     dependencies:
       '@microsoft/mxc-sdk':
@@ -4712,6 +4722,15 @@ packages:
   '@mozilla/readability@0.6.0':
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
+
+  '@muse-code/sdk@1.4.2':
+    resolution: {integrity: sha512-2gl6EMq0pOoqokQxlfaKciyrkhvfd17UwtRui9rEUULmJZ4wwr3h/eW1HO88iGbU7X8QvTjwPa1WXcOl/HN/mA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@types/node': '>=20'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
 
   '@napi-rs/wasm-runtime@1.2.4':
     resolution: {integrity: sha512-AJxoUD2/15ESHbvpcyjU274nsAPLuOtPHCk0vKJM5pj//Fg/B1FXNWjPnXTT9PymCYYiHo4zPj0ZomXBKhoy7g==}
@@ -13191,6 +13210,10 @@ snapshots:
       - supports-color
 
   '@mozilla/readability@0.6.0': {}
+
+  '@muse-code/sdk@1.4.2(@types/node@26.6.4)':
+    optionalDependencies:
+      '@types/node': 26.6.4
 
   '@napi-rs/wasm-runtime@1.2.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)':
     dependencies:

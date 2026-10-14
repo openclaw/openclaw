@@ -32,6 +32,7 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
   createGatewaySchedulerClock,
@@ -327,6 +328,212 @@ it.each(["admission", "queue", "delegated"] as const)(
       reply?.complete();
       admission.release();
       recoveryLog.mockRestore();
+    }
+  },
+);
+
+it.each(
+  [true, false].flatMap((restart) =>
+    ["none", "active", "pending"].map((callbackFailure) => ({ restart, callbackFailure })),
+  ),
+)(
+  "interrupts non-chat Gateway admission owners while preserving final writes (restart=$restart, callbackFailure=$callbackFailure)",
+  async ({ restart, callbackFailure }) => {
+    const sessionKey = `agent:main:dashboard:owned-shutdown-${restart}`;
+    const sessionId = `owned-shutdown-${restart}`;
+    const target = { storePath, sessionKey };
+    const resolveGatewayContext = () => undefined;
+    const owner = Symbol(sessionKey);
+    const controller = new AbortController();
+    const pendingController = new AbortController();
+    const interrupted = createDeferred();
+    const taskStarted = createDeferred();
+    const persistFinalWrite = createDeferred();
+    const finalSessionKey = `${sessionKey}-final`;
+    const finalSessionId = `${sessionId}-final`;
+    const finalTarget = { storePath, sessionKey: finalSessionKey, sessionId: finalSessionId };
+    await replaceSessionEntry(target, {
+      sessionId,
+      updatedAt: 1,
+      restartRecoveryDeliveryRunId: `${sessionId}-run`,
+      restartRecoverySourceIngress: "control-ui",
+    });
+    await appendTranscriptMessage(
+      { ...target, sessionId },
+      { message: { role: "user", content: "Resume this synthetic work after restart." } },
+    );
+    await replaceSessionEntry(finalTarget, {
+      sessionId: finalSessionId,
+      updatedAt: 1,
+      status: "done",
+    });
+    let recoveryMarkedBeforeInterruption = false;
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      owner,
+      resolveGatewayContext,
+      onInterrupt: (reason) => {
+        recoveryMarkedBeforeInterruption = Boolean(loadSessionEntry(target)?.mainRestartRecovery);
+        controller.abort(reason);
+        interrupted.resolve();
+        if (callbackFailure === "active") {
+          throw new Error("Synthetic active admission cancellation failure");
+        }
+      },
+    });
+    const pendingValidation = vi.fn();
+    let pendingPromoted = false;
+    const pending = beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      owner,
+      serializeOwner: true,
+      resolveGatewayContext,
+      assertAllowed: pendingValidation,
+      onInterrupt: (reason) => {
+        pendingController.abort(reason);
+        if (callbackFailure === "pending") {
+          throw new Error("Synthetic pending admission cancellation failure");
+        }
+      },
+    }).then(
+      (lease) => {
+        pendingPromoted = true;
+        lease.release();
+        return undefined;
+      },
+      (error: unknown) => error,
+    );
+    const interruptFinalWrite = vi.fn();
+    const finalAdmission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [finalSessionKey, finalSessionId],
+      resolveGatewayContext,
+      isSettling: () => true,
+      onInterrupt: interruptFinalWrite,
+    });
+    const finalWrite = finalAdmission
+      .run(async () => {
+        await persistFinalWrite.promise;
+        await appendTranscriptMessage(finalTarget, {
+          message: { role: "assistant", content: "The protected final write persisted." },
+        });
+      })
+      .finally(() => finalAdmission.release());
+    const siblingInterrupt = vi.fn();
+    const unboundInterrupt = vi.fn();
+    const sibling = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      resolveGatewayContext: () => undefined,
+      onInterrupt: siblingInterrupt,
+    });
+    const unbound = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      resolveGatewayContext: undefined,
+      onInterrupt: unboundInterrupt,
+    });
+    const lane = `session:${sessionKey}`;
+    const active = admission
+      .run(() =>
+        enqueueCommandInLane(
+          lane,
+          async () => {
+            taskStarted.resolve();
+            try {
+              await interrupted.promise;
+              controller.signal.throwIfAborted();
+            } finally {
+              admission.release();
+            }
+          },
+          { abortSignal: controller.signal },
+        ),
+      )
+      .catch((error: unknown) => error);
+    await taskStarted.promise;
+    const queuedTask = vi.fn(async () => undefined);
+    const queued = enqueueCommandInLane(lane, queuedTask, {
+      abortSignal: controller.signal,
+    }).catch((error: unknown) => error);
+    const harness = createAgentEventTestHarness();
+    try {
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+      expect(pendingValidation).not.toHaveBeenCalled();
+      const shutdown = await prepareGatewayRunShutdown({
+        resolveGatewayContext,
+        restart,
+        timeoutMs: 0,
+        warnings: [],
+        getPendingReplyCount: () => 0,
+        chatAbortControllers: new Map(),
+        chatQueuedTurns: new Map(),
+        chatRunState: harness.chatRunState,
+        agentRunSeq: harness.agentRunSeq,
+        removeChatRun: () => undefined,
+        broadcast: harness.broadcast,
+        nodeSendToSession: harness.nodeSendToSession,
+        markMainSessionsAbortedForRestart: async (params) => {
+          await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
+        },
+      });
+      expect(controller.signal.aborted).toBe(true);
+      expect(pendingController.signal.aborted).toBe(true);
+      expect(recoveryMarkedBeforeInterruption).toBe(restart);
+      const [activeError, queuedError, pendingError] = await Promise.all([active, queued, pending]);
+      for (const error of [activeError, queuedError, pendingError]) {
+        expect(error).toBeInstanceOf(Error);
+        if (restart) {
+          expect(error).toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
+        }
+      }
+      expect(pendingPromoted).toBe(false);
+      expect(pendingValidation).not.toHaveBeenCalled();
+      expect(queuedTask).not.toHaveBeenCalled();
+      expect(admission.isActive()).toBe(false);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
+      expect(finalAdmission.isActive()).toBe(true);
+      expect(interruptFinalWrite).not.toHaveBeenCalled();
+      expect(sibling.isActive()).toBe(true);
+      expect(unbound.isActive()).toBe(true);
+      expect(siblingInterrupt).not.toHaveBeenCalled();
+      expect(unboundInterrupt).not.toHaveBeenCalled();
+      let released = false;
+      void shutdown.released.then(
+        () => {
+          released = true;
+        },
+        () => {
+          released = true;
+        },
+      );
+      await Promise.resolve();
+      expect(released).toBe(false);
+      persistFinalWrite.resolve();
+      await finalWrite;
+      if (callbackFailure === "none") {
+        await shutdown.released;
+      } else {
+        await expect(shutdown.released).rejects.toThrow(
+          `Synthetic ${callbackFailure} admission cancellation failure`,
+        );
+      }
+      expect(finalAdmission.isActive()).toBe(false);
+      expect(JSON.stringify(await loadTranscriptEvents(finalTarget))).toContain(
+        "The protected final write persisted.",
+      );
+    } finally {
+      controller.abort(createAgentRunRestartAbortError());
+      interrupted.resolve();
+      persistFinalWrite.resolve();
+      await Promise.all([active, queued, finalWrite]);
+      admission.release();
+      await pending;
+      sibling.release();
+      unbound.release();
+      await harness.handler.dispose();
     }
   },
 );

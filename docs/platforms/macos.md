@@ -184,8 +184,21 @@ A failed coordinated update stays in its setup-style window with retry,
 [update guide](/install/updating), and Discord actions. Automatic repair never
 downgrades a newer Gateway or overrides an `extended-stable` channel pin.
 
+Onboarded, update-enabled launches also check the app-owned runtime when the
+post-update receipt is missing, stale, or unreadable. Current runtime ownership
+and version determine the work; receipts preserve interrupted progress and
+notification deduplication. Pending welcome notifications wait for current
+runtime verification. Same-version reconciliation without an app-update receipt
+does not send another welcome.
+
+An interrupted update from an older Mac app may refer to its managed CLI package,
+not the currently selected Gateway or node service. The app verifies ownership
+and repairs that package before reconciling the selected runtime. A newer
+package is preserved without downgrading it; any separately needed service
+update still records its own recovery progress.
+
 After a successful update, the app finds the most recently human-used,
-top-level direct session and gives that agent a one-time update event. Heartbeat
+top-level direct webchat session and gives that agent a one-time update event. Heartbeat
 and cron activity do not affect this choice. The agent can then welcome you back
 from the conversation you were most likely using. In remote mode, a separately
 installed, app-managed node service retains its own runtime update and recovery
@@ -249,7 +262,7 @@ Right-click an external link in the dashboard to choose **Open in Browser Panel*
 
 ## Import browser logins
 
-The first time a Mac tab opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Dashboard → Settings → This Mac → Browser** can re-open the native import flow while a local Gateway and eligible profile are available. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+Choose **Import browser logins** in **Dashboard → Settings → This Mac → Browser** to discover Chrome-family profiles and open the import banner. First launch, automatic setup, and passive dashboard refreshes do not inspect other apps' browser data before you request this feature. macOS may ask for access when discovery starts. Choose a profile from the banner's **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied into an isolated managed profile — passwords never leave the source browser. Dismissing the banner records the choice; the same Settings action can re-open it. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
 Switching away from Local mode hides the import banner and discards pending status or banner results. An import already sent to the local Gateway may still finish there; switching modes does not undo copied cookies. Returning to Local mode lets you request a fresh offer from **Settings → This Mac → Browser**.
 

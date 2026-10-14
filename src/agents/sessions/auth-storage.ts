@@ -360,7 +360,7 @@ export class AuthStorage {
     if (data) {
       this.setData(data);
     } else {
-      this.reload();
+      this.loadFromStorage();
     }
   }
 
@@ -465,6 +465,10 @@ export class AuthStorage {
   /** @deprecated Use reloadAsync. Retained until removal in a later stable release after deprecation ships. */
   reload(): void {
     warnSynchronousAuthStorage("reload", "reloadAsync");
+    this.loadFromStorage();
+  }
+
+  private loadFromStorage(): void {
     try {
       const content = this.storage.read
         ? this.storage.read()
@@ -506,7 +510,7 @@ export class AuthStorage {
 
   private persistProviderChange(provider: string, credential: AuthCredential | undefined): void {
     if (this.loadError) {
-      this.reload();
+      this.loadFromStorage();
     }
 
     if (this.loadError) {

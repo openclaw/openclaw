@@ -326,6 +326,10 @@ export function startNodeHostConnection({
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
                 ? { idleRetention: true }
                 : {}),
+              ...(prepared.deviceFoldersEnabled &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS)
+                ? { deviceFolders: true }
+                : {}),
               ...(prepared.preparedWorkspacesEnabled
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
                 : {}),

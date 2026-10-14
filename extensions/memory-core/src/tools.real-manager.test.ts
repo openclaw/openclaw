@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
+import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 import * as generationLease from "./memory/manager-index-generation-lease.js";
 import {
   createManagerIndexFixture,
@@ -321,6 +322,37 @@ describe("memory_search real manager", () => {
     }
   });
 
+  it("reads published memory changes without database diagnostic queries", async () => {
+    const cfg = keywordConfig();
+    const manager = await indexedManager(cfg);
+    const tool = searchTool(cfg);
+
+    for (const marker of ["violetcompass", "ambercompass"]) {
+      await fs.writeFile(path.join(fixture.paths.memory, "current.md"), `Remember ${marker}.`);
+      await manager.sync({ reason: "published-memory-edit", force: true });
+      using diagnostics = vi.spyOn(cpuRuntime, "runMemoryStatus");
+      const result = await tool.execute(marker, { query: marker, corpus: "memory" });
+
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ snippet: expect.stringContaining(marker) })],
+      });
+      expect(diagnostics).not.toHaveBeenCalled();
+    }
+
+    const diagnostics = await manager.statusAsync();
+    expect(diagnostics.files).toBeGreaterThan(0);
+    expect(diagnostics.chunks).toBeGreaterThan(0);
+    expect(diagnostics.sourceCounts).toEqual([
+      expect.objectContaining({ source: "memory", files: diagnostics.files }),
+    ]);
+    expect(await manager.statusAsync({ includeCounts: false })).toMatchObject({
+      files: undefined,
+      chunks: undefined,
+      sourceCounts: undefined,
+      cache: expect.objectContaining({ entries: undefined }),
+    });
+  });
+
   it("backfills visible sessions with one bounded query embedding", async () => {
     const cfg = createConfig({ sources: ["sessions"], sessionMemory: true, vectorEnabled: false });
     cfg.memory = { ...cfg.memory, citations: "off" };
@@ -362,7 +394,7 @@ describe("memory_search real manager", () => {
         expect.objectContaining({ snippet: expect.stringContaining("visible private a") }),
         expect.objectContaining({ snippet: expect.stringContaining("visible private b") }),
       ]),
-      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 4 },
+      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 200 },
     });
     expect(result.details).toHaveProperty("results.length", 2);
     expect(provider.embedQueryCalls).toBe(1);
@@ -371,10 +403,21 @@ describe("memory_search real manager", () => {
 
   it("returns memory-file keyword matches at the deadline without cooling down healthy recall", async () => {
     const cfg = createConfig({ minScore: 0, vectorEnabled: false });
-    await indexedManager(cfg, undefined, "baseline");
+    const manager = await indexedManager(cfg, undefined, "baseline");
     const queryEntered = createDeferred<void>();
+    const partialStatusReady = createDeferred<void>();
     const releaseQuery = createDeferred<void>();
+    let embeddingStarted = false;
+    const statusAsync = manager.statusAsync.bind(manager);
+    vi.spyOn(manager, "statusAsync").mockImplementation(async (...args) => {
+      const status = await statusAsync(...args);
+      if (embeddingStarted) {
+        partialStatusReady.resolve();
+      }
+      return status;
+    });
     provider.beforeEmbedQuery = async () => {
+      embeddingStarted = true;
       queryEntered.resolve();
       await releaseQuery.promise;
     };
@@ -383,6 +426,7 @@ describe("memory_search real manager", () => {
     const execution = tool.execute("keyword-deadline", zebraQuery);
     try {
       await queryEntered.promise;
+      await partialStatusReady.promise;
       await vi.advanceTimersByTimeAsync(30_000);
       const result = await execution;
       expect(result.details).toMatchObject({

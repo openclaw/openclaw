@@ -1,4 +1,5 @@
 // Builds lazy native approval runtime adapters.
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type {
   ChannelApprovalNativeAvailabilityAdapter,
@@ -11,7 +12,7 @@ import type { ChannelApprovalKind } from "./approval-types.js";
 /** Runtime-context capability key used by channels to register native approval resources. */
 export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
 
-/** Creates a lazy approval runtime with synchronous availability callbacks. */
+/** @deprecated Use createLazyChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. */
 export function createLazyChannelApprovalNativeRuntimeAdapter<
   TPendingPayload = unknown,
   TPreparedTarget = unknown,
@@ -45,6 +46,11 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
       TBinding,
       TFinalPayload
     > {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createLazyChannelApprovalNativeRuntimeAdapter",
+    replacement: "createLazyChannelApprovalNativeRuntimeAdapterAsync",
+  });
   return {
     ...createLazyChannelApprovalNativeRuntimeAdapterAsync(params),
     availability: { isConfigured: params.isConfigured, shouldHandle: params.shouldHandle },

@@ -160,12 +160,6 @@ export type SessionsUsageOverview = {
   filterOptions: Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
 };
 
-/** Already-authorized metadata; the worker supplies usage from the owning store. */
-export type UsageOverviewSession = Omit<SessionUsageEntry, "usage" | "contextWeight"> & {
-  agentId: string;
-  instances: Array<{ sessionId?: string; sessionFile: string }>;
-};
-
 /** Aggregated report with one final, bounded comparison page. */
 export type UsageOverviewSlice = Pick<SessionsUsageResult, "sessions" | "totals" | "aggregates"> & {
   overview: SessionsUsageOverview;

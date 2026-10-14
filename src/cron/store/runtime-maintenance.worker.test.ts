@@ -51,7 +51,11 @@ it.each(["empty", "retained", "expired"] as const)(
               }),
           );
           expect(result).toEqual({
-            outcome: { reconciled: 0, pruned: history === "expired" ? 1 : 0 },
+            outcome: {
+              reconciled: 0,
+              pruned: history === "expired" ? 1 : 0,
+              nextSweepAtMs: history === "retained" ? nowMs + 6 * day : null,
+            },
           });
           expect(reads.counts).toEqual({ history: 1, receipts: 0 });
           expect(exec.mock.calls.some(([sql]) => /^\s*BEGIN\b/i.test(sql))).toBe(

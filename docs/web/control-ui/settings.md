@@ -32,6 +32,8 @@ In **Models**, **Connect provider** offers the credential-only sign-in methods d
 
 Model pickers show the authentication methods available to the selected agent. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 
+Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
+
 During first-run **Model Setup**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
 
 ## Environment identity

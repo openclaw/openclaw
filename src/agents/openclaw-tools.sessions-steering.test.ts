@@ -29,6 +29,7 @@ vi.mock("../config/config.js", () => ({
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
@@ -245,6 +246,7 @@ it.each([
       expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(
         false,
       );
+      await waitForSessionParticipantRecording(scope);
       expect(listSessionParticipantsReadOnly(scope).get(runScopedCallerKey)).toEqual([
         expect.objectContaining({
           identity: { type: "agent", id: "re-portal" },

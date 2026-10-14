@@ -90,7 +90,7 @@ export type ProviderAuthProfileMetadata = {
   accountId?: string;
 };
 
-/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Retained until an announced stable removal window. */
 export function resolveProviderAuthProfileMetadata(params: {
   provider: string;
   cfg?: OpenClawConfig;

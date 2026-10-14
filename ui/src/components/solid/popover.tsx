@@ -22,6 +22,8 @@ export interface PopoverProps {
   class?: string;
   open?: boolean;
   placement?: OverlayPlacement;
+  dismissOutsidePointer?: boolean;
+  dismissOutsideFocus?: boolean;
   onBeforeShow?(event: Event): void;
   onBeforeHide?(event: Event): void;
   onOpenChange?(open: boolean): void;
@@ -36,6 +38,12 @@ export function Popover(props: PopoverProps): JSX.Element {
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const id = untrack(() => props.id);
   const overlay = createOverlay(id, undefined, {
+    get dismissOutsidePointer() {
+      return props.dismissOutsidePointer;
+    },
+    get dismissOutsideFocus() {
+      return props.dismissOutsideFocus;
+    },
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,

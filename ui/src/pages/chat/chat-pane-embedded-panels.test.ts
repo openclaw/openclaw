@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
+import * as videoPosters from "../../lib/media/video-poster.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
@@ -22,7 +23,7 @@ import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import type { ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import {
@@ -41,7 +42,7 @@ import {
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./components/chat-sidebar.test-support.ts";
-import { renderChatThread } from "./components/chat-thread.ts";
+import { renderChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -344,6 +345,7 @@ describe("chat pane embedded panels", () => {
     "reuses attachment metadata when Open shows %s content in Files",
     async (surface) => {
       installTranscriptDomMocks();
+      vi.spyOn(videoPosters, "requestVideoPoster").mockResolvedValue(null);
       const { context, mount, state } = createReviewFixture();
       const transcript = document.body.appendChild(document.createElement("div"));
       const fetchMetadata = vi.fn(() =>

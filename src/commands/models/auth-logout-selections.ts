@@ -6,13 +6,13 @@ import {
 } from "../../agents/agent-scope-config.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { listCandidateAuthProfileStores } from "../../agents/auth-profiles/candidate-stores.js";
-import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
+import { resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { AuthProfileRemovalScope } from "../../agents/auth-profiles/profiles.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import {
-  findPersistedAuthProfileCredential,
-  resolvePersistedAuthProfileOwnerAgentDir,
-} from "../../agents/auth-profiles/store.js";
+  findPersistedAuthProfileCredentialAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
+} from "../../agents/auth-profiles/store-runtime.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
@@ -53,10 +53,10 @@ export async function resolveModelAuthProfileRemoval(
   for (const [agentId, agentDir] of agentDirs) {
     const removed = new Set<string>();
     for (const profileId of profileIds) {
-      if (!findPersistedAuthProfileCredential({ agentDir, profileId })) {
+      if (!(await findPersistedAuthProfileCredentialAsync({ agentDir, profileId }))) {
         continue;
       }
-      const owner = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
+      const owner = await resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir, profileId });
       const databasePath = owner
         ? resolvePathViaExistingAncestorSync(resolveAuthProfileDatabasePath(owner))
         : sharedPath;
@@ -89,23 +89,6 @@ export function excludeSurvivingModelAuthProfiles(
         .filter(([, ids]) => ids.size > 0),
     ),
   };
-}
-
-/** Revalidate after removal awaits, before synchronous queued-work cleanup. */
-export function excludeReconnectedModelAuthProfiles(
-  cfg: OpenClawConfig,
-  planned: ModelAuthProfileRemoval,
-): ModelAuthProfileRemoval {
-  const surviving = (ids: ReadonlySet<string>, agentDir?: string) =>
-    new Set(
-      [...ids].filter((profileId) => findPersistedAuthProfileCredential({ agentDir, profileId })),
-    );
-  return excludeSurvivingModelAuthProfiles(planned, {
-    shared: surviving(planned.shared),
-    agents: new Map(
-      [...planned.agents].map(([id, ids]) => [id, surviving(ids, resolveAgentDir(cfg, id))]),
-    ),
-  });
 }
 
 /** Release only deleted account selections; model choices and unrelated accounts survive. */

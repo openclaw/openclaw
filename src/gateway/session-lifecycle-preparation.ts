@@ -8,7 +8,10 @@ import {
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
@@ -34,6 +37,12 @@ import {
 } from "./session-sharing-preparation.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
+
+type PreparedLifecycleTarget = {
+  matchesCurrent(currentConfig: OpenClawConfig): boolean;
+  bindCreation: Awaited<ReturnType<typeof prepareSessionMutationFacts>>["bindCreation"];
+  release(): void | Promise<void>;
+};
 
 /** Retain the canonical targets across asynchronous authority preparation and mutation. */
 export function prepareGatewaySessionLifecycleTargets(params: {
@@ -83,75 +92,87 @@ export function prepareGatewaySessionLifecycleTargets(params: {
   const databasePreparation = databaseCustody?.preparations[0]!.then((prepared) => {
     preparedDatabase = prepared;
   });
-  const preparations = params.targets.map(async ({ target, entry, storageReady }, index) => {
-    const memory = isIncognitoSessionKey(target.canonicalKey)
-      ? getSessionActorStorageBinding({})
-      : undefined;
-    if (memory) {
-      return {
-        matchesCurrent() {
-          memory.actor.assertCurrent();
-          memory.authority.assertCurrent();
-          return true;
-        },
-        bindCreation() {},
-        release() {},
-      };
-    }
-    let preparedStorage: { assertCurrent(): void } | undefined;
-    const targetStorageReady = storageReady?.then((prepared) => {
-      preparedStorage = prepared;
-    });
-    const selected = { ...target };
-    const originalIdentity = {
-      sessionId: entry?.sessionId,
-      lifecycleRevision: entry?.lifecycleRevision,
-    };
-    const selectOnEntry = index === 0 ? creationSelection : undefined;
-    if (selectOnEntry) {
-      await selectOnEntry.promise;
-      preparedDatabase?.assertCurrent();
-    }
-    const facts = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey: selected.canonicalKey,
-      agentId: selected.agentId,
-      allowMissing: true,
-      storageReady: targetStorageReady ?? databasePreparation,
-    });
-    let sessionId = originalIdentity.sessionId;
-    let lifecycleRevision = originalIdentity.lifecycleRevision;
-    if (selectOnEntry) {
-      try {
-        preparedDatabase?.assertCurrent();
-        const selectedEntry = facts.readCurrent(cfg).target?.entry;
-        sessionId = selectedEntry?.sessionId;
-        lifecycleRevision = selectedEntry?.lifecycleRevision;
-      } catch (error) {
-        facts.release();
-        throw error;
-      }
-    }
-    return {
-      matchesCurrent(currentConfig: OpenClawConfig) {
-        preparedStorage?.assertCurrent();
-        const current = facts.readCurrent(currentConfig).target;
-        return (
-          facts.storageTarget.agentId === selected.agentId &&
-          facts.storageTarget.storePath === selected.storePath &&
-          facts.storageTarget.canonicalKey === selected.canonicalKey &&
-          current?.entry.sessionId === sessionId &&
-          current?.entry.lifecycleRevision === lifecycleRevision &&
-          (!current ||
-            (current.agentId === selected.agentId &&
-              current.storePath === selected.storePath &&
-              current.canonicalKey === selected.canonicalKey))
+  const preparations = params.targets.map(
+    async ({ target, entry, storageReady }, index): Promise<PreparedLifecycleTarget> => {
+      const memory = isIncognitoSessionKey(target.canonicalKey)
+        ? getSessionActorStorageBinding({})
+        : undefined;
+      if (memory) {
+        const assertCurrent = () => memory.authority.assertCurrent();
+        const selected = expectDefined(
+          await acquireSessionActorStorage(
+            { ...target, sessionKey: target.canonicalKey },
+            {
+              authority: memory.authority,
+              lifetime: { assertCurrent, assertReadable: assertCurrent },
+            },
+          ),
+          "memory lifecycle target",
         );
-      },
-      bindCreation: facts.bindCreation,
-      release: facts.release,
-    };
-  });
+        return {
+          matchesCurrent() {
+            selected.actor.assertCurrent();
+            return true;
+          },
+          bindCreation() {},
+          release: () => selected.actor.release(),
+        };
+      }
+      let preparedStorage: { assertCurrent(): void } | undefined;
+      const targetStorageReady = storageReady?.then((prepared) => {
+        preparedStorage = prepared;
+      });
+      const selected = { ...target };
+      const originalIdentity = {
+        sessionId: entry?.sessionId,
+        lifecycleRevision: entry?.lifecycleRevision,
+      };
+      const selectOnEntry = index === 0 ? creationSelection : undefined;
+      if (selectOnEntry) {
+        await selectOnEntry.promise;
+        preparedDatabase?.assertCurrent();
+      }
+      const facts = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey: selected.canonicalKey,
+        agentId: selected.agentId,
+        allowMissing: true,
+        storageReady: targetStorageReady ?? databasePreparation,
+      });
+      let sessionId = originalIdentity.sessionId;
+      let lifecycleRevision = originalIdentity.lifecycleRevision;
+      if (selectOnEntry) {
+        try {
+          preparedDatabase?.assertCurrent();
+          const selectedEntry = facts.readCurrent(cfg).target?.entry;
+          sessionId = selectedEntry?.sessionId;
+          lifecycleRevision = selectedEntry?.lifecycleRevision;
+        } catch (error) {
+          facts.release();
+          throw error;
+        }
+      }
+      return {
+        matchesCurrent(currentConfig: OpenClawConfig) {
+          preparedStorage?.assertCurrent();
+          const current = facts.readCurrent(currentConfig).target;
+          return (
+            facts.storageTarget.agentId === selected.agentId &&
+            facts.storageTarget.storePath === selected.storePath &&
+            facts.storageTarget.canonicalKey === selected.canonicalKey &&
+            current?.entry.sessionId === sessionId &&
+            current?.entry.lifecycleRevision === lifecycleRevision &&
+            (!current ||
+              (current.agentId === selected.agentId &&
+                current.storePath === selected.storePath &&
+                current.canonicalKey === selected.canonicalKey))
+          );
+        },
+        bindCreation: facts.bindCreation,
+        release: facts.release,
+      };
+    },
+  );
   for (const preparation of preparations) {
     void preparation.catch(() => {});
   }
@@ -208,7 +229,7 @@ export function prepareGatewaySessionLifecycleTargets(params: {
       creationSelection?.reject(new Error("Session creation ended before target selection"));
       for (const result of await Promise.allSettled(preparations)) {
         if (result.status === "fulfilled") {
-          result.value.release();
+          await result.value.release();
         }
       }
       await databasePreparation?.catch(() => {});

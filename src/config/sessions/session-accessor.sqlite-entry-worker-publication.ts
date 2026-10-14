@@ -39,7 +39,7 @@ import { retainSessionTranscriptWorkerPublication } from "./session-transcript-a
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionEntry } from "./types.js";
 
-/** A confirmed worker result invalidates row facts without opening a parent connection. */
+/** Publish confirmed removals or invalidate incomplete row facts without a parent connection. */
 export function publishSessionEntryWorkerInvalidations(
   params: {
     agentId: string;
@@ -53,19 +53,20 @@ export function publishSessionEntryWorkerInvalidations(
   const keys = [...new Set(changedKeys)];
   const changes: SessionRowChange[] = [];
   for (const sessionKey of keys) {
+    const removed = params.removedSessionKeys?.has(sessionKey) === true;
     // Confirmed absence revokes a generation; other incomplete postimages remain unavailable.
     publishRetainedSessionEntryChange(
       params.databaseIdentity,
       sessionKey,
       undefined,
       undefined,
-      params.removedSessionKeys?.has(sessionKey) === true,
+      removed,
     );
     const change: SessionRowChange = {
       agentId: params.agentId,
       storePath: params.storePath,
       sessionKey,
-      factsInvalidated: true,
+      ...(removed ? { facts: { kind: "removed" as const } } : { factsInvalidated: true }),
     };
     bindPreparedSessionEntryPublication(change, {
       kind: "marker",

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import "../../lib/toast-host.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";

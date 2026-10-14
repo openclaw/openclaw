@@ -56,6 +56,16 @@ describe("provider-owned audio transcription", () => {
     "routes subscription audio from official base %s with model %s to the standard transcription endpoint",
     async (baseUrl, model) => {
       useOAuth();
+      expect(
+        await openaiMediaUnderstandingProvider.isAudioConfigured!({
+          cfg: {},
+          agentDir: "/fixture/agents/audio",
+          profile: "openai:audio",
+          baseUrl,
+          model,
+        }),
+      ).toBe(true);
+      authMocks.resolve.mockClear();
       const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "Hallo" });
       const result = await openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
         cfg: {},
@@ -158,6 +168,8 @@ describe("provider-owned audio transcription", () => {
               throw new Error("OpenAI audio transcription registration missing");
             }
             if (apiKey === undefined) {
+              expect(await provider.isAudioConfigured!({ cfg })).toBe(false);
+              authMocks.resolve.mockClear();
               const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "unexpected" });
               const result = await provider.transcribeAudioWithContext({
                 cfg,
@@ -175,6 +187,8 @@ describe("provider-owned audio transcription", () => {
               provider: "openai",
               token,
             };
+            expect(await provider.isAudioConfigured!({ cfg })).toBe(true);
+            authMocks.resolve.mockClear();
             const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "subscription" });
             const result = await provider.transcribeAudioWithContext({
               cfg,
@@ -221,6 +235,10 @@ describe("provider-owned audio transcription", () => {
         },
       };
       const original = structuredClone(cfg);
+      expect(await openaiMediaUnderstandingProvider.isAudioConfigured!({ cfg, baseUrl })).toBe(
+        true,
+      );
+      authMocks.resolve.mockClear();
       const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
       await openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
         cfg,
@@ -257,6 +275,13 @@ describe("provider-owned audio transcription", () => {
     { headers: { authorization: "Bearer other" } },
   ])("rejects unsupported subscription request settings before upload: %j", async (settings) => {
     useOAuth();
+    expect(
+      await openaiMediaUnderstandingProvider.isAudioConfigured!({
+        cfg: {},
+        profile: "openai:audio",
+        ...settings,
+      }),
+    ).toBe(false);
     await expect(
       openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
         cfg: {},
@@ -284,6 +309,29 @@ describe("provider-owned audio transcription", () => {
       }),
     ).resolves.toEqual({ ok: false, error: failure });
     expect(authMocks.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves credentials again after readiness and rejects before upload if they are lost", async () => {
+    authMocks.resolve
+      .mockResolvedValueOnce({
+        apiKey: "fixture-platform-key",
+        mode: "api-key",
+        source: "profile:openai:audio",
+      })
+      .mockRejectedValueOnce(new Error("selected credentials removed"));
+    const context = { cfg: {}, profile: "openai:audio" };
+    expect(await openaiMediaUnderstandingProvider.isAudioConfigured!(context)).toBe(true);
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "unexpected" });
+    expect(
+      await openaiMediaUnderstandingProvider.transcribeAudioWithContext!({
+        ...context,
+        buffer: Buffer.from("audio"),
+        fileName: "voice.wav",
+        timeoutMs: 1000,
+        fetchFn,
+      }),
+    ).toMatchObject({ ok: false, error: { message: "selected credentials removed" } });
+    expect(getRequest().url).toBeNull();
   });
 
   it.each([400, 200])(

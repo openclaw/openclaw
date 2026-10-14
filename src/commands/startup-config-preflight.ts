@@ -2,6 +2,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
@@ -39,6 +40,7 @@ export type StartupConfigPreflightResult = ReturnType<typeof result> & {
 export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
+  assertDatabasePortStartupAllowed(resolveStateDir(process.env));
   for (let attempt = 1; ; attempt++) {
     await using snapshots = createConfigPreflightSnapshotReader();
     const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");

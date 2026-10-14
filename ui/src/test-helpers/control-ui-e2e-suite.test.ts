@@ -114,6 +114,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => pageClosed ? [] : [page],
           newPage: async () => { context.emit("page", page); return page; },
           browser: () => ({ isConnected: () => true }),
@@ -188,6 +189,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => [page],
           newPage: async () => { context.emit("page", page); return page; },
           route: async (pattern, handler) => { contextHandlers.push({ pattern, handler }); },
@@ -211,6 +213,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
       }
       const context = Object.assign(new EventEmitter(), {
         setDefaultTimeout() {},
+        addInitScript: async () => {},
         pages: () => [],
         newPage: async () => { context.emit("page", closedPage); return closedPage; },
         unrouteAll: async () => {},

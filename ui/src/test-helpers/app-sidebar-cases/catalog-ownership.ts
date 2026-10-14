@@ -11,7 +11,7 @@ import {
 } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session catalog ownership", () => {
   it.each([false, true])(

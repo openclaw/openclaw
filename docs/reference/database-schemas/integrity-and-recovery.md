@@ -37,6 +37,16 @@ schema identity, the time of the last full verification, and the final physical
 file metadata. It is reconstructible verification metadata, not database state
 or a backup.
 
+Completed memory index schema receipts also survive a clean close. They remain
+scoped to the cache, FTS, and tokenizer settings that were validated, so an
+unchanged restart skips memory schema setup and the resulting agent schema
+refresh. Owner-controlled FTS and vector replacements republish that receipt
+after commit when they preserve the admitted table contracts. Rollback cannot
+publish a replacement receipt. Changed settings, other in-process DDL, or a
+missing or invalid seal take the ordinary memory schema admission path. An
+unclean shutdown still requires integrity verification. Imported-row backfills
+still run.
+
 At startup, admission accepts the seal only when its JSON parses, its short
 checksum matches, and all of the following match the current database: device,
 inode, stable birthtime, byte size, nanosecond modification time, and schema
@@ -366,7 +376,14 @@ Doctor also shares one private shared-state snapshot across a synchronous
 workspace-alias check. The next check reads fresh state, so committed repairs are
 visible without taking a separate snapshot for every configured workspace.
 
-Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
+Memory search and maintenance managers retain the per-agent publication worker
+and its admitted schema, physical identity, and index facts. Acquisition does not
+open a second main-thread reader. Worker lifetime and accepted writes drain with
+the manager; explicit quarantine and disposal still revoke the database. Full
+memory rebuilds use temporary shadow databases and publish their derived tables
+in one worker transaction. Read-only admission and bundled status reads use the
+retrieval worker without creating or migrating a missing database. The released
+synchronous status API retains a lazily opened diagnostic reader.
 
 If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
 
@@ -483,6 +500,11 @@ and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Configured ACP-only session stores follow the same deferred inspection and
+session preparation path, including IDs from `acp.defaultAgent`,
+`acp.allowedAgents`, and ACP runtime aliases. They do not require native auth or
+model publications unless the ID also belongs to the configured agent roster.
 
 Pending preparation does not produce a startup migration warning. Status and
 Doctor derive failed inspection and preparation warnings from current agent

@@ -7,7 +7,7 @@ import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
-export const SidebarCollapseToggle = defineSolidBridge<{ onToggle?: () => void }>(
+defineSolidBridge<{ onToggle?: () => void }>(
   "openclaw-sidebar-collapse-toggle",
   (props, host) => {
     host.style.display = "contents";

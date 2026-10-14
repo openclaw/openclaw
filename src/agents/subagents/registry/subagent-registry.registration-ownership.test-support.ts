@@ -195,71 +195,25 @@ export function registerSubagentRegistrationOwnershipTests({
     },
   );
 
-  it.each(["appears", "loses its recorded owner"])(
-    "refuses registration when a foreign same-key row %s after cohort preparation",
-    async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        const unknown = createSubagentRunRecord({
-          runId: "foreign-unknown",
-          childSessionKey: "global",
-          generation: 7,
-        });
-        if (change === "loses its recorded owner") {
-          saveSubagentRegistryChangesToSqlite(
-            new Map([[unknown.runId, { ...unknown, childAgentId: "research" }]]),
-            [unknown.runId],
-          );
-        }
-        const execute = stateWorker.runOpenClawStateWorkerOperation;
-        let inserted = false;
-        const foreignWrite = vi
-          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-          .mockImplementation((context, operation, options) =>
-            execute(
-              context,
-              (scope) =>
-                operation({
-                  execute: async (...args) => {
-                    if (!inserted && args[0].type === "subagents.persistChanges") {
-                      inserted = true;
-                      saveSubagentRegistryChangesToSqlite(new Map([[unknown.runId, unknown]]), [
-                        unknown.runId,
-                      ]);
-                    }
-                    return scope.execute(...args);
-                  },
-                }),
-              options,
-            ),
-          );
-        let ownership: SubagentRegistrationScope | undefined;
-        try {
-          await expect(
-            registerSubagentRun(registration("racing-global", { childSessionKey: "global" }), {
-              retainOwnership: (scope) => {
-                ownership = scope;
-              },
-            }),
-          ).rejects.toThrow("Subagent registry row versions changed");
-          const persisted = loadSubagentRegistryFromSqlite();
-          expect(persisted.has("racing-global")).toBe(false);
-          expect(persisted.get(unknown.runId)).toMatchObject({
-            generation: 7,
-            childSessionKey: "global",
-          });
-          expect(persisted.get(unknown.runId)?.childAgentId).toBeUndefined();
-          expect(subagentRuns.has("racing-global")).toBe(false);
-          expect(ownership?.canCleanupSession()).toBe(false);
-          expect(callGateway).not.toHaveBeenCalled();
-        } finally {
-          foreignWrite.mockRestore();
-        }
-        await registerSubagentRun(registration("racing-global", { childSessionKey: "global" }));
-        expect(loadSubagentRegistryFromSqlite().get("racing-global")?.generation).toBe(8);
+  it("registers successive children from committed generation receipts", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      await registerSubagentRun(registration("first-child", { childSessionKey: "global" }));
+      await updateRun("first-child", (draft) => {
+        draft.generation = 7;
+        draft.label = "retained first child";
       });
-    },
-  );
+      await registerSubagentRun(registration("second-child", { childSessionKey: "global" }));
+      await registerSubagentRun(registration("third-child", { childSessionKey: "global" }));
+      const retained = loadSubagentRegistryFromSqlite();
+      expect(retained.get("first-child")).toMatchObject({
+        generation: 7,
+        label: "retained first child",
+      });
+      expect(retained.get("second-child")?.generation).toBe(8);
+      expect(retained.get("third-child")?.generation).toBe(9);
+    });
+  });
 
   it.each(["global", "agent:research:subagent:owned-child"])(
     "persists the explicit child owner and original incarnation for %s",

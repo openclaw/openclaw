@@ -264,3 +264,12 @@ it("publishes prompt budgets and their invalidation to subscribed sessions", () 
     null,
   );
 });
+
+it("publishes and clears device folder bindings in subscribed snapshots", () => {
+  const sessionRow = { key: "agent:main:folder", kind: "direct" as const, updatedAt: 1 };
+  const deviceFolder = { deviceId: "paired-device", path: "/home/example/project" };
+  const previous = buildGatewaySessionSnapshot({ sessionRow: { ...sessionRow, deviceFolder } });
+  expect(previous.deviceFolder).toEqual(deviceFolder);
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ deviceFolder: null });
+});

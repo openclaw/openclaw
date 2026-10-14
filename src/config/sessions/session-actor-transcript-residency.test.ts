@@ -34,6 +34,7 @@ import {
   prepareSessionColdBatchInWorker,
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 
@@ -139,6 +140,79 @@ function contextFixture(f: Fixture) {
     },
   };
 }
+
+it("keeps settled append bodies in receipts and storage without evicting navigation", async () => {
+  await withActor((f) => {
+    replace(f);
+    const other = { ...f.target, sessionKey: "agent:main:other-resident" };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, other.sessionKey, { sessionId: "other", updatedAt: 1 });
+    });
+    f.read();
+    const warn = vi.fn();
+    f.hooks.transactionOptions = { logger: { warn }, slowTransactionHoldMs: 0 };
+    const events = Array.from({ length: 6 }, (_, index) => ({
+      type: "custom",
+      id: `large-metadata-${index}`,
+      parentId: index === 0 ? "answer" : `large-metadata-${index - 1}`,
+      timestamp: "2026-01-01T00:00:03Z",
+      customType: "openclaw.cache-ttl",
+      data: { snapshot: "synthetic".repeat(180_000) },
+    }));
+    for (const event of events) {
+      const outcome = f.mutate({
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          commandId: event.id,
+          phaseId: "turn",
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: null,
+          eventJson: JSON.stringify(event),
+        },
+      });
+      expect(outcome.kind).toBe("committed");
+      expect(warn).toHaveBeenLastCalledWith(
+        "slow SQLite transaction hold",
+        expect.objectContaining({
+          operation: "session.actor.appendTranscriptEvent",
+          context: { payloadBytes: Buffer.byteLength(JSON.stringify(event)) },
+        }),
+      );
+      if (outcome.kind === "committed") {
+        expect(outcome.receipt.transcript.appendedEvents?.[0]?.event).toEqual(event);
+      }
+    }
+    const expectedBytes = [question, answer, ...events].reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
+    const reads = trackSqliteStatementExecutions(f.database.db, ["history"], (sql) =>
+      /^\s*select\b/iu.test(sql) && sql.includes('"transcript_events"') ? "history" : null,
+    );
+    let warm;
+    try {
+      f.read(other);
+      reads.counts.history = 0;
+      warm = f.read();
+      expect(reads.counts.history).toBe(0);
+      expect(warm.transcript.projection?.contextMetadata?.sizeBytes).toBe(expectedBytes);
+    } finally {
+      reads.restore();
+    }
+    expect(
+      readTranscriptEventRows(f.database, f.scope.sessionId).map((row) =>
+        JSON.parse(row.eventJson),
+      ),
+    ).toEqual([...transcript(f), ...events]);
+    f.restartActor();
+    const cold = f.read();
+    expect(cold.transcript.modelContext).toEqual(warm.transcript.modelContext);
+    expect(cold.transcript.projection?.contextMetadata).toEqual(
+      warm.transcript.projection?.contextMetadata,
+    );
+  });
+});
 
 it("advances retained context through native actor appends and preserves it through bookkeeping", async () => {
   await withActor(async (f) => {
@@ -466,6 +540,12 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
     try {
       context.seed();
       const databaseOptions = { agentId: "main", path: f.database.path };
+      const readColdMetadata = () =>
+        readRetainedSessionEntryFacts(databaseOptions, {
+          sessionKeys: [f.target.sessionKey],
+          includeColdMetadata: true,
+        });
+      expect(readColdMetadata()?.coldArchives).toEqual([]);
       const beforeMs = Date.UTC(2030, 0, 1);
       const prepared = await prepareSessionColdBatchInWorker({
         databaseOptions,
@@ -495,6 +575,9 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       expect(context.read()).toBeUndefined();
       expect(context.anchors()).toBeUndefined();
       expect(context.summary()).toBeUndefined();
+      expect(readColdMetadata()).toBeUndefined();
+      expect(context.replica.beginRead().install(f.read())).toBe(true);
+      expect(readColdMetadata()).toBeUndefined();
       const plan = {
         kind: "cold-restore" as const,
         databaseOptions,
@@ -508,7 +591,9 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       expect(context.read()).toBeUndefined();
       expect(context.anchors()).toBeUndefined();
       expect(context.summary()).toBeUndefined();
+      expect(readColdMetadata()).toBeUndefined();
       context.seed();
+      expect(readColdMetadata()?.coldArchives).toEqual([]);
       expect(context.read()?.snapshot.events).toEqual(transcript(f));
       expect(context.anchors()?.anchors.map((anchor) => anchor.entryId)).toEqual([
         "question",

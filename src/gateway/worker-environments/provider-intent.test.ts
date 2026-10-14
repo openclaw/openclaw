@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerProvider } from "../../plugins/types.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";

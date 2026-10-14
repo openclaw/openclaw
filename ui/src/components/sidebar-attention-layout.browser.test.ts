@@ -1,24 +1,40 @@
-import { html, render } from "lit";
+import { render as renderSolid, type JSX } from "@solidjs/web";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
 import "../styles/sidebar-issues.css";
-import { renderHubTabs } from "./hub-tabs.ts";
-// Upgrade the real element: the floating layout once regressed because a base
-// class stamped inline `display: contents`, which only a live upgrade reveals.
-import "./sidebar-attention.ts";
 import {
   buildSidebarInboxEntries,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
-import { renderSidebarAttentionPanel } from "./sidebar-attention-panel.runtime.ts";
+// Upgrade the real element: the floating layout once regressed because a base
+// class stamped inline `display: contents`, which only a live upgrade reveals.
+import "./sidebar-attention.tsx";
+import {
+  SidebarAttentionPanel,
+  type SidebarAttentionPanelParams,
+} from "./sidebar-attention-panel.runtime.tsx";
+import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 import layoutCss from "../styles/layout.css?inline";
 import floatingCss from "../styles/sidebar-attention-floating.css?inline";
+
+const mountedPanels = new Map<Element, () => void>();
+function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams) {
+  return () => createComponent(SidebarAttentionPanel, params);
+}
+function render(view: () => JSX.Element, container: Element) {
+  mountedPanels.get(container)?.();
+  mountedPanels.set(container, renderSolid(view, container));
+  flush();
+}
 
 const authWarning: SidebarAttentionItem = {
   type: "attention",
@@ -49,9 +65,7 @@ function inboxMention(id: string): MentionInboxItem {
   };
 }
 
-function panelParams(
-  entries: readonly SidebarInboxEntry[],
-): Parameters<typeof renderSidebarAttentionPanel>[0] {
+function panelParams(entries: readonly SidebarInboxEntry[]): SidebarAttentionPanelParams {
   return {
     context: {
       basePath: "",
@@ -87,6 +101,10 @@ function panelParams(
 }
 
 afterEach(() => {
+  for (const dispose of mountedPanels.values()) {
+    dispose();
+  }
+  mountedPanels.clear();
   document.body.replaceChildren();
   document.documentElement.classList.remove(
     "openclaw-native-nav",
@@ -103,24 +121,29 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       const shell = document.createElement("div");
       shell.className = mobile ? "shell shell--mobile-nav" : "shell";
       document.body.append(shell);
-      const renderPanel = (selectedTab: "all" | "approvals") => {
-        render(
-          renderSidebarAttentionPanel({
-            ...params,
-            selectedTab,
-          }),
-          shell,
-        );
-      };
-
-      renderPanel("all");
-      await Promise.resolve();
+      const [selectedTab, setSelectedTab] = createSignal<"all" | "approvals">("all");
+      render(
+        renderSidebarAttentionPanel({
+          ...params,
+          get selectedTab() {
+            return selectedTab();
+          },
+        }),
+        shell,
+      );
+      await waitForSolid(() =>
+        expect(shell.querySelector(".sidebar-issues-panel__tabs")).not.toBeNull(),
+      );
+      await shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+        "openclaw-tooltip",
+      )?.updateComplete;
       const populatedHeader = shell.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
       const populatedTabs = shell.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
       const headerHeight = populatedHeader.getBoundingClientRect().height;
       const tabsTop = populatedTabs.getBoundingClientRect().top;
 
-      renderPanel("approvals");
+      setSelectedTab("approvals");
+      flush();
       const placeholder = shell.querySelector<HTMLButtonElement>(
         ".sidebar-issues-panel__dismiss-shown",
       )!;
@@ -226,24 +249,22 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         ).join("")}
       </nav>
       <main class="content">
-        <openclaw-sidebar-attention class="sidebar-attention--floating">
-          <button class="sidebar-issues-button"></button>
-        </openclaw-sidebar-attention>
+        <openclaw-sidebar-attention class="sidebar-attention--floating"></openclaw-sidebar-attention>
       </main>
     `;
-      document.body.append(shell);
+      const provider = createApplicationContextProvider(panelParams([]).context);
+      provider.append(shell);
+      document.body.append(provider);
 
-      const attention = shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-        "openclaw-sidebar-attention",
-      )!;
+      const attention = shell.querySelector<HTMLElement>("openclaw-sidebar-attention")!;
       const chrome = shell.querySelector<HTMLElement>(".shell-chrome-controls")!;
       const nativeChrome = shell.querySelector<HTMLElement>(".macos-titlebar-controls")!;
-      const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
-
       // The real shell mounts this row only in native web-chrome mode.
       nativeChrome.remove();
-      await attention.updateComplete;
-      attention.append(inbox);
+      await waitForSolid(() =>
+        expect(attention.querySelector(".sidebar-issues-button")).not.toBeNull(),
+      );
+      const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
 
       expect(getComputedStyle(attention).position).toBe("fixed");
       expect(getComputedStyle(attention).display).toBe("flex");
@@ -311,13 +332,22 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       fixture.style.position = "static";
       fixture.style.width = `${width}px`;
       fixture.style.height = "220px";
+      const listWrap = document.createElement("div");
+      listWrap.className = "sidebar-issues-panel__list-wrap";
+      listWrap.innerHTML = `<div class="sidebar-issues-panel__list">${Array.from(
+        { length: 6 },
+        (_, index) => `<div data-attention-kind="cronFailed">
+          <div class="sidebar-issues-panel__summary">Inbox item ${index}</div>
+        </div>`,
+      ).join("")}</div>`;
       render(
-        html` ${renderHubTabs({
+        () => [
+          createComponent(HubTabs, {
             id: "inbox-fixture",
             active: "tab-0",
             ariaLabel: "Inbox categories",
             panelId: "inbox-fixture-panel",
-            className: "sidebar-issues-panel__tabs",
+            class: "sidebar-issues-panel__tabs",
             variant: "sub",
             tabs: ["All", "Approvals", "Mentions", "Automations", "System"].map((label, index) => ({
               value: `tab-${index}`,
@@ -325,17 +355,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
               count: index || undefined,
             })),
             onSelect: () => undefined,
-          })}
-          <div class="sidebar-issues-panel__list-wrap">
-            <div class="sidebar-issues-panel__list">
-              ${Array.from(
-                { length: 6 },
-                (_, index) => html` <div data-attention-kind="cronFailed">
-                  <div class="sidebar-issues-panel__summary">Inbox item ${index}</div>
-                </div>`,
-              )}
-            </div>
-          </div>`,
+          } satisfies HubTabsProps<string>),
+          listWrap,
+        ],
         fixture,
       );
       const shell = document.createElement("div");
@@ -343,7 +365,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       shell.append(fixture);
       document.body.append(shell);
 
-      await Promise.resolve();
+      await waitForSolid(() => expect(fixture.querySelector('[role="tab"]')).not.toBeNull());
       const group = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__tabs");
       const header = document.createElement("header");
       header.className = "sidebar-issues-panel__header";

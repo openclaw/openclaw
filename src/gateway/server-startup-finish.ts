@@ -272,6 +272,7 @@ export async function finishGatewayStartup(params: {
           isNixMode,
           startupStartedAt: opts.startupStartedAt,
           broadcastToConnIds,
+          broadcast,
           getClientConnIds: gatewayRequestContext.getClientConnIds!,
           broadcastPluginEvent,
           controlUiRootLifecycle,

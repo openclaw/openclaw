@@ -41,10 +41,9 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import {
   withCurrentPendingInputAuthority,
@@ -213,29 +212,36 @@ export function stageSessionPendingInput(
   scope: PendingInputScope,
   options: PendingInputStageOptions,
 ): Promise<SessionPendingInputReceipt | undefined> {
-  const memory = getSessionActorStorageBinding(scope);
-  const incognito = memory
-    ? undefined
-    : (scope.incognito ?? captureIncognitoSessionOperation(scope));
-  incognito?.admissionSignal?.throwIfAborted();
-  incognito?.actor.assertCurrent();
   const captured = {
     ...scope,
-    sessionActor: memory,
-    incognito: incognito && { ...incognito },
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const preparedRequest = preparePendingInputRequest(options);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (memory) {
-    return runWithSessionActorStorage(memory, () =>
-      preparePendingInputStore(
-        captured,
-        options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
-      ).then((store) =>
-        stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store),
-      ),
-    );
+  if (
+    captureSessionActorStorageOwner(scope, {
+      assertCurrent: options.assertCurrent,
+      authorize: options.assertCurrent,
+    })
+  ) {
+    return preparePendingInputStore(
+      captured,
+      options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
+    ).then((store) => {
+      const binding = store.sessionActor;
+      if (!binding) {
+        throw new Error("Incognito pending input omitted its actor");
+      }
+      return runWithSessionActorStorage(binding, () =>
+        stagePreparedPendingInput(
+          { ...captured, sessionActor: binding },
+          options,
+          preparedRequest,
+          lifecycleGeneration,
+          store,
+        ),
+      );
+    });
   }
   return getSessionInputActor(captured).then((inputActor) => {
     const admission = inputActor ? undefined : resolveSqliteWriteAdmissionScope(captured);
@@ -485,7 +491,6 @@ async function stagePreparedPendingInput(
         if (finished) {
           throw new SessionPendingInputCustodyError("Pending input ownership ended");
         }
-        scope.incognito?.authority.assertCurrent();
         options.assertCurrent();
         return scope.sessionActor
           ? runWithSessionActorStorage(scope.sessionActor, operation)
@@ -573,8 +578,6 @@ async function stagePreparedPendingInput(
           config: options.config,
           assertCurrent: () => {
             store.assertCurrent();
-            scope.incognito?.actor.assertCurrent();
-            scope.incognito?.authority.assertCurrent();
             assertAdmittedCurrent();
           },
           authority: options.authority,

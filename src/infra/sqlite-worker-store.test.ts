@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import {
   link,
   mkdir,
@@ -391,6 +392,20 @@ describe("SQLite worker store", () => {
         }
         const firstAlias = await open(aliasPath);
         const secondAlias = await open(aliasPath);
+        const realpath = vi.spyOn(fs.realpathSync, "native");
+        try {
+          expect(await append(firstAlias, "warm alias write")).toEqual({
+            ...originalReceipt,
+            writes: 2,
+          });
+          expect(await read(original)).toEqual(["original data", "warm alias write"]);
+          // No database path resolution belongs on an already-open worker operation.
+          expect(
+            realpath.mock.calls.filter(([pathname]) => pathname === file || pathname === aliasPath),
+          ).toEqual([]);
+        } finally {
+          realpath.mockRestore();
+        }
         await unlink(aliasPath);
         if (kind === "hardlink") {
           await writeFile(aliasPath, "");
@@ -420,10 +435,11 @@ describe("SQLite worker store", () => {
         expect(replacementReceipt.writes).toBe(1);
         expect(await append(original, "original still usable")).toEqual({
           ...originalReceipt,
-          writes: 4,
+          writes: 5,
         });
         expect(await read(original)).toEqual([
           "original data",
+          "warm alias write",
           "ahead of alias write",
           "last alias write",
           "original still usable",

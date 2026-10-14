@@ -147,7 +147,7 @@ export type CleanupBookkeepingParams = {
   provisionalKill?: boolean;
   skipRequesterSettleWake?: boolean;
   isCurrent?: () => boolean;
-  discardDelivery?: (draft: SubagentRunRecord) => void;
+  finalizeDelivery?: (draft: SubagentRunRecord) => void;
 };
 
 export type ScheduledRequesterSettleWake = {

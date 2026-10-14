@@ -5,6 +5,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -50,7 +51,8 @@ function catalogConnection(gateway: ApplicationContext["gateway"]): CatalogConne
   return {
     gatewayUrl: gateway.connection.gatewayUrl,
     client: snapshot.client,
-    connected: snapshot.phase === "connected",
+    connected:
+      snapshot.phase === "connected" && hasOperatorReadAccess(snapshot.hello?.auth ?? null),
     voiceWake:
       isGatewayMethodAdvertised(snapshot, "voicewake.get") === true &&
       isGatewayMethodAdvertised(snapshot, "voicewake.set") === true,

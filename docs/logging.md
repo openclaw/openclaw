@@ -342,6 +342,13 @@ results before repeating them.
 
 ### Targeted model transport diagnostics
 
+Prompt-cache history warnings identify the first changed message and bounded
+field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.
+They report no message content, argument values, or signature bytes. Unknown
+extension keys appear as `other`; blocks beyond the retained diagnostic prefix
+appear as `content[remaining]`. A history warning identifies changed model
+context; it does not alone prove why a provider's cache-read tokens dropped.
+
 When debugging provider calls, use targeted environment flags instead of raising
 all logs to `debug`:
 
@@ -1034,6 +1041,16 @@ records, paths, names, or content. They do not change the warning threshold,
 checkpoint mode or timeout, or archive-retention behavior.
 
 ### Slow reply preparation
+
+Before acknowledgement, `slow chat send` reports requests taking at least one
+second, including the first turn of `sessions.create`. Its `detail.admission.*`
+fields separate work admission and validation inside that admission.
+The `detail.persist.*` fields separate pending input staging,
+transcript persistence, and dashboard authority preparation.
+These fixed labels contain no message content or session identifiers and require
+no diagnostic flag. Durations include awaited work: `admission.revalidate` is
+nested inside `admission.work`, so their values must not be added together or
+treated as SQLite execution time.
 
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 
