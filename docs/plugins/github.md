@@ -116,10 +116,16 @@ hovercard, and GitHub links open externally.
 - Hover previews are shared for one minute across readers using the same GitHub
   identity. Concurrent requests share a fetch, but each reader must still have
   access when the result arrives. Expired previews can appear with a stale marker
-  while one background refresh runs. **Refresh** waits for current metadata.
+  while one background refresh runs. Cached delivery checks the current credential
+  once; each upstream dispatch also checks it. **Refresh** waits for current metadata.
   Refreshes use GitHub ETags for unchanged item and commit responses; identity
   changes, eviction, or a failed refresh retire those cached responses. Repository
   visibility is checked again for every authenticated refresh.
+- Slow preview reads (500 ms or longer) log phase durations for identity preparation,
+  cache/load wait, delivery credential checks, metadata rendering, optional decoration,
+  and upstream authentication/network waits. Network timings cover response headers;
+  metadata/decorations include response-body reads. These diagnostics omit URLs,
+  item contents, and credentials.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
   unavailable services show their specific explanation in the reader and hovercards,
   including GitHub's retry delay when available. Cached preview details stay visible

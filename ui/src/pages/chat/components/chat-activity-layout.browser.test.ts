@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement | undefined;

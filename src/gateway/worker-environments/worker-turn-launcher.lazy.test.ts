@@ -209,6 +209,7 @@ describe("worker turn execution loading", () => {
       cloudWorkers: { requiredProfile: "development" },
     };
     let checkedPendingPublication = false;
+    // mock-isolation: drive the launcher guard without starting real worker execution.
     vi.doMock("./worker-turn-execution.js", () => ({
       executeWorkerTurn: async (params: {
         onHandoff: () => void;

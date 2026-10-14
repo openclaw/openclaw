@@ -273,7 +273,9 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector(".chat-pane__sharing-owner-title")?.textContent?.trim()).toBe(
       "Owner",
     );
-    expect(root.querySelector(".chat-pane__sharing-owner")?.textContent?.trim()).toBe("Owner");
+    expect(
+      root.querySelector(".chat-pane__sharing-owner .session-menu__text")?.textContent?.trim(),
+    ).toBe("Owner");
     expect(
       root.querySelector(".chat-pane__sharing-owner openclaw-session-owner-chip"),
     ).not.toBeNull();

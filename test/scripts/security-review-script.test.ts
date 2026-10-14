@@ -1445,6 +1445,60 @@ describe("combined security review entry point", () => {
     }
   });
 
+  // The last job is the gate, so only complete enumeration of every range succeeds.
+  const jobPage = (from: number, count: number, total: number) => ({
+    total_count: total,
+    jobs: Array.from({ length: count }, (_, index) => ({
+      name: from + index === total - 1 ? "openclaw/ci-gate" : `job ${from + index}`,
+      status: "completed",
+      conclusion: "success",
+    })),
+  });
+
+  it.each([
+    {
+      name: "the first page",
+      pages: {
+        "per_page=100&page=1": { httpError: 502 },
+        "per_page=50&page=1": jobPage(0, 50, 60),
+        "per_page=50&page=2": jobPage(50, 10, 60),
+      },
+    },
+    {
+      name: "a later page at two sizes",
+      pages: {
+        "per_page=100&page=1": jobPage(0, 100, 130),
+        "per_page=100&page=2": { httpError: 502 },
+        "per_page=50&page=3": { httpError: 502 },
+        "per_page=25&page=5": jobPage(100, 25, 130),
+        "per_page=25&page=6": jobPage(125, 5, 130),
+      },
+    },
+  ])("lists the same CI job range at a smaller page size after 5xx on $name", ({ pages }) => {
+    const result = evaluate({
+      // Any request outside the expected page ranges fails the review.
+      [jobsPath]: { httpError: 404 },
+      ...Object.fromEntries(
+        Object.entries(pages).map(([query, response]) => [`${jobsPath}?${query}`, response]),
+      ),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([]);
+    expect(result.combined).toEqual(["pending", "success"]);
+    expect(result.requests.filter((entry) => `GET ${entry.path}` === jobsPath)).toHaveLength(
+      Object.keys(pages).length,
+    );
+  });
+
+  it("keeps normal read retries and fails closed when the smallest job page fails", () => {
+    const result = evaluate({ [jobsPath]: { httpError: 502 } });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
+    expect(result.combined).toEqual(["pending", "failure"]);
+    expect(result.stderr).toContain("per_page=25&page=1 failed: 502");
+    expect(result.requests.filter((entry) => `GET ${entry.path}` === jobsPath)).toHaveLength(6);
+  });
+
   it.each([
     ...[
       { field: "status", value: "unknown" },

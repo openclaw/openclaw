@@ -15,7 +15,7 @@ function createModel(overrides: Partial<Model> = {}): Model {
   return {
     api: "openai-completions",
     provider: "fireworks",
-    id: "accounts/fireworks/routers/kimi-k2p6-turbo",
+    id: "accounts/fireworks/routers/kimi-k2.6-synthetic-test",
     name: "Kimi",
     baseUrl: "https://api.fireworks.ai/inference/v1",
     reasoning: false,
@@ -72,7 +72,7 @@ describe("wrapFireworksProviderStream", () => {
     },
     {
       name: "explicit cache affinity for Kimi",
-      modelId: "accounts/fireworks/routers/kimi-k2p6-turbo",
+      modelId: "accounts/fireworks/routers/kimi-k2.6-synthetic-test",
       options: { sessionId: "synthetic-session", promptCacheKey: "synthetic-cache-key" },
       affinity: "synthetic-cache-key",
     },
@@ -273,7 +273,7 @@ describe("wrapFireworksProviderStream", () => {
 
   it("forces thinking disabled for Fireworks Kimi k2.5 aliases", () => {
     expect(
-      capturePayload(createModel({ id: "accounts/fireworks/routers/kimi-k2.5-turbo" })),
+      capturePayload(createModel({ id: "accounts/fireworks/routers/kimi-k2.5-synthetic-test" })),
     ).toEqual({ thinking: { type: "disabled" } });
   });
 

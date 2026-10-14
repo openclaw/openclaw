@@ -4,7 +4,7 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 /* @vitest-environment jsdom */
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
 const reactions: MessageReactionSummary[] = [

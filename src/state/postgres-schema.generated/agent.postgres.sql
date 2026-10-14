@@ -543,6 +543,8 @@ CREATE TABLE "session_windows" (
   "created_at" bigint NOT NULL,
   "updated_at" bigint NOT NULL,
   "transcript_updated_at" bigint DEFAULT NULL,
+  "row_transcript_json" text COLLATE "C",
+  "row_transcript_updated_at" bigint,
   "transcript_observed_at" bigint DEFAULT NULL,
   "session_entry_provenance" bigint NOT NULL DEFAULT 0,
   "acp_owned" bigint NOT NULL DEFAULT 0,

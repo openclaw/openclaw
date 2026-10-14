@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { presenceViewerLastActivity } from "../lib/presence-users.ts";
+import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
 import { resolveSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -137,13 +137,16 @@ export function captureSidebarSnapshotModel(
       return {
         ...displayUser(user),
         watchedSessions: [],
-        entries: lastActivityAt === undefined ? [] : [{ ts: 0, lastActivityAt }],
+        entries: [{ ts: 0, lastActivityAt }],
       };
     }),
     onlineCounts: [...(online.counts ?? [])],
     peopleSortMode: host.people.sortMode,
     peopleStatusFilter: host.people.statusFilter,
-    onlineExpanded: host.teamOnlineExpanded,
+    peoplePresenceFilter: host.people.presenceFilter,
+    offlineUsers: (host.people.directory?.result?.profiles ?? [])
+      .filter((profile) => !profile.mergedInto)
+      .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
     footer: displayUser(context.gateway.snapshot.selfUser),

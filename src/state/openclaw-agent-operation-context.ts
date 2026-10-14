@@ -1,3 +1,4 @@
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   OpenClawAgentDatabase,
@@ -13,6 +14,7 @@ export type AgentWorkerOperationContext = {
     operationLabel: string,
     owner: string,
     write: (current: OpenClawAgentDatabase) => T,
+    diagnosticContext?: SqliteTransactionOptions["diagnosticContext"],
   ) => T;
   /** Durable executors lend their exact admitted shared owner to native binding settlement. */
   writeSharedTransaction?: <T>(

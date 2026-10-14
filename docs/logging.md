@@ -342,6 +342,13 @@ results before repeating them.
 
 ### Targeted model transport diagnostics
 
+Prompt-cache history warnings identify the first changed message and bounded
+field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.
+They report no message content, argument values, or signature bytes. Unknown
+extension keys appear as `other`; blocks beyond the retained diagnostic prefix
+appear as `content[remaining]`. A history warning identifies changed model
+context; it does not alone prove why a provider's cache-read tokens dropped.
+
 When debugging provider calls, use targeted environment flags instead of raising
 all logs to `debug`:
 
@@ -911,6 +918,16 @@ and scheduling delays; they do not establish lock contention. The separate
 errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
+Hold warnings label the callback as `callbackKind: "application-transaction"`:
+OpenClaw's transaction body, not a SQLite busy handler or SQL function.
+`phases.databaseAdmissionWaitMs` measures synchronous metadata exchanges with the
+host, separately from authority waits in `hostAdmissionWaitMs`. Metadata waits
+during COMMIT belong to this field and are excluded from the hold's `commitMs`.
+The legacy
+`sqlMs` field excludes both waits and commit time, but includes JavaScript between
+SQL statements. The default 1,000 ms logging threshold does not establish a
+one-second timeout.
+
 Older builds report `session.reclamation.commit-settlement` for a parent-side
 synchronous SQLite check after authorizing a reclamation or cold-storage commit.
 The parent now atomically accepts the commit after checking live authority and
@@ -956,6 +973,20 @@ The timing fields separate the elapsed interval into:
 These fields are available when the queued callback started and finished;
 `elapsedMs` records the total duration. The warning's console line carries the
 same fields as `key=value` pairs; `openclaw logs --json` shows the original `raw` record.
+
+`slow agent database reservation` covers direct, Worker, and ordered-read
+reservations when `queueWaitMs + writerExecutionMs` reaches 1000 ms, even when
+execution itself is fast. Completion delay alone does not trigger this warning.
+When a writer was holding the lane at enqueue, `blockingOperation` and optional
+`blockingCaller` identify that holder; `blockingWorkerOperations` lists its bounded
+Worker operation labels. This is the holder observed at enqueue, not a breakdown
+of every writer ahead in the queue. Reentrant borrowing does not emit a second
+reservation warning. No reservation warning is emitted below the threshold.
+
+Prometheus already exposes `openclaw_worker_queue_wait_seconds` with
+`kind="sqlite_writer"` and bounded `request_class` labels. It measures Worker
+request enqueue-to-dispatch time; an outer reservation wait before that enqueue
+is visible in the reservation warning, not in this Worker histogram.
 
 Use `operation` to locate the owning code path. It does not identify a specific
 SQL statement, measure CPU time or lock contention, or establish that a nearby

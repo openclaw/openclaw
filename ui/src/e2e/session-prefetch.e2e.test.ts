@@ -44,6 +44,7 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
       await page.locator(".chat-thread-inner").getByText("Workspace ready.").waitFor();
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
       const reportRequests = async () =>
         (await gateway.getRequests("chat.history")).filter(
           (request) => (request.params as { sessionKey?: string }).sessionKey === reportKey,
@@ -53,6 +54,7 @@ suite.define(() => {
         .first();
       await reportLink.hover();
       await expect.poll(async () => (await reportRequests()).length).toBe(1);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
       const before = (await gateway.getRequests("sessions.list")).length;
       await gateway.setSessionsListResponse(
         sessionsListResponse([{ ...workspace, label: "Workspace updated", updatedAt: 3 }, report]),

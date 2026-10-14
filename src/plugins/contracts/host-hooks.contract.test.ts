@@ -1383,6 +1383,47 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it.each(
+    ["start", { length: 1, 0: "start" }, [""], [" "], [1], [undefined]].map((phases) => ({
+      phases,
+    })),
+  )("rejects malformed agent event phases $phases", ({ phases }) => {
+    const { registry } = registerFixture({ id: "bad-phases" }, (api) => {
+      api.agent.events.registerAgentEventSubscription({
+        id: "events",
+        phases: phases as never,
+        handle: () => undefined,
+      });
+    });
+    expect(registry.registry.agentEventSubscriptions).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "bad-phases",
+        message: "agent event subscription phases must be an array of non-empty strings: events",
+      },
+    ]);
+  });
+
+  it.each(["", "summary", " metadata ", null, 1, true, {}, []])(
+    "rejects malformed agent event payload mode %j",
+    (payload) => {
+      const { registry } = registerFixture({ id: "bad-payload" }, (api) => {
+        api.agent.events.registerAgentEventSubscription({
+          id: "events",
+          payload: payload as never,
+          handle: () => undefined,
+        });
+      });
+      expect(registry.registry.agentEventSubscriptions).toHaveLength(0);
+      expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+        {
+          pluginId: "bad-payload",
+          message: "agent event subscription payload must be full or metadata: events",
+        },
+      ]);
+    },
+  );
+
   it("requires explicit unset to remove plugin session extension state", async () => {
     const { registry } = registerFixture(
       {

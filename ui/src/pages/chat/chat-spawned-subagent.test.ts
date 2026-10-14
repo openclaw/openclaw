@@ -7,15 +7,14 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
-import { renderActivityGroup } from "./components/chat-message-group.ts";
+import { renderActivityGroup } from "./components/chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createMessageEntry,
   createToolCall,
   createToolGroup,
 } from "./components/chat-message.test-support.ts";
-import { renderToolCard } from "./components/chat-tool-cards.ts";
-import { renderToolFixture } from "./components/chat-tool-render.test-support.ts";
+import { renderToolFixture, renderToolCard } from "./components/chat-tool-render.test-support.ts";
 
 const parentKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
 const label = "Write a six-line robot story";

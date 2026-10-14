@@ -28,6 +28,8 @@ turn settles may send the fallback after their buffered replies. `tagged` mode
 keeps its normal streaming behavior, and text
 inside a `[[tts:text]]` block remains audio-only.
 
+Visible captions and their text fallbacks preserve whitespace inside code blocks.
+
 After synthesis, OpenClaw persists batch TTS output in the media store under
 `tool-speech-synthesis`. The reply uses that stable media path instead of a
 provider temporary file, and normal media maintenance prunes expired output.

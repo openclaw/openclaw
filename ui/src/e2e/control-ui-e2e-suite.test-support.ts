@@ -20,6 +20,7 @@ import {
 import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiPaneRuntimeTestAdapterScript } from "../test-helpers/control-ui-pane-runtime.test-support.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -380,6 +381,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       const context = await currentBrowser.newContext(contextOptions);
       openBrowserContexts.set(context, owner);
       contextDiagnostics.set(context, { test });
+      await context.addInitScript({ content: createControlUiPaneRuntimeTestAdapterScript() });
       if (stopping || owner?.signal.aborted) {
         await closeBrowserContext(context);
         throw new ControlUiE2eAcquisitionClosedError(

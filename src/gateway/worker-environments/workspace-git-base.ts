@@ -104,9 +104,10 @@ export async function prepareWorkerProjectSnapshot(params: {
     return null;
   }
   const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(root, options);
-  const origin = await runGit(root, ["remote", "get-url", "origin"], options);
+  const origin = await runGit(canonicalRoot, ["remote", "get-url", "origin"], options);
   const label =
-    (origin.code === 0 ? normalizeCloudRepo(origin.stdout) : undefined) ?? path.basename(root);
+    (origin.code === 0 ? normalizeCloudRepo(origin.stdout) : undefined) ??
+    path.basename(canonicalRoot);
   params.signal?.throwIfAborted();
   // Linked session worktrees share the repository cache; their pinned commits and
   // mutable overlays must not create a new project identity.

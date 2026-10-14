@@ -519,7 +519,7 @@ suite.define(() => {
         );
         const module = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));

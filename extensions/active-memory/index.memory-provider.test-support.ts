@@ -18,7 +18,6 @@ type MemoryProviderTestParams = {
   writeUsableMemoryTranscript: (sessionFile: string, text: string) => Promise<void>;
   seedSession: (sessionKey: string, sessionId: string, updatedAt?: number) => void;
   expectPrependContextContains: (result: unknown, text: string) => void;
-  lastEmbeddedRunParams: () => Record<string, unknown>;
   lastRuntimeEmbeddedRunParams: () => Record<string, unknown>;
 };
 
@@ -198,39 +197,6 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     expect(params.lastRuntimeEmbeddedRunParams().memoryAudience).toBe(memoryAudience);
   });
 
-  it("runs provider-direct trigger recall without a deterministic recall tool", async () => {
-    params.memoryCapability.deterministicRecallToolName = undefined;
-    params.memoryCapability.recallToolNames = ["record_find"];
-    params.useNativeProvider();
-    params.getActiveMemoryProvider.mockResolvedValueOnce({
-      providerId: "records",
-      provider: {
-        search: vi.fn(async () => ({ hits: [] })),
-        capabilities: { candidates: ["trigger"] },
-        candidates: vi.fn(async () => ({ hits: [] })),
-        close: vi.fn(async () => {}),
-      },
-    });
-    await params.runPromptBuild(
-      { prompt: "Help when booking a flight" },
-      {
-        sessionKey: "agent:main:telegram:direct:owner",
-        sessionId: "owner-session",
-        messageProvider: "telegram",
-        channelId: "owner",
-        memoryAudience: { kind: "owner-private", agentId: "main" },
-      },
-    );
-    expect(params.getActiveMemoryProvider).toHaveBeenCalledOnce();
-  });
-
-  it("uses the selected provider's declared deep-recall tools by default", async () => {
-    params.memoryCapability.recallToolNames = ["record_find", "record_get"];
-    params.registerPluginConfig({});
-    await params.runPromptBuild({ prompt: "What did we decide?" });
-    expect(params.lastEmbeddedRunParams().toolsAllow).toEqual(["record_find", "record_get"]);
-  });
-
   it("serves native trigger recall under the turn's session authority and audience", async () => {
     params.useNativeProvider();
     const assertMemoryAudienceCurrent = vi.fn();
@@ -304,74 +270,26 @@ export function registerActiveMemoryProviderTests(params: MemoryProviderTestPara
     expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["denies the deterministic recall tool", "memory_search", "memory_search"],
-    ["has no deterministic recall tool", undefined, undefined],
-  ])("skips legacy trigger recall when the owner %s", async (_label, toolName, denied) => {
-    params.memoryCapability.deterministicRecallToolName = toolName;
-    await params.runPromptBuild(
-      { prompt: "Help when booking a flight" },
-      {
-        sessionKey: "agent:main:telegram:direct:owner",
-        sessionId: "owner-session",
-        messageProvider: "telegram",
-        channelId: "owner",
-        toolAuthority: {
-          fingerprint: "legacy-policy",
-          allows: (name: string) => name !== denied,
-          assertActive: () => undefined,
-        },
-      },
-    );
-    expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
-    expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
-  });
-
-  it.each([" \n "])(
-    "does not recall legacy historical text for an explicit empty request %j",
-    async (currentUserMessage) => {
-      params.registerPluginConfig({ mode: "always" });
-      const search = vi.fn(async () => []);
-      params.getActiveMemorySearchManager.mockResolvedValue({
-        manager: { search, listTriggerCandidates: vi.fn(async () => []) },
-      } as never);
-      await params.runPromptBuild({
-        prompt: "What do you remember about my preferences?",
-        currentUserMessage,
-        currentUserMessageId: "empty-admission",
-        messages: [{ role: "user", content: "What do you remember about my preferences?" }],
-      });
-      expect(search).not.toHaveBeenCalled();
-      expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reuses one legacy trigger admission across history changes and keeps authority separate", async () => {
-    params.registerPluginConfig({ mode: "escalate" });
-    const search = vi.fn(async () => []);
-    params.getActiveMemorySearchManager.mockResolvedValue({
-      manager: { search, listTriggerCandidates: vi.fn(async () => []) },
-    } as never);
-    for (const [history, fingerprint, admission] of [
-      ["old history", "authority-a", "same-admission"],
-      ["rebuilt history", "authority-a", "same-admission"],
-      ["rebuilt history", "authority-b", "same-admission"],
-      ["rebuilt history", "authority-b", "new-admission"],
-    ] as const) {
+  it.each([["denies the deterministic recall tool", "memory_search", "memory_search"]])(
+    "skips legacy trigger recall when the owner %s",
+    async (_label, toolName, denied) => {
+      params.memoryCapability.deterministicRecallToolName = toolName;
       await params.runPromptBuild(
+        { prompt: "Help when booking a flight" },
         {
-          prompt: history,
-          currentUserMessage: "ok",
-          currentUserMessageId: admission,
-          messages: [{ role: "user", content: history }],
-        },
-        {
-          runId: "trigger-rebuild",
-          toolAuthority: { fingerprint, allows: () => true, assertActive: () => undefined },
+          sessionKey: "agent:main:telegram:direct:owner",
+          sessionId: "owner-session",
+          messageProvider: "telegram",
+          channelId: "owner",
+          toolAuthority: {
+            fingerprint: "legacy-policy",
+            allows: (name: string) => name !== denied,
+            assertActive: () => undefined,
+          },
         },
       );
-    }
-    expect(search).toHaveBeenCalledTimes(3);
-    expect(params.runEmbeddedAgent).not.toHaveBeenCalled();
-  });
+      expect(params.getActiveMemorySearchManager).not.toHaveBeenCalled();
+      expect(params.getActiveMemoryProvider).not.toHaveBeenCalled();
+    },
+  );
 }

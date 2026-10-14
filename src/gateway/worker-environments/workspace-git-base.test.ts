@@ -31,7 +31,8 @@ describe("prepared worker projects", () => {
       prepareWorkerProjectSnapshot({ localPath, namespace });
     const original = await prepare(repository);
     expect(original).toBeDefined();
-    expect(await prepare(worktree)).toEqual({ ...original, label: "linked" });
+    expect(original?.label).toBe("repository");
+    expect(await prepare(worktree)).toEqual(original);
 
     await fs.writeFile(path.join(worktree, "input.txt"), "next commit\n");
     await requireGit(worktree, ["commit", "--quiet", "-am", "next"]);
@@ -46,7 +47,7 @@ describe("prepared worker projects", () => {
         namespace: "gateway-one",
         baseCommit: original!.baseCommit,
       }),
-    ).toEqual({ ...original, label: "linked" });
+    ).toEqual(original);
     await expect(
       prepareWorkerProjectSnapshot({
         localPath: worktree,
@@ -113,16 +114,31 @@ describe("prepared worker projects", () => {
     const root = await fs.realpath(tempDirs.make("worker-project-label-"));
     const repository = path.join(root, "project");
     await createRepository(repository);
+    const worktree = path.join(root, "session-a");
+    await requireGit(repository, ["worktree", "add", "--detach", worktree, "HEAD"]);
     const prepare = () =>
       prepareWorkerProjectSnapshot({ localPath: repository, namespace: "gateway" });
     const original = await prepare();
     expect(original?.label).toBe("project");
 
     await requireGit(repository, ["remote", "add", "origin", "git@example.invalid:Team/Repo.git"]);
+    await requireGit(repository, ["config", "extensions.worktreeConfig", "true"]);
+    await requireGit(worktree, [
+      "config",
+      "--worktree",
+      "remote.origin.url",
+      "git@example.invalid:Other/Session.git",
+    ]);
     expect(await prepare()).toEqual({ ...original, label: "example.invalid/team/repo" });
+    expect(
+      await prepareWorkerProjectSnapshot({ localPath: worktree, namespace: "gateway" }),
+    ).toEqual({ ...original, label: "example.invalid/team/repo" });
 
     await requireGit(repository, ["remote", "set-url", "origin", "/local/repository.git"]);
     expect(await prepare()).toEqual(original);
+    expect(
+      await prepareWorkerProjectSnapshot({ localPath: worktree, namespace: "gateway" }),
+    ).toEqual(original);
   });
 
   it("does not invent a project snapshot for a plain or unborn workspace", async () => {

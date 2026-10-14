@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { retainSessionListForegroundWork } from "../../gateway/session-projection-work.js";
-import { observeSessionRowBackfill } from "../../gateway/session-row-backfill.test-support.js";
+import {
+  clearStoredSessionRowTranscriptForTest,
+  observeSessionRowBackfill,
+} from "../../gateway/session-row-backfill.test-support.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
@@ -390,6 +393,12 @@ it("projects shared rows under their logical owner while retaining the physical 
         touchSessionEntry: false,
       },
     );
+    clearStoredSessionRowTranscriptForTest({
+      agentId: "main",
+      storePath,
+      sessionKey: "global",
+      sessionId: "session-global",
+    });
 
     const releaseBackfill = retainSessionListForegroundWork();
     await withResidentRows(cfg, async (projection) => {

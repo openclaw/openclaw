@@ -168,6 +168,7 @@ function createEnvironmentSummaryProperties() {
     platform: Type.Optional(NonEmptyString),
     sessionHost: Type.Optional(Type.Boolean()),
     workerSlots: Type.Optional(WorkerSlotSummarySchema),
+    workerHost: Type.Optional(closedObject({ deviceFolders: Type.Optional(Type.Literal(true)) })),
     workerBundle: Type.Optional(NodeWorkerBundleStatusSchema),
     lastConnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDisconnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
@@ -8,7 +9,10 @@ import {
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
-import { resolveThinkingDefault } from "../../model-thinking-default.js";
+import {
+  resolveConfiguredThinkingDefault,
+  resolveThinkingDefault,
+} from "../../model-thinking-default.js";
 
 type RequesterPreferencesContext = {
   cfg: OpenClawConfig;
@@ -45,16 +49,19 @@ export function resolveRequesterPreferences(params: RequesterPreferencesContext)
   const entry = params.requesterEntry;
   const { defaultModel, selectedModel } = resolveRequesterModel(params);
   const model = selectedModel ?? defaultModel;
+  const thinkingParams = {
+    cfg: params.cfg,
+    agentId: params.requesterAgentId,
+    provider: model.provider,
+    model: model.model,
+  };
+  const selectedThinkingLevel =
+    normalizeOptionalString(entry?.thinkingLevel) ??
+    resolveConfiguredThinkingDefault(thinkingParams);
   return {
     model: selectedModel ?? undefined,
-    thinkingLevel:
-      (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) ||
-      resolveThinkingDefault({
-        cfg: params.cfg,
-        agentId: params.requesterAgentId,
-        provider: model.provider,
-        model: model.model,
-      }),
+    thinkingLevel: selectedThinkingLevel ?? resolveThinkingDefault(thinkingParams),
+    thinkingExplicit: selectedThinkingLevel !== undefined,
   };
 }
 

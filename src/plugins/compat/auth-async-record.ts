@@ -8,9 +8,9 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
   introduced: "2026-10-01",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
-  removalGate: "next-plugin-sdk-major",
+  removeAfter: "2026-12-31",
   replacement:
-    "Await the Async-suffixed auth-store, snapshot-publication, AuthStorage, profile-upsert, provider-availability, profile-metadata, model-auth, model-header, provider-selection, and TTS methods. For secret-read preparation, use loadAuthProfileStoreForRuntimeAsync from agent-runtime with readOnly: true and allowKeychainPrompt: false. Replace saveAuthProfileStore with the owner-backed updateAuthProfileStoreWithLock from provider-auth. New SDK displays should use resolveProviderAuthProfileMetadataAsync from provider-auth-runtime; resolveAuthStorePathForDisplay remains supported until removal in a later stable release after deprecation ships and its async path replacement is core-internal. Implement isConfiguredAsync for media, speech, and realtime providers, and resolveConfigAsync for realtime voice providers. Released synchronous methods retain their signatures, immediate results, and completion timing until removal in a later stable release after deprecation ships.",
+    "Await the Async-suffixed auth-store, snapshot-publication, AuthStorage, profile-upsert, provider-availability, profile-metadata, model-auth, model-header, provider-selection, and TTS methods. For secret-read preparation, use loadAuthProfileStoreForRuntimeAsync from agent-runtime with readOnly: true and allowKeychainPrompt: false. Replace saveAuthProfileStore with the owner-backed updateAuthProfileStoreWithLock from provider-auth. Public database-path displays retire after 2026-12-31 with no public async path replacement; display provider/profile identifiers instead. Bundled callers use AuthStorage.resolvePathForDisplayAsync from the private agent-sessions surface for exact selected paths. Use resolveProviderAuthProfileMetadataAsync from provider-auth-runtime for profile metadata. Implement isConfiguredAsync for media, speech, and realtime providers, and resolveConfigAsync for realtime voice providers. For internal realtime hooks, implement isBrowserSessionConfiguredAsync, isGatewayRelayConfiguredAsync, and resolveBrowserSessionCapabilitiesAsync. Released synchronous methods retain their signatures, immediate results, and completion timing through 2026-12-31; removal ships in the first January 2027 stable release.",
   docsPath:
     "/plugins/sdk-migration/how-to-migrate#await-auth-profile-and-provider-availability-operations",
   surfaces: [
@@ -32,6 +32,9 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "openclaw/plugin-sdk/agent-runtime resolveAuthStorePathForDisplay",
     "openclaw/plugin-sdk/agent-runtime findPersistedAuthProfileCredential",
     "openclaw/plugin-sdk/agent-runtime resolvePersistedAuthProfileOwnerAgentDir",
+    "openclaw/plugin-sdk/agent-sessions ModelRegistry.create",
+    "openclaw/plugin-sdk/agent-sessions ModelRegistry.refresh",
+    "openclaw/plugin-sdk/agent-sessions ModelRegistry.unregisterProvider",
     "openclaw/plugin-sdk/agent-sessions AuthStorage.forAgent",
     "openclaw/plugin-sdk/agent-sessions AuthStorage.create",
     "openclaw/plugin-sdk/agent-sessions AuthStorage.reload",
@@ -57,6 +60,9 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "RealtimeTranscriptionProviderPlugin.isConfigured",
     "RealtimeVoiceProviderPlugin.isConfigured",
     "RealtimeVoiceProviderPlugin.resolveConfig",
+    "InternalRealtimeVoiceProviderApi.isBrowserSessionConfigured",
+    "InternalRealtimeVoiceProviderApi.isGatewayRelayConfigured",
+    "InternalRealtimeVoiceProviderApi.resolveBrowserSessionCapabilities",
   ],
   diagnostics: [
     "TypeScript @deprecated annotations and migration documentation",
@@ -76,5 +82,5 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "src/plugins/compat/registry.test.ts",
   ],
   releaseNote:
-    "Auth-profile reads and writes, provider availability, and model selection use the existing database workers. Bundled callers await the new APIs; released synchronous contracts remain supported until a later stable release. Stored data, schemas, and update behavior are unchanged.",
+    "Auth-profile reads and writes, provider availability, and model selection use the existing database workers. Bundled callers await the new APIs; released synchronous contracts remain supported through 2026-12-31. Stored data, schemas, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

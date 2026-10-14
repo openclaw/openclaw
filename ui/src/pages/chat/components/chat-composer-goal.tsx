@@ -92,8 +92,7 @@ const goalActionIcons = {
 } as const;
 
 function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
-  const canResume = () =>
-    ["paused", "blocked", "usage_limited", "budget_limited"].includes(props.goal.status);
+  const canResume = () => props.goal.status !== "active";
   const pauseReason = () =>
     canResume() && !props.expanded && !props.resumeRecovery ? props.goal.lastStatusNote : undefined;
   const statusLabel = () =>

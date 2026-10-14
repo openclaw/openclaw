@@ -64,6 +64,30 @@ class GatewayDiscoveryTest {
   }
 
   @Test
+  fun discoveredGatewayDecodesInstanceNamesOnceAndPreservesTxtText() {
+    val harness = modernDiscovery()
+    val service = modernService("127.0.0.1").apply { serviceName = "Claw \\092123" }
+    val registration = harness.found(service)
+    registration.deliver { onServiceUpdated(service) }
+    assertEquals(
+      "Claw \\123",
+      harness.discovery.gateways.value
+        .single()
+        .name,
+    )
+
+    val displayName = "Claw \\123 \"Café\" 🦞"
+    service.setAttribute("displayName", displayName.toByteArray(Charsets.UTF_8))
+    registration.deliver { onServiceUpdated(service) }
+    assertEquals(
+      displayName,
+      harness.discovery.gateways.value
+        .single()
+        .name,
+    )
+  }
+
+  @Test
   fun retiredServiceUpdateCannotResurrectALostGateway() {
     val harness = modernDiscovery()
     val service = modernService("127.0.0.1")

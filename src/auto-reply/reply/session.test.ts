@@ -300,21 +300,46 @@ afterEach(() => {
 describe("initSessionState guarded initialization", () => {
   registerSessionInitializationAdmissionTests({ makeStorePath });
 
-  it("reuses accepted activity without losing a later in-process entry update", async () => {
+  it("reuses unchanged initialization without losing related entries or later in-process updates", async () => {
     const storePath = await makeStorePath("openclaw-session-accepted-activity-");
     const sessionKey = "agent:main:dashboard:accepted-activity";
     const sessionId = "accepted-activity";
+    const storedParentKey = "agent:main:dashboard:stored-parent";
+    const modelParentKey = "agent:main:dashboard:model-parent";
     const at = Date.now() - 1_000;
     await writeSessionStoreFast(storePath, {
-      [sessionKey]: { sessionId, updatedAt: at, lastInteractionAt: at },
+      [sessionKey]: {
+        sessionId,
+        updatedAt: at,
+        lastInteractionAt: at,
+        parentSessionKey: storedParentKey,
+      },
+      [storedParentKey]: { sessionId: "stored-parent", updatedAt: at, label: "Stored parent" },
+      [modelParentKey]: { sessionId: "model-parent", updatedAt: at, modelOverride: "test-model" },
     });
     const params = {
       cfg: { session: { store: storePath } } as OpenClawConfig,
-      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "webchat", Surface: "webchat" },
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        ModelParentSessionKey: modelParentKey,
+        Provider: "webchat",
+        Surface: "webchat",
+      },
       recordedSessionActivity: { sessionId, sessionKey, at },
     };
     const initialized = await initSessionState(params);
     expect(initialized.sessionEntry).toMatchObject({ updatedAt: at, lastInteractionAt: at });
+    const unchanged = await initSessionState(params);
+    expect(unchanged.sessionEntry).toEqual(initialized.sessionEntry);
+    expect(unchanged.sessionEntryHandle.get(storedParentKey)).toMatchObject({
+      sessionId: "stored-parent",
+      label: "Stored parent",
+    });
+    expect(unchanged.sessionEntryHandle.get(modelParentKey)).toMatchObject({
+      sessionId: "model-parent",
+      modelOverride: "test-model",
+    });
 
     const updated = expectDefined(
       await upsertSessionEntryCore(
@@ -425,9 +450,13 @@ describe("initSessionState guarded initialization", () => {
         },
         cfg: { session: { store: storePath } } as OpenClawConfig,
       }),
-    ).rejects.toThrow(
-      'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
-    );
+    ).rejects.toMatchObject({
+      name: "SessionWorkStartError",
+      reason: "archived",
+      retryable: false,
+      message:
+        'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
+    });
   });
 
   it.each(["/new"] as const)(
@@ -1342,6 +1371,33 @@ describe("initSessionState RawBody", () => {
       expect(
         resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
       ).toMatchObject({ sandboxed: required, sandboxRequired: required });
+    },
+  );
+
+  it.each(["hello again", "/reset"])(
+    "preserves device-folder affinity through reply-session rollover (%s)",
+    async (body) => {
+      const storePath = await makeStorePath("openclaw-rollover-device-folder-");
+      const sessionKey = "agent:main:dashboard:device-folder-rollover";
+      const deviceFolder = { deviceId: "rollover-device", path: "/existing/project" };
+      const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "device-folder-before-rollover",
+          updatedAt: staleStartedAt,
+          sessionStartedAt: staleStartedAt,
+          lastInteractionAt: staleStartedAt,
+          deviceFolder,
+        },
+      });
+      const result = await initSessionState({
+        ctx: { RawBody: body, ChatType: "direct", SessionKey: sessionKey },
+        cfg: { session: { store: storePath, reset: { mode: "daily", atHour: 4 } } },
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(body === "/reset");
+      expect(result.sessionEntry.deviceFolder).toEqual(deviceFolder);
+      expect(loadSessionEntry({ storePath, sessionKey })?.deviceFolder).toEqual(deviceFolder);
     },
   );
 

@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { agentProvenanceFromRow } from "./agent-provenance.kernel.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
@@ -14,7 +14,7 @@ export type AgentLifecycleStoreFacts = {
 
 /** Seed one lifecycle snapshot; committed owner receipts maintain its in-process projection. */
 export function readAgentLifecycleStoreFacts(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentLifecycleStoreFacts {
   const db = getNodeSqliteKysely<Pick<DB, "agent_provenance" | "agent_deletion_journal">>(database);
@@ -74,4 +74,4 @@ export const agentLifecycleReadOperations = {
     type: "agentLifecycle.read" as const,
     facts: readAgentLifecycleStoreFacts(database, agentId),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;

@@ -47,6 +47,7 @@ import {
   type UsageCostWorkerHostEffects,
   type UsageCostWorkerHostReply,
   type UsageCostWorkerHostRequest,
+  type UsageCostWorkerInput,
   type UsageCostWorkerLocation,
   type UsageCostWorkerOperation,
   type UsageCostWorkerResult,
@@ -62,6 +63,7 @@ export type PreparedUsageCostWorker = {
   config?: OpenClawConfig;
   agentDir: string;
   databases: Array<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
+  stores: UsageCostWorkerInput["stores"];
   archiveStorePaths: string[];
   sessionActor?: SessionActorStorageBinding;
   memory?: NonNullable<ReturnType<typeof captureSessionActorStorageOwner>>;
@@ -106,6 +108,7 @@ export function prepareUsageCostWorker(params: {
       config: params.config,
       agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, memory.agentId),
       databases: [],
+      stores: [],
       archiveStorePaths: [],
       sessionActor: memory.binding,
       memory,
@@ -149,13 +152,23 @@ export function prepareUsageCostWorker(params: {
     }
   }
   const seen = new Set<string>();
+  const stores = new Map<string, UsageCostWorkerInput["stores"][number]>();
   for (const target of targets) {
     const key = JSON.stringify([target.agentId, target.storePath]);
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    add(toDatabaseOptions(resolveSqliteReadScope({ ...target, env })));
+    const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
+    const database = { agentId: options.agentId, path: resolveOpenClawAgentSqlitePath(options) };
+    add(options);
+    stores.set(key, { agentId: target.agentId, storePath: target.storePath, database });
+    // Scanners use physical markers; preserve the logical agent when the store is shared.
+    stores.set(JSON.stringify([target.agentId, database.path]), {
+      agentId: target.agentId,
+      storePath: database.path,
+      database,
+    });
   }
   return {
     location: {
@@ -168,6 +181,7 @@ export function prepareUsageCostWorker(params: {
     config: params.config,
     agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
     databases: [...databases.values()],
+    stores: [...stores.values()],
     archiveStorePaths,
   };
 }
@@ -256,6 +270,7 @@ async function runPreparedUsageCostWorker(
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const location = structuredClone(prepared.location);
   const archiveStorePaths = [...prepared.archiveStorePaths];
+  const stores = structuredClone(prepared.stores);
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
@@ -264,11 +279,9 @@ async function runPreparedUsageCostWorker(
       signal?.throwIfAborted();
     };
     const resolveBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
-      const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env: location.env }));
-      const databasePath = resolveOpenClawAgentSqlitePath(options);
-      const binding = prepared.databases.find(
-        (entry) => entry.agentId === options.agentId && entry.path === databasePath,
-      );
+      const binding = stores.find(
+        (entry) => entry.agentId === target.agentId && entry.storePath === target.storePath,
+      )?.database;
       if (!binding) {
         throw new Error("Usage worker requested an unowned transcript database");
       }
@@ -327,13 +340,16 @@ async function runPreparedUsageCostWorker(
           location,
           operation: workerOperation,
           databases: [],
+          stores,
           archiveStorePaths,
         },
         {
           signal,
           beforeDispatch: assertCurrent,
           inputBytes:
-            2 * JSON.stringify({ location, operation: workerOperation, archiveStorePaths }).length,
+            2 *
+            JSON.stringify({ location, operation: workerOperation, archiveStorePaths, stores })
+              .length,
           timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
           onRequest: async (value, context) => {
             let reply: UsageCostWorkerHostReply;

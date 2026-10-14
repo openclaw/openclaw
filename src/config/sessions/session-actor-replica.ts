@@ -6,7 +6,6 @@ import {
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
@@ -23,6 +22,7 @@ import {
   readSessionActorParticipantPostimage,
   readSessionActorProjectionReceiptFromCells,
   scopedWriteToken,
+  scopedWriteTokens,
 } from "./session-actor-replica-receipts.js";
 import type {
   FileTarget,
@@ -38,7 +38,6 @@ import {
   type SessionActorTranscriptReplica,
 } from "./session-actor-transcript-replica.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
-import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
@@ -47,6 +46,26 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
+
+// Residency is a heap estimate, not a wire-size limit. Trusted postimages are
+// acyclic plain data; count strings without allocating or scanning their JSON.
+function estimateReplicaBytes(value: unknown): number {
+  if (typeof value === "string") {
+    return 16 + value.length * 2;
+  }
+  if (!value || typeof value !== "object") {
+    return 8;
+  }
+  if (Array.isArray(value)) {
+    return value.reduce<number>((bytes, child) => bytes + 16 + estimateReplicaBytes(child), 32);
+  }
+  let bytes = 32;
+  for (const key in value) {
+    bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key));
+  }
+  return bytes;
+}
+
 const pool = resolveGlobalSingleton<ReplicaPool>(
   Symbol.for("openclaw.sessionActorReplicas"),
   () => ({ cells: new Map(), snapshots: 0, bytes: 0 }),
@@ -91,8 +110,17 @@ export function ensureReplicaSubscription(): void {
       ) {
         // Creation already owns the complete entry; its first reader need not fetch it again.
         retainSessionActorEntryFacts(
-          target,
-          { entry: created.fullEntry, snapshots: "full", projection: created.projection },
+          target.database,
+          [
+            {
+              sessionKey: target.sessionKey,
+              facts: {
+                entry: created.fullEntry,
+                snapshots: "full",
+                projection: created.projection,
+              },
+            },
+          ],
           created.source.incarnation,
         );
       }
@@ -133,7 +161,6 @@ export function ensureReplicaSubscription(): void {
         cell.snapshot,
         change,
       );
-      const previousPredicateColumns = cell.predicateColumns;
       const previous = cell.snapshot ?? cell.entry;
       const previousProjection = cell.snapshot
         ? { hasBoard: cell.snapshot.hasBoard }
@@ -177,8 +204,7 @@ export function ensureReplicaSubscription(): void {
         // Transcript/metadata markers do not revoke an installed entry receipt.
         // Its original scoped token still rejects any unaccounted storage write.
         cell.entry = unchangedEntry;
-        cell.predicateColumns = previousPredicateColumns;
-        cell.bytes = JSON.stringify(unchangedEntry).length * 2;
+        cell.bytes = estimateReplicaBytes(unchangedEntry);
         pool.snapshots += 1;
         pool.bytes += cell.bytes;
       }
@@ -217,7 +243,7 @@ export function ensureReplicaSubscription(): void {
               : undefined);
           // Metadata receipts retain side-table facts when their writer did not change sharing.
           const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
-          cell.entry = freezeJsonSnapshot({
+          cell.entry = {
             target: cell.target,
             entry: structuredClone(prepared.fullEntry),
             dependencySessionIds,
@@ -226,9 +252,8 @@ export function ensureReplicaSubscription(): void {
             projection,
             members: sharingUnchanged ? previous?.members : undefined,
             participants: sharingUnchanged ? previous?.participants : undefined,
-          });
-          cell.predicateColumns = deriveSessionPredicateColumns(JSON.stringify(prepared.fullEntry));
-          cell.bytes = JSON.stringify(cell.entry).length * 2;
+          };
+          cell.bytes = estimateReplicaBytes(cell.entry);
           pool.snapshots += 1;
           pool.bytes += cell.bytes;
           touch(cell);
@@ -260,7 +285,6 @@ function discard(cell: ReplicaCell): void {
   cell.transcript = undefined;
   cell.snapshot = undefined;
   cell.entry = undefined;
-  cell.predicateColumns = undefined;
   cell.bytes = 0;
 }
 
@@ -269,18 +293,14 @@ function retainSnapshot(
   state: SessionActorHotState,
   generation: string | undefined,
 ): void {
-  const next = isDeeplyFrozenPlainData(state) ? state : freezeJsonSnapshot(structuredClone(state));
-  if (cell.snapshot === next && cell.generation === generation) {
+  if (cell.snapshot === state && cell.generation === generation) {
     return touch(cell);
   }
   const previousTranscript = cell.transcript;
   discard(cell);
-  cell.snapshot = next;
-  cell.predicateColumns = next.entry
-    ? deriveSessionPredicateColumns(JSON.stringify(next.entry))
-    : undefined;
+  cell.snapshot = state;
   cell.generation = generation;
-  cell.bytes = JSON.stringify(next).length * 2;
+  cell.bytes = estimateReplicaBytes(state);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (
@@ -297,8 +317,8 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
   if (!cell.snapshot && !cell.entry && !cell.transcript) {
     pool.snapshots += 1;
   }
-  const previousBytes = cell.transcript ? JSON.stringify(cell.transcript).length * 2 : 0;
-  const bytes = JSON.stringify(transcript).length * 2;
+  const previousBytes = cell.transcript ? estimateReplicaBytes(cell.transcript) : 0;
+  const bytes = estimateReplicaBytes(transcript);
   cell.transcript = transcript;
   cell.bytes += bytes - previousBytes;
   pool.bytes += bytes - previousBytes;
@@ -417,7 +437,6 @@ export function readSessionActorEntryFacts(
       : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
-    predicateColumns: cell.predicateColumns,
     incarnation,
   });
 }
@@ -516,49 +535,52 @@ export function readSessionActorRowFacts(params: {
 
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */
 export function retainSessionActorEntryFacts(
-  target: FileTarget,
-  facts: Omit<
-    SessionActorEntryFacts,
-    "target" | "writeToken" | "dependencySessionIds" | "predicateColumns"
-  >,
+  database: FileTarget["database"],
+  entries: readonly {
+    sessionKey: string;
+    facts: Omit<SessionActorEntryFacts, "target" | "writeToken" | "dependencySessionIds">;
+  }[],
   incarnation: string,
 ): void {
   ensureReplicaSubscription();
-  const dependencySessionIds = facts.entry ? [facts.entry.sessionId] : [];
-  const writeToken = scopedWriteToken(target, dependencySessionIds);
-  if (!writeToken) {
+  const prepared = entries.map(({ sessionKey, facts }) => ({
+    target: { database, sessionKey },
+    facts,
+    dependencySessionIds: facts.entry ? [facts.entry.sessionId] : [],
+  }));
+  const tokens = scopedWriteTokens(database, prepared);
+  if (!tokens) {
     return;
   }
-  const key = targetKey(target);
-  let cell = pool.cells.get(key);
-  if (!cell) {
-    cell = { target, reservation: 0, handles: 0, pending: 0, bytes: 0 };
-    pool.cells.set(key, cell);
-  }
-  if (cell.snapshot) {
-    const current = scopedWriteToken(target, cell.snapshot.dependencySessionIds);
-    if (current === cell.snapshot.writeToken) {
-      touch(cell);
-      return;
+  for (const [index, { target, facts, dependencySessionIds }] of prepared.entries()) {
+    const writeToken = tokens[index]!;
+    const key = targetKey(target);
+    let cell = pool.cells.get(key);
+    if (!cell) {
+      cell = { target, reservation: 0, handles: 0, pending: 0, bytes: 0 };
+      pool.cells.set(key, cell);
     }
-  }
-  discard(cell);
-  cell.entry = freezeJsonSnapshot(
-    structuredClone({
+    if (cell.snapshot) {
+      const current = scopedWriteToken(target, cell.snapshot.dependencySessionIds);
+      if (current === cell.snapshot.writeToken) {
+        touch(cell);
+        continue;
+      }
+    }
+    discard(cell);
+    // The private copy isolates mutable reader results; no borrowed reference escapes this owner.
+    cell.entry = structuredClone({
       ...facts,
       target,
       dependencySessionIds,
       writeToken,
-    }),
-  );
-  cell.predicateColumns = facts.entry
-    ? deriveSessionPredicateColumns(JSON.stringify(facts.entry))
-    : undefined;
-  cell.generation = incarnation;
-  cell.bytes = JSON.stringify(cell.entry).length * 2;
-  pool.snapshots += 1;
-  pool.bytes += cell.bytes;
-  touch(cell);
+    });
+    cell.generation = incarnation;
+    cell.bytes = estimateReplicaBytes(cell.entry);
+    pool.snapshots += 1;
+    pool.bytes += cell.bytes;
+    touch(cell);
+  }
 }
 
 /** Handles retain their own authority; complete physical postimages survive handle release. */
@@ -568,7 +590,7 @@ export function createSessionActorReplica(params: {
   currentGeneration: () => string | undefined;
 }) {
   ensureReplicaSubscription();
-  const target = freezeJsonSnapshot(structuredClone(params.target));
+  const target = structuredClone(params.target);
   const key = targetKey(target);
   let cell = pool.cells.get(key);
   if (!cell) {

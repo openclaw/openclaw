@@ -49,6 +49,7 @@ import {
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import {
@@ -100,6 +101,7 @@ export function buildEmbeddedRunPayloads(params: {
   runAborted?: boolean;
   runStopReason?: string;
   deferAssistantTimeoutError?: boolean;
+  rateLimitRetriesExhausted?: number;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
@@ -147,6 +149,7 @@ export function buildEmbeddedRunPayloads(params: {
     assistantMessageIndex: terminalMessageIndex,
     keptAnswer,
     sourceReplyDeliveryState,
+    rateLimitRetriesExhausted,
   }: Pick<
     typeof params,
     | "assistantTexts"
@@ -155,6 +158,7 @@ export function buildEmbeddedRunPayloads(params: {
     | "assistantMessageIndex"
     | "keptAnswer"
     | "sourceReplyDeliveryState"
+    | "rateLimitRetriesExhausted"
   >) => {
     // Delivery receipts span the attempt; canonical completion belongs to one input.
     const completedSourceReplyViaMessageTool =
@@ -240,6 +244,7 @@ export function buildEmbeddedRunPayloads(params: {
           ? undefined
           : lastAssistantErrored || rawErrorMessage
             ? (providerLoginRecovery?.hint ??
+              renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
               formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
             : formatAssistantErrorText(assistantForPayload, errorContext)
         : undefined;
@@ -266,6 +271,7 @@ export function buildEmbeddedRunPayloads(params: {
                 providerFailure: {
                   reason: classifyAssistantFailoverReason(assistantForPayload, errorContext),
                   rawError: rawErrorMessage,
+                  rateLimitRetriesExhausted,
                 },
               }
             : {}),

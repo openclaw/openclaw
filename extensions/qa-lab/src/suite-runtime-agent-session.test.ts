@@ -319,6 +319,28 @@ describe("qa suite runtime agent session helpers", () => {
         parentSessionKey,
       },
     });
+
+    await seedQaSessionEntries({ gateway: { tempRoot } } as never, [
+      {
+        agentId: "qa",
+        sessionKey: parentSessionKey,
+        entry: {
+          sessionId: "session-main",
+          updatedAt: 400,
+          label: "Updated after the first read",
+          compactionCount: 1,
+        },
+      },
+    ]);
+    const refreshed = await readRawQaSessionStore({ gateway: { tempRoot } }, { agentId: "qa" });
+    expect(refreshed[parentSessionKey]).toMatchObject({
+      sessionId: "session-main",
+      updatedAt: 400,
+      label: "Updated after the first read",
+      compactionCount: 1,
+    });
+    expect(refreshed["agent:qa:subagent:child"]?.sessionId).toBe("session-child");
+    expect(refreshed["agent:claude:acp:child"]).toBeUndefined();
   });
 
   it("reports bounded persisted compaction summaries", async () => {

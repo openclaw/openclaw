@@ -115,7 +115,7 @@ function stopChild(entry: Owned): Promise<void> {
       (entry.groupIdentity ? isBrokerChildGroupAlive(entry.groupIdentity) : directChildAlive);
     const termination =
       child.pid && groupAlive
-        ? terminateLostBrokerChild(child.pid, entry.detached, undefined, entry.groupIdentity)
+        ? terminateLostBrokerChild(child.pid, entry.detached, entry.groupIdentity)
         : undefined;
     void termination?.settled.catch(() => {});
     if (groupAlive && directChildAlive) {
@@ -451,7 +451,7 @@ async function launch(
       await stopChild(current);
     } else {
       const termination = spawnedGroupIdentity
-        ? terminateLostBrokerChild(spawnedGroupIdentity.pid, true, undefined, spawnedGroupIdentity)
+        ? terminateLostBrokerChild(spawnedGroupIdentity.pid, true, spawnedGroupIdentity)
         : undefined;
       void termination?.settled.catch(() => {});
       disposeFailedChild(spawnedChild);

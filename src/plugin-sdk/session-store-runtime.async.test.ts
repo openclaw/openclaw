@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
-import { afterEach, beforeEach, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, expect, expectTypeOf, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -30,6 +30,8 @@ import {
   listSessionEntriesAsync,
   readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
+  resolveTranscriptSessionKeyBySessionId,
+  resolveTranscriptSessionKeyBySessionIdAsync,
   upsertSessionEntry,
 } from "./session-store-runtime.js";
 
@@ -92,6 +94,58 @@ const completeEntry: InternalSessionEntry = {
     writerRunId: "synthetic-writer",
   },
 };
+
+it("resolves historical transcript keys off the host after the current session changes", async () => {
+  expectTypeOf<typeof resolveTranscriptSessionKeyBySessionIdAsync>().parameters.toEqualTypeOf<
+    Parameters<typeof resolveTranscriptSessionKeyBySessionId>
+  >();
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-historical-transcript-key-") };
+  const scope = { agentId: "main", env };
+  const sessionKey = "agent:main:history";
+  const read = async (sessionId: string) => {
+    const sql = observeHostDataSql();
+    try {
+      const resolved = await resolveTranscriptSessionKeyBySessionIdAsync({ ...scope, sessionId });
+      expect(sql.queries).toEqual([]);
+      return resolved;
+    } finally {
+      sql.restore();
+    }
+  };
+  expect(await read("missing")).toBeUndefined();
+  expect(existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+  await upsertSessionEntry({
+    ...scope,
+    sessionKey,
+    entry: { sessionId: "historical", updatedAt: 1 },
+  });
+  expect(await read("historical")).toBe(sessionKey);
+  await upsertSessionEntry({
+    ...scope,
+    sessionKey,
+    entry: { sessionId: "current", updatedAt: 2 },
+  });
+  expect(await read("historical")).toBe(sessionKey);
+  expect(await read("current")).toBe(sessionKey);
+  expect(await read("missing")).toBeUndefined();
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  try {
+    for (let call = 0; call < 2; call++) {
+      expect(resolveTranscriptSessionKeyBySessionId({ ...scope, sessionId: "historical" })).toBe(
+        sessionKey,
+      );
+    }
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("resolveTranscriptSessionKeyBySessionIdAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+  } finally {
+    warning.mockRestore();
+  }
+  await expect(
+    getSessionEntryByIdAsync({ ...scope, sessionId: "historical" }),
+  ).resolves.toBeUndefined();
+});
 
 it("lists current public metadata off the host after an owner write without creating absent stores", async () => {
   expectTypeOf<

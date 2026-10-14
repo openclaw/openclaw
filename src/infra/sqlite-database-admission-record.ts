@@ -295,13 +295,16 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   publish(record?: Admission): void {
+    if (record && this.records.get(record.identity) !== record) {
+      return;
+    }
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
-    for (const [identity, current] of this.records) {
+    for (const current of this.records.values()) {
       if (isSqliteDatabaseAdmissionRetired(current)) {
         if (readSqliteDatabaseGeneration(current, "retired") === 1) {
-          this.descriptors.delete(identity);
+          this.descriptors.delete(current.identity);
         }
-        this.forget(identity);
+        this.forget(current.identity);
         continue;
       }
       if (record && current !== record) {
@@ -348,7 +351,6 @@ export class SqliteDatabaseAdmissionRegistry {
   ): SqliteDatabaseAdmissions {
     if (!identities && !cursor) {
       this.publish();
-      return [...this.published.values()];
     }
     if (!identities && cursor?.revision === this.revision) {
       return [];
@@ -376,18 +378,16 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   install(admissions: SqliteDatabaseAdmissions): void {
-    if (admissions.length === 0) {
-      return;
-    }
-    this.publish();
     for (const incoming of admissions) {
+      let record = this.records.get(incoming.identity);
       if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {
+        if (record && isSqliteDatabaseAdmissionRetired(record)) {
+          this.publish(record);
+        }
         continue;
       }
       let changed = false;
-      let record = this.records.get(incoming.identity);
       if (record && isSqliteDatabaseAdmissionRetired(record)) {
-        this.records.delete(record.identity);
         record = undefined;
       }
       if (!record) {
@@ -413,9 +413,10 @@ export class SqliteDatabaseAdmissionRegistry {
           continue;
         }
         // The host selects one shared incarnation for concurrent discoveries of the same key.
+        const previous = record.writeScopes.get(key);
         if (
-          record.writeScopes.get(key)?.identity === revision.identity ||
-          (threadId === 0 && record.writeScopes.has(key))
+          previous?.identity === revision.identity ||
+          (threadId === 0 && previous && Atomics.load(new Int32Array(previous.state), 1) === 0)
         ) {
           continue;
         }
@@ -425,11 +426,10 @@ export class SqliteDatabaseAdmissionRegistry {
         record.writeScopes.set(key, revision);
         changed = true;
       }
-      if (
-        threadId !== 0 &&
-        incoming.writeScopeRevision === readSqliteDatabaseGeneration(record, "writeScopeRevision")
-      ) {
-        record.writeScopeRevision = incoming.writeScopeRevision;
+      const writeScopeRevision = readSqliteDatabaseGeneration(record, "writeScopeRevision");
+      if (threadId === 0 || incoming.writeScopeRevision === writeScopeRevision) {
+        changed ||= record.writeScopeRevision !== writeScopeRevision;
+        record.writeScopeRevision = writeScopeRevision;
       }
       for (const [owner, references] of incoming.references) {
         if (!record.references.has(owner) && Atomics.load(new Int32Array(references), 0) >= 0) {

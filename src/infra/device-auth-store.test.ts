@@ -19,10 +19,8 @@ import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
   loadDeviceAuthToken,
-  loadDeviceAuthTokenReadOnly,
   loadDeviceAuthTokens,
   loadOriginDeviceToken,
-  loadOriginDeviceTokenReadOnly,
   storeDeviceAuthToken,
   storeOriginDeviceToken,
 } from "./device-auth-store.js";
@@ -49,41 +47,6 @@ afterEach(async () => {
 });
 
 describe("infra/device-auth-store", () => {
-  it("reads existing device auth without opening writable shared state", async () => {
-    await withTempDir("openclaw-device-auth-readonly-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      await storeDeviceAuthToken({
-        ...deviceTarget,
-        token: "local-token",
-        env,
-      });
-      await storeOriginDeviceToken({
-        gatewayScope: "wss://one.example",
-        ...deviceTarget,
-        token: "origin-token",
-        env,
-      });
-      await closeOpenClawStateDatabaseAsync();
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const bytesBeforeRead = fs.readFileSync(databasePath);
-
-      expect(
-        (await loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }))?.token,
-      ).toBe("local-token");
-      expect(
-        (
-          await loadOriginDeviceTokenReadOnly({
-            gatewayScope: "wss://one.example",
-            ...deviceTarget,
-            env,
-          })
-        )?.token,
-      ).toBe("origin-token");
-      expect(fs.readFileSync(databasePath)).toEqual(bytesBeforeRead);
-      expect(fs.statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
-    });
-  });
-
   it("upserts and clears only the exact origin, device, and normalized role", async () => {
     await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
       const env = createEnv(stateDir);

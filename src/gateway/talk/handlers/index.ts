@@ -16,7 +16,7 @@ import {
   validateTalkSpeakParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
-import { readConfigFileSnapshot } from "../../../config/config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../../config/config.js";
 import { redactConfigObject } from "../../../config/redact-snapshot.js";
 import {
   buildTalkConfigResponse,
@@ -264,7 +264,7 @@ async function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParam
                 provider.id === activeSpeechProvider ? buildTalkTtsConfig(config) : undefined;
               const effectiveConfig = setup && !("error" in setup) ? setup.cfg : config;
               const effectiveTts = resolveTtsConfig(effectiveConfig);
-              return isTtsProviderConfiguredAsync(effectiveTts, provider, effectiveConfig);
+              return isTtsProviderConfiguredAsync(effectiveTts, provider);
             })),
           modes: ["stt-tts"],
           brains: ["agent-consult"],
@@ -769,8 +769,8 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const snapshot = await readConfigFileSnapshot();
     const runtimeConfig = context.getRuntimeConfig();
+    const sourceConfig = projectConfigOntoRuntimeSourceSnapshot(runtimeConfig);
     const configPayload: Record<string, unknown> = {};
 
     let talk: TalkConfigResponse | undefined;
@@ -778,7 +778,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     try {
       const resolved = await resolveTalkResponseFromConfig({
         includeSecrets,
-        sourceConfig: snapshot.config,
+        sourceConfig,
         runtimeConfig,
       });
       talk = resolved?.talk;
@@ -794,7 +794,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       configPayload.clientHints = { realtime: realtimeClientHints };
     }
 
-    const sessionMainKey = snapshot.config.session?.mainKey;
+    const sessionMainKey = runtimeConfig.session?.mainKey;
     if (typeof sessionMainKey === "string") {
       configPayload.session = { mainKey: sessionMainKey };
     }
@@ -809,7 +809,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       : undefined;
     // Profile accent overrides gateway prefs, then the gateway seam color and theme default.
     const seamColor =
-      profileAccent ?? snapshot.config.ui?.prefs?.accent ?? snapshot.config.ui?.seamColor;
+      profileAccent ?? runtimeConfig.ui?.prefs?.accent ?? runtimeConfig.ui?.seamColor;
     if (typeof seamColor === "string" && seamColor !== "theme") {
       configPayload.ui = { seamColor };
     }

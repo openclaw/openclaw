@@ -221,7 +221,7 @@ function prepareBlockedSubagentCompletion(
   }
   const text =
     successful && !params.storeReplaced
-      ? "Subagent completion delivery is blocked: " + params.reason
+      ? `Subagent completion delivery is blocked: ${params.reason} (run ${subagent.runId})`
       : null;
   const queued = text
     ? prepareClaimedSessionDelivery(

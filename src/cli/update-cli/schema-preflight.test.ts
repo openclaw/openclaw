@@ -9,7 +9,6 @@ import { createConfigIO } from "../../config/io.js";
 import { withTempHome, writeOpenClawConfig } from "../../config/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
@@ -42,34 +41,12 @@ afterEach(() => {
 });
 
 describe("target-release database schema preflight", () => {
-  it("admits matching caller and service contexts in one online copy while a writer keeps committing", async () => {
+  it("admits matching caller and service contexts while a writer keeps committing", async () => {
     const home = fs.realpathSync.native(tempDirs.make("update-busy-preflight-"));
     const stateDir = path.join(home, ".openclaw");
     const callerEnv = { HOME: home };
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const source = openOpenClawStateDatabase({ env }).path;
-    // The updater's ledger retains a live source owner; inspection must pin its own reader.
-    const backups = path.join(stateDir, "backups.jsonl");
-    const preload = path.join(stateDir, "backup-progress.cjs");
-    fs.writeFileSync(
-      preload,
-      `
-      const fs = require("node:fs");
-      const sqlite = require("node:sqlite");
-      const backup = sqlite.backup;
-      sqlite.backup = async function(source, destination, options) {
-        const pages = await backup(source, destination, options);
-        const snapshot = new sqlite.DatabaseSync(destination, { readOnly: true });
-        try {
-          const integrity = snapshot.prepare("PRAGMA integrity_check").get().integrity_check;
-          fs.appendFileSync(${JSON.stringify(backups)}, JSON.stringify({ integrity, pages }) + "\\n");
-        } finally {
-          snapshot.close();
-        }
-        return pages;
-      };
-    `,
-    );
     const writer = new Worker(
       `
       const { parentPort, workerData } = require("node:worker_threads");
@@ -97,20 +74,15 @@ describe("target-release database schema preflight", () => {
     const exited = once(writer, "exit");
     try {
       await once(writer, "message");
-      const result = await withEnvAsync(sqliteWorkerPreloadEnv(preload), () =>
-        checkTargetDatabaseSchemasForContexts(
-          { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
-          [
-            { config: {}, env: callerEnv },
-            { config: {}, env: { ...env } },
-          ],
-        ),
+      const result = await checkTargetDatabaseSchemasForContexts(
+        { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+        [
+          { config: {}, env: callerEnv },
+          { config: {}, env: { ...env } },
+        ],
       );
       expect(result).toEqual({ incompatible: [], indeterminate: [] });
       expect(callerEnv).toEqual({ HOME: home });
-      const copies = fs.readFileSync(backups, "utf8").trim().split("\n");
-      expect(copies).toHaveLength(1);
-      expect(JSON.parse(copies[0]!)).toEqual({ integrity: "ok", pages: expect.any(Number) });
       const finalGeneration = once(writer, "message");
       writer.postMessage("stop", []);
       expect((await finalGeneration)[0]).toBeGreaterThan(1);

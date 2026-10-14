@@ -198,10 +198,12 @@ describe("chat pane task suggestion lifecycle", () => {
         ? accepted.promise
         : Promise.resolve({ suggestions: [suggestion, next] } satisfies TaskSuggestionsListResult),
     );
-    const { pane } = createTestChatPane({
+    const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
       sessions: createSessionCapabilityFixture(),
     });
+    state.lastError = "History unavailable";
+    state.chatError = "Chat send failed";
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
     pane.taskSuggestions = [suggestion, next];
@@ -233,6 +235,8 @@ describe("chat pane task suggestion lifecycle", () => {
     expect(pane.taskSuggestions).toEqual([next]);
     expect(container.querySelector('[data-task-id="task_123"]')).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
+    expect(state.lastError).toBe("History unavailable");
+    expect(state.chatError).toBe("Chat send failed");
     await pane.resolveTaskSuggestion(suggestion, "accept");
     expect(
       request.mock.calls.filter(([method]) => method === "taskSuggestions.accept"),
@@ -453,7 +457,7 @@ describe("chat pane task suggestion lifecycle", () => {
         }
         return Promise.resolve({ suggestions: [] });
       });
-      const { pane } = createTestChatPane({
+      const { pane, state } = createTestChatPane({
         client: createTestGatewayClient(request),
         sessions: createSessionCapabilityFixture(),
       });
@@ -470,21 +474,26 @@ describe("chat pane task suggestion lifecycle", () => {
       if (result) {
         first.resolve(result);
       } else {
-        first.reject(new Error("Acceptance response unavailable"));
+        first.reject(new Error("Synthetic session creation failed"));
       }
       await pending;
       await pane.refreshTaskSuggestions();
       expect(pane.taskSuggestions).toEqual([suggestion]);
+      const failure = state.lastError;
+      expect(failure).toContain(result ? "Couldn't confirm" : "Synthetic session creation failed");
+      expect(state.chatError).toBe(failure);
       const container = document.createElement("div");
       render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
       expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(true);
       expect(container.textContent).toContain(suggestion.prompt);
       expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-        result ? "Couldn't confirm" : "Acceptance response unavailable",
+        result ? "Couldn't confirm" : "Synthetic session creation failed",
       );
       expect(container.querySelector(".task-suggestion__retry")?.textContent).toContain("Retry");
       const retrying = pane.resolveTaskSuggestion(suggestion, "accept");
       expect(pane.taskSuggestions).toEqual([]);
+      expect(state.lastError).toBe(failure);
+      expect(state.chatError).toBe(failure);
       await pane.resolveTaskSuggestion(suggestion, "accept");
       expect(attempts).toBe(2);
       expect(request.mock.calls.filter(([method]) => method === "taskSuggestions.accept")).toEqual([
@@ -494,8 +503,83 @@ describe("chat pane task suggestion lifecycle", () => {
       retry.resolve({ taskId: suggestion.id, key: "agent:main:task" });
       await retrying;
       expect(pane.taskSuggestions).toEqual([]);
+      expect(state.lastError).toBeNull();
+      expect(state.chatError).toBeNull();
     },
   );
+
+  it.each([
+    { field: "lastError", sameMessage: false, beforeRetry: false },
+    { field: "chatError", sameMessage: false, beforeRetry: false },
+    { field: "lastError", sameMessage: true, beforeRetry: true },
+    { field: "chatError", sameMessage: true, beforeRetry: false },
+    { field: "both", sameMessage: true, beforeRetry: false },
+  ] as const)(
+    "preserves a newer error when a task retry succeeds (%j)",
+    async ({ field, sameMessage, beforeRetry }) => {
+      const retry = createDeferred<TaskSuggestionsAcceptResult>();
+      let attempts = 0;
+      const request = createGatewayRequestMock((method) =>
+        method === "taskSuggestions.accept"
+          ? ++attempts === 1
+            ? Promise.reject(new Error("Session creation failed"))
+            : retry.promise
+          : Promise.resolve({ suggestions: [] }),
+      );
+      const { pane, state } = createTestChatPane({
+        client: createTestGatewayClient(request),
+        sessions: createSessionCapabilityFixture(),
+      });
+      pane.taskSuggestions = [suggestion];
+      await pane.resolveTaskSuggestion(suggestion, "accept");
+      const message = sameMessage ? "Session creation failed" : "Chat send failed";
+      const publishNewerError = () => {
+        if (field === "both") {
+          state.lastError = state.chatError = message;
+        } else {
+          state[field] = message;
+        }
+      };
+      if (beforeRetry) {
+        publishNewerError();
+      }
+      const pending = pane.resolveTaskSuggestion(suggestion, "accept");
+      if (!beforeRetry) {
+        publishNewerError();
+      }
+      retry.resolve({ taskId: suggestion.id, key: "agent:main:task" });
+      await pending;
+      expect(pane.taskSuggestions).toEqual([]);
+      expect(state.lastError).toBe(field === "chatError" ? null : message);
+      expect(state.chatError).toBe(field === "lastError" ? null : message);
+    },
+  );
+
+  it("keeps another task's identical failure when the first task recovers", async () => {
+    const retry = createDeferred<TaskSuggestionsAcceptResult>();
+    let attempts = 0;
+    const request = createGatewayRequestMock((method) =>
+      method === "taskSuggestions.accept"
+        ? ++attempts === 2
+          ? retry.promise
+          : Promise.reject(new Error("Session creation failed"))
+        : Promise.resolve({ suggestions: [] }),
+    );
+    const { pane, state } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const other = { ...suggestion, id: "task_other" };
+    pane.taskSuggestions = [suggestion, other];
+    await pane.resolveTaskSuggestion(suggestion, "accept");
+    const pending = pane.resolveTaskSuggestion(suggestion, "accept");
+    await pane.resolveTaskSuggestion(other, "accept");
+    retry.resolve({ taskId: suggestion.id, key: "agent:main:task" });
+    await pending;
+    expect(pane.taskSuggestions).toEqual([other]);
+    expect(state.lastError).toBe("Session creation failed");
+    expect(state.chatError).toBe("Session creation failed");
+  });
 
   it.each(["hello", "client", "unknown"] as const)(
     "retires submitted suggestion content when Hello changes the %s recovery owner",

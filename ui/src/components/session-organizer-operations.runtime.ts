@@ -5,6 +5,7 @@ import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-s
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
 import { isSubagentSessionKey, resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -30,7 +31,6 @@ import type { SessionActionHost, SessionActionRow } from "./session-organizer-ba
 import { rememberSessionGroup, type SessionGroupActionHost } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import { patchSession } from "./session-organizer-patch.runtime.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,

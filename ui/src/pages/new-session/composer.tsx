@@ -543,7 +543,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                   return;
                 }
                 const target = event.currentTarget;
-                adjustTextareaHeight(target);
+                adjustTextareaHeight(target, { nativeInput: true });
                 const mentions = frame().mentionMenuHost.getMentions();
                 props.options.onInput(
                   target.value,

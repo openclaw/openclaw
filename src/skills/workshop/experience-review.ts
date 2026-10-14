@@ -288,6 +288,8 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   const run = () =>
     runSkillWorkshopReview({
       ...foregroundPromptContext,
+      // This system review inherits prompt context, not the foreground turn's trigger.
+      trigger: undefined,
       preparedRunAdmission,
       sessionId: reviewSession.sessionId,
       sessionKey: reviewSession.sessionKey,

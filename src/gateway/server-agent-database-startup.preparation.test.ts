@@ -87,15 +87,20 @@ type StartupAdmission = NonNullable<
 function createFleet(
   agentIds = ["large", "small"],
   migrateAgent?: Parameters<StartupAdmission["activate"]>[0]["migrateAgent"],
+  acpOnlyAgentIds: readonly string[] = [],
 ) {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("startup-preparation-") };
+  const acpOnly = new Set(acpOnlyAgentIds);
+  const nativeAgentIds = agentIds.filter((agentId) => !acpOnly.has(agentId));
+  const nativeEntries = nativeAgentIds.length > 0 ? nativeAgentIds : ["main"];
   let cfg: OpenClawConfig = {
     gateway: { auth: { mode: "token", token: "synthetic-before-refresh" } },
     agents: {
-      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
-      defaults: { systemAgent: { agentId: agentIds[0] } },
+      entries: Object.fromEntries(nativeEntries.map((id) => [id, {}])),
+      defaults: { systemAgent: { agentId: nativeEntries[0] } },
     },
+    ...(acpOnlyAgentIds.length > 0 ? { acp: { allowedAgents: [...acpOnlyAgentIds] } } : {}),
   };
   const paths = agentIds.map((agentId) => resolveOpenClawAgentSqlitePath({ agentId, env }));
   for (const pathname of paths) {
@@ -115,7 +120,9 @@ function createFleet(
   mocks.revision.mockImplementation(() => revision);
   mocks.snapshot.mockImplementation(() => ({
     sourceConfig: cfg,
-    authStores: paths.map((databasePath) => ({ databasePath })),
+    authStores: paths.flatMap((databasePath, index) =>
+      acpOnly.has(agentIds[index]!) ? [] : [{ databasePath }],
+    ),
   }));
   mocks.refreshSecrets.mockImplementation(
     async ({ assertCurrent }: { assertCurrent: () => void }) => {
@@ -211,6 +218,17 @@ function createFleet(
 const recoveredMessage = "agent database recovered after background inspection and preparation";
 const progressMessage = "agent database startup preparation still running";
 const supersededRetryMessage = "agent database startup preparation was superseded; retrying";
+
+it("admits configured ACP-only stores without native runtime publication", async ({ signal }) => {
+  const fleet = createFleet(["codex"], undefined, ["codex"]);
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(admission.waitForAgentPreparation("codex", fleet)!, signal);
+    expect(readAgentDatabaseAdmissionRefusal("codex", fleet)).toBeUndefined();
+    expect(mocks.refreshSecrets).not.toHaveBeenCalled();
+    expect(mocks.refreshModels).not.toHaveBeenCalled();
+  });
+});
 
 it("admits agents before transcript repair and joins repair on shutdown", async ({ signal }) => {
   const fleet = createFleet();

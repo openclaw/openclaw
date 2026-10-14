@@ -5,14 +5,10 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { pathDisplayName } from "../../lib/path-display.ts";
 import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
-import {
-  environmentPlacementRuntime,
-  environmentDeviceDisabledReason,
-  environmentCloudDisabledReason,
-} from "./hosted-environments.ts";
+import { environmentCloudDisabledReason } from "./hosted-environments.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
-import { resolveWhereChip } from "./where-chip.ts";
+import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import "../../styles/palette-session-settings.css";
 
 registerNewSessionSetupEnglish();
@@ -73,12 +69,14 @@ export class PaletteSessionSettings {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return;
     }
-    // Web Awesome handles dropdown Escape at document level. Let the nested
-    // picker close before this settings dialog, without blocking that listener.
+    // The nested menu owns Escape and roving focus, including its trigger.
     if (
       event
         .composedPath()
-        .some((node) => node instanceof Element && node.matches("wa-dropdown[open]"))
+        .some(
+          (node) =>
+            node instanceof Element && node.matches('[role="menu"], [aria-haspopup="menu"]'),
+        )
     ) {
       return;
     }
@@ -98,12 +96,6 @@ export class PaletteSessionSettings {
     if (
       !["ArrowDown", "ArrowUp"].includes(event.key) ||
       !(event.currentTarget instanceof HTMLElement)
-    ) {
-      return;
-    }
-    // The shared agent dropdown owns its own roving focus and keyboard semantics.
-    if (
-      event.composedPath().some((node) => node instanceof Element && node.tagName === "WA-DROPDOWN")
     ) {
       return;
     }
@@ -136,20 +128,7 @@ export class PaletteSessionSettings {
       submission.submitting ||
       Boolean(submission.pendingPlacement.sessionKey) ||
       Boolean(submission.submissionOutcomeUnknown);
-    const where = resolveWhereChip({
-      hostedEnvironment: place.hostedEnvironment
-        ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
-        : undefined,
-      environments: place.canWrite() ? gateway.environments : [],
-      cloudProfiles: place.isAdmin() ? gateway.cloudProfiles : [],
-      cloudProfileId: place.cloudProfileId,
-      ...place.cloudSelection,
-      deviceId: place.deviceId,
-      autoDevice: place.autoDevice,
-      devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
-      deviceDisabledReason:
-        environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
-    });
+    const where = resolveWhereChip(draftWhereChipParams(place, gateway));
     const machineLabel =
       where.kind === "local" ? gateway.gatewayName || t("newSession.local") : where.label;
     const cloudSummary = [

@@ -23,3 +23,7 @@ export {
 } from "../../../../src/infra/sqlite-database-admission.js";
 export { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
 export { stageSqliteTransactionState } from "../../../../src/infra/sqlite-post-commit.js";
+export {
+  sqlPublicationAnchor,
+  type PostgresSqlConnection,
+} from "../../../../src/infra/sql-connection.js";

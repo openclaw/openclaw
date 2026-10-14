@@ -154,7 +154,10 @@ function readUnindexedLogicalParents(
         "active.event_seq",
         "previous.event_seq as parent_seq",
         eb.fn
-          .coalesce(transcriptEventResetNavigationSql("parent"), eb.val("null"))
+          .coalesce(
+            transcriptEventResetNavigationSql(projection.database.db, "parent"),
+            eb.val("null"),
+          )
           .as("parent_json"),
       ])
       .where("active.session_id", "=", projection.resolved.sessionId)
@@ -243,6 +246,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     onRead?: (
       projection: CurrentTranscriptProjection,
       rows: Array<{ rawSeq: number; serializedBytes: number }>,
+      messagePresence: true | undefined,
     ) => void;
   },
 ): SessionTranscriptBoundedActiveContext {
@@ -265,8 +269,11 @@ export function readSessionTranscriptBoundedActiveContextCore(
           database: projection.database,
           ...projection.resolved,
         });
-    const consume = (rows: Array<{ rawSeq: number; serializedBytes: number }>) => {
-      const consumed = options.onRead?.(projection, rows);
+    const consume = (
+      rows: Array<{ rawSeq: number; serializedBytes: number }>,
+      messagePresence?: true,
+    ) => {
+      const consumed = options.onRead?.(projection, rows, messagePresence);
       if (isPromiseLike(consumed)) {
         void Promise.resolve(consumed).catch(() => {});
         throw new Error("Transcript snapshot consumers must remain synchronous");
@@ -522,10 +529,13 @@ export function readSessionTranscriptBoundedActiveContextCore(
     if (boundary) {
       sizes.set(boundary.seq, boundary.serialized_bytes);
     }
-    consume([
-      ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),
-      ...contextSequences.map((rawSeq) => ({ rawSeq, serializedBytes: sizes.get(rawSeq)! })),
-    ]);
+    consume(
+      [
+        ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),
+        ...contextSequences.map((rawSeq) => ({ rawSeq, serializedBytes: sizes.get(rawSeq)! })),
+      ],
+      events.some((event) => asOptionalRecord(event)?.type === "message") ? true : undefined,
+    );
     return {
       version,
       activeLeafEntryId,

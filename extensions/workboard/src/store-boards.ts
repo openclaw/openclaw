@@ -70,22 +70,27 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
   }
 
-  listCards(board: unknown): Promise<
+  listCards(
+    board: unknown,
+    sessionKey?: string,
+  ): Promise<
     WorkboardListResult & {
       boards: WorkboardBoardSummary[];
-      revision: WorkboardChange & { boardId?: string };
+      revision: WorkboardChange & { boardId?: string; sessionKey?: string };
     }
   > {
     return this.runOperation(() => {
       const boardId = normalizeBoardId(board);
       const writeToken = this.refreshWriteReceipt();
       const revision = this.cardsRevision;
-      const cached = this.cardLists.get(boardId);
+      const cached = sessionKey === undefined ? this.cardLists.get(boardId) : undefined;
       if (cached) {
         return cached;
       }
       const pending: ReturnType<WorkboardBoardStore["listCards"]> = Promise.all([
-        this.list({ boardId }),
+        sessionKey === undefined
+          ? this.list({ boardId })
+          : readCards(this.store, { kind: "session-links", sessionKey, boardId }),
         this.listBoards(),
       ])
         .then(([cards, { boards }]) => {
@@ -93,7 +98,11 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
             cards: cards.map(redactClaimToken),
             boards,
             statuses: WORKBOARD_STATUSES,
-            revision: { ...revision, ...(boardId === undefined ? {} : { boardId }) },
+            revision: {
+              ...revision,
+              ...(boardId === undefined ? {} : { boardId }),
+              ...(sessionKey === undefined ? {} : { sessionKey }),
+            },
           };
           freezeCardList(result);
           // A concurrent update may finish this read with older facts; the writer
@@ -101,10 +110,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
           return result;
         })
         .catch((error: unknown) => {
-          this.cardLists.delete(boardId);
+          if (sessionKey === undefined) {
+            this.cardLists.delete(boardId);
+          }
           throw error;
         });
-      if (writeToken !== undefined) {
+      if (writeToken !== undefined && sessionKey === undefined) {
         this.cardLists.set(boardId, pending);
       }
       return pending;

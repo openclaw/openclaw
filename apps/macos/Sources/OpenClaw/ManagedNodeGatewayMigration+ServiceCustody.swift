@@ -114,11 +114,8 @@ extension ManagedNodeGatewayMigration {
                   environmentWrapper: artifacts.wrapper),
               let cli = GatewayLaunchAgentManager.installedServiceCLI(
                   snapshot: snapshot, environmentFile: artifacts.environment, environmentWrapper: artifacts.wrapper),
-              cli.prefix.first == runtime.bun.path,
+              cli.matchesBundledRuntime(runtime),
               let entrypoint = cli.prefix.last,
-              ["openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs"].contains(where: {
-                  runtime.packageRoot.appendingPathComponent($0).path == entrypoint
-              }),
               snapshot.environment["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibrary.path,
               snapshot.port == port,
               snapshot.programArguments.contains("--allow-unconfigured") == allowUnconfigured

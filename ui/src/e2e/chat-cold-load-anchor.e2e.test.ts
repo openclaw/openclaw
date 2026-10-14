@@ -320,9 +320,9 @@ suite.define(() => {
         await gateway.waitForRequest("progressCard.get");
         await page.waitForFunction(() => {
           const pane = document.querySelector(".chat-pane-cache__pane--active") as
-            | (HTMLElement & { state?: { connected: boolean; chatLoading: boolean } })
+            | (HTMLElement & { transcriptReady: boolean })
             | null;
-          return pane?.state?.connected && !pane.state.chatLoading;
+          return pane?.transcriptReady;
         });
         const reconciled = await page.evaluate(async () => {
           for (let index = 0; index < 20; index += 1) {

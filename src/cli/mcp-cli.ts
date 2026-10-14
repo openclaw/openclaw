@@ -24,6 +24,7 @@ import {
 } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
+import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -287,7 +288,20 @@ function hasSensitiveKey(name: string): boolean {
 }
 
 function hasLiteralSensitiveValue(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0 && !value.trim().startsWith("$");
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  const tokens = scanEnvTemplateTokens(value);
+  let literal = value;
+  for (const token of tokens) {
+    if (token.kind === "escaped" || token.defaultValue?.trim()) {
+      return true;
+    }
+    literal = literal.replaceAll(renderEnvTemplateToken(token), "");
+  }
+  return (
+    tokens.length === 0 || (literal.trim().length > 0 && !/^(Bearer|Basic)$/i.test(literal.trim()))
+  );
 }
 
 function resolveConfiguredPath(filePath: string, cwd: unknown): string {
@@ -361,6 +375,7 @@ async function commandExists(
 async function collectMcpDoctorIssues(params: {
   name: string;
   server: Record<string, unknown>;
+  authoredServer?: Record<string, unknown>;
   probe: boolean;
   config: OpenClawConfig;
 }): Promise<McpDoctorIssue[]> {
@@ -425,8 +440,8 @@ async function collectMcpDoctorIssues(params: {
     }
   }
   for (const [field, values] of [
-    ["headers", asRecord(server.headers)],
-    ["env", asRecord(server.env)],
+    ["headers", asRecord(params.authoredServer?.headers)],
+    ["env", asRecord(params.authoredServer?.env)],
   ] as const) {
     for (const [key, value] of Object.entries(values ?? {})) {
       if (hasSensitiveKey(key) && hasLiteralSensitiveValue(value)) {
@@ -898,6 +913,7 @@ export function registerMcpCli(program: Command) {
             const issues = await collectMcpDoctorIssues({
               name: serverName,
               server,
+              authoredServer: loaded.authoredConfig?.mcp?.servers?.[serverName],
               config: loaded.config,
               probe: Boolean(opts.probe),
             });

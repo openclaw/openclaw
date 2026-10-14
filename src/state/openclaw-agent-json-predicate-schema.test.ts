@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import { deriveContextEngineTurnOutboxState } from "../agents/harness/context-engine-turn-outbox-state.js";
 import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
@@ -215,6 +217,10 @@ describe("agent JSON predicate migration", () => {
           .all()
           .map((row) => row.name);
         expect(columns.includes("navigation_type")).toBe(outcome !== "rollback");
+        // Read-only session readers refuse migrated stores without startup columns.
+        expect(hasPendingAgentStartupColumns(captureSqliteSchemaFacts(database).tableSql)).toBe(
+          outcome === "rollback",
+        );
         if (outcome === "without-outbox") {
           expect(
             database

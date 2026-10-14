@@ -123,6 +123,40 @@ struct OpenClawNativeStateSQLiteTests {
         }
     }
 
+    @Test func `read-only config opens checkpointed WAL without sidecars`() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-native-wal-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("openclaw.sqlite")
+        do {
+            let writer = try OpenClawNativeStateSQLite(databaseURL: url)
+            try self.createConfigMachineState(writer)
+            try writer.execute("PRAGMA journal_mode=WAL")
+            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'retained-pin', 10)")
+            try #require(writer.scalarInt64("PRAGMA wal_checkpoint(TRUNCATE)") == 0)
+        }
+        // Node removes these on last close; Apple's writer may retain its empty WAL.
+        for suffix in ["-wal", "-shm"] {
+            if FileManager.default.fileExists(atPath: url.path + suffix) {
+                if suffix == "-wal" {
+                    try #require(FileManager.default.attributesOfItem(atPath: url.path + suffix)[.size] as? Int == 0)
+                }
+                try FileManager.default.removeItem(atPath: url.path + suffix)
+            }
+            try #require(!FileManager.default.fileExists(atPath: url.path + suffix))
+        }
+        let original = try Data(contentsOf: url)
+        let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+
+        #expect(try reader.configMachineStateValue(key: "fixture") == .init(
+            value: "retained-pin",
+            updatedAtMilliseconds: 10))
+        #expect(throws: OpenClawNativeStateError.self) {
+            try reader.execute("UPDATE config_machine_state SET value_json = 'unexpected'")
+        }
+        #expect(try Data(contentsOf: url) == original)
+    }
+
     @Test func `admitted config reads observe foreign rows without replacing their handle`() throws {
         try self.withDatabaseURL { writer, url in
             try self.createConfigMachineState(writer)

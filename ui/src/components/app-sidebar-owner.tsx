@@ -70,17 +70,6 @@ import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
-  private teamOnlineExpandedValue = false;
-  get teamOnlineExpanded(): boolean {
-    return this.teamOnlineExpandedValue;
-  }
-  set teamOnlineExpanded(value: boolean) {
-    if (Object.is(this.teamOnlineExpandedValue, value)) {
-      return;
-    }
-    this.teamOnlineExpandedValue = value;
-    this.requestUpdate();
-  }
   override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   override sidebarTools: ReadonlyMap<string, SidebarToolActivity> = new Map();
   override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
@@ -101,7 +90,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sessionProjection.restoreChildrenDisplay(rows);
     this.people.sortMode = model.peopleSortMode;
     this.people.statusFilter = model.peopleStatusFilter;
-    this.teamOnlineExpanded = model.onlineExpanded;
+    this.people.presenceFilter = model.peoplePresenceFilter;
     sidebarOnlineOrder(this).restore(model.onlineUsers, new Map(model.onlineCounts));
   }
 
@@ -123,7 +112,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sessionProjection.restoreChildrenDisplay([]);
     sidebarOnlineOrder(this).clear();
     this.people.resetView();
-    this.teamOnlineExpanded = false;
+    this.people.setPresenceFilter("online");
   }
 
   sidebarSnapshotSettled(): boolean {
@@ -700,8 +689,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 )}
               </Show>
             </div>
-            <div class="sidebar-shell__footer">
-              <Show when={this.devGitBranch}>
+            <Show when={this.devGitBranch}>
+              <div class="sidebar-shell__footer">
                 <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
                   <div class="sidebar-footer-branch">
                     <span class="sidebar-footer-branch__icon" aria-hidden="true">
@@ -710,8 +699,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                     <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
                   </div>
                 </openclaw-tooltip>
-              </Show>
-            </div>
+              </div>
+            </Show>
           </div>
           {menus}
         </aside>

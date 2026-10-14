@@ -76,10 +76,8 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
-        if (event.event === "cron") {
+        if (event.event === "cron" || event.event === "config.changed") {
           this.load(false);
-        } else if (event.event === "config.changed") {
-          this.load();
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
         }

@@ -142,7 +142,7 @@ export type SqliteWorkerStoreOptions = {
 export type PreparedSqliteWorkerOpen = {
   onNativeLost?: (reason: Error) => void;
   signal?: AbortSignal;
-  preparation?: Buffer;
+  preparation?: Buffer<ArrayBuffer>;
   runtimeGeneration?: RuntimeWorkerGeneration;
   carrierUrl: URL;
   expectedIdentity?: string;
@@ -159,7 +159,7 @@ export type PreparedSqliteWorkerOpen = {
   assertCurrent?: () => void;
   moduleUrl: URL;
   databasePath: string;
-  input: Buffer;
+  input: Buffer<ArrayBuffer>;
   existingOnly: boolean;
   stateContext?: SqliteWorkerStateContext;
 };

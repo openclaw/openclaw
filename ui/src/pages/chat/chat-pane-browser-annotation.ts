@@ -14,7 +14,7 @@ import {
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 
 export function focusBrowserAnnotationComposerAfterUpdate(
-  host: ParentNode & { updateComplete: Promise<unknown> },
+  host: Pick<ParentNode, "querySelector"> & { updateComplete: Promise<unknown> },
 ): void {
   void host.updateComplete.then(() => {
     host.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({

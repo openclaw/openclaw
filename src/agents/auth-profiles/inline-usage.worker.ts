@@ -15,7 +15,7 @@ import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 import {
   authProfilePeerGenerationMayMatch,
   updateAuthProfileStoreInDatabase,
-} from "./store-update-kernel.js";
+} from "./store-update.worker.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 
 /** The canonical agent executor lends its connection and transaction/commit admission. */

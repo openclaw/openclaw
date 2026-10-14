@@ -162,6 +162,7 @@ type NodeTestPlanOptions = {
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
   compactNodeJobCap?: number;
+  mainValidation?: boolean;
   runnerBackend?: string;
 };
 
@@ -332,6 +333,10 @@ const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 360;
 const COMPACT_SERIAL_NODE_TEST_JOB_SECONDS = 300;
 const COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS = 500;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
+// Hourly hybrid main validation carries the complete tooling family. Packing it
+// denser (420s + 60s setup) keeps headroom under its 77-row cap without
+// exceeding main's existing 500s parallel rows.
+const COMPACT_MAIN_VALIDATION_TOOLING_JOB_SECONDS = 420;
 // Runtime preparation is charged once beside the same serial test budget.
 // This is admission, never a test deadline.
 const COMPACT_HYBRID_RUNTIME_JOB_SECONDS =
@@ -1023,6 +1028,7 @@ function isParallelToolingGroup(group: NodeTestShardGroup): boolean {
 function compactToolingTestSecondsLimit(
   groups: readonly NodeTestShardGroup[],
   runnerBackend: string | undefined,
+  mainValidation = false,
 ): number {
   // Keep the measured planner-proof tail bounded without fragmenting unrelated tooling.
   const hasPlannerProof = groups.some((group) =>
@@ -1032,7 +1038,9 @@ function compactToolingTestSecondsLimit(
   );
   return runnerBackend !== "github" && hasPlannerProof
     ? COMPACT_EXCLUSIVE_JOB_SECONDS
-    : COMPACT_SERIAL_NODE_TEST_JOB_SECONDS;
+    : mainValidation && runnerBackend === "hybrid"
+      ? COMPACT_MAIN_VALIDATION_TOOLING_JOB_SECONDS
+      : COMPACT_SERIAL_NODE_TEST_JOB_SECONDS;
 }
 
 function estimateParallelToolingSeconds(
@@ -1894,7 +1902,7 @@ const INFRA_SHARD_PREFIXES = [
   ["heartbeat-core", ["heartbeat"]],
   ["outbound-actions", ["outbound/message-action"]],
   ["outbound-core", ["outbound/"]],
-  ["net-install", ["net/", "install", "npm", "brew", "binaries"]],
+  ["net-install", ["net/", "install", "npm", "brew", "binaries", "update-global.pnpm"]],
   ["device", ["device"]],
   ["gateway-lock-argv", ["gateway-lock", "gateway-process-argv"]],
   ["gateway-processes", ["gateway-processes"]],
@@ -4452,6 +4460,100 @@ function packSelectedNodeTestJobs(
     .toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }
 
+/** Fit completed bundles without changing child execution or exceeding their existing budgets. */
+export function packCompactNodeTestJobsToCapacity(
+  jobs: CompactNodeTestShard[],
+  options: {
+    compactJobCap: number;
+    runnerBackend: string;
+    estimateGroupSeconds: (group: NodeTestShardGroup) => number;
+  },
+): CompactNodeTestShard[] {
+  if (jobs.length <= options.compactJobCap) {
+    return jobs;
+  }
+  const packed = jobs.slice();
+  const boundedWorkers = (job: CompactNodeTestShard) =>
+    !job.requiresDist &&
+    !job.pretestBuildMode &&
+    Object.keys(job.env ?? {}).every((key) => key === "OPENCLAW_VITEST_MAX_WORKERS") &&
+    Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2) <= 2 &&
+    job.groups.every(
+      (group) =>
+        !group.requiresDist &&
+        !group.pretestBuildMode &&
+        Number(
+          group.env?.OPENCLAW_VITEST_MAX_WORKERS ??
+            job.env?.OPENCLAW_VITEST_MAX_WORKERS ??
+            (job.runner === EXTRA_LARGE_NODE_TEST_RUNNER && job.planConcurrency === 1 ? 8 : 2),
+        ) <= 2 &&
+        (isParallelCompactGroup(group) || isParallelToolingGroup(group)),
+    );
+  while (packed.length > options.compactJobCap) {
+    let best: { left: number; right: number; merged: CompactNodeTestShard } | undefined;
+    for (let left = 0; left < packed.length; left += 1) {
+      const first = packed[left]!;
+      if (!boundedWorkers(first)) {
+        continue;
+      }
+      for (let right = left + 1; right < packed.length; right += 1) {
+        const second = packed[right]!;
+        if (first.runner !== second.runner || !boundedWorkers(second)) {
+          continue;
+        }
+        const groups = [...first.groups, ...second.groups];
+        const parallel = first.planConcurrency === 2 && second.planConcurrency === 2;
+        const families = groups.map(compactStripeFamily).filter((family) => family !== undefined);
+        const seconds = Math.ceil(
+          Math.max(
+            groups.reduce((sum, group) => sum + options.estimateGroupSeconds(group), 0),
+            (first.predictedSeconds ?? 0) + (second.predictedSeconds ?? 0),
+          ),
+        );
+        const testSeconds = parallel
+          ? estimateParallelTestSeconds(groups, options.estimateGroupSeconds)
+          : seconds;
+        if (
+          (!parallel && groups.length > COMPACT_NODE_TEST_JOB_GROUPS) ||
+          new Set(families).size !== families.length ||
+          seconds >
+            (parallel
+              ? COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS
+              : groups.every(isParallelToolingGroup)
+                ? compactToolingTestSecondsLimit(groups, options.runnerBackend)
+                : COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS) ||
+          (parallel && testSeconds > COMPACT_SERIAL_NODE_TEST_JOB_SECONDS) ||
+          (best && seconds >= best.merged.predictedSeconds!)
+        ) {
+          continue;
+        }
+        best = {
+          left,
+          right,
+          merged: {
+            ...first,
+            groups,
+            predictedSeconds: seconds,
+            predictedTestSeconds: testSeconds,
+            planConcurrency: parallel ? 2 : 1,
+            env: { ...first.env, ...PINNED_COMPACT_GROUP_ENV },
+            // A merge must not extend either contributing job's deadline.
+            timeoutMinutes: Math.min(first.timeoutMinutes ?? 60, second.timeoutMinutes ?? 60),
+          },
+        };
+      }
+    }
+    if (!best) {
+      throw new Error(
+        `compact ${options.runnerBackend} node test plan exceeds ${options.compactJobCap} jobs (${packed.length} planned): no compatible bundles fit the existing limits`,
+      );
+    }
+    packed[best.left] = best.merged;
+    packed.splice(best.right, 1);
+  }
+  return packed;
+}
+
 function routeRunsOnJobs(
   jobs: CompactNodeTestShard[],
   compactNodeJobCap: number,
@@ -4820,7 +4922,7 @@ function createCompactNodeTestShardBundles(
   const hostedToolingGroups: NodeTestShardGroup[] = [];
   const maximumInitialBinSeconds = Math.max(
     COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS,
-    COMPACT_SERIAL_NODE_TEST_JOB_SECONDS,
+    compactToolingTestSecondsLimit([], options.runnerBackend, options.mainValidation),
     COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS,
     COMPACT_EXCLUSIVE_JOB_SECONDS,
     COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS,
@@ -4894,7 +4996,7 @@ function createCompactNodeTestShardBundles(
       const serialSecondsCap = sharesSerialCliBudget
         ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
         : combined.every(isParallelToolingGroup)
-          ? compactToolingTestSecondsLimit(combined, options.runnerBackend)
+          ? compactToolingTestSecondsLimit(combined, options.runnerBackend, options.mainValidation)
           : exclusive && !sharesHostedBuild
             ? COMPACT_EXCLUSIVE_JOB_SECONDS
             : usesExpandedRunnerProfile(options.runnerBackend)
@@ -5320,7 +5422,7 @@ function createCompactNodeTestShardBundles(
     options.runnerBackend === "hybrid" || hostedHourly
       ? readToolingFileTimings("blacksmith")
       : undefined;
-  const measuredJobs =
+  let measuredJobs =
     (options.runnerBackend === "hybrid" || hostedHourly) && options.compactMode !== undefined
       ? (hostedHourly
           ? [DEFAULT_NODE_TEST_RUNNER, BUNDLED_NODE_TEST_RUNNER]
@@ -5329,7 +5431,11 @@ function createCompactNodeTestShardBundles(
           (jobs, runner) =>
             rebalanceMeasuredSerialJobs(jobs, {
               runner,
-              profile: hostedHourly ? "hosted-hourly" : "native",
+              profile: hostedHourly
+                ? "hosted-hourly"
+                : options.mainValidation
+                  ? "main-validation"
+                  : "native",
               estimateGroup: (group) => ({
                 seconds: estimateParallelToolingSeconds(
                   group,
@@ -5345,7 +5451,11 @@ function createCompactNodeTestShardBundles(
                 ? {}
                 : {
                     testSecondsLimit: (groups: NodeTestShardGroup[]) =>
-                      compactToolingTestSecondsLimit(groups, options.runnerBackend),
+                      compactToolingTestSecondsLimit(
+                        groups,
+                        options.runnerBackend,
+                        options.mainValidation,
+                      ),
                   }),
               canShare: (groups) =>
                 groups.length <= COMPACT_NODE_TEST_JOB_GROUPS && hasDistinctStripeFamilies(groups),
@@ -5368,10 +5478,19 @@ function createCompactNodeTestShardBundles(
         true,
       );
     }
-    throw new Error(
-      `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
-    );
+    if (options.runnerBackend === "hybrid") {
+      measuredJobs = packCompactNodeTestJobsToCapacity(measuredJobs, {
+        compactJobCap,
+        runnerBackend: options.runnerBackend,
+        estimateGroupSeconds: estimateStripeSeconds,
+      });
+    } else {
+      throw new Error(
+        `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${measuredJobs.length} planned)`,
+      );
+    }
   }
+
   for (const job of measuredJobs) {
     if (job.planConcurrency !== 2) {
       job.predictedTestSeconds = Math.max(

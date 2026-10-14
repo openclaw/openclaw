@@ -495,7 +495,7 @@ export function createAgentHarnessHostCapabilities(params: {
       return buildActiveNodeContextText(requesterProfileId);
     },
     bindToolSurface,
-    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. */
+    /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. Supported through 2026-12-31. */
     createToolSurface: (options, bindingOptions) => {
       warnPluginSdkDeprecation({
         family: "agent-harness-host",
@@ -536,7 +536,6 @@ export function createAgentHarnessHostCapabilities(params: {
           },
         ),
       );
-      library?.assertPublicationCurrent();
       return bindCreatedTools(sourceTools, bindingOptions);
     },
     prepareMutableFileApproval: async (request) => {

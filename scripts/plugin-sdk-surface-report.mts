@@ -138,7 +138,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 5,
   "plugin-entry": 3,
   // Shipped synchronous capture remains available while plugins migrate to async capture.
-  "proxy-capture": 9,
+  "proxy-capture": 10,
   routing: 1,
   // +4: shipped default/session-agent resolvers remain available through
   // compatibility barrels while callers migrate to explicit/sole selection.
@@ -147,13 +147,15 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
   "approval-gateway-runtime": 1,
-  "approval-handler-runtime": 1,
+  // Complete the approved synchronous approval-preparation deprecations.
+  "approval-handler-runtime": 3,
+  "approval-handler-adapter-runtime": 1,
   "approval-reply-runtime": 0,
   // Released synchronous approval routing remains until a later release after stable deprecation.
   "approval-client-runtime": 1,
-  "approval-delivery-runtime": 1,
-  "approval-native-runtime": 9,
-  "approval-runtime": 6,
+  "approval-delivery-runtime": 2,
+  "approval-native-runtime": 11,
+  "approval-runtime": 8,
   "config-contracts": 0,
   // +1: getRuntimeConfig keeps its shipped cold-load contract while callers prepare
   // with captureRuntimeConfigAsyncReader and consume readRuntimeConfig.
@@ -205,7 +207,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
   // +2: released synchronous transcript event/stat reads during the worker cutover.
-  "session-store-runtime": 9,
+  "session-store-runtime": 10,
   // Released synchronous sandbox lookup remains while plugins adopt async or prepared reads.
   sandbox: 1,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
@@ -215,7 +217,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 22,
   "models-provider-runtime": 1,
   // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
-  "command-auth-native": 3,
+  "command-auth-native": 4,
   "native-command-registry": 1,
   "skill-commands-runtime": 2,
   // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
@@ -269,7 +271,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +10: shared database-engine contracts and operations after the SQLite export cutover.
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: approved lexical database-engine admission scope for workboard boot/migrations.
-      3758,
+      // +1: async auth-provider preparation for Codex and voice model-session patches.
+      // +1: isHostNoticePayload for agent-to-agent reply filtering.
+      3760,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -302,7 +306,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +5: shared database-engine host and worker operations.
       // +1: approved async auth-snapshot publication with retained sync compatibility.
       // +1: the same lexical database-engine admission scope.
-      2193,
+      // +1: the same prepareAuthProfileProvider operation on model-session-runtime.
+      // +1: the same host-notice classifier on reply-payload.
+      2195,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -320,8 +326,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
       // +2: retained synchronous transcript event/stat reads until a later release after stable deprecation.
       // +4: the runtime config getter and three auth/store compatibility pairs named above.
+      // +10: approved missing deprecations for retained synchronous transcript lookup,
+      // proxy initialization, approval preparation, and command authorization.
       // +1: released snapshot publication remains during its approved async replacement.
-      209,
+      219,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

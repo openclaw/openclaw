@@ -137,6 +137,7 @@ export function createSessionPrefetchFixture() {
 
   return {
     cache,
+    controller,
     store,
     host,
     shell,

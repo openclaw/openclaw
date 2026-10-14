@@ -110,6 +110,7 @@ export function buildGatewaySessionSnapshot(params: {
         }),
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
+    deviceFolder: sessionRow.deviceFolder ?? null,
     permissionMode: sessionRow.permissionMode ?? null,
     communication: sessionRow.communication ?? null,
     effectiveCommunication: sessionRow.effectiveCommunication,

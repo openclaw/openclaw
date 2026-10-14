@@ -194,3 +194,97 @@ describe("hourly main CI admission", () => {
     expect(evaluate(sanity.jobs.actionlint.if, context)).toBe(true);
   });
 });
+
+describe("CodeQL language selection", () => {
+  const workflow = readWorkflow(".github/workflows/codeql.yml");
+  const scope = workflow.jobs.scope;
+  const script = scope.steps.find((step: { id?: string }) => step.id === "scope").with.script;
+  const categories = [
+    "core-auth-secrets",
+    "channel-runtime-boundary",
+    "network-ssrf-boundary",
+    "mcp-process-tool-boundary",
+    "process-exec-boundary",
+    "plugin-trust-boundary",
+    "actions",
+  ];
+
+  const cases: Array<{
+    files: string[];
+    expected: string[];
+    eventName?: string;
+    exitCode?: number;
+    checkoutOutcome?: string;
+  }> = [
+    { files: [".github/workflows/docs.yml"], expected: ["actions"] },
+    { files: [".github/actions/example/action.yml"], expected: ["actions"] },
+    { files: [".github/workflows/codeql.yml"], expected: categories },
+    { files: [".github/codeql/codeql-actions-critical-security.yml"], expected: categories },
+    { files: ["src/main.ts"], expected: categories.slice(0, -1) },
+    { files: ["packages/example/README.md"], expected: categories.slice(0, -1) },
+    { files: [".github/workflows/docs.yml", "src/main.ts"], expected: categories },
+    { files: [], expected: categories },
+    { files: [".github/workflows/docs.yml"], checkoutOutcome: "failure", expected: categories },
+    { files: [".github/workflows/docs.yml"], exitCode: 128, expected: categories },
+    ...["push", "schedule", "workflow_dispatch"].map((eventName) => ({
+      eventName,
+      files: [".github/workflows/docs.yml"],
+      expected: categories,
+    })),
+  ];
+
+  it.each(cases)(
+    "selects $expected for $files/$eventName/$exitCode",
+    async ({ files, expected, ...options }) => {
+      let matrix: { include: Array<Record<string, string | number>> } | undefined;
+      await runInNewContext(`(async () => { ${script} })()`, {
+        context: { eventName: options.eventName ?? "pull_request" },
+        process: { env: { CODEQL_CHECKOUT_OUTCOME: options.checkoutOutcome ?? "success" } },
+        core: {
+          setOutput: (_name: string, value: string) => {
+            matrix = JSON.parse(value);
+          },
+          warning: () => {},
+        },
+        exec: {
+          getExecOutput: async (_command: string, args: string[]) => {
+            expect(args).toEqual(["diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"]);
+            return {
+              exitCode: options.exitCode ?? 0,
+              stdout: files.join("\0") + (files.length ? "\0" : ""),
+            };
+          },
+        },
+      });
+      expect(matrix?.include).toEqual(
+        expected.map((category) => ({
+          category,
+          language: category === "actions" ? "actions" : "javascript-typescript",
+          runs_on: "ubuntu-24.04",
+          timeout_minutes: category === "actions" ? 10 : 25,
+          config_file: `./.github/codeql/codeql-${category}-critical-security.yml`,
+        })),
+      );
+    },
+  );
+
+  it("keeps event admission and exact merge identity", () => {
+    expect(scope.if).toBe(workflow.jobs["security-high"].if);
+    const checkout = scope.steps.find(
+      (step: { name?: string }) => step.name === "Checkout event merge",
+    );
+    expect(checkout["continue-on-error"]).toBe(true);
+    expect(
+      scope.steps.find((step: { id?: string }) => step.id === "scope").env.CODEQL_CHECKOUT_OUTCOME,
+    ).toBe("${{ steps.checkout.outcome }}");
+    expect(checkout.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      "fetch-depth": 2,
+      "persist-credentials": false,
+    });
+    expect(workflow.jobs["security-high"].needs).toBe("scope");
+    expect(workflow.jobs["security-high"].strategy.matrix).toBe(
+      "${{ fromJSON(needs.scope.outputs.matrix) }}",
+    );
+  });
+});

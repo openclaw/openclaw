@@ -319,6 +319,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Opt in to full OpenClaw worker session hosting from Gateway-managed bundles. Disabled by default.",
   "nodeHost.workerRuns.enabled":
     "Allow this paired node to host sessions from exact bundles installed by its Gateway (default: false).",
+  "nodeHost.workerRuns.folders":
+    "Optional directory roots restricting in-place sessions to those roots and their subdirectories. Unset allows any existing directory except filesystem roots and private worker storage; [] disables device-folder sessions. Use absolute or ~/ paths. Existing files stay on the device; session deletion never removes these folders. Requires workerRuns.enabled.",
   "nodeHost.workerRuns.capacity":
     "Maximum concurrent worker sessions hosted by this node (default: the number of available CPU cores). Must be an integer from 1 through 1024.",
   "nodeHost.workerRuns.isolation":

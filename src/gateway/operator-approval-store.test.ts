@@ -18,6 +18,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -300,23 +301,26 @@ describe("operator approval store", () => {
           .where("approval_id", "=", "a-corrupt"),
       );
 
-      const records = await listPendingOperatorApprovals({
+      const listing = listPendingOperatorApprovals({
         audienceSessionKey,
         limit: 1,
         nowMs: 2_000,
         databaseOptions,
       });
-      expect(records.map((record) => record.id)).toEqual(audienceSessionKey ? ["b-match"] : []);
-      expect(rawApprovalRow(databaseOptions, "a-corrupt")).toMatchObject({
-        status: "denied",
-        terminal_reason: "storage-corrupt",
-      });
-      await forceDenyOperatorApproval({
+      // A later decision must not overtake the list's corrupt-row repair.
+      const denying = forceDenyOperatorApproval({
         id: "b-match",
         reason: "no-route",
         resolver: { kind: "system", id: null },
         nowMs: 2_000,
         databaseOptions,
+      });
+      const records = await listing;
+      await denying;
+      expect(records.map((record) => record.id)).toEqual(audienceSessionKey ? ["b-match"] : []);
+      expect(rawApprovalRow(databaseOptions, "a-corrupt")).toMatchObject({
+        status: "denied",
+        terminal_reason: "storage-corrupt",
       });
       expect(
         (
@@ -358,14 +362,20 @@ describe("operator approval store", () => {
     try {
       writer.exec("BEGIN IMMEDIATE");
       expect(Date.now()).toBeLessThan(expiresAtMs);
-      const result = await withSqliteWriteAdmissionService(database.db, releaseWriter, async () =>
-        operatorApprovalOperations["operatorApprovals.get"](
-          { id: "lock-delayed-clock" },
-          {
-            open: () => database,
-            stateOptions: () => ({ path: database.path, env: databaseOptions.env ?? process.env }),
-          },
-        ),
+      const result = await withSqliteWriteAdmissionService(
+        requireNativeSqliteDatabase(database.db),
+        releaseWriter,
+        async () =>
+          operatorApprovalOperations["operatorApprovals.get"](
+            { id: "lock-delayed-clock" },
+            {
+              open: () => database,
+              stateOptions: () => ({
+                path: database.path,
+                env: databaseOptions.env ?? process.env,
+              }),
+            },
+          ),
       );
 
       expect(releaseWriter).toHaveBeenCalledOnce();

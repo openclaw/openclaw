@@ -4,6 +4,7 @@ import {
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -86,6 +87,15 @@ export function readTranscriptMessageByIdentity(
   // SAFETY: Identity rows are created only for canonical object events; message stays unknown.
   const event = JSON.parse(eventRow.event_json) as { message?: unknown };
   return { messageId: identity.eventId, message: event.message };
+}
+
+export function readTranscriptMessageByEventId(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  eventId: string,
+): { messageId: string; message: unknown } | undefined {
+  const identity = readTranscriptIdentityByEventId(database, scope.sessionId, eventId);
+  return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
 }
 
 export function readTranscriptEventIdentity(event: unknown) {

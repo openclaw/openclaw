@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertSqliteSchemaContains,
   getCanonicalSqliteNamedIndexContracts,
@@ -11,6 +13,7 @@ import {
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
+import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -27,10 +30,13 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 const tableEnsurers = new Map<string, ReturnType<typeof createSqliteSchemaEnsurer>>();
 
 function ensureTable(
-  database: DatabaseSync,
+  database: EngineConnection,
   table: string,
   options?: Parameters<typeof extractSqliteTableSchema>[2],
 ): void {
+  if (isPostgresSqlConnection(database)) {
+    return ensureStatePostgresFragment(database, table);
+  }
   let ensure = tableEnsurers.get(table);
   if (!ensure) {
     const schema = getOpenClawStateFeatureSchemaSql(table, options);
@@ -43,7 +49,7 @@ function ensureTable(
   ensure(database);
 }
 
-export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {
+export function ensureRepositoryWorkspacePendingResultSchema(database: EngineConnection): void {
   const table = "worker_workspace_pending_results";
   if (tableHasColumn(database, table, "repository_workspace_id")) {
     return;
@@ -51,13 +57,13 @@ export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseS
   ensureColumn(database, table, "repository_workspace_id TEXT");
 }
 
-export function ensureSessionRepositoryWorkspaceSchema(database: DatabaseSync): void {
+export function ensureSessionRepositoryWorkspaceSchema(database: EngineConnection): void {
   ensureTable(database, "session_repository_workspaces", {
     errorMessage: "Repository workspace schema marker is missing.",
   });
 }
 
-export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync): void {
+export function ensureRepositoryGitHubPublicationSchema(database: EngineConnection): void {
   ensureTable(database, "github_repository_publication_requests", {
     endMarker:
       "ON github_repository_publication_requests(owner_profile_id, session_id, idempotency_key) WHERE owner_profile_id IS NOT NULL;",
@@ -65,14 +71,14 @@ export function ensureRepositoryGitHubPublicationSchema(database: DatabaseSync):
   });
 }
 
-export function ensureGitHubPublicationSessionLifecycleSchema(database: DatabaseSync): void {
+export function ensureGitHubPublicationSessionLifecycleSchema(database: EngineConnection): void {
   ensureTable(database, "github_publication_session_lifecycles", {
     errorMessage: "GitHub publication lifecycle schema marker is missing.",
   });
 }
 
 /** Lazily install the additive secret store table and index on first write. */
-export function ensureSecretStoreSchema(database: DatabaseSync): void {
+export function ensureSecretStoreSchema(database: EngineConnection): void {
   ensureTable(database, "secret_store_entries", {
     endMarker: "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;",
     errorMessage: "OpenClaw secret store schema marker is missing.",
@@ -81,27 +87,27 @@ export function ensureSecretStoreSchema(database: DatabaseSync): void {
 }
 
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */
-export function ensureMcpOAuthPendingSchema(database: DatabaseSync): void {
+export function ensureMcpOAuthPendingSchema(database: EngineConnection): void {
   ensureTable(database, "mcp_oauth_pending_authorizations", {
     errorMessage: "OpenClaw MCP OAuth pending schema marker is missing.",
   });
 }
 
 /** Lazily install the additive device join-code table on first mint or redemption. */
-export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void {
+export function ensureDevicePairingJoinCodeSchema(database: EngineConnection): void {
   ensureTable(database, "device_pairing_join_codes", {
     errorMessage: "OpenClaw device pairing join-code schema marker is missing.",
   });
 }
 
 /** Lazily installs the Gateway's installation-local config revision key owner. */
-export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
+export function ensureConfigRevisionKeySchema(database: EngineConnection): void {
   ensureTable(database, "config_revision_keys", {
     errorMessage: "OpenClaw config revision key schema marker is missing.",
   });
 }
 
-export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
+export function assertAgentDeletionJournalAvailable(database: EngineConnection): void {
   if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
     throw new Error(
       "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
@@ -124,7 +130,7 @@ export function reconstructAgentDeletionJournalSchema(
   return !existed;
 }
 
-export function ensureAgentDeletionJournalPhaseSchema(database: DatabaseSync): void {
+export function ensureAgentDeletionJournalPhaseSchema(database: EngineConnection): void {
   assertAgentDeletionJournalAvailable(database);
   if (tableHasColumn(database, "agent_deletion_journal", "phase")) {
     return;
@@ -132,7 +138,7 @@ export function ensureAgentDeletionJournalPhaseSchema(database: DatabaseSync): v
   ensureColumn(database, "agent_deletion_journal", "phase TEXT");
 }
 
-export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
+export function ensureAgentDatabaseLeaseSchema(database: EngineConnection): void {
   if (tableHasColumn(database, "agent_database_leases", "provenance")) {
     return;
   }
@@ -145,43 +151,43 @@ export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
  * existing v6 databases stay valid without it. Uses the canonical schema;
  * a downgraded reader simply loses setup-completion reconciliation.
  */
-export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): void {
+export function ensureDevicePairSetupCompletionSchema(database: EngineConnection): void {
   ensureTable(database, "device_pair_setup_completions");
 }
 
 /** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
-export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): void {
+export function ensureDevicePairSetupBootstrapSchema(database: EngineConnection): void {
   ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
 }
 
 /** Installs environment-owned node binding columns at first cloud enrollment use. */
-export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: DatabaseSync): void {
+export function ensureWorkerEnvironmentNodeEnrollmentSchema(database: EngineConnection): void {
   ensureDevicePairSetupCompletionSchema(database);
   ensureColumn(database, "worker_environments", "node_setup_id TEXT");
   ensureColumn(database, "worker_environments", "node_device_id TEXT");
 }
 
 /** Register fixed build ownership on the dedicated node's current transaction. */
-export function ensureNodeWorkerPreparedWorkspaceSchema(database: DatabaseSync): void {
+export function ensureNodeWorkerPreparedWorkspaceSchema(database: EngineConnection): void {
   // Prepared DDL is reusable; admitted presence still follows transaction rollback.
   ensureTable(database, "node_worker_prepared_workspaces", {
     errorMessage: "Node prepared workspace schema marker is missing.",
   });
 }
 
-function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
+function ensureWorkerSessionToolStateSchema(db: EngineConnection): void {
   ensureTable(db, "worker_turn_tool_authorities");
   ensureTable(db, "worker_session_tool_operations");
 }
 
-export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
+export function ensureGitHubPublicationSchema(db: EngineConnection): void {
   ensureTable(db, "github_publication_requests", {
     endMarker: "ON github_publication_requests(status, updated_at_ms, request_id);",
   });
 }
 
 /** First personal publication write only; status and old readers leave this surface dormant. */
-export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
+export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): void {
   ensureTable(db, "github_personal_publication_requests", {
     endMarker: "ON github_personal_publication_requests(status, updated_at_ms, request_id);",
     errorMessage: "Personal GitHub publication schema marker is missing.",

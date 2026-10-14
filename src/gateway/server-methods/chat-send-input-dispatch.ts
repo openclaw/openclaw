@@ -3,6 +3,7 @@ import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { reserveReplyAdmissionTicket } from "../../auto-reply/reply/reply-admission-ticket.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import type { SessionGoalOperationResult } from "../../config/sessions/goals-operations.js";
@@ -18,9 +19,11 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
+import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
+import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
   bindChatSendPreparedMediaCustody,
   prepareChatSendAttachments,
@@ -599,7 +602,7 @@ export async function handleChatSendWithStorage(
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
     releaseBeforeDispatch = undefined;
-    startChatDispatch({
+    const dispatch: StartChatDispatchParams = {
       ...setup,
       replyAdmissionTicket,
       diagnostics,
@@ -652,7 +655,12 @@ export async function handleChatSendWithStorage(
         persist: persistGatewayUserTurnTranscript,
         persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
       },
-    });
+    };
+    // Accepted work retains its source authority; the spawning tool and turn no longer
+    // own reply preparation while the new runtime establishes its own caller context.
+    withoutGatewayToolCallerIdentity(() =>
+      runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
+    );
     admittedCleanup.dispatched = true;
   } catch (err) {
     dashboardAuthority?.release();
