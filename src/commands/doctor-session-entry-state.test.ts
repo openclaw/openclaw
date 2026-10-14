@@ -394,7 +394,7 @@ it("backs up original rows and migrates pending delivery state before canonical 
   });
 });
 
-it.each(["retired owner", "retired room introduced after scan"] as const)(
+it.each(["snapshot failure", "retired owner", "retired room introduced after scan"] as const)(
   "does not rewrite rows after %s",
   async (failure) => {
     state = await createOpenClawTestState({
@@ -409,6 +409,9 @@ it.each(["retired owner", "retired room introduced after scan"] as const)(
     let retired = false;
     let expectedRaw = legacy.raw;
     vi.spyOn(snapshots, "createVerifiedSqliteSnapshot").mockImplementation(async (options) => {
+      if (failure === "snapshot failure") {
+        throw new Error("snapshot unavailable");
+      }
       const result = await createSnapshot(options);
       if (failure === "retired owner") {
         retired = true;
@@ -441,12 +444,31 @@ it.each(["retired owner", "retired room introduced after scan"] as const)(
     });
     await expect(refused).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
     await expect(refused).rejects.toThrow(
-      failure === "retired owner" ? "repair owner retired" : "2026.9.5",
+      failure === "snapshot failure"
+        ? "snapshot unavailable"
+        : failure === "retired owner"
+          ? "repair owner retired"
+          : "2026.9.5",
     );
     expect(legacy.readRaw()).toBe(expectedRaw);
     expect(() => loadExactSessionEntryReadOnly(legacy.scope)).toThrow(/openclaw doctor --fix/);
   },
 );
+
+it("refuses a failed raw scan without treating its store as clean", async () => {
+  state = await createOpenClawTestState({
+    prefix: "openclaw-entry-scan-refusal-",
+    scenario: "minimal",
+  });
+  const legacy = seedEntry("scan-failure", { pendingFinalDelivery: true });
+  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(() => {
+    throw new Error("synthetic database read failure");
+  });
+  await expect(
+    repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state.env }),
+  ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
+  expect(legacy.readRaw()).toBe(legacy.raw);
+});
 
 it("normalizes only scalar state while leaving malformed identity for its repair owner", async () => {
   state = await createOpenClawTestState({

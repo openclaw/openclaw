@@ -310,7 +310,7 @@ describe("anonymous published session reader", () => {
     });
   });
 
-  it.for(["metadata", "reset"] as const)(
+  it.for(["metadata", "revoke", "reset"] as const)(
     "rechecks %s after awaited history before releasing content",
     async (action, { signal }) => {
       await withPublicTestState(async () => {
@@ -357,7 +357,9 @@ describe("anonymous published session reader", () => {
                 if (action === "metadata") {
                   return { label: "Updated public example" };
                 }
-                return { sessionId: "replacement" };
+                return action === "reset"
+                  ? { sessionId: "replacement" }
+                  : { publicShare: undefined };
               },
               { workerGuard: {} },
             );

@@ -74,6 +74,10 @@ import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mj
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
+import {
+  getUnitFastIsolatedTestFiles,
+  getUnitFastTimerTestFiles,
+} from "../vitest/vitest.unit-fast-paths.mjs";
 import { createUnitFastVitestConfig } from "../vitest/vitest.unit-fast.config.ts";
 import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.ts";
 import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
@@ -1511,6 +1515,71 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   }
 
+  it("shares a small hosted tooling tail without lowering its runner owner", async () => {
+    const compiler = "test/scripts/write-unified-entry-dts.test.ts";
+    const shortFiles = ["test/scripts/fixture-short.test.ts"];
+    const fileSeconds = new Map<string, number>([
+      ...Array.from(
+        { length: 32 },
+        (_, index) => [`test/scripts/fixture-long-${index}.test.ts`, 300] as const,
+      ),
+      [compiler, 74],
+      [shortFiles[0]!, 10],
+    ]);
+    const files = [...fileSeconds.keys()];
+    const plan = await createToolingFixturePlan({
+      files,
+      shards: [
+        {
+          config: "test/vitest/vitest.full-core-tooling.config.ts",
+          name: "core-tooling",
+          projects: ["test/vitest/vitest.tooling.config.ts"],
+        },
+      ],
+      timings: {},
+      fileSeconds: (file) => fileSeconds.get(file)!,
+      options: {
+        compactMode: "pull-request",
+        runnerBackend: "github",
+        includeReleaseOnlyPluginShards: false,
+      },
+    });
+    // The compiler child costs 118.4s and the separate 10s file costs 16s on hosted.
+    // Their 135s job must retain the compiler's stronger runner and serial children.
+    const shared = plan.filter((job) => job.groups.some((group) => group.runner !== job.runner));
+    expect(shared).toHaveLength(1);
+    const job = shared[0]!;
+    expect(job).toMatchObject({
+      runner: DEFAULT_NODE_TEST_RUNNER,
+      predictedSeconds: 135,
+      requiresDist: false,
+      planConcurrency: 1,
+    });
+    expect(job.pretestBuildMode).toBeUndefined();
+    expect(job.groups.map((group) => group.runner)).toEqual([
+      DEFAULT_NODE_TEST_RUNNER,
+      BUNDLED_NODE_TEST_RUNNER,
+    ]);
+    expect(
+      job.groups.every(
+        (group) =>
+          group.pretestBuildMode === undefined &&
+          /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name),
+      ),
+    ).toBe(true);
+    expect(
+      new Set(job.groups.map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""))).size,
+    ).toBe(2);
+    expect(job.groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      [compiler, ...shortFiles].toSorted(),
+    );
+    expect(
+      plan
+        .flatMap((entry) => entry.groups.flatMap((group) => group.includePatterns ?? []))
+        .toSorted(),
+    ).toEqual(files.toSorted());
+  });
+
   it("keeps hosted tooling within the GitHub job cap when its inventory grows", async () => {
     // Seventy-eight full-budget anchors leave 12 of the 90 jobs for tooling.
     const anchors = Array.from({ length: 78 }, (_, index) => ({
@@ -1842,6 +1911,78 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(files).toContain("src/infra/home-dir.test.ts");
   });
 
+  it.each(["github"])(
+    "preserves product coverage and canonical tooling owners across the %s release tier",
+    (runnerBackend) => {
+      const options = {
+        compactMode: "pull-request" as const,
+        includeReleaseOnlyPluginShards: false,
+        runnerBackend,
+      };
+      const full = getCommittedCompactPlan("pull-request", runnerBackend);
+      const automatic = createNodeTestShardBundles({
+        ...options,
+        includeReleaseOnlyToolingShards: false,
+        changedPaths: ["src/gateway/server.ts"],
+      });
+      const fullGroups = full.flatMap((job) => job.groups);
+      const automaticGroups = automatic.flatMap((job) => job.groups);
+      const productFiles = (groups: typeof fullGroups) =>
+        groups
+          .filter((group) => !group.configs.some((config) => config.includes("vitest.tooling")))
+          .flatMap(
+            (group) =>
+              group.includePatterns ??
+              group.configs.flatMap((config) => {
+                if (config === "test/vitest/vitest.unit-fast-isolated.config.ts") {
+                  return getUnitFastIsolatedTestFiles();
+                }
+                if (config === "test/vitest/vitest.unit-fast-fake-timers.config.ts") {
+                  return getUnitFastTimerTestFiles();
+                }
+                return [];
+              }),
+          )
+          .filter((file) => !file.startsWith("test/scripts/") && !file.startsWith("src/scripts/"))
+          .toSorted();
+      expect(
+        automaticGroups.some((group) =>
+          group.configs.some((config) => config.includes("vitest.tooling")),
+        ),
+      ).toBe(false);
+      expect(
+        automaticGroups
+          .flatMap((group) => group.includePatterns ?? [])
+          .some((file) => file.startsWith("test/scripts/")),
+      ).toBe(false);
+      expect(productFiles(automaticGroups)).toEqual(productFiles(fullGroups));
+      expect(
+        createNodeTestShardBundles({
+          ...options,
+          includeReleaseOnlyToolingShards: false,
+          changedPaths: ["package.json"],
+        }),
+      ).toEqual(full);
+      const push = createNodeTestShardBundles({
+        ...options,
+        compactMode: "push",
+        includeReleaseOnlyToolingShards: false,
+        changedPaths: ["package.json"],
+      });
+      expect(
+        push
+          .flatMap((job) => job.groups)
+          .some((group) => group.configs.some((config) => config.includes("vitest.tooling"))),
+      ).toBe(false);
+      expect(
+        push
+          .flatMap((job) => job.groups)
+          .flatMap((group) => group.includePatterns ?? [])
+          .some((file) => file.startsWith("test/scripts/")),
+      ).toBe(false);
+    },
+  );
+
   it("retains the changed host plugin test in a bounded hub plan beside store aliases", () => {
     const target = "src/plugins/tools.optional.test.ts";
     const changedPaths = [...STORE_ALIAS_CHANGED_PATHS, "tsconfig.json"];
@@ -1872,6 +2013,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       },
     ]);
   });
+  it.each([
+    {
+      owner: "infra",
+      prefix: "core-runtime-infra-",
+      config: "test/vitest/vitest.infra.config.ts",
+      expectedFiles: () => [
+        ...new Set([...listTestFiles("src/infra"), ...databaseWorkerCoreTestFiles]),
+      ],
+    },
+    {
+      owner: "cron",
+      prefix: "core-runtime-cron-",
+      config: undefined,
+      expectedFiles: () => listTestFiles("src/cron"),
+    },
+  ])(
+    "covers every $owner test exactly once across split shards",
+    ({ prefix, config, expectedFiles }) => {
+      const actual = defaultShards
+        .filter((shard) => shard.shardName.startsWith(prefix))
+        .filter((shard) => !config || shard.configs.includes(config))
+        .flatMap((shard) => shard.includePatterns ?? [])
+        .toSorted((a, b) => a.localeCompare(b));
+
+      expect(actual).toEqual(expectedFiles().toSorted((a, b) => a.localeCompare(b)));
+      expect(new Set(actual).size).toBe(actual.length);
+    },
+  );
+
   it("covers every auto-reply reply test exactly once across split shards", () => {
     const actual = defaultShards
       .filter((shard) => shard.shardName.startsWith("auto-reply-reply-"))

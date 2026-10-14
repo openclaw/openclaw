@@ -160,6 +160,36 @@ describe("resolveExecDefaults", () => {
     expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
   });
 
+  it("reports host approval floors after normalized exec modes", () => {
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
+      version: 1,
+      defaults: {
+        security: "deny",
+        ask: "off",
+      },
+      agents: {},
+    });
+
+    // Approval floors clamp normalized mode upward/downward after config mode
+    // mapping so persisted host policy remains the final safety boundary.
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({
+          tools: {
+            exec: {
+              mode: "auto",
+            },
+          },
+        }),
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "deny",
+      security: "deny",
+      ask: "on-miss",
+    });
+  });
+
   it("reports agent-scoped host approval floors", () => {
     vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,

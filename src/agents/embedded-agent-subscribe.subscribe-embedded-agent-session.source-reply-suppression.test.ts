@@ -563,4 +563,20 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(onToolResult).not.toHaveBeenCalled();
   });
+
+  it("does not suppress message_end replies when message tool reports error", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
+
+    const messageText = "Please retry the send.";
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-err",
+      message: messageText,
+      result: { details: { status: "error" } },
+    });
+    emitAssistantMessageEnd(emit, messageText);
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -264,6 +264,22 @@ describe("createModelAuthAvailabilityResolver", () => {
     ).toMatchObject({ availability: false, evidence: "profile" });
   });
 
+  it("does not let ChatGPT OAuth satisfy a custom API-key endpoint", () => {
+    const customRoute = {
+      ...platformRoute,
+      baseUrl: "https://openai-compatible.example/v1",
+    } satisfies ProviderModelRouteCandidate;
+    const result = evaluate({
+      resolution: { kind: "routes", defaultRuntimeId: "openclaw", routes: [customRoute] },
+      store: authStore({
+        "openai:chatgpt": openAiOAuthProfile(),
+      }),
+    });
+
+    expect(result).toMatchObject({ availability: false, selectedRoute: customRoute });
+    expect(result.selectedProfileId).toBeUndefined();
+  });
+
   it.each([
     {
       auth: "oauth" as const,

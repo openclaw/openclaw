@@ -178,10 +178,13 @@ describe("deny-only native tool delegation", () => {
     ).toBeUndefined();
   });
 
-  it.each(["missing allowAgents", "missing target", "same agent"])(
+  it.each(["missing grant", "missing allowAgents", "missing target", "same agent"])(
     "requires exact independent authorization: %s",
     (kind) => {
       const cfg = config();
+      if (kind === "missing grant") {
+        cfg.agents!.entries!.front!.subagents!.delegateToolsTo = [];
+      }
       if (kind === "missing allowAgents") {
         cfg.agents!.entries!.front!.subagents!.allowAgents = [];
       }

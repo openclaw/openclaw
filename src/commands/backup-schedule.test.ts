@@ -98,6 +98,51 @@ describe("scheduled backups", () => {
     );
   });
 
+  it("adds one isolated command job with the selected Git backup argv", async () => {
+    gatewayRpc.call.mockImplementation(async (method: string) => {
+      if (method === "cron.add") {
+        return { created: true, job: { id: "backup-job" } };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const runtime = createTestRuntime();
+    const repository = await pushReadyRepository();
+    await expect(
+      backupEnableCommand(runtime, {
+        repository,
+        every: "6h",
+        push: true,
+        excludeSecrets: true,
+      }),
+    ).resolves.toEqual({ id: "backup-job", updated: false });
+    expect(gatewayRpc.call).toHaveBeenCalledWith(
+      "cron.add",
+      expect.anything(),
+      expect.objectContaining({
+        declarationKey: BACKUP_CRON_JOB_NAME,
+        name: BACKUP_CRON_JOB_NAME,
+        schedule: { kind: "every", everyMs: 21_600_000 },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "command",
+          argv: [
+            "openclaw",
+            "backup",
+            "git",
+            "create",
+            "--repository",
+            repository,
+            "--all",
+            "--push",
+            "--exclude-secrets",
+          ],
+        },
+      }),
+    );
+    expect(gatewayRpc.call).toHaveBeenCalledOnce();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("schedules a configured agent using its normalized id", async () => {
     gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
     const runtime = createTestRuntime();

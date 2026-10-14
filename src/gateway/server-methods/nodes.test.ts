@@ -352,6 +352,36 @@ async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
 }
 
 describe("nodeHandlers node.pair.approve", () => {
+  it("promotes the first surface only for the same authenticated pairing identity", async () => {
+    const { stateDir, nodeId } = await createNodeState("node-pending-identity-stable");
+    const pending = await requestSurface(stateDir, nodeId, "Galaxy A54 5G pending");
+    const pendingState = await captureNodePairingState(nodeId);
+    expect(pendingState?.generation).toBeNull();
+
+    const { context, opts } = createOptions({ requestId: pending.request.requestId });
+    context.nodeRegistry.get.mockReturnValue({
+      nodeId,
+      connId: "conn-pending-identity-stable",
+      pairingIdentity: pendingState?.identity.key,
+    });
+
+    await invokeNode("node.pair.approve", opts);
+
+    const approvedState = await captureNodePairingState(nodeId);
+    expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
+    expect(approvedState?.generation).not.toBeNull();
+    expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(
+      nodeId,
+      expect.objectContaining({ commands: expect.any(Array) }),
+      {
+        expectedConnId: "conn-pending-identity-stable",
+        expectedPairingIdentity: pendingState?.identity.key,
+        nextPairingGeneration: approvedState?.generation?.key,
+      },
+    );
+    expectApproved(opts, nodeId);
+  });
+
   it("requires current-generation runner inventory after exact live reapproval", async () => {
     const { stateDir, nodeId } = await createNodeState("node-1", { surface: true });
     const previousState = await captureNodePairingState(nodeId);
