@@ -282,7 +282,7 @@ export function runSessionNativeBindingTransaction(
   try {
     return withSqliteSessionDeletionWorkerParticipant(commitParticipant, () =>
       context.writeTransaction(operationLabel, owner, (current) => {
-        stageSqliteTransactionState(current.db, {
+        stageSqliteTransactionState(sqlPublicationAnchor(current.db), {
           stage() {},
           commit: () => {
             agent = "committed";

@@ -5,13 +5,14 @@ import type { ApplicationContext } from "../../../app/context.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
-import { ChatPane } from "../chat-pane-render.ts";
+import { ChatPaneRuntime } from "../chat-pane-render.ts";
+import { createPaneTestHost } from "../chat-pane.test-support.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
-class GeometryPane extends ChatPane {
+class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
   readonly renderedRects: Array<{ width: number; height: number } | null> = [];
   private readonly rows: TranscriptRow[] = Array.from({ length: 100 }, (_, index) => ({
@@ -31,38 +32,41 @@ class GeometryPane extends ChatPane {
   }
 
   override render() {
-    return html`
-      <div class="chat-thread-viewport" style="height: 400px; flex: none; padding: 20px 0">
-        <div class="chat-thread" style="overflow-anchor: none">
-          ${this.transcript.renderSession(this.sessionKey, (session) => {
-            if (!(session instanceof ChatSessionVirtualizerHost)) {
-              throw new Error("Expected the session virtualizer owner");
-            }
-            this.session = session;
-            const virtualizer = session["virtualizer"];
-            this.renderedRects.push(virtualizer.scrollRect && { ...virtualizer.scrollRect });
-            return html`${session.render(
-                this.rows,
-                (row) => (row.kind === "content" ? row.content : null),
-                null,
-                false,
-              )}<output>${virtualizer.getTotalSize()}</output>`;
-          })}
+    return {
+      layout: html`
+        <div class="chat-thread-viewport" style="height: 400px; flex: none; padding: 20px 0">
+          <div class="chat-thread" style="overflow-anchor: none">
+            ${this.transcript.renderSession(this.sessionKey, (session) => {
+              if (!(session instanceof ChatSessionVirtualizerHost)) {
+                throw new Error("Expected the session virtualizer owner");
+              }
+              this.session = session;
+              const virtualizer = session["virtualizer"];
+              this.renderedRects.push(virtualizer.scrollRect && { ...virtualizer.scrollRect });
+              return html`${session.render(
+                  this.rows,
+                  (row) => (row.kind === "content" ? row.content : null),
+                  null,
+                  false,
+                )}<output>${virtualizer.getTotalSize()}</output>`;
+            })}
+          </div>
         </div>
-      </div>
-    `;
+      `,
+      dialog: undefined,
+      capabilityDialogs: undefined,
+    };
   }
 }
-customElements.define("test-transcript-geometry-pane", GeometryPane);
 
-let pane: GeometryPane | undefined;
+let pane: (GeometryPane & HTMLElement) | undefined;
 afterEach(() => {
   pane?.remove();
   pane = undefined;
   vi.restoreAllMocks();
 });
 
-// Let real ResizeObservers and their resulting Lit commits finish between widths.
+// Let real ResizeObservers and their resulting commits finish between widths.
 async function settleLayout() {
   for (let frame = 0; frame < 4; frame++) {
     await new Promise<void>((resolve) => {
@@ -81,10 +85,10 @@ async function mountPane() {
     phase: "stopped",
     client: null,
   });
-  pane = new GeometryPane();
+  pane = createPaneTestHost("test-transcript-geometry-pane", GeometryPane);
   pane.initialize(fixture.context);
   pane.style.cssText = "display: block; width: 800px";
-  document.body.append(pane);
+  document.body.append(pane.element);
   await pane.updateComplete;
   await vi.dynamicImportSettled();
   await settleLayout();
@@ -95,7 +99,7 @@ async function mountPane() {
 
 it("commits each settled pane width with its new transcript rect in exactly one render", async () => {
   const { host, viewport } = await mountPane();
-  const updates = vi.spyOn(host, "performUpdate");
+  const updates = vi.spyOn(host, "render");
   const counts: number[] = [];
   for (const width of [760, 720, 680, 740, 1001.5, 999.75]) {
     updates.mockClear();
@@ -110,31 +114,30 @@ it("commits each settled pane width with its new transcript rect in exactly one 
   console.info(`Settled width render counts: ${counts.join(", ")}`);
 });
 
-it.each(["pending", "hostUpdated"] as const)(
+it.each(["pending", "committed"] as const)(
   "commits a non-sync measurement before paint with a %s pane update",
   async (phase) => {
     const { host, session } = await mountPane();
     const virtualizer = session["virtualizer"];
     const notification = vi.spyOn(virtualizer.options, "onChange");
-    const updates = vi.spyOn(host, "performUpdate");
+    const updates = vi.spyOn(host, "render");
     const paint = vi.fn();
     const frame = requestAnimationFrame(paint);
     const measure = () => virtualizer.resizeItem(0, 180);
-    const controller = {
-      hostUpdated() {
-        host.removeController(controller);
+    if (phase === "committed") {
+      const commit = host.commitRender.bind(host);
+      vi.spyOn(host, "commitRender").mockImplementationOnce(() => {
+        commit();
         measure();
-      },
-    };
-    if (phase === "hostUpdated") {
-      host.addController(controller);
+      });
     }
     host.requestUpdate();
     if (phase === "pending") {
       measure();
     }
     try {
-      while (host.isUpdatePending) {
+      await host.updateComplete;
+      if (phase === "committed") {
         await host.updateComplete;
       }
       expect(notification).toHaveBeenCalledExactlyOnceWith(virtualizer, false);
@@ -143,7 +146,6 @@ it.each(["pending", "hostUpdated"] as const)(
       expect(paint).not.toHaveBeenCalled();
     } finally {
       cancelAnimationFrame(frame);
-      host.removeController(controller);
     }
   },
 );
@@ -163,15 +165,13 @@ it.each([
       observed.push({ width: size.inlineSize, height: size.blockSize });
     });
     observer.observe(viewport, { box: "border-box" });
-    const updates = vi.spyOn(host, "performUpdate");
+    const updates = vi.spyOn(host, "render");
     try {
       slot.style.cssText = `box-sizing: ${boxSizing}; width: 620.25px; height: 460.5px; flex: none; padding: 20px 0; border: 3px solid transparent; transform: scale(${scale})`;
       session.syncViewportGeometry();
       const rect = { width: Math.round(width), height: Math.round(height) };
       expect(session["virtualizer"].scrollRect).toEqual(rect);
-      while (host.isUpdatePending) {
-        await host.updateComplete;
-      }
+      await host.updateComplete;
       const requests = vi.spyOn(host, "requestUpdate");
       await settleLayout();
       expect(observed).toEqual([{ width, height }]);

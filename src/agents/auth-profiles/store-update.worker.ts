@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { MessageChannel } from "node:worker_threads";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
@@ -42,14 +43,21 @@ export type AuthStoreUpdateCommitted = {
   store: AuthProfileStore;
   publication: AuthStoreUpdatePublication;
   credentialFacts?: ReturnType<typeof authProfileCredentialPublication.bound>;
+  compensation?: AuthStoreCompensation;
+};
+type AuthStoreCompensation = {
+  before: { store: unknown; state: unknown };
+  after: { store: unknown; state: unknown };
 };
 export type AuthStoreUpdateResponse =
   | { save: false }
+  | { save: true; restore: AuthStoreCompensation }
   | {
       save: true;
       store: AuthProfileStore;
       /** Compensation may restore an originally absent credential row. */
       deleteEmptyStore?: boolean;
+      captureCompensation?: boolean;
       scopedSharedStore?: AuthProfileStore;
       externalProfiles: RuntimeExternalOAuthProfile[];
       runtimeStore?: AuthProfileStore;
@@ -141,7 +149,7 @@ export function updateAuthProfileStoreInDatabase(
   try {
     sendAuthProfileUpdateValue(port1, {
       store: prepared
-        ? markRuntimePersistedProfiles(prepared.loaded ?? createEmptyAuthProfileStore())
+        ? markRuntimePersistedProfiles(prepared.localStore)
         : createEmptyAuthProfileStore(),
       mainStore: prepared && !isMainStore ? prepared.mainStore : null,
       storePresent: prepared?.existingRaw !== undefined,
@@ -162,28 +170,64 @@ export function updateAuthProfileStoreInDatabase(
       return;
     }
     const { existingRaw, existingState, localStore, mainStore } = prepared ?? prepareStores();
-    const next = buildLocalAuthProfileStoreForSave({
-      owner: input.owner,
-      store: response.store,
-      agentDir: input.agentDir,
-      options: response.options,
-      persistedStores: { isMainStore, localStore, mainStore },
-      getScopedSharedAuthStore: () => response.scopedSharedStore,
-      listRuntimeExternalAuthProfiles: () => response.externalProfiles,
-      runtimeStore: response.runtimeStore,
-    });
-    const { payload, statePayload, publication } = prepareAuthProfileStoreMutation({
+    const restoring = "restore" in response ? response.restore : undefined;
+    // Each cell is restored only while this removal still owns its exact postimage.
+    const restoredRaw = restoring
+      ? isDeepStrictEqual(existingRaw ?? null, restoring.after.store)
+        ? restoring.before.store
+        : (existingRaw ?? null)
+      : undefined;
+    const restoredState = restoring
+      ? isDeepStrictEqual(existingState, restoring.after.state)
+        ? restoring.before.state
+        : existingState
+      : undefined;
+    const next =
+      "restore" in response
+        ? (mergePersistedAuthProfileState(restoredRaw, () => restoredState) ?? {
+            ...createEmptyAuthProfileStore(),
+            ...coerceAuthProfileState(restoredState),
+          })
+        : buildLocalAuthProfileStoreForSave({
+            owner: input.owner,
+            store: response.store,
+            agentDir: input.agentDir,
+            options: response.options,
+            persistedStores: { isMainStore, localStore, mainStore },
+            getScopedSharedAuthStore: () => response.scopedSharedStore,
+            listRuntimeExternalAuthProfiles: () => response.externalProfiles,
+            runtimeStore: response.runtimeStore,
+          });
+    const mutation = prepareAuthProfileStoreMutation({
       existingRaw: existingRaw ?? null,
       existingState,
       store: next,
-      selectionProfiles: { ...mainStore?.profiles, ...response.store.profiles, ...next.profiles },
+      selectionProfiles: {
+        ...mainStore?.profiles,
+        ...("store" in response ? response.store.profiles : undefined),
+        ...next.profiles,
+      },
     });
+    const payload = restoring
+      ? restoredRaw
+      : "deleteEmptyStore" in response &&
+          response.deleteEmptyStore &&
+          Object.keys(mutation.payload.profiles).length === 0
+        ? null
+        : mutation.payload;
+    const statePayload = restoring ? restoredState : mutation.statePayload;
+    const publication = {
+      ...mutation.publication,
+      credentialsChanged: !isDeepStrictEqual(existingRaw ?? null, payload),
+      stateChanged: !isDeepStrictEqual(existingState, statePayload),
+      ...(restoring ? { selectionChanged: !isDeepStrictEqual(existingState, statePayload) } : {}),
+    };
     let credentialFacts: AuthStoreUpdateCommitted["credentialFacts"];
     if (publication.credentialsChanged) {
       const { receipt } = authProfileCredentialPublication.capture(
         sqlPublicationAnchor(database),
         () => {
-          if (response.deleteEmptyStore && Object.keys(payload.profiles).length === 0) {
+          if (payload === null) {
             deleteAuthProfileJsonCell(database, "store", kind);
           } else {
             writeAuthProfileJsonCell(database, "store", kind, payload);
@@ -206,6 +250,14 @@ export function updateAuthProfileStoreInDatabase(
       store: markRuntimePersistedProfiles(next),
       publication,
       credentialFacts,
+      ...("captureCompensation" in response && response.captureCompensation
+        ? {
+            compensation: {
+              before: { store: existingRaw ?? null, state: existingState },
+              after: { store: payload, state: statePayload },
+            },
+          }
+        : {}),
     } satisfies AuthStoreUpdateCommitted);
   } finally {
     port1.close();

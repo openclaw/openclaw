@@ -1,4 +1,5 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -83,7 +84,7 @@ export function readSessionEntryList(
           }
           return entries;
         }
-        return withSqlitePostCommitPublications(database.db, () =>
+        return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
           runSqliteDeferredTransactionSync(database.db, () => {
             const identities = executeSqliteQuerySync(
               database.db,

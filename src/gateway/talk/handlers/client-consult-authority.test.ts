@@ -181,6 +181,13 @@ describe("voice consult registration authority", () => {
       const waiting = createDeferred();
       const resume = createDeferred();
       let pending: Promise<unknown> | undefined;
+      const registration = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: "queued-consult",
+        sessionId: "original-consult-session",
+        sessionKey: scope.sessionKey,
+        timeoutMs: 60_000,
+      });
       try {
         setTestEnvValue("OPENCLAW_STATE_DIR", successor);
         await voiceSessions.createOrResumeClientVoiceSession({
@@ -264,6 +271,7 @@ describe("voice consult registration authority", () => {
         if (relay) {
           await closeRelaySession(relay, "completed");
         }
+        registration.cleanup();
         await cleanupSessionStateForTest({ stateDir: successor, rootPath: successor });
       }
     },

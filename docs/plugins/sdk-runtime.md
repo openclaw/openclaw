@@ -437,7 +437,12 @@ same subpath to admit cold agent storage without receiving a writable native
 handle. Its required live authority runs inside worker grants and must not read
 the same database or do blocking work. Put same-database predicates in the paired
 worker transaction. Explicit `prepare()` owns creation; `executeExisting` keeps
-missing storage absent. The deprecated `withOpenClawAgentDatabaseRuntime` and
+missing storage absent. `terminalSignal` aborts with the terminal failure reason
+after accepted publications settle. Retained consumers must stop reusing that
+store and acquire through their normal admission owner. Idle retirement and
+explicit `close()` do not abort the signal; an aborted signal never authorizes
+replaying an acknowledged or unknown-outcome write.
+The deprecated `withOpenClawAgentDatabaseRuntime` and
 `withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
 ordering, including the latter's post-integrity, pre-repair checkpoint, until
 the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.

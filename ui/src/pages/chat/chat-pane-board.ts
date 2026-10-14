@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -37,7 +36,7 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { ensureBoardViewElement, renderBoardSessionSurface } from "./board-session-surface.ts";
+import { ensureBoardViewElement, renderBoardSessionSurface } from "./board-session-surface.tsx";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -167,13 +166,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       }
       // The session capability publishes the acknowledged metadata. Never turn
       // its value into a personal override or rearrange any active viewer.
-      showToast({ message: t("chat.sidePanel.defaultSaved"), anchor: this });
+      showToast({ message: t("chat.sidePanel.defaultSaved"), anchor: this.element });
     } catch (error) {
       if (isCurrent()) {
         this.publishHeaderError(error, scope.headerOutcomeOwner);
         showToast({
           message: t("chat.sidePanel.defaultSaveError", { error: formatUiError(error) }),
-          anchor: this,
+          anchor: this.element,
         });
       }
     } finally {
@@ -631,7 +630,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
     const session = this.resolveBoardConversation();
-    const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     if (!this.isBoardPanelAvailable(board)) {
       return nothing;
     }
@@ -647,7 +645,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     // Only the loaded board acknowledgment supplies a missing owner; its display key
     // must not replace the original session target (notably global versus a literal key).
     session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
-    const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
     const connectionGeneration = this.connectionGeneration;
     const renderSurface = () =>
       renderBoardSessionSurface({
@@ -677,10 +674,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         } satisfies BoardViewCallbacks,
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
       });
-    // Keep one template boundary so hiding the panel does not remount app iframes.
-    return html`${
-      boardActive ? renderSurface() : guard([sessionKey, session.agentId], renderSurface)
-    }`;
+    // Changing Lit's directive chain would replace the retained Solid board owner.
+    return html`${renderSurface()}`;
   }
 
   protected showDashboard(expanded: boolean): void {

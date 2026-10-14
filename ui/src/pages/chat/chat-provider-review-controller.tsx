@@ -1,9 +1,10 @@
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
-import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
+import { createMemo, Show } from "solid-js";
+import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import {
   chatProviderReviewRow,
   holdProviderReviewQueuedInputs,
@@ -12,7 +13,7 @@ import {
 import { isTerminalFailureChatSendAck, normalizeChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
-export class ChatProviderReviewController implements ReactiveController {
+export class ChatProviderReviewController {
   private canWrite = false;
 
   private binding: {
@@ -35,8 +36,9 @@ export class ChatProviderReviewController implements ReactiveController {
   } | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    host: Pick<SolidControllerHost, "addController">,
     private readonly readState: () => ChatHost | undefined,
+    private readonly notify: () => void,
   ) {
     host.addController(this);
   }
@@ -140,7 +142,7 @@ export class ChatProviderReviewController implements ReactiveController {
   ) {
     if (this.isCurrent(binding)) {
       binding[flag] = false;
-      this.host.requestUpdate();
+      this.notify();
     }
   }
 
@@ -149,7 +151,7 @@ export class ChatProviderReviewController implements ReactiveController {
       return;
     }
     binding.loading = true;
-    this.host.requestUpdate();
+    this.notify();
     try {
       await import("../../components/modal-dialog.ts");
       if (this.isCurrent(binding)) {
@@ -179,13 +181,13 @@ export class ChatProviderReviewController implements ReactiveController {
     }
     if (!holdProviderReviewQueuedInputs(binding.state, binding.sessionKey, binding.agentId)) {
       binding.error = t("chat.providerReview.queueHoldFailed");
-      this.host.requestUpdate();
+      this.notify();
       return;
     }
     binding.pending = true;
     binding.attemptedRunId = binding.idempotencyKey;
     binding.error = null;
-    this.host.requestUpdate();
+    this.notify();
     try {
       const result = await binding.client!.request("sessions.providerReview.continue", {
         sessionKey: binding.sessionKey,
@@ -221,7 +223,7 @@ export class ChatProviderReviewController implements ReactiveController {
     }
     binding.refreshing = true;
     binding.error = null;
-    this.host.requestUpdate();
+    this.notify();
     try {
       const outcome = await binding.state.sessions.reconcileMutation(binding.agentId);
       if (this.isCurrent(binding) && outcome.status === "failed") {
@@ -236,88 +238,203 @@ export class ChatProviderReviewController implements ReactiveController {
     }
   }
 
-  notice() {
+  view() {
     const state = this.readState();
     const review = state && chatProviderReviewRow(state)?.providerReview;
-    if (!review) {
-      return nothing;
-    }
     const binding = this.binding;
-    const hasFindings = Boolean(review.explanation?.trim());
-    return html`
-      <div
-        class="chat-composer-neighbor-card chat-composer-neighbor-card--warn chat-provider-review"
-        role="alert"
-      >
-        <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
-          >${icons.alertTriangle}</span
-        >
-        <div class="chat-composer-neighbor-card__copy">
-          <strong
-            >${t(review.canContinue ? "chat.providerReview.pausedTitle" : "chat.providerReview.stoppedTitle")}</strong
-          >
-          <span
-            >${t(
-              hasFindings
-                ? review.canContinue
-                  ? "chat.providerReview.pausedBody"
-                  : "chat.providerReview.stoppedWithFindingsBody"
-                : "chat.providerReview.stoppedBody",
-            )}</span
-          >
-          ${binding?.error && !binding.open ? html`<span>${binding.error}</span>` : nothing}
-        </div>
-        ${hasFindings ? html`<button class="btn btn--sm" type="button" ?disabled=${!binding || binding.loading} @click=${() => binding && void this.open(binding)}>${t("chat.providerReview.review")}</button>` : nothing}
-      </div>
-    `;
+    const dialog = binding?.open && this.isCurrent(binding) ? binding : null;
+    return {
+      review,
+      dialog,
+      error: binding?.error,
+      loading: binding?.loading,
+      available: Boolean(binding),
+      canWrite: this.canWrite,
+      onOpen: () => {
+        if (binding) {
+          void this.open(binding);
+        }
+      },
+      onClose: () => {
+        if (dialog) {
+          this.clearCurrentFlag(dialog, "open");
+        }
+      },
+      onRefresh: () => {
+        if (dialog) {
+          void this.refresh(dialog);
+        }
+      },
+      onAcknowledge: () => {
+        if (dialog) {
+          void this.acknowledge(dialog);
+        }
+      },
+    };
   }
+}
 
-  dialog() {
-    const binding = this.binding;
-    if (!binding?.open || !this.isCurrent(binding)) {
-      return nothing;
-    }
-    const { review } = binding;
-    const canContinue =
-      review.canContinue &&
-      Boolean(review.explanation?.trim() && review.continuationMessage?.trim());
-    const close = () => this.clearCurrentFlag(binding, "open");
-    return html`
-      <openclaw-modal-dialog label=${t("chat.providerReview.review")} @modal-cancel=${close}>
-        <section class="exec-approval-card chat-provider-review-dialog">
-          <h2 class="exec-approval-title">
-            ${t(canContinue ? "chat.providerReview.pausedTitle" : "chat.providerReview.stoppedTitle")}
-          </h2>
-          <div class="chat-provider-review-dialog__content">
-            ${
-              canContinue
-                ? html`
-                    <h3>${t("chat.providerReview.continuationTitle")}</h3>
-                    <p>${t("chat.providerReview.continuationBody")}</p>
-                    <blockquote
-                      class="chat-provider-review-dialog__text"
-                      .textContent=${review.continuationMessage}
-                    ></blockquote>
-                  `
-                : html`<p>${t("chat.providerReview.noContinuation")}</p>`
-            }
-            <h3>${t("chat.providerReview.findings")}</h3>
-            <div class="chat-provider-review-dialog__text">${review.explanation}</div>
-            <p>
-              ${t(canContinue ? "chat.providerReview.queueHelp" : "chat.providerReview.queueStopped")}
-            </p>
-            ${binding.error ? html`<p class="callout danger" role="alert">${binding.error}</p>` : nothing}
-            ${binding.submitted && !binding.error ? html`<p role="status">${t(binding.refreshing ? "chat.providerReview.checkingStatus" : "chat.providerReview.waiting")}</p>` : nothing}
+type ProviderReviewViewProps = {
+  controller: ChatProviderReviewController;
+  revision?: unknown;
+};
+
+export function ChatProviderReviewNotice(props: ProviderReviewViewProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.controller.view();
+  });
+  return (
+    <Show when={view().review} keyed>
+      {(review) => {
+        const hasFindings = Boolean(review.explanation?.trim());
+        return (
+          <div
+            class="chat-composer-neighbor-card chat-composer-neighbor-card--warn chat-provider-review"
+            role="alert"
+          >
+            <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+              <Icon name="alertTriangle" />
+            </span>
+            <div class="chat-composer-neighbor-card__copy">
+              <strong>
+                {t(
+                  review.canContinue
+                    ? "chat.providerReview.pausedTitle"
+                    : "chat.providerReview.stoppedTitle",
+                )}
+              </strong>
+              <span>
+                {t(
+                  hasFindings
+                    ? review.canContinue
+                      ? "chat.providerReview.pausedBody"
+                      : "chat.providerReview.stoppedWithFindingsBody"
+                    : "chat.providerReview.stoppedBody",
+                )}
+              </span>
+              {view().error && !view().dialog ? <span>{view().error}</span> : null}
+            </div>
+            {hasFindings ? (
+              <button
+                class="btn btn--sm"
+                type="button"
+                disabled={view().loading || !view().available}
+                onClick={() => view().onOpen()}
+              >
+                {t("chat.providerReview.review")}
+              </button>
+            ) : null}
           </div>
-          <div class="exec-approval-actions">
-            <button type="button" class="btn" autofocus @click=${close}>
-              ${t("common.close")}
-            </button>
-            ${binding.submitted ? html`<button type="button" class="btn" ?disabled=${binding.refreshing} @click=${() => void this.refresh(binding)}>${t(binding.refreshing ? "chat.providerReview.checkingStatus" : "chat.providerReview.checkStatus")}</button>` : nothing}
-            ${canContinue ? html`<button type="button" class="btn primary" ?disabled=${!this.canWrite || binding.pending || binding.submitted} @click=${() => void this.acknowledge(binding)}>${t(binding.pending && !binding.submitted ? "chat.providerReview.continuing" : "chat.providerReview.acknowledge")}</button>` : nothing}
-          </div>
-        </section>
-      </openclaw-modal-dialog>
-    `;
-  }
+        );
+      }}
+    </Show>
+  );
+}
+
+export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.controller.view();
+  });
+  return (
+    <Show when={view().dialog} keyed>
+      {(binding) => {
+        const review = binding.review;
+        const canContinue =
+          review.canContinue &&
+          Boolean(review.explanation?.trim() && review.continuationMessage?.trim());
+        // The binding is stable until the owner changes; publications refresh its fields without remounting the modal.
+        const current = () => {
+          view();
+          return binding;
+        };
+        return (
+          <openclaw-modal-dialog
+            label={t("chat.providerReview.review")}
+            onModal-cancel={() => view().onClose()}
+          >
+            <section class="exec-approval-card chat-provider-review-dialog">
+              <h2 class="exec-approval-title">
+                {t(
+                  canContinue
+                    ? "chat.providerReview.pausedTitle"
+                    : "chat.providerReview.stoppedTitle",
+                )}
+              </h2>
+              <div class="chat-provider-review-dialog__content">
+                {canContinue ? (
+                  <>
+                    <h3>{t("chat.providerReview.continuationTitle")}</h3>
+                    <p>{t("chat.providerReview.continuationBody")}</p>
+                    <blockquote class="chat-provider-review-dialog__text">
+                      {review.continuationMessage}
+                    </blockquote>
+                  </>
+                ) : (
+                  <p>{t("chat.providerReview.noContinuation")}</p>
+                )}
+                <h3>{t("chat.providerReview.findings")}</h3>
+                <div class="chat-provider-review-dialog__text">{review.explanation}</div>
+                <p>
+                  {t(
+                    canContinue
+                      ? "chat.providerReview.queueHelp"
+                      : "chat.providerReview.queueStopped",
+                  )}
+                </p>
+                {current().error ? (
+                  <p class="callout danger" role="alert">
+                    {current().error}
+                  </p>
+                ) : null}
+                {current().submitted && !current().error ? (
+                  <p role="status">
+                    {t(
+                      current().refreshing
+                        ? "chat.providerReview.checkingStatus"
+                        : "chat.providerReview.waiting",
+                    )}
+                  </p>
+                ) : null}
+              </div>
+              <div class="exec-approval-actions">
+                <button type="button" class="btn" autofocus onClick={() => view().onClose()}>
+                  {t("common.close")}
+                </button>
+                {current().submitted ? (
+                  <button
+                    type="button"
+                    class="btn"
+                    disabled={current().refreshing}
+                    onClick={() => view().onRefresh()}
+                  >
+                    {t(
+                      current().refreshing
+                        ? "chat.providerReview.checkingStatus"
+                        : "chat.providerReview.checkStatus",
+                    )}
+                  </button>
+                ) : null}
+                {canContinue ? (
+                  <button
+                    type="button"
+                    class="btn primary"
+                    disabled={!view().canWrite || current().pending || current().submitted}
+                    onClick={() => view().onAcknowledge()}
+                  >
+                    {t(
+                      current().pending && !current().submitted
+                        ? "chat.providerReview.continuing"
+                        : "chat.providerReview.acknowledge",
+                    )}
+                  </button>
+                ) : null}
+              </div>
+            </section>
+          </openclaw-modal-dialog>
+        );
+      }}
+    </Show>
+  );
 }

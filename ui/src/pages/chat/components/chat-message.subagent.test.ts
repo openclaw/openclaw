@@ -2,7 +2,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
