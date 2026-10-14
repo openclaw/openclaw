@@ -36,6 +36,7 @@ export function createOpenAIServiceTierObservationWrapper(
       recovery = { rejections: 0, until: 0, remaining: 0 };
       recoveries.set(route, recovery);
     }
+    let rejectedTier: string | undefined;
     const observedOptions = { ...options };
     if (recovery.remaining > 0 && Date.now() < recovery.until) {
       recovery.remaining--;
@@ -43,13 +44,13 @@ export function createOpenAIServiceTierObservationWrapper(
         const replacement = await options?.onPayload?.(payload, payloadModel);
         const request = replacement ?? payload;
         if (isRecord(request) && request.service_tier === "ultrafast") {
+          rejectedTier = "ultrafast";
           request.service_tier = "priority";
         }
         return replacement;
       };
     }
     const previous = options && responsesServiceTierObserver.get(options);
-    let rejectedTier: string | undefined;
     responsesServiceTierObserver.set(observedOptions, (observation) => {
       previous?.(observation);
       if (!options?.signal?.aborted && observation.requestedTier === "ultrafast") {
@@ -65,7 +66,7 @@ export function createOpenAIServiceTierObservationWrapper(
           recovery.remaining = 0;
         }
       }
-      // A successful slower retry still describes the original rejected request.
+      // Retain the selected tier across both recovery retries and cooldown calls.
       if (observation.rejected) {
         rejectedTier ??= observation.requestedTier;
       }

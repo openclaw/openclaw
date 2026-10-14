@@ -193,11 +193,15 @@ it("attributes a successful slower retry to the original rejected tier without a
   });
 });
 
-async function providerTurn(runId = attribution.runId, replacement = false) {
+async function providerTurn(
+  runId = attribution.runId,
+  replacement = false,
+  record: Parameters<typeof createOpenAIServiceTierObservationWrapper>[1] = () => true,
+) {
   // Worker inference recreates the wrapper for each model call in the same run.
   const stream = createOpenAIServiceTierObservationWrapper(
     createOpenAIFastModeWrapper(createOpenAIResponsesTransportStreamFn(), "ultrafast"),
-    () => true,
+    record,
     { ...attribution, runId },
   );
   const result = await stream(
@@ -219,9 +223,14 @@ async function providerTurn(runId = attribution.runId, replacement = false) {
 }
 
 it("bounds persistent rejections across 30 model calls and probes after 20 cooldown calls", async () => {
+  const record = vi.fn(() => true);
   for (let turn = 0; turn < 30; turn++) {
-    await providerTurn(attribution.runId, true);
+    await providerTurn(attribution.runId, true, record);
   }
+  expect(record).toHaveBeenLastCalledWith(model, {
+    requestedTier: "ultrafast",
+    responseTier: "priority",
+  });
   expect(provider.tiers).toEqual([
     "ultrafast",
     "priority",
