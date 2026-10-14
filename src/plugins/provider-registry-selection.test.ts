@@ -38,7 +38,13 @@ describe("provider registry selection", () => {
       },
     ];
     const selected = findProviderRuntimeRegistrationInRegistry({
-      registry: { providers: providers.map((entry) => ({ pluginId: "qwen", provider: entry })) },
+      registry: {
+        providers: providers.map((entry) => ({
+          pluginId: "qwen",
+          source: "test",
+          provider: entry,
+        })),
+      },
       provider: providerId,
       ownerRefs: baseUrl ? [resolveProviderEndpoint(baseUrl, owners).endpointClass] : [],
     })?.provider;
