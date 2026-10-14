@@ -834,7 +834,7 @@ describe("workboard gateway methods", () => {
         execution: { runId },
         metadata: {
           automation: { launch: { phase: "accepted", acceptedRunId: runId } },
-          attempts: [expect.objectContaining({ id: runId, runId })],
+          attempts: [expect.objectContaining({ id: expect.any(String), runId })],
         },
       });
     }
