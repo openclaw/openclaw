@@ -7,6 +7,7 @@ import {
   type ChatHistoryDeltaResult,
   type ChatPendingInputsPage,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isToolResultContentType } from "../../chat/tool-content.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
@@ -143,6 +144,11 @@ function sanitizeHistoryMessage(
         return block;
       }
       const content = { ...(block as Record<string, unknown>) };
+      // Nested tool results (Tool Search, Code Mode) carry the same display metadata.
+      if (isToolResultContentType(content.type) && "details" in content) {
+        delete content.details;
+        truncated = true;
+      }
       const fields =
         content.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
       for (const field of fields) {

@@ -138,6 +138,7 @@ function buildPersistedDetailsFallback(
         "fullOutputPath",
         "spilledChars",
         "spillTruncated",
+        "openclawSkillUsage",
       ],
       maxChars: MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS,
     });
@@ -215,6 +216,7 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
       "spilledChars",
       "spillTruncated",
       "truncation",
+      "openclawSkillUsage",
     ],
     maxChars: MAX_PERSISTED_DETAIL_STRING_CHARS,
   });

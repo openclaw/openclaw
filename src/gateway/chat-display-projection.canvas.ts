@@ -102,6 +102,20 @@ export function projectToolResultDetails(
   if (reviewOutcome === "approved" || reviewOutcome === "denied" || reviewOutcome === "reviewing") {
     projected.approvalReviewOutcome = reviewOutcome;
   }
+  const skillUsage = readRecord(record.openclawSkillUsage);
+  if (
+    isDisplayRouteIdentifier(skillUsage?.skillName, maxChars) &&
+    (skillUsage.skillSource === "bundled" ||
+      skillUsage.skillSource === "workspace" ||
+      skillUsage.skillSource === "unknown") &&
+    (skillUsage.activation === "read" || skillUsage.activation === "command")
+  ) {
+    projected.openclawSkillUsage = {
+      skillName: skillUsage.skillName,
+      skillSource: skillUsage.skillSource,
+      activation: skillUsage.activation,
+    };
+  }
   const preview = extractCanvasFromDetails(record);
   if (preview?.mcpApp && preview.viewId) {
     projected.mcpAppPreview = {

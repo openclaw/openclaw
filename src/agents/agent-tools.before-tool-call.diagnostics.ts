@@ -49,7 +49,10 @@ import {
   resolveSkillReadPath,
 } from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
-import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
+import {
+  buildAdjustedParamsKey,
+  recordToolCallSkillUsage,
+} from "./agent-tools.before-tool-call.state.js";
 import type {
   HookBlockedReason,
   HookContext,
@@ -466,8 +469,9 @@ export function findSkillUsageMatch(params: {
 }
 
 /**
- * Records one demonstrated skill use: this run's usage receipt (review trigger) and the
- * trusted skill.used event (skill_usage rows, unused-skill archive clock).
+ * Records one demonstrated skill use: this run's usage receipt (review trigger), the
+ * call's transcript identity, and the trusted skill.used event (skill_usage rows,
+ * unused-skill archive clock).
  */
 export function recordSkillUsed(params: {
   ctx?: Pick<HookContext, "runId" | "sessionKey" | "sessionId" | "agentId" | "trace">;
@@ -482,6 +486,13 @@ export function recordSkillUsed(params: {
     activation: params.match.activation,
     ...(params.match.skillFile ? { skillFile: params.match.skillFile } : {}),
   });
+  if (params.toolCallId) {
+    recordToolCallSkillUsage(params.toolCallId, params.ctx?.runId, {
+      skillName: params.match.skillName,
+      skillSource: params.match.skillSource,
+      activation: params.match.activation,
+    });
+  }
   const trace = params.ctx?.trace
     ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace))
     : undefined;
