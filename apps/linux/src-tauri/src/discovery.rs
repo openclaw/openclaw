@@ -4,6 +4,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::Url;
@@ -79,13 +80,14 @@ impl DiscoveredGateway {
 
 struct DiscoveryRuntime {
     daemon: ServiceDaemon,
-    receiver: thread::JoinHandle<()>,
+    receiver_alive: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
 pub struct GatewayDiscovery {
     gateways: GatewayMap,
     runtime: Mutex<Option<DiscoveryRuntime>>,
+    generation: Arc<AtomicU64>,
 }
 
 impl GatewayDiscovery {
@@ -96,7 +98,7 @@ impl GatewayDiscovery {
             .map_err(|_| "Gateway discovery lock is unavailable.".to_string())?;
         if runtime
             .as_ref()
-            .is_some_and(|runtime| !runtime.receiver.is_finished())
+            .is_some_and(|runtime| runtime.receiver_alive.load(Ordering::Acquire))
         {
             return Ok(());
         }
@@ -115,7 +117,16 @@ impl GatewayDiscovery {
             }
         };
         let gateways = Arc::clone(&self.gateways);
-        let receiver = thread::Builder::new()
+        let receiver_alive = Arc::new(AtomicBool::new(true));
+        let thread_receiver_alive = Arc::clone(&receiver_alive);
+        let generation = self
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        let current_generation = Arc::clone(&self.generation);
+        // A dead receiver makes the next snapshot rebuild discovery. The generation
+        // prevents an old receiver from clearing a newer runtime's snapshot on exit.
+        let thread = thread::Builder::new()
             .name("openclaw-gateway-discovery".to_string())
             .spawn(move || {
                 while let Ok(event) = events.recv() {
@@ -123,16 +134,16 @@ impl GatewayDiscovery {
                         break;
                     }
                 }
-                // Finish clearing before is_finished permits a replacement receiver.
-                clear_gateways(&gateways);
-            })
-            .map_err(|error| {
-                let _ = mdns.shutdown();
-                format!("Could not run gateway discovery: {error}")
-            })?;
+                thread_receiver_alive.store(false, Ordering::Release);
+                clear_gateways_if_current(&gateways, &current_generation, generation);
+            });
+        if let Err(error) = thread {
+            let _ = mdns.shutdown();
+            return Err(format!("Could not run gateway discovery: {error}"));
+        }
         *runtime = Some(DiscoveryRuntime {
             daemon: mdns,
-            receiver,
+            receiver_alive,
         });
         Ok(())
     }
@@ -265,6 +276,21 @@ fn apply_event(gateways: &GatewayMap, event: ServiceEvent) -> bool {
 
 fn clear_gateways(gateways: &GatewayMap) {
     if let Ok(mut gateways) = gateways.lock() {
+        gateways.clear();
+    }
+}
+
+fn clear_gateways_if_current(
+    gateways: &GatewayMap,
+    current_generation: &AtomicU64,
+    generation: u64,
+) {
+    let Ok(mut gateways) = gateways.lock() else {
+        return;
+    };
+    // Replacement receivers insert under this lock, so a stale receiver cannot
+    // pass the generation check and later erase a newer snapshot.
+    if current_generation.load(Ordering::Acquire) == generation {
         gateways.clear();
     }
 }
@@ -743,6 +769,18 @@ mod tests {
             &gateways,
             ServiceEvent::SearchStopped(GATEWAY_SERVICE_TYPE.to_string())
         ));
+    }
+
+    #[test]
+    fn stale_receiver_cannot_clear_a_newer_snapshot() {
+        let gateways = GatewayMap::default();
+        let service = service();
+        apply_event(&gateways, ServiceEvent::ServiceResolved(Box::new(service)));
+        let generation = AtomicU64::new(2);
+
+        clear_gateways_if_current(&gateways, &generation, 1);
+
+        assert_eq!(gateways.lock().expect("snapshot lock").len(), 1);
     }
 
     #[test]
