@@ -329,6 +329,63 @@ describe("config model validation with provider runtime", () => {
     });
   });
 
+  it("publishes the candidate config before provider plugins register", async () => {
+    await withProviderFixtures(async ({ config, state }) => {
+      const id = "pin-config";
+      const plugin = writePlugin({
+        id,
+        dir: state.path("plugins", id),
+        body: `module.exports = {
+  id: ${JSON.stringify(id)},
+  register(api) {
+    if (api.runtime.config.current().plugins.entries[${JSON.stringify(id)}].enabled !== true) {
+      throw new Error("Model validation did not publish the candidate config");
+    }
+    api.registerProvider({
+      id: ${JSON.stringify(id)},
+      label: ${JSON.stringify(id)},
+      auth: [],
+      resolveDynamicModel({ modelId }) {
+        return {
+          id: modelId,
+          name: modelId,
+          provider: ${JSON.stringify(id)},
+          api: "openai-completions",
+          baseUrl: "https://provider.invalid/v1",
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 32000,
+          maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        };
+      },
+    });
+  },
+};`,
+      });
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          providers: [id],
+          modelCatalog: { providers: { [id]: { models: [{ id: "catalog-model" }] } } },
+        }),
+      );
+      config.plugins!.allow!.push(id);
+      config.plugins!.load!.paths!.push(plugin.file);
+      config.plugins!.entries![id] = { enabled: true };
+      config.agents!.defaults!.model = { primary: `${id}/exact-supported` };
+
+      const result = await checkTouchedTextModelRefs({
+        config,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+      });
+
+      expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    });
+  });
+
   it.each(["disabled", "denied", "not allowed"] as const)(
     "rejects a %s provider even when an ambient registry has its hook",
     async (policy) => {
