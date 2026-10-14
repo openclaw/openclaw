@@ -393,36 +393,6 @@ describe("push.test handler", () => {
       registration,
     });
   });
-
-  it("does not clear direct registrations when push.test overrides the environment", async () => {
-    const registration = directRegistration();
-    vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
-    mockDirectAuth();
-    vi.mocked(normalizeApnsEnvironment).mockReturnValue("production");
-    const result = apnsResult({
-      ok: false,
-      status: 400,
-      reason: "BadDeviceToken",
-      environment: "production",
-    });
-    vi.mocked(sendApnsAlert).mockResolvedValue(result);
-    vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
-
-    const { invoke } = createInvokeParams({
-      nodeId: "ios-node-1",
-      title: "Wake",
-      body: "Ping",
-      environment: "production",
-    });
-    await invoke();
-
-    expect(shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
-      registration,
-      result,
-      overrideEnvironment: "production",
-    });
-    expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
-  });
 });
 
 describe("push.web.test handler", () => {

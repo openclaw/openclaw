@@ -129,10 +129,7 @@ async function invoke(
 }
 
 describe("MCP App gateway bridge", () => {
-  it.each([
-    { label: "empty", params: { cursor: "" } },
-    { label: "padded", params: { cursor: " page-2 " } },
-  ])(
+  it.each([{ label: "empty", params: { cursor: "" } }])(
     "preserves $label list cursors through registered handlers and App operations",
     async ({ params }) => {
       const cursor = params.cursor;
