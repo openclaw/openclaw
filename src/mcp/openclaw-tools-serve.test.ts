@@ -94,6 +94,24 @@ describe("OpenClaw tools MCP server", () => {
     }
   });
 
+  it("applies configured tool policy to the served tools", async () => {
+    const served = async (config: unknown) =>
+      (
+        await resolveOpenClawToolsForMcp({
+          agentSessionKey: "agent:work:acp:policy",
+          agentId: "work",
+          config: config as never,
+        })
+      ).map((tool) => tool.name);
+
+    expect(await served({ agents: { entries: { work: {} } } })).toEqual(["automations"]);
+    expect(await served({ agents: { entries: { work: { tools: { deny: ["cron"] } } } } })).toEqual(
+      [],
+    );
+    expect(await served({ tools: { deny: ["automations"] } })).toEqual([]);
+    expect(await served({ tools: { profile: "minimal" } })).toEqual([]);
+  });
+
   it("gates cron trigger surfaces by the host config", async () => {
     const jobKeys = async (config: unknown) => {
       const [tool] = await resolveOpenClawToolsForMcp({
