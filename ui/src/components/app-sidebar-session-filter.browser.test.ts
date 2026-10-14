@@ -290,7 +290,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
 
   it("isolates keyboard filters from a previous sidebar's hovered control", async () => {
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
-    onTestFinished(() => vi.unstubAllGlobals());
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
     const previous = await mountFilters(390);
     const previousControl = previous.sidebar.querySelector<HTMLElement>(
       ".sidebar-footer-bar__home",

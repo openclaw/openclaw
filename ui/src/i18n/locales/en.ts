@@ -2884,7 +2884,7 @@ export const en: TranslationMap & {
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing this turn…",
       memoryFlushing: "Saving conversation memory…",
-      startingModel: "Waiting for a response…",
+      startingModel: "Waiting for a response",
       waitingForState: "Temporarily busy—retrying…",
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",

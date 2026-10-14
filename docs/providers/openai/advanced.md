@@ -105,7 +105,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an
-    unknown outcome remain replay-unsafe and fail closed. The explicit server
+    unknown outcome stop without replaying the request. The explicit server
     rejections `previous_response_not_found`,
     `websocket_connection_limit_reached`, and the Zero Data Retention
     `unsupported_parameter` rejection of `previous_response_id` are safe

@@ -27,6 +27,10 @@ it("registers live source and external dependency DOM resources", async () => {
   for (const target of [window, document, document.body, document.documentElement]) {
     target.addEventListener("repo-event", listener, true);
   }
+  const ownerWindow = window;
+  vi.stubGlobal("window", { addEventListener: ownerWindow.addEventListener.bind(ownerWindow) });
+  window.addEventListener("repo-event", listener, true);
+  vi.unstubAllGlobals();
   const observer = new MutationObserver(() => document.body.dataset.repoMutation = "observed");
   observer.observe(document, { childList: true, subtree: true });
   document.dispatchEvent(new Event("repo-event"));
@@ -52,7 +56,6 @@ it("registers live source and external dependency DOM resources", async () => {
   document.body.dataset.repoEvent = "";
   document.dispatchEvent(new Event("repo-event"));
   expect(document.body.dataset.repoEvent).toBe("observed");
-  const ownerWindow = window;
   vi.stubGlobal("window", {
     addEventListener: ownerWindow.addEventListener.bind(ownerWindow),
     removeEventListener: ownerWindow.removeEventListener.bind(ownerWindow),
