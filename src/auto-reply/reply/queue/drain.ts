@@ -55,7 +55,7 @@ import {
   completeFollowupRunLifecycle,
   completeFollowupRuns,
   retireFollowupRunCancellation,
-  stopFailedFollowupHeartbeats,
+  updateFollowupRetryHeartbeats,
 } from "./lifecycle.js";
 import {
   clearFollowupQueue,
@@ -560,7 +560,7 @@ async function runQueueSummaryDelivery(
     try {
       await run({ abortSignal: cancellation.signal, onAdmitted });
     } catch (err) {
-      stopFailedFollowupHeartbeats(err, delivery.sources);
+      updateFollowupRetryHeartbeats(err, delivery.sources);
       if (!admitted) {
         if (!(err instanceof FollowupRunDeferredError)) {
           releaseQueueSummaryDeliveryForRetry(queue, delivery);
@@ -873,7 +873,7 @@ export function scheduleFollowupDrain(
     try {
       await effectiveRunFollowup(item);
     } catch (error) {
-      stopFailedFollowupHeartbeats(error, [item]);
+      updateFollowupRetryHeartbeats(error, [item]);
       throw error;
     }
   };
@@ -1041,7 +1041,7 @@ export function scheduleFollowupDrain(
               ...collectQueuedPromptMedia(activeGroupItems),
             });
           } catch (err) {
-            stopFailedFollowupHeartbeats(err, activeGroupItems);
+            updateFollowupRetryHeartbeats(err, activeGroupItems);
             if (admitted) {
               completeGroup();
             } else if (reserveOptions.shouldRestoreOnError()) {

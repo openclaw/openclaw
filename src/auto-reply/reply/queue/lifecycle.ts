@@ -20,16 +20,17 @@ function stopFollowupRunPreAdoptionHeartbeat(lifecycle: TurnAdoptionLifecycle | 
   }
 }
 
-export function stopFailedFollowupHeartbeats(
+export function updateFollowupRetryHeartbeats(
   error: unknown,
   sources: readonly FollowupRun[],
 ): void {
-  if (error instanceof FollowupRunDeferredError) {
-    return;
-  }
-  // Failed preparation is not liveness; let each source's ingress watchdog own bounded retry.
+  // Preparation failures stop renewal; a later capacity wait restores source liveness.
   for (const source of sources) {
-    stopFollowupRunPreAdoptionHeartbeat(source.turnAdoptionLifecycle);
+    if (error instanceof FollowupRunDeferredError) {
+      startFollowupRunPreAdoptionHeartbeat(source.turnAdoptionLifecycle);
+    } else {
+      stopFollowupRunPreAdoptionHeartbeat(source.turnAdoptionLifecycle);
+    }
   }
 }
 

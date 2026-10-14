@@ -14,7 +14,7 @@ import {
   resolveReplyPersonalToolTargets,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
-import { stopFailedFollowupHeartbeats } from "./lifecycle.js";
+import { updateFollowupRetryHeartbeats } from "./lifecycle.js";
 import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
@@ -243,7 +243,7 @@ export async function prepareNextDeliveryGroup(
       return { items: group, assertCurrent };
     });
   } catch (error) {
-    stopFailedFollowupHeartbeats(error, items);
+    updateFollowupRetryHeartbeats(error, items);
     throw error;
   }
 }
