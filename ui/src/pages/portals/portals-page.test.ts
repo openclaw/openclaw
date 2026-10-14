@@ -360,9 +360,9 @@ describe("PortalsPage", () => {
     "retains the embedded iframe document through %s presentation changes",
     async (entry) => {
       let title = portal.title;
-      const source = createContext(["portal.list"], async () => ({
-        portals: [{ ...portal, title }],
-      }));
+      const source = createContext(["portal.list", "ui.command.result"], async (method) =>
+        method === "portal.list" ? { portals: [{ ...portal, title }] } : { ok: true },
+      );
       let page: HTMLElementTagNameMap["openclaw-portals-page"];
       if (entry === "solid") {
         page = await mountPage(source.context, portal.id);
@@ -385,7 +385,9 @@ describe("PortalsPage", () => {
       expect(page.querySelector("iframe"), "frame after hiding").toBe(frame);
       title = "Refreshed app";
       page.handleToggleRequest(
-        new CustomEvent("openclaw:portal-toggle", { detail: { open: true, portalId: portal.id } }),
+        new CustomEvent("openclaw:portal-toggle", {
+          detail: { open: true, portalId: portal.id, requestId: "show-again" },
+        }),
       );
       page.presented = true;
       await page.updateComplete;
@@ -396,6 +398,15 @@ describe("PortalsPage", () => {
       expect(page.querySelector("iframe")).toBe(frame);
       expect(writes.mock.calls.filter(([name]) => name === "src")).toEqual([]);
       expect(sourceWrites).not.toHaveBeenCalled();
+      expect(probePortalReachable).toHaveBeenCalledTimes(1);
+      expect(source.request).toHaveBeenCalledWith("ui.command.result", {
+        requestId: "show-again",
+        presentation: {
+          portalId: portal.id,
+          status: "unverified",
+          reason: "network-reachable",
+        },
+      });
     },
   );
 

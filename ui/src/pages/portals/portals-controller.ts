@@ -92,11 +92,8 @@ export class PortalsController {
   }
   observePresentation(requestId: string, portalId?: string) {
     this.presentationRequest = { requestId, portalId };
-    // A repeated show is a fresh viewer observation, not a cached network verdict.
-    const portal = this.portals.find((entry) => entry.id === portalId);
-    if (portal) {
-      this.ensurePortalProbe(portal, true);
-    }
+    // Report this view's diagnosis without re-probing and discarding its live
+    // iframe document. The explicit Retry action owns a fresh network check.
     this.reportPresentation();
   }
 
