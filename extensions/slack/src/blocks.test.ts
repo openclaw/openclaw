@@ -27,6 +27,46 @@ describe("buildSlackBlocksFallbackText", () => {
     expect(renderSlackBlockFallbackText({ ...block, title: null })).toBe("Alt &lt;@U123&gt;");
   });
 
+  it("keeps a rich-text date when Slack omits the optional fallback", () => {
+    const blocksOnlyDate = [
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_section",
+            elements: [{ type: "date", timestamp: 1700000000, format: "{date_long} at {time}" }],
+          },
+        ],
+      },
+    ];
+
+    // Slack's RichTextDate contract makes fallback optional; the timestamp still
+    // has to reach the message content.
+    expect(buildSlackBlocksFallbackText(blocksOnlyDate as never)).toBe(
+      new Date(1700000000 * 1000).toISOString(),
+    );
+  });
+
+  it("keeps supplied date fallback text and surrounding words", () => {
+    const sentence = [
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_section",
+            elements: [
+              { type: "text", text: "Meet on " },
+              { type: "date", timestamp: 1700000000, fallback: "Nov 14" },
+              { type: "text", text: " after lunch." },
+            ],
+          },
+        ],
+      },
+    ];
+
+    expect(buildSlackBlocksFallbackText(sentence as never)).toBe("Meet on Nov 14 after lunch.");
+  });
+
   it("renders inbound table cells as bounded delimiter-safe TSV", () => {
     const table = {
       type: "table",

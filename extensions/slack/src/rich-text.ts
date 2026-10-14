@@ -75,8 +75,21 @@ export function renderSlackRichText(
           const name = read(element.name);
           return name ? `:${name}:` : "";
         }
-        case "date":
-          return literal(read(element.fallback) ?? "");
+        case "date": {
+          const fallback = read(element.fallback);
+          if (fallback) {
+            return literal(fallback);
+          }
+          // Slack makes \`fallback\` optional: keep a deterministic UTC rendering of the
+          // timestamp instead of dropping the date from the message content.
+          const millis =
+            typeof element.timestamp === "number" ? element.timestamp * 1000 : Number.NaN;
+          return literal(
+            Number.isFinite(millis) && Math.abs(millis) <= 8.64e15
+              ? new Date(millis).toISOString()
+              : "",
+          );
+        }
         default:
           return "";
       }
