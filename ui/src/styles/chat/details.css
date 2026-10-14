@@ -360,7 +360,10 @@ openclaw-chat-details-progress {
 }
 .chat-details .chat-pr__meta {
   flex: none;
+  flex-wrap: wrap;
+  justify-content: end;
   gap: 4px;
+  max-width: 160px;
 }
 .chat-details .chat-pr__diff {
   display: inline-flex;
@@ -394,9 +397,6 @@ openclaw-chat-details-progress {
 .chat-details .chat-pr--compact .chat-pr__meta {
   grid-column: 2;
   grid-row: 1;
-  flex-wrap: wrap;
-  justify-content: end;
-  max-width: 160px;
 }
 .chat-details .chat-pr--compact .chat-pr__number {
   align-self: center;
