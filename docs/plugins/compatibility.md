@@ -79,17 +79,27 @@ Deprecated records must include a warning start date, replacement, docs link,
 and either a final removal date or an explicitly approved removal gate.
 The `stable-deprecation-period` gate records preparation for removal in a later
 ordinary stable release. It does not set a deadline or authorize removal.
-Leave `removeAfter` unset until the owning maintainer approves and announces the
-target stable release and final compatibility date. Beta releases do not satisfy
-the shipped replacement or deprecation requirement.
+Once the owner approves a window, replace that gate with the final compatibility
+day in `removeAfter`. Beta releases do not satisfy the shipped replacement or
+deprecation requirement.
+
+Deprecated synchronous SQLite-backed Plugin SDK members remain compatible
+through **December 31, 2026** (`removeAfter: 2026-12-31`). Removal ships in the
+**first January 2027 stable release**, without an SDK major. The next stable
+release announces this window with actionable warnings and the
+[complete async migration guide](/plugins/sdk-migration/sqlite-async).
+This preparation removes no public member. Existing asynchronous APIs, prepared
+SQL-free overloads, worker-local SQLite primitives, and explicit offline
+maintenance contracts remain supported.
 
 The announced warning-to-removal window should be no more than three months.
 That bound is not an automatic expiry: a source annotation, elapsed registry
 date, or undated gate cannot substitute for shipped diagnostics, migration
 instructions, supported-reader checks, and the announced window. The
 [removal timeline](/plugins/sdk-migration/removal-timeline) describes the
-additional shipped-surface gate. Legacy `next-plugin-sdk-major` registry values
-require owner migration to the later-stable-release policy. Do not add an
+additional shipped-surface gate. Other compatibility families retain their own
+dates or ordinary stable release gates; the SQLite cutoff does not reschedule
+them. Do not add an
 open-ended removal window without an approved gate unless maintainers explicitly
 decide it is permanent compatibility and mark it `active` instead.
 
@@ -167,14 +177,17 @@ and legacy-state import and Doctor migrations remain unchanged.
 ### Synchronous plugin state
 
 `plugin-state-sync-keyed-store` names the existing synchronous keyed-store adapter.
-Its September 11, 2026 deprecation uses the `stable-deprecation-period` removal gate.
+Its September 11, 2026 deprecation now has the final compatibility day
+December 31, 2026. Removal ships in the first January 2027 stable release.
 Actual legacy calls emit one diagnostic per plugin and capability family per
 Gateway process; module imports remain silent.
 Existing synchronous methods, plugin trust eligibility, and transactional callback
 semantics remain unchanged. Migrate to data-only `openKeyedStoreV2` operations using
 the [state-store migration guide](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
-Removal still requires a supported external-plugin migration, an announced
-ordinary stable release window, and explicit maintainer approval.
+The window also covers V1 `update` and `deleteIf` callbacks. Their Promise return
+does not move the transaction off the Gateway thread; use V2 `observe` and
+`compareAndApply`, or a worker operation, instead. Bundled first-party plugins
+support the current host and use V2 directly, without older-host fallbacks.
 
 ### Session agent resolution aliases
 

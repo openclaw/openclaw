@@ -14,12 +14,14 @@ it("attributes legacy use to its runtime owner and gives each family an independ
   try {
     await first.run(async () => {
       await Promise.resolve();
-      useLegacy("writer");
-      useLegacy("writer");
-      useLegacy("transcript");
+      useLegacy("session-store");
+      useLegacy("session-store");
+      useLegacy("session-transcript");
     });
-    reloaded.run(() => useLegacy("writer"));
-    withPluginRuntimePluginScope({ pluginId: "sdk-warning-other" }, () => useLegacy("writer"));
+    reloaded.run(() => useLegacy("session-store"));
+    withPluginRuntimePluginScope({ pluginId: "sdk-warning-other" }, () =>
+      useLegacy("session-store"),
+    );
     expect(warning).toHaveBeenCalledTimes(3);
     expect(warning.mock.calls.map(([message]) => String(message).split(":")[0])).toEqual([
       "Plugin sdk-warning-owner",
@@ -29,7 +31,8 @@ it("attributes legacy use to its runtime owner and gives each family an independ
     for (const [message] of warning.mock.calls) {
       expect(message).toContain("store.writeAsync");
       expect(message).toContain("remains supported during its deprecation period");
-      expect(message).toContain("removed in a later release after stable deprecation");
+      expect(message).toContain("Final compatibility day: 2026-12-31");
+      expect(message).toContain("first January 2027 stable release");
     }
   } finally {
     await Promise.all([first.dispose(), reloaded.dispose()]);
@@ -52,7 +55,7 @@ it("bounds unscoped warnings and never prints path-like caller labels", () => {
     });
   }
   expect(warning).toHaveBeenCalledExactlyOnceWith(
-    "Plugin SDK: store.write is deprecated; use store.writeAsync instead. The legacy contract remains supported during its deprecation period. It will be removed in a later release after stable deprecation.",
+    "Plugin SDK: store.write is deprecated; use store.writeAsync instead. The legacy contract remains supported during its deprecation period. Removal requires an announced ordinary stable release window.",
     { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
   );
 });

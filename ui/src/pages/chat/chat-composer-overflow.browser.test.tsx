@@ -525,7 +525,11 @@ describe("composer overflow presentation", () => {
       expect(rail()).toBe(element);
       expect(element.scrollWidth).toBeGreaterThan(element.clientWidth);
       await expectEdges(element, true);
+      // The reconnect measurement can precede the native observer's first delivery.
+      await afterLayout();
       container.style.width = "760px";
+      await afterLayout();
+      expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth + 1);
       await expectEdges(element, false);
     },
   );

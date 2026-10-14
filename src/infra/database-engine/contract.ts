@@ -1,8 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Kysely } from "kysely";
 import type { SqlConnection } from "../sql-connection.js";
-import type { DatabaseEngineInput } from "./config.js";
-import type { DatabaseEngineId } from "./registry.js";
+import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
 
 export type { EngineConnection } from "../sql-connection.js";
 

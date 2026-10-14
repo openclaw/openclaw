@@ -180,7 +180,7 @@ export class ModelRegistry {
     this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
 
-  /** @deprecated Use createAsync for disk discovery or fromCapturedSources for prepared catalogs. */
+  /** @deprecated Use createAsync or fromCapturedSources. Supported through 2026-12-31. */
   static create(
     authStorage: AuthStorage,
     modelsJsonPath: string = join(getAgentDir(), "models.json"),
@@ -230,12 +230,11 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /** @deprecated Await refreshAsync when refreshing disk-backed catalogs. */
+  /** @deprecated Await refreshAsync for disk-backed catalogs. Supported through 2026-12-31. */
   refresh(): void {
     if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       ModelRegistry.warnNativeCatalogRead("ModelRegistry.refresh", "ModelRegistry.refreshAsync");
-      // Legacy SDK callers retain synchronous disk freshness until removal in a later stable
-      // release after deprecation ships.
+      // Legacy SDK callers retain synchronous disk freshness through 2026-12-31.
       this.pluginCatalogs = undefined;
       this.pluginCatalogReadError = undefined;
     }
@@ -901,7 +900,7 @@ export class ModelRegistry {
    * Also resets dynamic OAuth and API stream registrations before reapplying
    * remaining dynamic providers.
    * Has no effect if the provider was never registered.
-   * @deprecated Use unregisterProviderAsync for disk-backed registries.
+   * @deprecated Use unregisterProviderAsync for disk-backed registries. Supported through 2026-12-31.
    */
   unregisterProvider(providerName: string): void {
     if (!this.registeredProviders.has(providerName)) {

@@ -146,6 +146,9 @@ auth health, sandbox images, and plugin installs.
   </Accordion>
   <Accordion title="3d. Session transcript branch repair">
     Doctor scans legacy agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, Doctor repairs the branch while staging its history for import into SQLite. The raw JSONL file stays unchanged and is archived after successful import.
+
+    Doctor also drops redundant session headers from staged history when every field except `timestamp` matches the first header. Import retries and validation use that same staged history. Headers with conflicting identity or metadata are retained for investigation; the original JSONL bytes remain unchanged.
+
   </Accordion>
   <Accordion title="4. State integrity checks (session persistence, routing, and safety)">
     The state directory is the operational brainstem. If it vanishes, you lose sessions, credentials, logs, and config unless you have backups elsewhere.

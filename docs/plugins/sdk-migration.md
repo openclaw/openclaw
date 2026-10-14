@@ -12,6 +12,12 @@ OpenClaw replaced a broad backwards-compatibility layer with a modern plugin
 architecture built from small, focused imports. If your plugin predates that
 change, this guide gets it onto the current contracts.
 
+For synchronous SQLite APIs, use the [complete async migration
+guide](/plugins/sdk-migration/sqlite-async). The final compatibility day is
+**2026-12-31**; removal ships in the **first January 2027 stable release**, without
+a Plugin SDK major version. The tables cover every affected member and its
+awaited or prepared replacement.
+
 ## What changed
 
 Several wide-open import surfaces used to let plugins reach almost anything
@@ -86,8 +92,8 @@ incognito database.
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
 as an absent session or an uncertain probe; it also recognizes nested refusals.
-Removing the synchronous contracts for durable sessions requires a separately
-announced breaking SDK release.
+The deprecated synchronous contracts for durable sessions remain available
+through 2026-12-31 and are removed in the first January 2027 stable release.
 
 ### Session and command preparation
 
@@ -105,13 +111,13 @@ keeping durable reads off the Gateway thread.
 Await `UserTurnTranscriptRecorder.completeProcessingAsync(outcome)` to settle an
 accepted input through its session owner. The deprecated `completeProcessing`
 method preserves synchronous completion and returns after the terminal outcome
-commits, with a migration warning, until the next Plugin SDK major. Recorders
+commits, with a migration warning, through 2026-12-31. Recorders
 without an accepted input keep their existing no-op behavior.
 
 Use `readSessionTranscriptCatalogTitleAsync` from
 `openclaw/plugin-sdk/session-transcript-runtime` for catalog titles. The
-synchronous `readSessionTranscriptCatalogTitle` remains deprecated until the
-next Plugin SDK major.
+synchronous `readSessionTranscriptCatalogTitle` remains deprecated through
+2026-12-31.
 
 Use `resolveStoredModelOverrideAsync` and `resolveCommandArgMenuAsync` from
 `openclaw/plugin-sdk/command-auth-native` when preparing native commands.
@@ -121,7 +127,7 @@ return a promise; direct overrides still need no parent read. Menu preparation
 reads the current session's verbose setting before returning its choices.
 
 The corresponding synchronous APIs are deprecated for ordinary runtime use.
-Released signatures remain supported until the next Plugin SDK major. New
+Released signatures remain supported through 2026-12-31. New
 legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
 operations; final tool, disclosure, and mutation authority checks retain their
 current owner and timing.
@@ -131,8 +137,8 @@ For a complete cross-session store view, await
 `openclaw/plugin-sdk/session-transcript-hit`. It preserves full session entries
 and excludes incognito sessions while reading durable stores through the existing
 database worker. The synchronous `loadCombinedSessionStoreForGateway` retains its
-return value and emits a bounded deprecation warning; it remains supported until
-the next Plugin SDK major.
+return value and emits a bounded deprecation warning; it remains supported through
+2026-12-31.
 
 ### Native session lineage
 
@@ -157,8 +163,8 @@ use the prepared API.
 Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from
 `openclaw/plugin-sdk/exec-approvals-runtime`. Both use the existing shared-state
 read worker. The synchronous `loadExecApprovals` and `readExecApprovalsSnapshot`
-exports retain their signatures for the current Plugin SDK major, emit a bounded
-deprecation warning, and are scheduled for removal in the next major. Bundled
+exports retain their signatures through 2026-12-31, emit a bounded
+deprecation warning, and are scheduled for removal in the first January 2027 stable release. Bundled
 runtime callers use the awaited reads. The execution owner still checks current
 approval policy immediately before command execution using committed in-process
 policy publications; that final check does not query SQLite.
@@ -172,7 +178,7 @@ timestamps are read from the same worker snapshot, with the original database
 owner retained through validation and cleanup. The synchronous
 `resolveEntryResetFreshness(...)` method shipped in `v2026.9.8` remains available
 for existing JavaScript consumers and is deprecated for runtime use; removal
-requires the next Plugin SDK major and explicit breaking-release approval. Both methods retain the
+ships in the first January 2027 stable release after the 2026-12-31 compatibility cutoff. Both methods retain the
 existing reset policy and process-held incognito behavior.
 
 ### Why

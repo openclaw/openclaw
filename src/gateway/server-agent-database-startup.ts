@@ -22,7 +22,7 @@ function assertAgentDatabaseConfiguration(
   paths: readonly string[],
   env: NodeJS.ProcessEnv,
 ) {
-  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env });
+  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env, agentId });
   if (paths.some((pathname) => !isConfiguredAgentDatabaseTarget(targets, agentId, pathname))) {
     throw new Error(`Agent ${agentId} database configuration changed during startup inspection`);
   }

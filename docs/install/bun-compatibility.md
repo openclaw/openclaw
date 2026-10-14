@@ -214,6 +214,12 @@ Npm-sourced plugins use OpenClaw's bundled npm 12.1.0 CLI under Bun and do not r
 
 ## SQLite worker lifecycle
 
+SQLite worker requests and replies use exclusively owned transfer buffers on both
+Node and Bun. Bun's serializer can return shared backing storage; OpenClaw copies
+those bytes before transfer, including prepared opens and large command frames.
+Doctor migrations and runtime database operations retain their existing admission,
+byte limits, and native cleanup.
+
 After selecting SQLite, long-lived Gateway, node, and worker hosts that own SQLite
 pools on macOS and Linux await a check of whether Bun's ordinary
 `DatabaseSync.close()` and `Symbol.dispose()` release native statements and WAL

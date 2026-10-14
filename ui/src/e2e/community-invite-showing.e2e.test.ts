@@ -325,7 +325,7 @@ suite.define(() => {
                 await row.click({ button: "right" });
               }
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
-              await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
+              await page.locator('openclaw-session-menu [role^="menuitem"]:focus').waitFor();
               // A background render must not admit new geometry while a popover owns focus.
               await gateway.emitGatewayEvent("presence", { presence: [] });
               await settleSidebarIdleWork(page);

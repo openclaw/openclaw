@@ -119,11 +119,13 @@ export function normalizePendingFinalDelivery(
     return undefined;
   }
   const intentId = normalizeOptionalString(value.intentId);
+  const sourceRunId = normalizeOptionalString(value.sourceRunId);
   const deliveries = normalizePendingFinalDeliveries(value.deliveries);
   const base = {
     createdAt,
     ...(isRecord(value.context) ? { context: value.context } : {}),
     ...(intentId ? { intentId } : {}),
+    ...(sourceRunId ? { sourceRunId } : {}),
     ...(deliveries ? { deliveries } : {}),
   };
   if (value.kind === "transport-only") {
@@ -143,13 +145,29 @@ function normalizePendingFinalDeliveries(
     value.flatMap((item) => {
       const id = isRecord(item) ? normalizeOptionalString(item.id) : undefined;
       const state = isRecord(item) ? item.state : undefined;
+      const receipt = isRecord(item) && isRecord(item.receipt) ? item.receipt : undefined;
+      const platformMessageId = normalizeOptionalString(receipt?.platformMessageId);
+      const resultCount = receipt?.resultCount;
       return id &&
         (state === "prepared" ||
           state === "queued" ||
           state === "delivered" ||
           state === "suppressed" ||
           state === "unknown")
-        ? [{ id, state }]
+        ? [
+            {
+              id,
+              state,
+              ...(platformMessageId && Number.isSafeInteger(resultCount) && Number(resultCount) > 0
+                ? {
+                    receipt: {
+                      platformMessageId,
+                      resultCount: Number(resultCount),
+                    },
+                  }
+                : {}),
+            },
+          ]
         : [];
     });
   return deliveries.length > 0 ? deliveries : undefined;

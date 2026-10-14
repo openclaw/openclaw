@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
@@ -35,6 +34,11 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
+import {
+  assertStateFileSnapshotAllowed,
+  isStatePostgres,
+  openStatePostgresReadConnection,
+} from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
 import {
   invalidateOpenClawStateRuntimeIntegrity,
@@ -49,7 +53,7 @@ import {
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadConnection = {
-  database: { db: DatabaseSync; path: string };
+  database: { db: EngineConnection; path: string };
   snapshotSource?: {
     retain(): {
       location: string;
@@ -69,7 +73,7 @@ type RetainedReader = {
   idleTimer?: ReturnType<typeof setTimeout>;
 };
 const retainedReaders = new Map<string, RetainedReader>();
-const corruptedReaders = new WeakSet<DatabaseSync>();
+const corruptedReaders = new WeakSet<EngineConnection>();
 let unregisterExitClose: (() => void) | undefined;
 
 function retireReader(reader: RetainedReader): void {
@@ -127,6 +131,9 @@ function borrowStateReadConnection(
   pathname: string,
   expectedIdentity?: string,
 ): OpenClawStateSettledRead<OpenClawStateReadConnection> {
+  if (isStatePostgres()) {
+    return openStateReadConnectionResult(pathname, pathname, expectedIdentity, undefined, true);
+  }
   isExistingOpenClawStateSchema(pathname);
   const identity = readDatabasePathIdentitySync(pathname);
   if (expectedIdentity !== undefined) {
@@ -197,9 +204,6 @@ export function assertStateReadSchema(
   pathname: string,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
-  if (isPostgresSqlConnection(database)) {
-    requireNativeDatabaseFile("postgres", "repair");
-  }
   assertStateReadSchemaForPolicy(
     database,
     pathname,
@@ -257,13 +261,17 @@ export function readOpenClawStateReadOnlyLocation<T>(
   let closeAdmission: (() => void) | undefined;
   let result!: OpenClawStateSettledRead<T>;
   try {
-    closeAdmission = openStateSchemaReadAdmission?.(opened.database.db);
+    if (openStateSchemaReadAdmission) {
+      if (isPostgresSqlConnection(opened.database.db)) {
+        requireNativeDatabaseFile("postgres", "repair");
+      }
+      closeAdmission = openStateSchemaReadAdmission(opened.database.db);
+    }
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
-      result = {
-        status: "available",
-        value: runSqliteReadOperationSync(opened.database.db, () => {
+      const read = () =>
+        runSqliteReadOperationSync(opened.database.db, () => {
           admitStateSchemaFacts(opened.database.db, pathname);
           assertStateReadSchemaForPolicy(
             opened.database.db,
@@ -273,10 +281,15 @@ export function readOpenClawStateReadOnlyLocation<T>(
             readContentVersionRow,
           );
           return operation(opened.database);
-        }),
+        });
+      result = {
+        status: "available",
+        value: isPostgresSqlConnection(opened.database.db)
+          ? opened.database.db.runTransaction(read, undefined, true)
+          : read(),
       };
     } catch (error) {
-      if (isSqliteCorruptionError(error)) {
+      if (!isPostgresSqlConnection(opened.database.db) && isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
         corruptedReaders.add(opened.database.db);
       }
@@ -403,6 +416,18 @@ function openStateReadConnectionResult(
   };
   let native: ReturnType<typeof openTrackedStateDatabaseResult>;
   try {
+    if (isStatePostgres()) {
+      if (source !== pathname || snapshotRoot) {
+        assertStateFileSnapshotAllowed();
+      }
+      if (checkSchemaPolicy) {
+        isExistingOpenClawStateSchema(pathname);
+      }
+      const postgres = openStatePostgresReadConnection(pathname, expectedIdentity);
+      if (postgres) {
+        return { status: "available", value: postgres };
+      }
+    }
     if (expectedIdentity !== undefined) {
       assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
     }

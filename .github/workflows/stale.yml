@@ -3,6 +3,7 @@ name: Stale
 on:
   schedule:
     - cron: "17 3 * * *"
+    - cron: "17 9,15,21 * * *"
   workflow_dispatch:
     inputs:
       backfill_stale_closures:
@@ -25,6 +26,11 @@ on:
         required: false
         type: boolean
         default: true
+      pr_numbers:
+        description: "Up to 1000 PR numbers; bypasses the 350-PR daily slice/cursor, shares API and closure caps"
+        required: false
+        type: string
+        default: ""
       max_closures:
         description: "Maximum items to close when dry_run is false"
         required: false
@@ -37,8 +43,108 @@ env:
 permissions: {}
 
 jobs:
+  stale-pull-requests:
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || inputs.pr_numbers != '' || inputs.backfill_stale_closures != true || inputs.include_prs != false) }}
+    concurrency:
+      group: barnacle-stale-pr-lifecycle
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: read
+      pull-requests: read
+    outputs:
+      remaining-closures: ${{ steps.evaluate.outputs.remaining-closures }}
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/github
+            test/scripts
+            .github/workflows/stale.yml
+      - name: Test PR lifecycle policy
+        run: node --test test/scripts/stale-pr-lifecycle.node.mjs
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
+      # Cache holds only scan position. GitHub comments own warning/head facts.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: pr-cursor
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}
+        with:
+          path: .cache/barnacle-pr-scan.json
+          key: barnacle-pr-scan-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: barnacle-pr-scan-v1-
+      - name: Evaluate PR inactivity
+        id: evaluate
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run != false }}
+          PR_NUMBERS: ${{ inputs.pr_numbers }}
+          MAX_CLOSURES: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.max_closures) || '50' }}
+          RESTORED_CURSOR: ${{ steps.pr-cursor.outputs.cache-matched-key }}
+          BARNACLE_TOKEN: ${{ (inputs.backfill_stale_closures && steps.app-token-fallback.outputs.token) || steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          BARNACLE_APP_ID: ${{ inputs.backfill_stale_closures && steps.app-token-fallback.outputs.token && '2971289' || steps.app-token.outputs.token && '2729701' || '2971289' }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { runStalePullRequests } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/github/stale-pr-lifecycle.mjs`);
+            const rawTargets = process.env.PR_NUMBERS;
+            if (rawTargets && !/^\d+(?:\s*,\s*\d+)*$/.test(rawTargets.trim())) {
+              throw new Error("pr_numbers must contain comma-separated positive PR numbers");
+            }
+            core.info(`Restored PR scan: ${process.env.RESTORED_CURSOR || "start"}`);
+            if (!process.env.BARNACLE_TOKEN) throw new Error("No Barnacle installation token available");
+            const barnacle = getOctokit(process.env.BARNACLE_TOKEN);
+            const result = await runStalePullRequests({
+              github: barnacle, checksGithub: github, mutationGithub: barnacle,
+              expectedAppId: Number(process.env.BARNACLE_APP_ID), context, core,
+              dryRun: process.env.DRY_RUN === "true",
+              targets: rawTargets ? rawTargets.split(",").map(value => Number(value.trim())) : [],
+              maxClosures: Number(process.env.MAX_CLOSURES),
+              cursorPath: ".cache/barnacle-pr-scan.json",
+            });
+            core.setOutput("remaining-closures", result.remainingClosures);
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}
+        with:
+          path: .cache/barnacle-pr-scan.json
+          key: barnacle-pr-scan-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify PR scan checkpoint persistence
+        if: ${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            // Cache/save only warns on upload failure. Surface a lost checkpoint
+            // so repeated first slices cannot silently starve later PRs.
+            const key = `barnacle-pr-scan-v1-${context.runId}-${process.env.GITHUB_RUN_ATTEMPT}`;
+            const { data } = await github.rest.actions.getActionsCacheList({ ...context.repo, key });
+            if (!data.actions_caches.some(cache => cache.key === key)) {
+              throw new Error(`PR scan checkpoint was not persisted: ${key}`);
+            }
+            core.info(`Saved PR scan: ${key}`);
+
   stale:
-    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
+    if: ${{ github.repository == 'openclaw/openclaw' && inputs.pr_numbers == '' && (github.event_name != 'schedule' || github.event.schedule == '17 3 * * *') && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
     permissions:
       issues: write
       pull-requests: write
@@ -62,7 +168,7 @@ jobs:
           permission-actions: read
           permission-issues: write
           permission-pull-requests: write
-      - name: Mark stale unassigned issues and pull requests (primary)
+      - name: Mark stale unassigned issues (primary)
         id: stale-primary
         continue-on-error: true
         uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
@@ -70,12 +176,11 @@ jobs:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
           days-before-issue-close: 7
-          days-before-pr-stale: 14
-          days-before-pr-close: 7
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          remove-pr-stale-when-updated: false
           stale-issue-label: stale
-          stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
-          exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
           exempt-all-assignees: true
@@ -83,18 +188,11 @@ jobs:
           stale-issue-message: |
             This issue has been automatically marked as stale due to inactivity.
             Please add updates or it will be closed.
-          stale-pr-message: |
-            This pull request has been automatically marked as stale due to inactivity.
-            Please add updates or it will be closed.
           close-issue-message: |
             Closing due to inactivity.
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
             If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
-          close-pr-message: |
-            Closing due to inactivity.
-            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
-            That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (primary)
         id: assigned-issue-stale-primary
         continue-on-error: true
@@ -105,6 +203,7 @@ jobs:
           days-before-issue-close: 10
           days-before-pr-stale: -1
           days-before-pr-close: -1
+          remove-pr-stale-when-updated: false
           stale-issue-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           operations-per-run: 2000
@@ -119,30 +218,6 @@ jobs:
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
             If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
-      - name: Mark stale assigned pull requests (primary)
-        id: assigned-stale-primary
-        continue-on-error: true
-        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
-        with:
-          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: -1
-          days-before-issue-close: -1
-          days-before-pr-stale: 27
-          days-before-pr-close: 7
-          stale-pr-label: stale
-          exempt-pr-labels: maintainer,no-stale,bad-barnacle
-          operations-per-run: 2000
-          ascending: true
-          include-only-assigned: true
-          ignore-pr-updates: true
-          remove-stale-when-updated: true
-          stale-pr-message: |
-            This assigned pull request has been automatically marked as stale after being open for 27 days.
-            Please add updates or it will be closed.
-          close-pr-message: |
-            Closing due to inactivity.
-            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
-            That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Check stale state cache
         id: stale-state
         if: always()
@@ -167,19 +242,18 @@ jobs:
               core.warning(`Failed to check stale state cache: ${message}`);
               core.setOutput("has_state", "false");
             }
-      - name: Mark stale unassigned issues and pull requests (fallback)
+      - name: Mark stale unassigned issues (fallback)
         if: (steps.stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
         uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
           days-before-issue-stale: 14
           days-before-issue-close: 7
-          days-before-pr-stale: 14
-          days-before-pr-close: 7
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          remove-pr-stale-when-updated: false
           stale-issue-label: stale
-          stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
-          exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
           exempt-all-assignees: true
@@ -187,18 +261,11 @@ jobs:
           stale-issue-message: |
             This issue has been automatically marked as stale due to inactivity.
             Please add updates or it will be closed.
-          stale-pr-message: |
-            This pull request has been automatically marked as stale due to inactivity.
-            Please add updates or it will be closed.
           close-issue-message: |
             Closing due to inactivity.
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
             If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
-          close-pr-message: |
-            Closing due to inactivity.
-            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
-            That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (fallback)
         if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
         uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
@@ -208,6 +275,7 @@ jobs:
           days-before-issue-close: 10
           days-before-pr-stale: -1
           days-before-pr-close: -1
+          remove-pr-stale-when-updated: false
           stale-issue-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           operations-per-run: 2000
@@ -222,32 +290,9 @@ jobs:
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
             If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
-      - name: Mark stale assigned pull requests (fallback)
-        if: (steps.assigned-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
-        with:
-          repo-token: ${{ steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: -1
-          days-before-issue-close: -1
-          days-before-pr-stale: 27
-          days-before-pr-close: 7
-          stale-pr-label: stale
-          exempt-pr-labels: maintainer,no-stale,bad-barnacle
-          operations-per-run: 2000
-          ascending: true
-          include-only-assigned: true
-          ignore-pr-updates: true
-          remove-stale-when-updated: true
-          stale-pr-message: |
-            This assigned pull request has been automatically marked as stale after being open for 27 days.
-            Please add updates or it will be closed.
-          close-pr-message: |
-            Closing due to inactivity.
-            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
-            That channel is the escape hatch for high-quality PRs that get auto-closed.
 
   stale-bug-verification:
-    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
+    if: ${{ github.repository == 'openclaw/openclaw' && inputs.pr_numbers == '' && (github.event_name != 'schedule' || github.event.schedule == '17 3 * * *') && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
     permissions:
       issues: write
     runs-on: ubuntu-24.04
@@ -431,7 +476,8 @@ jobs:
               .write();
 
   backfill-stale-closures:
-    if: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && inputs.backfill_stale_closures == true }}
+    needs: stale-pull-requests
+    if: ${{ !cancelled() && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && inputs.pr_numbers == '' && inputs.backfill_stale_closures == true && (needs.stale-pull-requests.result == 'success' || needs.stale-pull-requests.result == 'skipped') }}
     permissions:
       issues: write
       pull-requests: write
@@ -450,15 +496,13 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run }}
           INCLUDE_ISSUES: ${{ inputs.include_issues }}
-          INCLUDE_PRS: ${{ inputs.include_prs }}
-          MAX_CLOSURES: ${{ inputs.max_closures }}
+          MAX_CLOSURES: ${{ needs.stale-pull-requests.result == 'success' && needs.stale-pull-requests.outputs.remaining-closures || format('{0}', inputs.max_closures) }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const dayMs = 24 * 60 * 60 * 1000;
             const dryRun = process.env.DRY_RUN !== "false";
             const includeIssues = process.env.INCLUDE_ISSUES !== "false";
-            const includePrs = process.env.INCLUDE_PRS !== "false";
             const maxClosures = Math.max(0, Number(process.env.MAX_CLOSURES || "50"));
             const nowMs = Date.now();
             const { owner, repo } = context.repo;
@@ -475,7 +519,6 @@ jobs:
               "clawsweeper:source-repro",
               "clawsweeper:fix-shape-clear",
             ]);
-            const prExemptLabels = new Set(["maintainer", "no-stale", "bad-barnacle"]);
             const maintainerAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
             const maintainerLogins = new Set([
               "altaywtf",
@@ -510,12 +553,6 @@ jobs:
               "If this is still an issue, please retry on the latest OpenClaw release and share updated details.",
               "If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.",
             ].join("\n");
-            const prCloseMessage = [
-              "Closing due to inactivity.",
-              "If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.",
-              "That channel is the escape hatch for high-quality PRs that get auto-closed.",
-            ].join("\n");
-
             const hasAny = (labels, exemptLabels) => {
               for (const label of labels) {
                 if (exemptLabels.has(label)) {
@@ -549,7 +586,7 @@ jobs:
             })) {
               for (const item of response.data) {
                 const isPr = Boolean(item.pull_request);
-                if ((isPr && !includePrs) || (!isPr && !includeIssues)) {
+                if (isPr || !includeIssues) {
                   skipped.disabledType += 1;
                   continue;
                 }
@@ -560,7 +597,7 @@ jobs:
                   continue;
                 }
 
-                const exemptLabels = isPr ? prExemptLabels : issueExemptLabels;
+                const exemptLabels = issueExemptLabels;
                 if (hasAny(labels, exemptLabels)) {
                   skipped.exemptLabel += 1;
                   continue;
@@ -582,13 +619,7 @@ jobs:
 
                 let eligible = false;
                 let lane = "";
-                if (isPr && assigned) {
-                  lane = "assigned-pr";
-                  eligible = isOlderThan(item.created_at, 34) && isOlderThan(item.updated_at, 7);
-                } else if (isPr) {
-                  lane = "unassigned-pr";
-                  eligible = isOlderThan(item.updated_at, 7);
-                } else if (assigned) {
+                if (assigned) {
                   lane = "assigned-issue";
                   eligible = isOlderThan(item.updated_at, 10);
                 } else {
@@ -661,30 +692,21 @@ jobs:
                 owner,
                 repo,
                 issue_number: candidate.number,
-                body: candidate.isPr ? prCloseMessage : issueCloseMessage,
+                body: issueCloseMessage,
               });
 
-              if (candidate.isPr) {
-                await github.rest.pulls.update({
-                  owner,
-                  repo,
-                  pull_number: candidate.number,
-                  state: "closed",
-                });
-              } else {
-                await github.rest.issues.update({
-                  owner,
-                  repo,
-                  issue_number: candidate.number,
-                  state: "closed",
-                  state_reason: "not_planned",
-                });
-              }
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: candidate.number,
+                state: "closed",
+                state_reason: "not_planned",
+              });
             }
 
   audit-bug-closure-reasons:
     needs: stale
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    if: ${{ inputs.pr_numbers == '' && (github.event_name != 'schedule' || github.event.schedule == '17 3 * * *') && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
     permissions:
       issues: read
     runs-on: ubuntu-24.04
@@ -784,7 +806,7 @@ jobs:
 
   lock-closed-issues:
     needs: stale
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    if: ${{ inputs.pr_numbers == '' && (github.event_name != 'schedule' || github.event.schedule == '17 3 * * *') && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
     permissions:
       issues: write
     runs-on: blacksmith-16vcpu-ubuntu-2404

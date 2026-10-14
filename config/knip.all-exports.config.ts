@@ -105,6 +105,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/database-engine/physical-facts-worker.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
+  // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.
+  "src/state/openclaw-state-db.postgres.test-support.ts!",
   // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
   "scripts/control-ui-parity/vitest.config.ts!",
   "scripts/control-ui-parity/capture-suite.ts!",

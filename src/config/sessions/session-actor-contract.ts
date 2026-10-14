@@ -1,5 +1,6 @@
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import type {
   SessionActorAuthority,
   SessionActorTarget,
@@ -48,6 +49,8 @@ export type {
   SessionActorHotState,
   SessionActorSettlement,
 } from "./session-actor-state.types.js";
+
+export type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 
 /** Serializable, pure bookkeeping. These reducers cannot change session identity or authority. */
 export type SessionActorReducer = SessionEntryBookkeepingReducer;
@@ -102,12 +105,6 @@ export type SessionActorInputRecovery = {
 export type SessionActorPendingFinalDelivery = NonNullable<SessionEntry["pendingFinalDelivery"]> & {
   intentId: string;
   deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]>;
-};
-
-/** Already validated by the host; live authority is checked again at commit. */
-export type SessionActorDeliveryEvidence = {
-  claim: HarnessCompletionRecovery;
-  result?: { channel: string; target?: { id: string }; platformMessageId?: string };
 };
 
 export type SessionActorPhaseInputs = {

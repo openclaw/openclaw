@@ -172,7 +172,9 @@ suite.define(() => {
           await expectStepOrder();
 
           const menuTrigger = pane.locator(".chat-header-session-menu__trigger");
-          const menu = pane.locator("wa-dropdown.chat-header-session-menu");
+          const menu = pane.locator(
+            "openclaw-chat-header-session-menu > .chat-header-session-menu",
+          );
           for (const visible of [false, true]) {
             await menuTrigger.click();
             await menu.getByRole("menuitem", { name: "View", exact: true }).hover();
