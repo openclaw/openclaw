@@ -165,7 +165,8 @@ extension OpenClawChatViewModel {
 
     func observeOutboxTranscriptTip(_ message: OpenClawChatMessage, session: SessionSnapshot) {
         guard let outbox, let scope = self.outboxBranchScope(for: session),
-              let tip = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines), !tip.isEmpty
+              let tip = message.canonicalTranscriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !tip.isEmpty
         else { return }
         let state = Task { await outbox.branchState(for: scope) }
         let previous = self.pendingCacheWriteTask
@@ -187,7 +188,7 @@ extension OpenClawChatViewModel {
         let activeLeaf: String? = branches.isEmpty ? nil : Self.activeBranchLeafEntryID(in: branches)
         guard branches.isEmpty || activeLeaf != nil else { return false }
         let leaves = Set(branches.map(\.leafEntryId).filter { !$0.isEmpty })
-        // Bootstrap pins one presentation; background replay follows a matching visible scope.
+        /// Bootstrap pins one presentation; background replay follows a matching visible scope.
         func visibleSession() -> SessionSnapshot? {
             let session = capturedSession ?? self.currentSessionSnapshot()
             let isVisible = capturedSession.map(self.isCurrentSession)
@@ -195,7 +196,7 @@ extension OpenClawChatViewModel {
             return isVisible ? session : nil
         }
         let activeTranscriptEntryIDs = visibleSession() != nil
-            ? Set(self.messages.compactMap(\.transcriptMessageID))
+            ? Set(self.messages.compactMap(\.canonicalTranscriptMessageID))
             : []
         guard let commands = await outbox.reconcileBranchScope(
             scope,

@@ -925,8 +925,76 @@ private actor LocalFixtureChatStore {
         ]
     }
 
+    private static func parallelToolResultMessages() -> [OpenClawChatMessage] {
+        let json = #"""
+        [
+          {
+            "role": "user",
+            "timestamp": 1000,
+            "content": "Check both tools"
+          },
+          {
+            "role": "assistant",
+            "timestamp": 2000,
+            "stopReason": "tool_use",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "parallel-a",
+                "name": "exec",
+                "arguments": {
+                  "command": "echo Alpha"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "parallel-b",
+                "name": "exec",
+                "arguments": {
+                  "command": "echo Beta"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "timestamp": 3000,
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "parallel-a",
+                "name": "exec",
+                "content": "ALPHA_RESULT_VISIBLE"
+              },
+              {
+                "type": "tool_result",
+                "tool_use_id": "parallel-b",
+                "name": "exec",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "BETA_RESULT_VISIBLE"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "timestamp": 4000,
+            "stopReason": "stop",
+            "content": "Both tools completed."
+          }
+        ]
+        """#
+        return (try? JSONDecoder().decode([OpenClawChatMessage].self, from: Data(json.utf8))) ?? []
+    }
+
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-parallel-results-fixture") {
+            return self.parallelToolResultMessages()
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-system-notices-fixture") {
             return [
                 OpenClawChatMessage(

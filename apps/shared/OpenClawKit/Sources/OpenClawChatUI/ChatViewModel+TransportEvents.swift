@@ -446,13 +446,14 @@ extension OpenClawChatViewModel {
             }
         }
         guard let message = payload.message else { return }
-        let sanitized = Self.stripInboundMetadata(from: message)
+        let ingested = message.ingestedMessages.map { Self.stripInboundMetadata(from: $0) }
         // Confirmation is gateway-scoped, not presentation-scoped. A flush
         // can drain session A while session B is visible, and A's event must
         // still retire its durable row before this handler returns early.
-        confirmOutboxCommands(in: [sanitized])
+        confirmOutboxCommands(in: ingested)
         guard isCurrentSession else { return }
-        self.observeOutboxTranscriptTip(sanitized, session: self.currentSessionSnapshot())
+        // Branch state follows the gateway carrier, not its expanded presentation rows.
+        self.observeOutboxTranscriptTip(message, session: self.currentSessionSnapshot())
 
         self.invalidateHistorySnapshots()
         // The active client also receives the gateway's echo of the user turn it
@@ -462,17 +463,27 @@ extension OpenClawChatViewModel {
         // Adopt the server record onto the exactly correlated row even when the
         // run's final event already cleared pending state. Same-content turns
         // without this key remain distinct.
-        if adoptCorrelatedUserMessage(incoming: sanitized) {
+        let incoming: [OpenClawChatMessage] = if ingested.count > 1, let user = ingested.last,
+                                                 adoptCorrelatedUserMessage(
+                                                     incoming: user,
+                                                     precedingMessages: Array(ingested.dropLast()))
+        {
+            []
+        } else {
+            ingested.filter { !adoptCorrelatedUserMessage(incoming: $0) }
+        }
+        if incoming.isEmpty {
             self.clearActiveSessionRunIndicatorIfLatestUserAnswered()
             self.applyDeferredExternalStateIfReady()
             return
         }
-        if adoptProvisionalFinalMessage(incoming: sanitized) {
+        let canonical = incoming.filter { !adoptProvisionalFinalMessage(incoming: $0) }
+        if canonical.isEmpty {
             self.clearActiveSessionRunIndicatorIfLatestUserAnswered()
             return
         }
 
-        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
+        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + canonical)
         replaceMessages(Self.dedupeMessages(reconciled))
         pruneProvisionalFinalMessages()
         pruneRunMessageScopes()

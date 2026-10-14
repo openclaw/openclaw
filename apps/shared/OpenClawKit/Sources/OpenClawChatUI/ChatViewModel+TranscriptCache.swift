@@ -60,7 +60,7 @@ extension OpenClawChatViewModel {
         let outbox = self.outbox
         let scope = self.outboxBranchScope(for: session)
         let tip = messages.reversed().compactMap {
-            ChatPayloadDecoding.trimmedNonEmptyString($0.transcriptMessageID)
+            ChatPayloadDecoding.trimmedNonEmptyString($0.canonicalTranscriptMessageID)
         }.first
         guard transcriptCache != nil || (outbox != nil && scope != nil && tip != nil) else { return }
         let branchStateTask: Task<OpenClawChatOutboxBranchState?, Never>? = if let outbox, let scope {
