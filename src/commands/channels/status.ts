@@ -13,7 +13,7 @@ import { withProgress } from "../../cli/progress.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { waitForGatewayDiagnostic } from "../gateway-diagnostic-readiness.js";
 
 export type ChannelsStatusOptions = {
@@ -49,6 +49,9 @@ export async function channelsStatusCommand(
   try {
     const remainingMs = await waitForGatewayDiagnostic({ timeoutMs, json: opts.json }, runtime);
     if (remainingMs === undefined) {
+      if (opts.probe) {
+        runtime.exit(1);
+      }
       return;
     }
     const payload = await withProgress(
@@ -80,7 +83,7 @@ export async function channelsStatusCommand(
     const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
-    if (isGatewayProtocolResponseError(err)) {
+    if (err instanceof ExitError || isGatewayProtocolResponseError(err)) {
       throw err;
     }
     const safeError = redactGatewayUrlSecretsInText(formatErrorMessage(err));
@@ -98,5 +101,8 @@ export async function channelsStatusCommand(
       gatewayAuthUnavailable,
       expectedErrorOutput,
     });
+    if (opts.probe) {
+      runtime.exit(1);
+    }
   }
 }
