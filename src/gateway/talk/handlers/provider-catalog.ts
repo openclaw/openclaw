@@ -39,7 +39,11 @@ export async function resolveCatalogProviderSelection<T extends { provider: { id
   }
 }
 
-export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agentId: string) {
+export async function buildTalkTranscriptionCatalog(
+  config: OpenClawConfig,
+  agentId: string,
+  onReadinessError: (error: unknown) => false,
+) {
   const transcriptionConfig = await buildTalkTranscriptionConfig(
     config,
     undefined,
@@ -93,9 +97,13 @@ export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agen
               const providerConfig =
                 provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
                 rawConfigWithModel;
-              configured = await (provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
-                provider.isConfigured?.({ cfg: config, providerConfig }) ??
-                false);
+              try {
+                configured = await (provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
+                  provider.isConfigured?.({ cfg: config, providerConfig }) ??
+                  false);
+              } catch (error) {
+                configured = onReadinessError(error);
+              }
             }
             const entry: Record<string, unknown> = {
               id: provider.id,

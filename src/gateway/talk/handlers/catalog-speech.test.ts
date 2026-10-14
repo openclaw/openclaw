@@ -11,13 +11,14 @@ import { talkHandlers } from "./index.js";
 
 const registry = vi.hoisted(() => ({
   providers: [] as SpeechProviderPlugin[],
+  listSpeechProviders: vi.fn<() => SpeechProviderPlugin[]>(),
   realtime: [] as RealtimeVoiceProviderPlugin[],
   transcription: [] as RealtimeTranscriptionProviderPlugin[],
 }));
 
 vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
-  listSpeechProviders: () => registry.providers,
+  listSpeechProviders: registry.listSpeechProviders,
   canonicalizeSpeechProviderId: (id: string | undefined) => id,
   getSpeechProvider: (id: string | undefined) =>
     registry.providers.find((provider) => provider.id === id),
@@ -62,6 +63,7 @@ afterEach(() => vi.useRealTimers());
 
 beforeEach(() => {
   registry.providers = [];
+  registry.listSpeechProviders.mockReset().mockImplementation(() => registry.providers);
   registry.realtime = [];
   registry.transcription = [];
 });
@@ -383,14 +385,14 @@ it("retains successful readiness after a provider failure and refreshes on confi
   });
 });
 
-it("retries a failed cold refresh before the client's warming window expires", async () => {
+it("retries failed cold discovery before the client's warming window expires", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const cfg: OpenClawConfig = { plugins: { enabled: false } };
   const context = { getRuntimeConfig: () => cfg };
-  const readiness = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("temporary failure"))
-    .mockResolvedValue(true);
+  const readiness = vi.fn(async () => true);
+  registry.listSpeechProviders.mockImplementationOnce(() => {
+    throw new Error("temporary discovery failure");
+  });
   registry.providers = [
     {
       id: "sample",
@@ -412,5 +414,91 @@ it("retries a failed cold refresh before the client's warming window expires", a
     ok: true,
     response: { speech: { providers: [{ configured: true }] } },
   });
-  expect(readiness).toHaveBeenCalledTimes(2);
+  expect(readiness).toHaveBeenCalledTimes(1);
 });
+
+it.each(["speech", "realtime", "transcription"] as const)(
+  "isolates cold %s readiness failures and retains the recovered warm snapshot",
+  async (kind) => {
+    let cfg: OpenClawConfig = {
+      plugins: {
+        enabled: false,
+        entries: { "voice-call": { config: { streaming: { provider: "healthy" } } } },
+      },
+      talk: { realtime: { provider: "healthy" } },
+    };
+    const context = { getRuntimeConfig: () => cfg };
+    const brokenReadiness = vi.fn(async (): Promise<boolean> => {
+      throw new Error("synthetic provider unavailable");
+    });
+    for (const id of ["healthy", "broken"]) {
+      const provider = {
+        id,
+        label: id,
+        isConfigured: () => false,
+        isConfiguredAsync: id === "broken" ? brokenReadiness : async () => true,
+      };
+      if (kind === "speech") {
+        registry.providers.push({
+          ...provider,
+          synthesize: async () => {
+            throw new Error("catalog must not synthesize");
+          },
+        });
+      } else if (kind === "realtime") {
+        registry.realtime.push({
+          ...provider,
+          capabilities: {
+            transports: ["gateway-relay"],
+            inputAudioFormats: [],
+            outputAudioFormats: [],
+          },
+          createBridge: () => {
+            throw new Error("catalog must not create a session");
+          },
+        });
+      } else {
+        registry.transcription.push({
+          ...provider,
+          createSession: () => {
+            throw new Error("catalog must not create a session");
+          },
+        });
+      }
+    }
+    const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+    expect((await read()).ok).toBe(false);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(await read()).toMatchObject({
+      ok: true,
+      response: {
+        [kind]: {
+          providers: [
+            { id: "healthy", configured: true },
+            { id: "broken", configured: false },
+          ],
+        },
+      },
+    });
+    brokenReadiness.mockResolvedValue(true);
+    cfg = { ...cfg };
+    await read();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const recovered = await read();
+    expect(recovered).toMatchObject({
+      ok: true,
+      response: { [kind]: { providers: [{ configured: true }, { configured: true }] } },
+    });
+    brokenReadiness.mockRejectedValue(new Error("provider unavailable again"));
+    cfg = { ...cfg };
+    expect((await read()).response).toBe(recovered.response);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect((await read()).response).toBe(recovered.response);
+  },
+);

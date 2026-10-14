@@ -328,7 +328,8 @@ function readTalkCatalog(
       }, CATALOG_REFRESH_DEADLINE_MS);
       deadline.unref();
       try {
-        const build = () => buildTalkCatalog(config, params, measure);
+        const build = () =>
+          buildTalkCatalog(config, params, measure, retained.snapshot !== undefined);
         const snapshot = await admission.run(() =>
           withPluginRuntimeGatewayContextResolver(
             resolver,
@@ -369,8 +370,14 @@ async function buildTalkCatalog(
   config: OpenClawConfig,
   params: TalkCatalogParams,
   measure: <T>(phase: string, run: () => Promise<T>) => Promise<T>,
+  hasSnapshot: boolean,
 ) {
-  let readinessFailed = false;
+  const onReadinessError = (error: unknown): false => {
+    if (hasSnapshot) {
+      throw error;
+    }
+    return false;
+  };
   // Reject ambiguous ownership before provider discovery loads unrelated plugins.
   const realtimeAgentId = resolveTalkSessionAgentId(config, params.sessionKey);
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
@@ -435,9 +442,7 @@ async function buildTalkCatalog(
               effectiveTts,
               provider,
               undefined,
-              () => {
-                readinessFailed = true;
-              },
+              onReadinessError,
             );
           }
           const entry: Record<string, unknown> = {
@@ -460,7 +465,9 @@ async function buildTalkCatalog(
         }),
       ),
     ),
-    measure("transcription", () => buildTalkTranscriptionCatalog(config, realtimeAgentId)),
+    measure("transcription", () =>
+      buildTalkTranscriptionCatalog(config, realtimeAgentId, onReadinessError),
+    ),
     measure("realtimeProviders", () =>
       settleTalkCatalogTasks(
         listRealtimeVoiceProviders(config, realtimeProviderIds).map(async (provider) => {
@@ -526,7 +533,7 @@ async function buildTalkCatalog(
                   providerConfig,
                   agentId: realtimeAgentId,
                   surface: realtimeSurface,
-                }))),
+                }).catch(onReadinessError))),
             modes: ["realtime"],
             brains:
               capabilities?.supportsToolCalls === false && capabilities.handlesAgentConsult !== true
@@ -583,9 +590,6 @@ async function buildTalkCatalog(
       ),
     ),
   ]);
-  if (readinessFailed) {
-    throw new Error("Talk catalog provider readiness failed");
-  }
   return {
     modes: ["realtime", "stt-tts", "transcription"],
     transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
