@@ -2,7 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 import type { ControllerHost } from "./page-controller.ts";
@@ -27,20 +27,28 @@ async function loadConnectedProviderData(
   target: { providerId: string; data: ModelProvidersData },
   signal: AbortSignal,
 ): Promise<ModelProvidersData> {
-  const authStatus = await loadModelAuthStatus(client, { agentId, signal });
+  // Read auth first so the catalog sees the newly connected runtime. This one
+  // shared refresh absorbs the intermediate catalog invalidations during login.
+  const refreshed = await loadModelProvidersData(client, { agentId, refresh: true, signal });
+  const authStatus = refreshed.authStatus;
   return {
     ...target.data,
-    authStatus: {
-      ...authStatus,
-      providers: [
-        ...(target.data.authStatus?.providers ?? []).filter(
-          (provider) => canonicalModelAuthProviderId(provider.provider) !== target.providerId,
-        ),
-        ...authStatus.providers.filter(
-          (provider) => canonicalModelAuthProviderId(provider.provider) === target.providerId,
-        ),
-      ],
-    },
+    providerOutcomes: refreshed.providerOutcomes,
+    catalogError: refreshed.catalogError,
+    error: authStatus ? refreshed.error : t("modelProviders.login.statusRefreshFailed"),
+    authStatus: authStatus
+      ? {
+          ...authStatus,
+          providers: [
+            ...(target.data.authStatus?.providers ?? []).filter(
+              (provider) => canonicalModelAuthProviderId(provider.provider) !== target.providerId,
+            ),
+            ...authStatus.providers.filter(
+              (provider) => canonicalModelAuthProviderId(provider.provider) === target.providerId,
+            ),
+          ],
+        }
+      : target.data.authStatus,
   };
 }
 
@@ -48,6 +56,7 @@ export class ModelProviderCoreLoader {
   private active = false;
   private catalogRequest: AbortController | null = null;
   catalogError: string | null = null;
+  retryProvider: string | undefined;
   private request: AbortController | null = null;
 
   constructor(
@@ -140,6 +149,7 @@ export class ModelProviderCoreLoader {
           });
       if (this.request === request) {
         this.active = false;
+        this.retryProvider = target && data.error ? target.providerId : undefined;
         this.options.onComplete({ client, agentId, reason, data });
       }
     } catch {
@@ -155,6 +165,7 @@ export class ModelProviderCoreLoader {
 
   invalidate(): void {
     this.resetCatalog();
+    this.retryProvider = undefined;
     this.active = false;
     this.request?.abort();
     this.request = null;

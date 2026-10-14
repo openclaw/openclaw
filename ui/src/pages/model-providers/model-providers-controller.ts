@@ -246,8 +246,7 @@ export class ModelProvidersController extends ModelPageController {
       () => this.context?.gateway,
       (gateway) =>
         modelCatalog.subscribeModelCatalogChanges(gateway, () => {
-          // Sign-in publishes several intermediate config changes. Its completion
-          // owns the credential read; catalog snapshots update the shared projection.
+          // Sign-in completion coalesces these invalidations into one shared catalog refresh.
           if (!this.login.busy) {
             void this.refresh("publication");
           }
@@ -691,7 +690,7 @@ export class ModelProvidersController extends ModelPageController {
           ? this.context.agents.refreshList()
           : Promise.all([
               this.context.runtimeConfig.refresh({ background: true }),
-              this.refresh("forced"),
+              this.refresh("forced", this.core.retryProvider),
             ])),
       onOpenKeyEditor: (provider) => {
         this.setState("keyEditorProvider", provider);

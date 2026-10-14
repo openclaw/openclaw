@@ -569,7 +569,17 @@ function ProviderAccess(props: ModelProvidersViewProps) {
       </label>
       <div class="model-providers__provider-list">
         {props.error ? (
-          <SettingsGroup>{renderProviderNoticeRow(props.error)}</SettingsGroup>
+          <SettingsGroup>
+            {renderProviderNoticeRow(props.error)}
+            <button
+              type="button"
+              class="btn btn--sm"
+              disabled={props.refreshing}
+              onClick={() => props.onRefresh()}
+            >
+              {t("common.retry")}
+            </button>
+          </SettingsGroup>
         ) : undefined}
         {props.providerUsageFailed ? (
           <SettingsGroup>
