@@ -551,6 +551,7 @@ src/config/zod-schema.session.ts
 src/config/zod-schema.telemetry.ts
 src/config/zod-schema.ts
 src/cron/completion-status.ts
+src/cron/definition-hash.ts
 src/cron/execution-error-constants.ts
 src/cron/run-diagnostics-normalize.ts
 src/cron/run-history-detail.ts
