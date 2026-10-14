@@ -14,6 +14,7 @@ import {
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
 } from "./agent-tools.before-tool-call.js";
+import { recordToolExecutionTracked } from "./agent-tools.before-tool-call.state.js";
 import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -705,26 +706,42 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     },
   );
 
-  it("keeps policy-blocked cron calls replay-safe", async () => {
-    const { ctx } = createTestContext();
-    const toolCallId = "tool-cron-policy-blocked";
-    await executeTool(ctx, {
-      toolName: "cron",
-      toolCallId,
-      args: { action: "add", job: { name: "reminder" } },
-      isError: false,
-      result: buildBlockedToolResult({
-        reason: "blocked by policy",
+  it.each(["cancelled-before-body", "policy-blocked", "middleware-rewritten"] as const)(
+    "derives cron replay safety from %s execution evidence",
+    async (mode) => {
+      const { ctx } = createTestContext();
+      const toolCallId = `tool-cron-${mode}`;
+      if (mode === "cancelled-before-body") {
+        recordToolExecutionTracked(toolCallId, "run-test");
+      }
+      await executeTool(ctx, {
+        toolName: "cron",
         toolCallId,
-        runId: "run-test",
-      }),
-    });
-    expect(ctx.state.replayState).toEqual({
-      replayInvalid: false,
-      hadPotentialSideEffects: false,
-    });
-    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
-  });
+        args: { action: "add", job: { name: "reminder" } },
+        isError: mode !== "policy-blocked",
+        ...(mode === "cancelled-before-body" ? { executionStarted: true } : {}),
+        result:
+          mode === "policy-blocked"
+            ? buildBlockedToolResult({ reason: "blocked by policy", toolCallId, runId: "run-test" })
+            : mode === "cancelled-before-body"
+              ? { details: { status: "error", error: "cancelled before tool body" } }
+              : {
+                  content: [{ type: "text", text: "blocked by middleware" }],
+                  details: {
+                    status: "blocked",
+                    deniedReason: "plugin-before-tool-call",
+                    reason: "blocked by middleware",
+                  },
+                },
+      });
+      const executed = mode === "middleware-rewritten";
+      expect(ctx.state.replayState).toEqual({
+        replayInvalid: executed,
+        hadPotentialSideEffects: executed,
+      });
+      expect(ctx.state.lastToolError?.mutatingAction).toBe(executed);
+    },
+  );
 
   it("records structured core read actions as replay-safe", async () => {
     for (const [toolName, action] of [
@@ -1014,6 +1031,63 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.messagingToolSentTexts).toEqual([]);
   });
 
+  it.each([
+    {
+      label: "the exact source route",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: true,
+    },
+    {
+      label: "the same target in another account",
+      accountId: "account-2",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: false,
+    },
+    {
+      label: "the same target in another thread",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-2",
+      expected: false,
+    },
+    {
+      label: "another target",
+      accountId: "account-1",
+      target: "chat456",
+      threadId: "thread-1",
+      expected: false,
+    },
+  ])("records explicit message sends only for $label", async (testCase) => {
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-explicit-${testCase.label}`,
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: testCase.accountId,
+        target: testCase.target,
+        threadId: testCase.threadId,
+        message: "explicit reply",
+      },
+      result: { details: { ok: true } },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(testCase.expected);
+  });
+
   it("records rich-content delivery when visible text is blank", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-rich-content";
@@ -1285,6 +1359,12 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       reason: { kind: "signal", signal: "SIGKILL" },
     },
     {
+      label: "credential-shaped output",
+      details: { exitCode: 7 },
+      output: `${dummyTelegramToken} ${"x".repeat(500)}`,
+      reason: { kind: "exit", exitCode: 7 },
+    },
+    {
       label: "terminal control characters",
       details: { exitCode: 7 },
       output: "SAFE\u001b[31m_PROCESS_STDERR",
@@ -1367,6 +1447,16 @@ describe("handleToolExecutionEnd timeout metadata", () => {
         },
       },
       error: "approval required",
+    },
+    {
+      label: "thrown gateway error",
+      result: resultWithDetails({
+        status: "error",
+        error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+        gatewayCode: "UNAVAILABLE",
+        nodeError: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
+      }),
+      error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
     },
   ])("records denial codes from $label results", async ({ result, error }) => {
     const { ctx } = createTestContext();
@@ -2373,6 +2463,12 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it.each([
     {
+      name: "case-variant collision",
+      toolName: "Web_Search",
+      builtinToolNames: new Set(["web_search"]),
+      provenance: {},
+    },
+    {
       name: "MCP provenance",
       toolName: "browser",
       builtinToolNames: undefined,
@@ -2391,6 +2487,40 @@ describe("handleToolExecutionEnd media emission", () => {
     });
     expect(onToolResult).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
+  it("queues one voice copy when TTS output text mentions the generated file", async () => {
+    const ctx = createMediaContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+      builtinToolNames: new Set(["tts"]),
+      coreBuiltinToolNames: new Set(["tts"]),
+    });
+
+    await endTool(ctx, {
+      toolName: "tts",
+      toolCallId: "tc-1",
+      result: markCoreTtsToolResult(
+        {
+          content: [{ type: "text", text: "Generated audio reply at /tmp/reply.opus" }],
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              audioAsVoice: true,
+              trustedLocalMedia: true,
+            },
+          },
+        },
+        ["/tmp/reply.opus"],
+      ),
+    });
+
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+    expect(ctx.state.toolAutoDeliveryMediaUrls).toEqual(new Set(["/tmp/reply.opus"]));
+    expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
   });
 
   it("does not grant auto-delivery to a trusted plugin tts when core tts is present", async () => {

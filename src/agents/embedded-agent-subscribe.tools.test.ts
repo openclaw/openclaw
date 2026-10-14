@@ -392,6 +392,15 @@ describe("filterToolResultMediaUrls", () => {
     ).toEqual(["/tmp/reply.opus", "https://example.com/audio.opus"]);
   });
 
+  it("filters local media from unregistered plugin tools", () => {
+    expect(
+      filterToolResultMediaUrls("plugin_media_tool", [
+        "/tmp/private.png",
+        "https://example.com/image.png",
+      ]),
+    ).toEqual(["https://example.com/image.png"]);
+  });
+
   it("keeps local media for exact plugin names trusted in this run", () => {
     expect(
       filterToolResultMediaUrls(

@@ -522,6 +522,14 @@ describe("cron tool", () => {
       error: "declarationKey must be a non-empty string",
     },
     {
+      name: "blank create display name",
+      args: {
+        action: "add",
+        job: { ...buildReminderAgentTurnJob(), declarationKey: "daily", displayName: "   " },
+      },
+      error: "displayName must be a non-empty string",
+    },
+    {
       name: "blank patch display name",
       args: { action: "update", jobId: "daily", job: { displayName: "   " } },
       error: "displayName must be a non-empty string or null",
@@ -535,6 +543,34 @@ describe("cron tool", () => {
     await expect(executeCron(args)).rejects.toThrow(error);
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
+
+  it.each([["null", { agentId: null }]])(
+    "forwards %s add ownership separately from authenticated caller identity",
+    async (_name, fields) => {
+      let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
+      callGatewayMock.mockImplementation(async () => {
+        identity = getGatewayToolCallerIdentity();
+        return { ok: true };
+      });
+
+      await executeCron(
+        {
+          action: "add",
+          job: { ...buildReminderAgentTurnJob(), ...fields },
+        },
+        {
+          agentSessionKey: "agent:agent-123:telegram:direct:channing",
+        },
+      );
+      expect(expectSingleGatewayCallMethod("cron.add")?.agentId).toBe(
+        "agentId" in fields ? fields.agentId : undefined,
+      );
+      expect(identity).toMatchObject({
+        agentId: "agent-123",
+        sessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+    },
+  );
 
   it("does not forward model-supplied callerScope", async () => {
     await executeCron(
@@ -562,6 +598,11 @@ describe("cron tool", () => {
         sessionTarget: "isolated",
         payload: { kind: "Command", argv: ["sh", "-lc", "echo ok"] },
       },
+    },
+    {
+      action: "update",
+      id: "job-4",
+      job: { payload: { kind: "Command", argv: ["sh", "-lc", "echo ok"] } },
     },
   ])("rejects mixed-case command payloads on $action", async (args) => {
     await expect(executeCron(args)).rejects.toThrow(

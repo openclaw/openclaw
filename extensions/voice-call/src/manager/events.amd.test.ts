@@ -27,47 +27,99 @@ function detection(answeredBy: string, id = "amd") {
 const voicemail = { detection: "twilio", onMachine: "leave-message" } as const;
 
 describe("carrier answering machine flow", () => {
-  it("uses realtime voicemail and waits before hangup", async () => {
-    const playback = createDeferred<void>();
-    const started = createDeferred<void>();
-    const work: Promise<unknown>[] = [];
-    const carrier = vi.fn();
-    const beforeCarrierPlayback = vi.fn();
-    const hangup = vi.fn(async () => {});
-    const call = callRecord({ brief: { voicemailMessage: "We will call again later." } });
-    const playRealtimeVoicemail = vi.fn(() => {
-      started.resolve();
-      return playback.promise;
-    });
-    const ctx = createContext({
-      playRealtimeVoicemail,
-      beforeCarrierPlayback,
-      trackCallWork: (item) => {
-        work.push(item);
-      },
-      provider: createProvider({
-        name: "twilio",
-        playMessageAndHangup: carrier,
-        hangupCall: hangup,
-      }),
-      config: VoiceCallConfigSchema.parse({ voicemail }),
-    });
+  it("records detection on a terminal status without restarting playback", async () => {
+    const playMessageAndHangup = vi.fn(async () => {});
+    const ctx = createContext({ provider: createProvider({ playMessageAndHangup }) });
+    const call = callRecord();
     ctx.activeCalls.set(call.callId, call);
-    await processEvent(ctx, detection("machine_end_beep"));
-    await started.promise;
-    expect(playRealtimeVoicemail).toHaveBeenCalledWith(
-      call.callId,
-      expect.stringContaining("We will call again later."),
-    );
-    expect(carrier).not.toHaveBeenCalled();
-    expect(beforeCarrierPlayback).not.toHaveBeenCalled();
-    expect(hangup).not.toHaveBeenCalled();
-    playback.resolve();
-    await Promise.all(work);
-    expect(hangup).toHaveBeenCalledTimes(1);
-    expect(call.endReason).toBe("voicemail");
-    expect(call.metadata?.voicemailStatus).toBe("left");
+    await processEvent(ctx, {
+      id: "ended",
+      type: "call.ended",
+      callId: call.callId,
+      timestamp: Date.now(),
+      reason: "completed",
+      answeredBy: "machine_end_beep",
+    });
+    expect(call.metadata).toMatchObject({
+      answeredByFirst: "machine_end_beep",
+      answeredBy: "machine_end_beep",
+    });
+    expect(call.endReason).toBe("completed");
+    expect(playMessageAndHangup).not.toHaveBeenCalled();
   });
+
+  it("retains the first classification as later callbacks update the call", async () => {
+    const ctx = createContext();
+    const call = callRecord();
+    ctx.activeCalls.set(call.callId, call);
+    await processEvent(ctx, detection("machine_start", "first"));
+    await processEvent(ctx, detection("machine_end_other", "last"));
+    expect(call.metadata).toMatchObject({
+      answeredByFirst: "machine_start",
+      answeredBy: "machine_end_other",
+    });
+    await processEvent(ctx, {
+      id: "ended",
+      type: "call.ended",
+      callId: call.callId,
+      timestamp: Date.now(),
+      reason: "completed",
+      answeredBy: "machine_end_beep",
+    });
+    expect(call.metadata).toMatchObject({
+      answeredByFirst: "machine_start",
+      answeredBy: "machine_end_beep",
+    });
+  });
+
+  it.each([false, true])(
+    "uses realtime voicemail and waits before hangup (failure=%s)",
+    async (failed) => {
+      const playback = createDeferred<void>();
+      const started = createDeferred<void>();
+      const work: Promise<unknown>[] = [];
+      const carrier = vi.fn();
+      const beforeCarrierPlayback = vi.fn();
+      const hangup = vi.fn(async () => {});
+      const call = callRecord({ brief: { voicemailMessage: "We will call again later." } });
+      const playRealtimeVoicemail = vi.fn(() => {
+        started.resolve();
+        return playback.promise;
+      });
+      const ctx = createContext({
+        playRealtimeVoicemail,
+        beforeCarrierPlayback,
+        trackCallWork: (item) => {
+          work.push(item);
+        },
+        provider: createProvider({
+          name: "twilio",
+          playMessageAndHangup: carrier,
+          hangupCall: hangup,
+        }),
+        config: VoiceCallConfigSchema.parse({ voicemail }),
+      });
+      ctx.activeCalls.set(call.callId, call);
+      await processEvent(ctx, detection("machine_end_beep"));
+      await started.promise;
+      expect(playRealtimeVoicemail).toHaveBeenCalledWith(
+        call.callId,
+        expect.stringContaining("We will call again later."),
+      );
+      expect(carrier).not.toHaveBeenCalled();
+      expect(beforeCarrierPlayback).not.toHaveBeenCalled();
+      expect(hangup).not.toHaveBeenCalled();
+      if (failed) {
+        playback.reject(new Error("No audible voicemail"));
+      } else {
+        playback.resolve();
+      }
+      await Promise.all(work);
+      expect(hangup).toHaveBeenCalledTimes(1);
+      expect(call.endReason).toBe(failed ? "error" : "voicemail");
+      expect(call.metadata?.voicemailStatus).toBe(failed ? "failed" : "left");
+    },
+  );
 
   it("prepares the bridge once and persists the intended message before carrier playback", async () => {
     const prepared = createDeferred<void>();
@@ -119,71 +171,80 @@ describe("carrier answering machine flow", () => {
     expect(call.endReason).toBe("voicemail");
   });
 
-  it("records carrier request failure without claiming voicemail was left", async () => {
-    const work: Promise<unknown>[] = [];
-    const fail = async () => {
-      throw new Error("carrier handoff failed");
-    };
-    const playMessageAndHangup = vi.fn(fail);
-    const hangup = vi.fn(async () => {});
-    const ctx = createContext({
-      beforeCarrierPlayback: async () => {},
-      trackCallWork: (item) => {
-        work.push(item);
-      },
-      provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
-      config: VoiceCallConfigSchema.parse({ voicemail }),
-    });
-    const call = callRecord();
-    ctx.activeCalls.set(call.callId, call);
-    await processEvent(ctx, detection("machine_end_silence"));
-    await Promise.all(work);
-    expect(playMessageAndHangup).toHaveBeenCalledTimes(1);
-    expect(call.metadata).toMatchObject({
-      voicemailStatus: "failed",
-      voicemailError: "carrier handoff failed",
-    });
-    expect(call.endReason).toBe("error");
-  });
+  it.each(["prepare", "request"])(
+    "records %s failure without claiming voicemail was left",
+    async (failure) => {
+      const work: Promise<unknown>[] = [];
+      const fail = async () => {
+        throw new Error("carrier handoff failed");
+      };
+      const playMessageAndHangup = vi.fn(failure === "request" ? fail : async () => {});
+      const hangup = vi.fn(async () => {});
+      const ctx = createContext({
+        beforeCarrierPlayback: failure === "prepare" ? fail : async () => {},
+        trackCallWork: (item) => {
+          work.push(item);
+        },
+        provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
+        config: VoiceCallConfigSchema.parse({ voicemail }),
+      });
+      const call = callRecord();
+      ctx.activeCalls.set(call.callId, call);
+      await processEvent(ctx, detection("machine_end_silence"));
+      await Promise.all(work);
+      expect(playMessageAndHangup).toHaveBeenCalledTimes(failure === "request" ? 1 : 0);
+      expect(call.metadata).toMatchObject({
+        voicemailStatus: "failed",
+        voicemailError: "carrier handoff failed",
+      });
+      expect(call.endReason).toBe("error");
+    },
+  );
 
-  it("plays notify speech once after unknown classification", async () => {
-    const work: Promise<unknown>[] = [];
-    const playMessageAndHangup = vi.fn(async () => {});
-    const hangup = vi.fn(async () => {});
-    const ctx = createContext({
-      trackCallWork: (item) => {
-        work.push(item);
-      },
-      provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
-      config: VoiceCallConfigSchema.parse({ voicemail }),
-    });
-    const call = callRecord({
-      mode: "notify",
-      pendingNotifyAmd: true,
-      initialMessage: "Your parcel is ready.",
-      brief: { voicemailMessage: "Please collect your parcel." },
-    });
-    ctx.activeCalls.set(call.callId, call);
-    await processEvent(ctx, detection("unknown"));
-    await processEvent(ctx, detection("unknown", "redelivery"));
-    await Promise.all(work);
-    expect(playMessageAndHangup).toHaveBeenCalledExactlyOnceWith({
-      callId: call.callId,
-      providerCallId: "CA-amd",
-      text: "Your parcel is ready.",
-    });
-    expect(hangup).not.toHaveBeenCalled();
-    await processEvent(ctx, {
-      id: "complete",
-      type: "call.ended",
-      callId: call.callId,
-      timestamp: Date.now(),
-      reason: "completed",
-    });
-    expect(call.endReason).toBe("completed");
-  });
+  it.each(["human", "unknown", "machine_end_beep"])(
+    "holds notify speech until classification %s, then plays the right message once",
+    async (answeredBy) => {
+      const work: Promise<unknown>[] = [];
+      const playMessageAndHangup = vi.fn(async () => {});
+      const hangup = vi.fn(async () => {});
+      const ctx = createContext({
+        trackCallWork: (item) => {
+          work.push(item);
+        },
+        provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
+        config: VoiceCallConfigSchema.parse({ voicemail }),
+      });
+      const call = callRecord({
+        mode: "notify",
+        pendingNotifyAmd: true,
+        initialMessage: "Your parcel is ready.",
+        brief: { voicemailMessage: "Please collect your parcel." },
+      });
+      ctx.activeCalls.set(call.callId, call);
+      await processEvent(ctx, detection(answeredBy));
+      await processEvent(ctx, detection(answeredBy, "redelivery"));
+      await Promise.all(work);
+      expect(playMessageAndHangup).toHaveBeenCalledExactlyOnceWith({
+        callId: call.callId,
+        providerCallId: "CA-amd",
+        text:
+          answeredBy === "machine_end_beep"
+            ? "Please collect your parcel."
+            : "Your parcel is ready.",
+      });
+      expect(hangup).not.toHaveBeenCalled();
+      await processEvent(ctx, {
+        id: "complete",
+        type: "call.ended",
+        callId: call.callId,
+        timestamp: Date.now(),
+        reason: "completed",
+      });
+      expect(call.endReason).toBe(answeredBy === "machine_end_beep" ? "voicemail" : "completed");
+    },
+  );
 
-  it("handles AMD hang-up policy without speaking", async () => {
+  it.each(["off", "hang-up"] as const)("handles AMD policy %s without speaking", async (mode) => {
     const work: Promise<unknown>[] = [];
     const playMessageAndHangup = vi.fn(async () => {});
     const hangup = vi.fn(async () => {});
@@ -193,7 +254,7 @@ describe("carrier answering machine flow", () => {
       },
       provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
       config: VoiceCallConfigSchema.parse({
-        voicemail: { detection: "twilio", onMachine: "hang-up" },
+        voicemail: { detection: mode === "off" ? "off" : "twilio", onMachine: "hang-up" },
       }),
     });
     const call = callRecord();
@@ -201,7 +262,7 @@ describe("carrier answering machine flow", () => {
     await processEvent(ctx, detection("machine_start"));
     await Promise.all(work);
     expect(playMessageAndHangup).not.toHaveBeenCalled();
-    expect(hangup).toHaveBeenCalledTimes(1);
-    expect(call.metadata?.voicemailStatus).toBe("hang-up");
+    expect(hangup).toHaveBeenCalledTimes(mode === "off" ? 0 : 1);
+    expect(call.metadata?.voicemailStatus).toBe(mode === "off" ? undefined : "hang-up");
   });
 });
