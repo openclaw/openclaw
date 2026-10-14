@@ -1,6 +1,10 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
-import type { ModelAuthStatusResult, SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  SystemAgentSetupDetectResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { WizardLoginController } from "../../components/wizard-login-controller.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -9,7 +13,9 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
 import type {
   ModelSetupWizardRunner,
   ModelSetupWizardCompletion,
@@ -60,8 +66,12 @@ export class ModelProviderLoginController {
   private message: ModelProviderRowMessage | undefined;
   private mode: "auth" | "activate" | "access" = "auth";
   private providerId: string | undefined;
+  private completionModel: ModelCatalogEntry | undefined;
+  private verifiedModelRef: string | undefined;
+  private startingChat = false;
   private readonly runner: ModelSetupWizardRunner;
   private readonly wizard: WizardLoginController;
+  private readonly completionCatalog: ModelCatalogReader;
 
   constructor(
     private readonly host: ControllerHost,
@@ -79,6 +89,23 @@ export class ModelProviderLoginController {
       sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
     });
     this.runner = this.wizard.runner;
+    this.completionCatalog = new ModelCatalogReader(() => host.requestUpdate(), {
+      onResult: (catalog) => {
+        const available = (model: ModelCatalogEntry) =>
+          canonicalModelAuthProviderId(model.provider) === this.providerId &&
+          model.available === true &&
+          model.manualSelectionAllowed !== false;
+        // Prefer the hosted ranking. Its absence must not lose the provider's
+        // own starter model, verified by the setup owner in this sign-in.
+        this.completionModel =
+          catalog.models.find((model) => available(model) && model.recommended === true) ??
+          catalog.models.find(
+            (model) =>
+              available(model) && `${model.provider}/${model.id}` === this.verifiedModelRef,
+          );
+        host.requestUpdate();
+      },
+    });
   }
 
   get busy(): boolean {
@@ -287,6 +314,10 @@ export class ModelProviderLoginController {
     this.message = undefined;
     this.mode = "auth";
     this.providerId = undefined;
+    this.completionModel = undefined;
+    this.verifiedModelRef = undefined;
+    this.startingChat = false;
+    this.completionCatalog.clear();
     // Cleanup addresses the original connection and wizard only. Late replies
     // cannot publish credentials or errors into another agent's view.
     this.wizard.reset();
@@ -322,6 +353,14 @@ export class ModelProviderLoginController {
       mode: this.mode === "access" ? "auth" : this.mode,
       busy: this.mutationActive,
       refreshWarning: this.refreshWarning,
+      doneMessage: t("modelSetup.wizard.connected"),
+      doneAction: this.completionModel
+        ? {
+            label: t("modelProviders.login.startChat", { model: this.completionModel.name }),
+            disabled: this.startingChat,
+            onClick: () => void this.startChat(),
+          }
+        : undefined,
     });
   }
 
@@ -453,13 +492,20 @@ export class ModelProviderLoginController {
   }
 
   private async complete(completion: ModelSetupWizardCompletion): Promise<void> {
+    const { context, agentId } = this.options.getScope();
+    const client = context.gateway.snapshot.client;
+    const generation = this.generation;
+    const providerId = this.providerId;
     const activating = this.mode === "activate";
     if (activating && !completion.modelActivation) {
       this.runner.fail(t("modelSetup.errors.activationFailed"));
       return;
     }
+    this.verifiedModelRef = completion.modelActivation?.modelRef;
     const label = this.runner.state.authLabel;
-    this.runner.close();
+    if (activating && !this.providerId) {
+      this.runner.close();
+    }
     this.message = {
       kind: "success",
       text: activating
@@ -483,7 +529,56 @@ export class ModelProviderLoginController {
           .join("\n") || undefined,
     };
     this.host.requestUpdate();
-    await this.options.refresh(this.providerId);
+    void this.options.refresh(providerId).catch((error: unknown) => {
+      if (generation === this.generation) {
+        this.refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
+        this.host.requestUpdate();
+      }
+    });
+    if (generation !== this.generation || context.gateway.snapshot.client !== client) {
+      return;
+    }
+    if (client && agentId && providerId) {
+      this.completionCatalog.bind(context.gateway, { agentId });
+      await this.completionCatalog.read();
+    }
+  }
+
+  private async startChat(): Promise<void> {
+    const model = this.completionModel;
+    const { context, agentId } = this.options.getScope();
+    if (!model || !agentId || this.startingChat || !this.options.canContinue()) {
+      return;
+    }
+    const generation = this.generation;
+    const client = context.gateway.snapshot.client;
+    this.startingChat = true;
+    this.host.requestUpdate();
+    try {
+      const key = await context.sessions.create({
+        agentId,
+        model: `${model.provider}/${model.id}`,
+        ...(model.agentRuntime ? { agentRuntime: model.agentRuntime.id } : {}),
+      });
+      if (generation !== this.generation || context.gateway.snapshot.client !== client) {
+        return;
+      }
+      if (key) {
+        this.reset();
+        openPreferredApplicationSession(context, key, agentId);
+      } else {
+        this.refreshWarning = context.sessions.state.error ?? t("modelProviders.requestFailed");
+      }
+    } catch (error) {
+      if (generation === this.generation) {
+        this.refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
+      }
+    } finally {
+      if (generation === this.generation) {
+        this.startingChat = false;
+        this.host.requestUpdate();
+      }
+    }
   }
 
   private async run(

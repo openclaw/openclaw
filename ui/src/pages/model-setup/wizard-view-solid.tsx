@@ -12,6 +12,7 @@ export type WizardViewProps = {
   state: ModelSetupWizardState;
   refreshWarning: string | null;
   doneMessage?: string;
+  doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
@@ -136,6 +137,19 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
           </div>
           <Show when={props.state.phase !== "step"}>
             <openclaw-modal-actions class="model-setup-wizard__footer">
+              <Show when={props.state.phase === "done" && props.doneAction}>
+                {(action) => (
+                  <button
+                    type="button"
+                    class="btn primary"
+                    data-login-start-chat
+                    disabled={action().disabled}
+                    onClick={() => action().onClick()}
+                  >
+                    {action().label}
+                  </button>
+                )}
+              </Show>
               <button
                 type="button"
                 class="btn"

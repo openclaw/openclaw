@@ -428,6 +428,7 @@ it.each([
             profiles: [],
             defaultModel: starter,
             agentRuntimeId: "muse",
+            nativeRuntimeConsent: ["muse"],
           }),
         },
       ],
@@ -572,6 +573,8 @@ it.each([
       expect(result).toMatchObject({ ok: true, modelRef: selectedModel });
     }
     const selected = (await readConfigFileSnapshot()).sourceConfig;
+    expect(selected.agents?.entries?.main?.nativeRuntimeConsent).toEqual(["muse"]);
+    expect(selected.agents?.entries?.other?.nativeRuntimeConsent).toBeUndefined();
     if (selectModel === false) {
       expect(JSON.stringify(selected.agents?.entries?.main?.model)).toBe(previousAgentModel);
     } else {

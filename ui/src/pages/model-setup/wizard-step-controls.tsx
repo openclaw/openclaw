@@ -193,11 +193,15 @@ function SingleChoice(props: StepProps & { options: WizardStepOption[] }) {
   return (
     <Show when={props.options.length <= 2} fallback={<Picker params={params()} />}>
       <div
-        class="wizard-step__actions"
+        class={[
+          "wizard-step__actions",
+          { "wizard-step__actions--split": Boolean(props.leadingAction) },
+        ]}
         role="group"
         aria-label={label()}
         aria-describedby={props.validationErrorId}
       >
+        {props.leadingAction}
         <For each={props.options} keyed={false}>
           {(option, index) => (
             <button
@@ -266,7 +270,7 @@ function OptionsStep(props: StepProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            <Show when={props.leadingAction}>
+            <Show when={options().length > 2 && props.leadingAction}>
               <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
                 {props.leadingAction}
               </openclaw-modal-actions>

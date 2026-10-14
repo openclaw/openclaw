@@ -98,10 +98,13 @@ export class MusePool {
     { credentialIdentity: string; pending: Promise<MuseRuntime> }
   >();
   private disposed = false;
-  constructor(private readonly binaryPath = "muse") {}
+  constructor(
+    private readonly binaryPath = "muse",
+    private readonly noSessionLog = false,
+  ) {}
 
   async acquire(
-    workspace: string,
+    workspace: string | undefined,
     apiKey: string | undefined,
     readOnly: boolean,
   ): Promise<MuseLease> {
@@ -167,7 +170,7 @@ export class MusePool {
   }
 
   private async spawn(
-    workspace: string,
+    workspace: string | undefined,
     env: NodeJS.ProcessEnv,
     readOnly: boolean,
     credentialIdentity: string,
@@ -177,7 +180,11 @@ export class MusePool {
     }
     const handshake = spawnMspConnection({
       command: this.binaryPath,
-      args: ["serve", ...(readOnly ? ["--disable-shell", "--disable-write"] : [])],
+      args: [
+        "serve",
+        ...(this.noSessionLog ? ["--no-session-log"] : []),
+        ...(readOnly ? ["--disable-shell", "--disable-write"] : []),
+      ],
       cwd: workspace,
       env,
       shutdownTimeoutMs: 1000,
