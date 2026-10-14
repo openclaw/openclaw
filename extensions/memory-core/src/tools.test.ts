@@ -74,6 +74,25 @@ describe("memory tool schemas", () => {
     expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
   });
 
+  it("accepts limit as the result cap", () => {
+    const tool = createMemorySearchToolOrThrow();
+    const prepared = tool.prepareArguments?.({ query: "X", limit: 10 });
+    expect(Value.Check(tool.parameters, prepared)).toBe(true);
+    expect(prepared).toEqual({ query: "X", maxResults: 10 });
+  });
+
+  it("keeps explicit result caps over limit", () => {
+    const tool = createMemorySearchToolOrThrow();
+    expect(tool.prepareArguments?.({ query: "X", maxResults: 3, limit: 10 })).toEqual({
+      query: "X",
+      maxResults: 3,
+    });
+    expect(tool.prepareArguments?.({ query: "X", max_results: 3, limit: 10 })).toEqual({
+      query: "X",
+      maxResults: 3,
+    });
+  });
+
   it("describes search as evidence-driven without repeating supplied recall", () => {
     const description = createMemorySearchToolOrThrow().description;
 
