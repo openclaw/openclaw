@@ -17,6 +17,7 @@ export {
   validateQaEvidenceSummaryJson,
 } from "./src/evidence-summary.js";
 export { splitQaModelRef } from "./src/model-selection.js";
+export { buildQaGatewayConfig } from "./src/qa-gateway-config.js";
 export {
   normalizeResponsesInput,
   resolveMockSubagentTurn,

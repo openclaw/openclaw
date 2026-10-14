@@ -10,6 +10,7 @@ import {
   resolveConfiguredCapabilityProviderAsync,
   type ResolvedConfiguredProvider,
 } from "../plugin-sdk/provider-selection-runtime.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   readInternalRealtimeVoiceProviderApi,
@@ -163,6 +164,13 @@ export async function isRealtimeVoiceProviderConfiguredAsync(
   if (configured !== undefined) {
     return configured;
   }
+  if (!params.provider.isConfiguredAsync) {
+    warnPluginSdkDeprecation({
+      family: "provider-sync-configuration",
+      method: "RealtimeVoiceProviderPlugin.isConfigured",
+      replacement: "isConfiguredAsync",
+    });
+  }
   return params.provider.isConfiguredAsync
     ? await params.provider.isConfiguredAsync(context)
     : (params.provider.isConfigured?.(context) ?? false);
@@ -239,6 +247,11 @@ function requireRealtimeVoiceProvider(
 export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {
+  warnPluginSdkDeprecation({
+    family: "provider-selection",
+    method: "resolveConfiguredRealtimeVoiceProvider",
+    replacement: "await resolveConfiguredRealtimeVoiceProviderAsync()",
+  });
   const resolution = requireRealtimeVoiceProvider(
     resolveConfiguredCapabilityProvider({
       ...prepareRealtimeVoiceProviderSelection(params),
@@ -279,6 +292,13 @@ export async function resolveConfiguredRealtimeVoiceProviderAsync(
       ...prepareRealtimeVoiceProviderSelection(params),
       resolveProviderConfig: async ({ provider, cfg, rawConfig }) => {
         const context = prepareRealtimeVoiceProviderConfig(params, provider, cfg, rawConfig);
+        if (!provider.resolveConfigAsync && provider.resolveConfig) {
+          warnPluginSdkDeprecation({
+            family: "provider-sync-configuration",
+            method: "RealtimeVoiceProviderPlugin.resolveConfig",
+            replacement: "resolveConfigAsync",
+          });
+        }
         return (
           (provider.resolveConfigAsync
             ? await provider.resolveConfigAsync(context)

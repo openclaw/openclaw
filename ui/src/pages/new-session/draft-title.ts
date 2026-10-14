@@ -1,8 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { isTarget, routeKey } from "./catalog-target.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -27,7 +27,7 @@ function sameDraft(left: DraftTitleInput | null, right: DraftTitleInput | null):
 }
 
 /** Owns disposable title work for New Session, never the chat route. */
-export class NewSessionTitleController implements ReactiveController {
+export class NewSessionTitleController {
   private current: DraftTitleInput | null = null;
   private title: string | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -40,7 +40,7 @@ export class NewSessionTitleController implements ReactiveController {
   private submitted: DraftTitleInput | null = null;
 
   constructor(
-    host: ReactiveControllerHost,
+    host: Pick<ControllerHost, "addController">,
     private readonly read: () => {
       context: ApplicationContext | undefined;
       data: NewSessionRouteData | undefined;

@@ -446,11 +446,13 @@ export function spawnCommandWithInvocation<
         )
       : execa(invocation.command, invocation.args, commandOptions);
   // nice execs Git in the same child; retain its family and operation attribution.
-  const diagnosticCommand =
-    argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git"
-      ? "git"
-      : invocation.command;
-  recordChildProcessSpawn(diagnosticCommand, child.nodeChildProcess);
+  const niceGit = argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git";
+  recordChildProcessSpawn(
+    niceGit ? "git" : invocation.command,
+    child.nodeChildProcess,
+    undefined,
+    niceGit ? argv.slice(4) : invocation.args,
+  );
   if (scope) {
     retainCommandProcess(scope, child, reservation);
   }

@@ -129,6 +129,11 @@ function createLeaseFixture() {
     id: 1,
     key: "synthetic-state",
     databasePath: "/synthetic/state.sqlite",
+    stateAccess: {
+      canonicalPath: "/synthetic/state.sqlite",
+      assertAccessAllowed() {},
+      assertReadAllowed() {},
+    },
     pathReferences: new Map([["/synthetic/state.sqlite", 1]]),
     moduleUrl: "file:///synthetic/shared-state-worker.js",
     inputHash: "capture-lease-fixture",

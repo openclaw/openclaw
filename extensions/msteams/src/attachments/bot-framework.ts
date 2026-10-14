@@ -1,6 +1,5 @@
 import { lookup } from "node:dns/promises";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -126,20 +125,6 @@ async function saveBotFrameworkAttachmentView(
 ): Promise<{ path: string; contentType?: string } | undefined> {
   const response = await fetchBotFrameworkAttachment(params, "attachmentView");
   if (!response) {
-    return undefined;
-  }
-  let contentLength: number | null;
-  try {
-    contentLength = parseMediaContentLength(response.headers.get("content-length"));
-  } catch (err) {
-    await response.body?.cancel().catch(() => undefined);
-    params.logger?.warn?.("msteams botFramework attachmentView invalid content-length", {
-      error: coerceErrorMessage(err),
-    });
-    return undefined;
-  }
-  if (contentLength !== null && contentLength > params.maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
     return undefined;
   }
   try {

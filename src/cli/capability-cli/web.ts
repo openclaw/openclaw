@@ -141,7 +141,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     const { resolveAgentDir } = await import("../../agents/agent-scope.js");
     const { isWebFetchProviderConfigured, listWebFetchProviders } =
       await import("../../web-fetch/runtime.js");
-    const { isWebSearchProviderConfigured, listWebSearchProviders } =
+    const { isWebSearchProviderConfigured, listWebSearchProvidersAsync } =
       await import("../../web-search/runtime.js");
     const agentDir = resolveAgentDir(cfg, agentId);
     const { ensureAuthProfileStoreWithoutExternalProfilesAsync } =
@@ -152,7 +152,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     );
     const selectedFetchProvider = normalizeLowercaseStringOrEmpty(cfg.tools?.web?.fetch?.provider);
     return {
-      search: listWebSearchProviders({ config: cfg }).map((provider) => ({
+      search: (await listWebSearchProvidersAsync({ config: cfg })).map((provider) => ({
         available: true,
         configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir, authStore }),
         selected: provider.id === selectedSearchProvider,

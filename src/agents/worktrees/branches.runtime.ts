@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -47,19 +48,17 @@ function branchInventoryRevision(
     return undefined;
   }
   try {
-    const stamps: [string, string][] = [];
+    const stamps = createHash("sha256");
     const stamp = (file: string) => {
       const stat = fsSync.lstatSync(file, { bigint: true, throwIfNoEntry: false });
       // Streams have no content revision; symlink targets can change independently.
-      if ((stat && !stat.isFile() && !stat.isDirectory()) || stamps.length >= 1024) {
+      if (stat && !stat.isFile() && !stat.isDirectory()) {
         throw new Error("Uncacheable ref inventory");
       }
-      stamps.push([
-        file,
-        stat
-          ? `${stat.dev}:${stat.ino}:${stat.mode}:${stat.uid}:${stat.gid}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
-          : "missing",
-      ]);
+      const metadata = stat
+        ? `${stat.dev}:${stat.ino}:${stat.mode}:${stat.uid}:${stat.gid}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+        : "missing";
+      stamps.update(`${file}\0${metadata}\0`);
       return stat;
     };
     stamp(path.join(repoRoot, ".git"));
@@ -146,7 +145,7 @@ function branchInventoryRevision(
     if (common !== gitDir && stamp(worktreeRefs)?.isDirectory()) {
       visit(worktreeRefs);
     }
-    return { revision: JSON.stringify([environment, head, stamps]), head };
+    return { revision: JSON.stringify([environment, head, stamps.digest("hex")]), head };
   } catch {
     return undefined;
   }

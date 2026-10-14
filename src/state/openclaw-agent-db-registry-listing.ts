@@ -510,6 +510,17 @@ export function listOpenClawRegisteredAgentDatabases(
   return cloneRegisteredAgentDatabases(entries, options);
 }
 
+/** Runtime discovery loads the registry through its existing read worker. */
+export async function listOpenClawRegisteredAgentDatabasesAsync(
+  options: AgentDatabaseRegistryListOptions = {},
+): Promise<OpenClawRegisteredAgentDatabase[]> {
+  const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
+  if (snapshot.result.status !== "available") {
+    throw new Error(`OpenClaw state database ${resolveDatabasePath(options)} is unavailable.`);
+  }
+  return snapshot.result.entries;
+}
+
 /** Scoped publication witnesses are immediate; native registry rows remain demand-driven. */
 export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
   inputOptions: AgentDatabaseRegistryListOptions & {
@@ -629,9 +640,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
           assertAdmissionCurrent();
           const witness = scopedWitness ?? captureWitness();
           const { memo, assertCurrent, followRegistration } = witness;
+          const assertReadCurrent = scopedWitness ? assertCurrent : assertAdmissionCurrent;
           // Install the witness before the first await, including a read that later rejects.
           preparedWitness = witness;
-          assertCurrent();
+          assertReadCurrent();
           let entries = options.fresh ? undefined : memo.entries;
           if (!entries) {
             const reply = await inCapturedScope(() =>
@@ -651,7 +663,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
               continue;
             }
             witness.acceptEntries(result?.status === "available" ? result.entries : []);
-            assertCurrent();
+            assertReadCurrent();
             if (
               result?.status === "unavailable" ||
               (result === undefined && hasUnavailableMissingSqlitePath(options.path))
@@ -662,7 +674,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
               ? (result?.entries ?? [])
               : (memo.entries ??= result?.entries ?? []);
           }
-          assertCurrent();
+          assertReadCurrent();
           return {
             result: {
               status: "available",

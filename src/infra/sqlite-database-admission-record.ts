@@ -199,10 +199,16 @@ export class SqliteDatabaseAdmissionRegistry {
   releaseWorker(owner: number): void {
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
-      if (references) {
-        // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
-        Atomics.store(new Int32Array(references), 0, -1);
-        this.retireUnreferenced(record);
+      // A worker cannot leave an unpublished write in a database it never borrowed.
+      if (!references) {
+        continue;
+      }
+      // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
+      const priorReferences = Atomics.exchange(new Int32Array(references), 0, -1);
+      this.retireUnreferenced(record);
+      // Native close settles receipts before releasing the worker's final reference.
+      if (priorReferences <= 0) {
+        continue;
       }
       advanceSqliteDatabaseGeneration(record, "writeRevision");
       advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");

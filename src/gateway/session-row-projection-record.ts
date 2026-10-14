@@ -4,6 +4,7 @@ import { resolveSessionParentSessionKey } from "../channels/plugins/session-conv
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionActorVersion } from "../config/sessions/session-actor-contract.js";
 import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
@@ -16,6 +17,7 @@ import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import type { PluginStateReadDependency } from "../plugin-state/plugin-state-publication.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
+import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
@@ -36,11 +38,10 @@ export type ProjectionOptions = {
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
-  /** A committed append's bounded preview; null means the newest message exceeded the bound. */
-  transcriptPreview?: string | null;
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
+  runtimeOwnershipRetryPending?: true;
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
@@ -52,8 +53,8 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
       | "acpMeta"
       | "runtimeOwnership"
       | "runtimeOwnershipDependencies"
+      | "runtimeOwnershipRetryPending"
       | "repositoryWorkspace"
-      | "transcriptPreview"
     >
   >;
 
@@ -72,8 +73,9 @@ export function isPreparedSessionRowDatabaseFacts(
 /** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
 export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
   return (
-    facts.runtimeOwnershipDependencies.length > 0 ||
-    resolveSessionPinnedHarnessId(facts.entry) === undefined
+    !facts.runtimeOwnershipRetryPending &&
+    (facts.runtimeOwnershipDependencies.length > 0 ||
+      resolveSessionPinnedHarnessId(facts.entry) === undefined)
   );
 }
 
@@ -82,7 +84,7 @@ export type SessionRowStore = {
   agentId: string;
   discoveryAgentId: string | null;
   discoveryOrder?: number;
-  identity: string | symbol;
+  identity: OpenClawAgentDatabaseIdentity;
   birthtime: string | undefined;
   filename: string;
 };
@@ -122,7 +124,7 @@ export type Row = {
   parents: Set<string>;
   generation: string | symbol;
   /** Exact private reads retain their session claim only for the consuming frame. */
-  privateSource?: { identity: string | symbol; assertCurrent(): void };
+  privateSource?: { identity: SessionActorVersion["epoch"]; assertCurrent(): void };
   preparedPrivate?: {
     relatedRows: Record<string, Pick<EntryRow, "key" | "agentId" | "storeTarget" | "entry">>;
     entries: Record<string, SessionEntry>;
@@ -170,10 +172,9 @@ export type Query = {
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
-export type SnapshotOptions = Pick<
-  Inputs,
-  "now" | "includeDerivedTitles" | "includeLastMessage" | "excludedChildKeys"
-> & {
+export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
   active?: boolean;
   subagentRuns?: SessionListRowContext["subagentRuns"];
   preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
@@ -257,7 +258,7 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
   };
 }
 
-/** Native acquisition and prepared worker facts share one transient row constructor. */
+/** Memory acquisition and prepared actor facts share one transient row constructor. */
 export function createIncognitoSessionRow(params: {
   cfg: Inputs["cfg"];
   key: string;

@@ -34,6 +34,7 @@ import * as sessionEntryRead from "../../config/sessions/session-entry-read-runt
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -311,6 +312,7 @@ it.each(["forbidden", "allowed"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const runId = "shared-embedded-run";
     const target = await seedEmbeddedSession(runId, owner.authenticatedUserProfile!.profileId);
     const before = sessions.loadSessionEntry(target);
@@ -369,6 +371,7 @@ it.each(["before signal", "after signal"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const runId = "revoked-embedded-run";
     const target = await seedEmbeddedSession(runId, client.authenticatedUserProfile!.profileId);
     const before = sessions.loadSessionEntry(target);
@@ -449,6 +452,7 @@ it.each(["matched", "old-incarnation", "foreign-key"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     await sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: parentKey },
       {
@@ -503,6 +507,7 @@ it.each(["matched", "old-incarnation", "foreign-key", "missing-row"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     if (target !== "missing-row") {
       await sessions.upsertSessionEntryCore(
         { agentId: "main", sessionKey: parentKey },
@@ -568,6 +573,7 @@ it.each([false, true])(
       : ["operator.sessions.write"];
     const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     await sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: parentKey },
       {

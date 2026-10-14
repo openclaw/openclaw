@@ -5,10 +5,7 @@ import {
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  type OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseOperations,
@@ -25,12 +22,12 @@ import {
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
   ARCHIVE_RETENTION_BATCH_SIZE,
   type PublishedSessionTranscriptArchive,
   type SessionArchivePruningOperations,
 } from "./session-history-archive-pruning.types.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
@@ -41,12 +38,12 @@ export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWa
 export async function readSqliteSessionArchivePruning(
   input: OpenClawAgentDatabaseOptions,
 ): Promise<PublishedSessionTranscriptArchive | null> {
-  const incognitoBinding = captureIncognitoSessionSource({ ...input, storePath: input.path });
-  if (incognitoBinding) {
-    incognitoBinding.admissionSignal?.throwIfAborted();
-    if (!("kind" in incognitoBinding)) {
-      incognitoBinding.actor.assertReadable();
-    }
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
     return null;
   }
   const options = resolveSessionReclamationDatabaseOptions(input);
@@ -94,19 +91,18 @@ export async function withSqliteSessionPageReclamation<T>(
     archives: SessionArchivePruningOperations,
   ) => Promise<T>,
 ): Promise<T> {
-  const incognitoBinding = captureIncognitoSessionSource({ ...input, storePath: input.path });
-  if (incognitoBinding) {
-    incognitoBinding.admissionSignal?.throwIfAborted();
-    if (!("kind" in incognitoBinding)) {
-      incognitoBinding.actor.assertReadable();
-    }
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
     throw new Error("Incognito sessions have no disk pages or archives to reclaim");
   }
   const options = resolveSessionReclamationDatabaseOptions(input);
-  const incognito = isIncognitoOpenClawAgentSqlitePath(options.path, options);
   const nativeOwner = !supportsOpenClawAgentDatabaseExecution(options);
   // Capture the original alias before admission can wait. Workers use only this physical path.
-  const physical = incognito ? undefined : readDatabasePathIdentitySync(options.path);
+  const physical = readDatabasePathIdentitySync(options.path);
   if (physical && !physical.key.startsWith("file:")) {
     throw new Error("SQLite archive pruning requires its existing database");
   }
@@ -129,7 +125,7 @@ export async function withSqliteSessionPageReclamation<T>(
       return physical ? runExclusiveSqliteTranscriptArchiveWorker(write, signal) : write();
     };
     if (nativeOwner) {
-      // Incognito and explicit Doctor/cleanup maintenance retain their existing native owner.
+      // Explicit Doctor/cleanup maintenance retains its native owner.
       const {
         readSessionArchivePruningInDatabase,
         deletePublishedSessionArchiveInDatabase,

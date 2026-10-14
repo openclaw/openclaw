@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { renderChatQueue } from "./chat-composer-queue.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
@@ -16,7 +18,7 @@ import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pendin
 import { retryQueuedChatMessage, steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { readPendingSendStatus } from "./chat-thread-items.ts";
-import { ChatSendStatus } from "./components/chat-message-send-status.ts";
+import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
@@ -111,6 +113,21 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
     const recovery = document.createElement("div");
     document.body.append(container, recovery);
     let sending: Promise<void> | undefined;
+    const [sendState, setSendState] = createSignal<ReturnType<typeof readPendingSendStatus>>(null);
+    mountSolid(
+      () =>
+        createComponent(ChatSendStatus, {
+          get status() {
+            return sendState();
+          },
+          actions: {
+            onRetryQueuedMessage: (id) => {
+              sending = retryQueuedChatMessage(host, id);
+            },
+          },
+        }),
+      { container: recovery },
+    );
     const snapshot = () => {
       const pending = getChatPendingInputs(host);
       const inputs = pending
@@ -167,17 +184,8 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
                 group.messages.map(({ message }) => messageText(message)),
               ),
       );
-      render(
-        solidContent(ChatSendStatus, {
-          status: sendStatus,
-          actions: {
-            onRetryQueuedMessage: (id) => {
-              sending = retryQueuedChatMessage(host, id);
-            },
-          },
-        }),
-        recovery,
-      );
+      setSendState(sendStatus);
+      flush();
       return {
         thread,
         queue: [...container.querySelectorAll(".chat-queue__item")].map((item) =>

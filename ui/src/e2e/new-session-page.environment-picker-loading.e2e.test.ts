@@ -32,7 +32,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await openEnvironmentPicker(page);
-        const picker = page.locator("wa-popover.new-session-page__where-popover");
+        const picker = page.locator(".oc-popover.new-session-page__where-popover");
         const loading = picker.locator(".new-session-page__environment-skeletons");
         await loading.first().waitFor();
         expect(await loading.count()).toBe(2);

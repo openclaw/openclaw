@@ -151,7 +151,7 @@ export function SessionOwnerChipContent(props: SessionOwnerChipProps) {
 }
 
 export type SessionOwnerChipElement = SolidBridgeElement<SessionOwnerChipProps>;
-defineSolidBridge<SessionOwnerChipProps>(
+export const SessionOwnerChip = defineSolidBridge<SessionOwnerChipProps>(
   "openclaw-session-owner-chip",
   (props) => <SessionOwnerChipContent {...props} />,
   {

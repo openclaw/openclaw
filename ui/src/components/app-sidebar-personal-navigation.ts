@@ -1,16 +1,24 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { parseSidebarEntry } from "../app-navigation.ts";
-import type { ApplicationContext } from "../app/context.ts";
+import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
+import { pathForRoute } from "../app-route-paths.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type {
   SessionConnectionScope,
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
+import { showToast } from "../lib/toast.ts";
+import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import {
+  setStoredSessionCatalogHidden,
+  type SidebarRecentSession,
+} from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
@@ -30,6 +38,53 @@ type PersonalNavigationHost = {
   findSidebarSessionByKey(key: string): SidebarRecentSession | undefined;
   pluginNavigation(): Parameters<typeof buildReconciledSidebarZone>[0]["pluginNavigation"];
 };
+
+export function hidePersonalSidebarCatalog(
+  host: {
+    readonly sessionData: {
+      readonly sessionCatalogs: ReadonlyArray<{ id: string; label?: string | null }>;
+    };
+    readonly basePath: string;
+    readonly ownerDocument: Document;
+    readonly onNavigate:
+      | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
+      | undefined;
+  },
+  catalogId: string,
+): void {
+  const label =
+    host.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
+    catalogId;
+  setStoredSessionCatalogHidden(catalogId, true);
+  // Reuse the settings-search destination for the Sidebar preferences block so the
+  // toast opens the same place the rest of the app calls "Appearance > Sidebar".
+  const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
+  const recoveryHref =
+    pathForRoute(recovery.routeId, host.basePath) + recovery.search + recovery.hash;
+  // The section disappears instantly and its only standing recovery lives on another
+  // page, so the outcome is announced where the action happened: undo here, plus a
+  // link that opens the re-enable block for after the toast is gone. Longer than the
+  // 6s default because that text is a recovery instruction, not an acknowledgement.
+  const message = host.ownerDocument.createDocumentFragment();
+  const recoveryLink = host.ownerDocument.createElement("a");
+  recoveryLink.className = "session-link";
+  recoveryLink.href = recoveryHref;
+  recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
+  recoveryLink.addEventListener("click", (event) => {
+    if (!shouldHandleNavigationClick(event)) {
+      return;
+    }
+    event.preventDefault();
+    host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
+  });
+  message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
+  showToast({
+    message,
+    actionLabel: t("common.undo"),
+    onAction: () => setStoredSessionCatalogHidden(catalogId, false),
+    durationMs: 12_000,
+  });
+}
 
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */
 export class SidebarPinnedSessions implements ReactiveController {

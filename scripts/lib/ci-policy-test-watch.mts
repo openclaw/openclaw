@@ -69,6 +69,13 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   // These owner contracts enter production through fixture adapters or a facade.
   {
+    testFile: "src/gateway/server.agents.config-readiness.test.ts",
+    watchGlobs: [
+      "src/secrets/runtime-auth-store-admission.ts",
+      "src/agents/prepared-model-runtime.configured.ts",
+    ],
+  },
+  {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
   },

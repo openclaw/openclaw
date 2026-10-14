@@ -7,16 +7,18 @@ export const TTS_PREFERENCES_COMPAT_RECORD = {
   introduced: "2026-10-03",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
-  removalGate: "next-plugin-sdk-major",
+  removalGate: "stable-deprecation-period",
   replacement:
-    "Await resolveTtsPrefsPathAsync(config) for the machine-owned path. Host dispatch carries worker-prepared preferences into synchronous prompt helpers. Retain released resolveTtsPrefsPath(config) and buildTtsSystemPromptHint(config, agentId, options) signatures until published plugin readers migrate and a breaking Plugin SDK release is explicitly approved.",
-  docsPath: "/plugins/sdk-migration/compatibility-policy#tts-preference-resolution",
+    "Await resolveTtsPrefsPathAsync(config) for the machine-owned path. Await buildTtsSystemPromptHintAsync, or await prepareTtsPreferences and pass preparedTtsPreferences to the supported synchronous hint overload. The unprepared synchronous hint and preference-path calls remain compatible until an ordinary stable removal window is announced and completed.",
+  docsPath: "/plugins/sdk-migration/async-transcript-and-tts",
   surfaces: [
     "openclaw/plugin-sdk/agent-runtime resolveTtsPrefsPath",
     "openclaw/plugin-sdk/tts-runtime resolveTtsPrefsPath",
     "openclaw/plugin-sdk/tts-runtime buildTtsSystemPromptHint",
   ],
-  diagnostics: ["Bounded DEP_PLUGIN_SDK warning for legacy path resolution"],
+  diagnostics: [
+    "Bounded DEP_PLUGIN_SDK warning for legacy path resolution and unprepared synchronous hint calls; prepared hints remain silent",
+  ],
   tests: [
     "src/plugin-sdk/tts-preferences-compat.test.ts",
     "src/tts/tts-preferences.worker.test.ts",

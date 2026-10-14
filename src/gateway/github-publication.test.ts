@@ -888,10 +888,11 @@ describe("Gateway GitHub publication", () => {
     await persistClaimPublicationWorkspace();
     const loadSessionRuntime = async () => {
       const runtime = await import("./session-utils.js");
+      const worker = await import("./session-utils-store-worker.js");
       return {
         resolveCanonicalSessionEntryFromStoreKeys:
           runtime.resolveCanonicalSessionEntryFromStoreKeys,
-        resolveGatewaySessionStoreTargetInWorker: runtime.resolveGatewaySessionStoreTargetInWorker,
+        resolveGatewaySessionStoreTargetInWorker: worker.resolveGatewaySessionStoreTargetInWorker,
       };
     };
     const warnings: string[] = [];

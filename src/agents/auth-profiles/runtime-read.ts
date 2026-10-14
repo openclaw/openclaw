@@ -1,5 +1,6 @@
 /** Runtime auth reads compose worker-prepared facts through the store's captured host scope. */
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
@@ -181,6 +182,7 @@ export function createAuthProfileStoreRuntimeReader({
     );
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     const trackPersistedRows =
+      isMainThread &&
       !isArtifactPreservingStateRead() &&
       !getOpenClawDatabaseMaintenanceScope() &&
       !getActiveOpenClawStateDatabaseReadSnapshot({ env });
@@ -589,7 +591,7 @@ export function createAuthProfileStoreRuntimeReader({
     return withPreparedAuthProfileStoreReads(agentDir, options, undefined, env);
   }
 
-  /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Retained until an announced stable removal window. */
   function loadAuthProfileStoreForRuntime(
     agentDir?: string,
     options?: LoadAuthProfileStoreOptions,

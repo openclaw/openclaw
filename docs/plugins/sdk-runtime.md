@@ -112,7 +112,11 @@ followed by its completed messages and the side question, preserving its system 
 settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
 payload data without re-running the parent's one-shot continuation hooks.
 Completed asynchronous tool calls, their outcomes, and the final answer remain in
-conversation order. The replay uses the current prepared model's proxy and TLS policy. Session read
+conversation order.
+If a published tool call is still running when the fork starts, the built-in
+runtime includes a non-error placeholder saying its result is not available yet.
+This does not cancel the parent call or persist a result in the parent session.
+The replay uses the current prepared model's proxy and TLS policy. Session read
 authority is checked immediately before every network send, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native
@@ -437,7 +441,12 @@ same subpath to admit cold agent storage without receiving a writable native
 handle. Its required live authority runs inside worker grants and must not read
 the same database or do blocking work. Put same-database predicates in the paired
 worker transaction. Explicit `prepare()` owns creation; `executeExisting` keeps
-missing storage absent. The deprecated `withOpenClawAgentDatabaseRuntime` and
+missing storage absent. `terminalSignal` aborts with the terminal failure reason
+after accepted publications settle. Retained consumers must stop reusing that
+store and acquire through their normal admission owner. Idle retirement and
+explicit `close()` do not abort the signal; an aborted signal never authorizes
+replaying an acknowledged or unknown-outcome write.
+The deprecated `withOpenClawAgentDatabaseRuntime` and
 `withOpenClawAgentDatabaseAsync` retain their native callbacks and admission
 ordering, including the latter's post-integrity, pre-repair checkpoint, until
 the next Plugin SDK major. Awaiting those callbacks does not move SQL off-thread.

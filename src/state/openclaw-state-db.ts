@@ -485,14 +485,14 @@ export function runWithOpenClawStateBusyTimeout<T>(
   }
 }
 
-/** Run a synchronous immediate transaction against the shared state database. */
+/** Run an admitted shared-state write; complete single statements may use autocommit. */
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
   transactionOptions: Pick<
     SqliteTransactionOptions,
     "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
-  > = {},
+  > & { singleStatement?: true } = {},
 ): T {
   if (
     isArtifactPreservingStateRead("agent", options.database?.path ?? resolveDatabasePath(options))

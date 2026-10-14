@@ -36,6 +36,15 @@ Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.
 
+## Existing folders on devices
+
+**Existing folder on device** is separate from a managed worktree. A compatible
+paired session host can run a session directly in an absolute folder on that
+specific device. OpenClaw does not clone, snapshot, transfer, reconcile, or remove
+that folder as a managed worktree. Choose **New workspace** or a repository source
+when you want an isolated, OpenClaw-managed workspace instead. See
+[session hosting](/nodes/session-hosting#work-in-an-existing-device-folder).
+
 ## Sandboxed sessions
 
 Sandboxed project sessions use a private Git checkout for execution,
@@ -367,12 +376,19 @@ OpenClaw exposes these tools only to operator sessions with an actionable Gatewa
 
 The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope. Repository checkout/ref hooks and filesystem monitors are always disabled. The `.openclaw/worktree-setup.sh` step runs only for an `operator.admin` caller; retries evaluate the current caller's scope rather than retaining the original caller's permission. `.worktreeinclude` provisioning still applies to every caller. Deleting the session attempts to snapshot and remove its managed worktree, including dirty worktrees and branches with unpushed commits. Hourly cleanup also snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
 
+Reply commands `/new` and `/reset`, and automatic idle resets, start a fresh conversation context while keeping the session's managed worktree, project, and working directory. Plain **New Chat** in the Control UI deliberately leaves the previous worktree through the normal cleanup flow.
+
 Archiving a session returns after its archive state and publication are committed, preserving the conversation and worktree binding. After sending the response, the Gateway wakes background maintenance to snapshot and remove the checkout. The response does not wait for Git or the worktree allocation lease. A failed metadata write leaves the checkout untouched. If cleanup cannot finish safely, the session stays archived and its files remain available for a later cleanup pass. Hourly garbage collection also picks up automatically archived sessions. Cleanup holds the session lifecycle mutation only while admitting its registry claim and publishing the removed checkout. Git runs outside that mutation. Unarchiving before cleanup starts keeps the existing checkout; during cleanup, unarchive reports that removal is in progress and asks you to retry after it settles. An incomplete deletion requires recovery of its preserved snapshot before unarchive.
 
 Slow archive requests log request-owned phase durations, including snapshot reads,
 projection, runtime selection, archive placement checks, commit, cron effects, and
 response preparation. These timings separate foreground metadata work from
 background Git cleanup; nested phases can overlap.
+
+Archive preparation reads the selected session without reserving its database's
+writer, so unrelated queued writes do not delay stopping that session. Committed
+policy changes invalidate the prepared source. The archive mutation still joins
+the writer queue and rechecks the current session and permissions before committing.
 
 Unarchiving, or an authorized human message that reopens the archived session, restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for the saved work.
 
@@ -447,6 +463,8 @@ An orphan retired without a snapshot no longer appears in `worktrees list` and c
 Run-end cleanup records its outcome on the worktree record: lossless removal, retention because the checkout is busy, dirty, unpushed, or has provisioned-file drift, or failure with an error reason. Inspect the recorded outcome with `openclaw worktrees list --json` or `worktrees.list`.
 
 Ordinary forced checkout removal first renames the captured file tree, then lets Git remove the original registration. File deletion runs serially in the background, so cleanup can release the checkout name without waiting for every file to be unlinked. A deletion failure logs the retained directory for manual cleanup; a crash before background deletion starts can leave a sibling `.openclaw-removing-*` directory for inspection. Non-force lossless removal and explicit interrupted-removal recovery keep Git's final check and joined file deletion.
+
+Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
 
 If checkout deletion fails or is interrupted, OpenClaw preserves the completed capture at `refs/openclaw/removals/<id>`. A later removal refuses to replace that capture with files from a possibly partial checkout. Preserve the remaining files, recorded branch, snapshot refs, and shared-state database for recovery. Inspect the original removal error and Git worktree registration before attempting cleanup; do not repeatedly force removal or prune registrations. A normal completed removal, successful restore, or snapshot expiry clears this recovery ref. A failure after checkout removal can leave its branch retained and require operator reconciliation before restore can recreate that branch.
 
@@ -715,7 +733,7 @@ Without a running local Gateway, `openclaw worktrees gc` runs cleanup to complet
 | `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.        |
 | `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
 
-`worktrees.list` requires `operator.read`. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
+`worktrees.list` requires `operator.read`. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
 Owner-routed requests require `operator.admin` and the corresponding
 [capability](/gateway/protocol/versioning#local-state-owner-routing). Their wire

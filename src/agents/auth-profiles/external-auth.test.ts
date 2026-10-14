@@ -8,6 +8,7 @@ import {
 } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -31,6 +32,7 @@ const credential = (overrides: Partial<OAuthCredential> = {}): OAuthCredential =
 });
 
 beforeEach(() => {
+  prepareSharedAuthStoreOwnershipForNative();
   readMiniMax.mockReset().mockReturnValue(null);
   testing.setResolveExternalAuthProfilesForTest(() => []);
   clearRuntimeAuthProfileStoreSnapshots();

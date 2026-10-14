@@ -1,3 +1,4 @@
+import "../lib/toast-host.ts";
 import type { ControlUiFocusTarget } from "@openclaw/session-url-contract";
 import { render, type JSX as SolidJSX } from "@solidjs/web";
 import {

@@ -391,7 +391,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           break;
         }
         case "snooze":
-          await operations.snoozeSessionWithUndo(host, session, action.snoozedUntil, scope);
+          await operations.snoozeSessionWithUndo(host, session, action, scope);
           break;
         case "wake":
           await operations.patchSession(host, session, { snoozedUntil: null }, scope, {
@@ -599,6 +599,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const loads = [this.loadHeaderPlatform(client, this.connectionGeneration)];
     // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
     const immediateRoot =
+      row.deviceFolder?.path ||
       (row.execNode ? row.execCwd?.trim() : undefined) ||
       row.spawnedWorkspaceDir?.trim() ||
       row.spawnedCwd?.trim() ||

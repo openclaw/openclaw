@@ -853,6 +853,11 @@ export const en: TranslationMap & {
     all: "All",
     snooze: "Snooze",
     wakeSession: "Wake session",
+    snoozeChooseTime: "Choose another time",
+    snoozeCustom: "Custom",
+    snoozeDateTime: "Date and time",
+    snoozeLocalTime: "Your local time ({zone})",
+    snoozeFutureRequired: "Choose a date and time in the future.",
     snoozeHour: "In 1 hour",
     snoozeThreeHours: "In 3 hours",
     snoozeEvening: "This evening",
@@ -3092,6 +3097,7 @@ export const en: TranslationMap & {
       openParent: "Open parent session {title}",
       subagentsRunning: "Subagents · {count} running",
       layout: "Layout",
+      panels: "Panels",
       continueInTerminal: {
         action: "Continue in terminal…",
         title: "Continue in terminal",
@@ -3350,6 +3356,10 @@ export const en: TranslationMap & {
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
           "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
+      },
+      automationRecovery: {
+        label: "System · automation recovery",
+        summary: "An automation failed — asked the agent to investigate and continue if needed.",
       },
       gatewayRestarted: {
         label: "System · gateway restarted",
@@ -3974,6 +3984,7 @@ export const en: TranslationMap & {
     },
     voice: {
       asking: "Asking OpenClaw...",
+      replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",

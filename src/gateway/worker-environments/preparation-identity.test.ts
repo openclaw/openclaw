@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import {
-  createWorkerProjectPreparationIdentity,
+  readWorkerPreparation,
   readWorkerProjectPreparation,
-} from "./preparation-identity.js";
+} from "./preparation-identity.schema.js";
 import type { WorkerLocalProjectSnapshot } from "./workspace-git-base.js";
 
-const input: Omit<Parameters<typeof createWorkerProjectPreparationIdentity>[0], "project"> & {
+const input: Omit<Parameters<typeof createWorkerPreparationIdentity>[0], "project"> & {
   project: WorkerLocalProjectSnapshot;
 } = {
   namespace: "gateway-one",
@@ -30,6 +31,34 @@ const input: Omit<Parameters<typeof createWorkerProjectPreparationIdentity>[0], 
 };
 
 describe("worker preparation identity", () => {
+  it("keeps empty runtime preparation separate from project content", () => {
+    const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
+    const preparation = createWorkerPreparationIdentity(runtime);
+    expect(preparation.key).not.toBe(createWorkerPreparationIdentity(input).key);
+    expect(preparation).not.toHaveProperty("setupRecipe");
+    expect(
+      readWorkerPreparation({
+        ...runtime.profileSnapshot,
+        runtimePreparation: { source: "empty", ...preparation },
+      }),
+    ).toEqual({ source: "empty", ...preparation });
+    expect(() =>
+      readWorkerPreparation({
+        project: input.project,
+        runtimePreparation: { source: "empty", ...preparation },
+      }),
+    ).toThrow("runtime preparation identity is invalid");
+    expect(() =>
+      readWorkerPreparation({
+        runtimePreparation: {
+          source: "empty",
+          ...preparation,
+          recipe: { source: "none", inputs: {}, env: {} },
+        },
+      }),
+    ).toThrow("runtime preparation identity is invalid");
+  });
+
   it("shares identity across linked source paths, JSON field order and plugin order", () => {
     const equivalent = structuredClone(input);
     equivalent.project.root = "/source/second-worktree";
@@ -40,17 +69,17 @@ describe("worker preparation identity", () => {
       machineClass: "small",
     };
     equivalent.artifacts.enabledPluginIds.reverse();
-    expect(createWorkerProjectPreparationIdentity(equivalent)).toEqual(
-      createWorkerProjectPreparationIdentity(input),
+    expect(createWorkerPreparationIdentity(equivalent)).toEqual(
+      createWorkerPreparationIdentity(input),
     );
   });
 
   it("separates skipped setup caches while preserving the default identity", () => {
-    const original = createWorkerProjectPreparationIdentity(input);
-    const enabled = createWorkerProjectPreparationIdentity({ ...input, runSetupScript: true });
+    const original = createWorkerPreparationIdentity(input);
+    const enabled = createWorkerPreparationIdentity({ ...input, runSetupScript: true });
     expect(enabled).toEqual(original);
     expect(enabled).not.toHaveProperty("runSetupScript");
-    const skipped = createWorkerProjectPreparationIdentity({ ...input, runSetupScript: false });
+    const skipped = createWorkerPreparationIdentity({ ...input, runSetupScript: false });
     expect(skipped.setupRecipe).toBe(original.setupRecipe);
     expect(skipped.runSetupScript).toBe(false);
     expect(skipped.key).not.toBe(original.key);
@@ -60,8 +89,8 @@ describe("worker preparation identity", () => {
 
   it("uses the provider disk fingerprint independently of lease and runtime policy", () => {
     const target = { ...input.target, profileKey: "7".repeat(64) };
-    const original = createWorkerProjectPreparationIdentity({ ...input, target });
-    const changed = createWorkerProjectPreparationIdentity({
+    const original = createWorkerPreparationIdentity({ ...input, target });
+    const changed = createWorkerPreparationIdentity({
       ...input,
       target,
       profileId: "renamed",
@@ -76,7 +105,7 @@ describe("worker preparation identity", () => {
     expect(changed.cacheKey).toBe(original.cacheKey);
     expect(changed.key).not.toBe(original.key);
     expect(
-      createWorkerProjectPreparationIdentity({
+      createWorkerPreparationIdentity({
         ...input,
         target: { ...target, profileKey: "8".repeat(64) },
       }).cacheKey,
@@ -85,6 +114,8 @@ describe("worker preparation identity", () => {
 
   it.each<[string, Partial<typeof input>]>([
     ["namespace", { namespace: "gateway-two" }],
+    ["provider", { providerId: "another-provider" }],
+    ["profile id", { profileId: "another-profile" }],
     ["commit", { project: { ...input.project, baseCommit: "1".repeat(40) } }],
     ["recipe", { setupRecipe: "2".repeat(40) }],
     [
@@ -119,18 +150,33 @@ describe("worker preparation identity", () => {
       },
     ],
   ])("invalidates a changed %s before allocation", (label, change) => {
-    const original = createWorkerProjectPreparationIdentity(input);
-    const next = createWorkerProjectPreparationIdentity({ ...input, ...change });
+    const original = createWorkerPreparationIdentity(input);
+    const next = createWorkerPreparationIdentity({ ...input, ...change });
     expect(next.key).not.toBe(original.key);
     expect(next.cacheKey).toMatch(/^[a-f0-9]{64}$/u);
     if (
-      ["commit", "mode", "runtime", "plugins", "bundle", "protocol", "version", "archive"].includes(
-        label,
-      )
+      [
+        "profile id",
+        "commit",
+        "mode",
+        "runtime",
+        "plugins",
+        "bundle",
+        "protocol",
+        "version",
+        "archive",
+      ].includes(label)
     ) {
       expect(next.cacheKey).toBe(original.cacheKey);
     } else {
       expect(next.cacheKey).not.toBe(original.cacheKey);
+    }
+    const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
+    const { project: _changedProject, setupRecipe: _changedRecipe, ...runtimeChange } = change;
+    if (!["recipe", "commit", "project"].includes(label)) {
+      expect(createWorkerPreparationIdentity({ ...runtime, ...runtimeChange }).key).not.toBe(
+        createWorkerPreparationIdentity(runtime).key,
+      );
     }
   });
 });

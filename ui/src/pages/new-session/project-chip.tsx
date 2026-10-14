@@ -1,17 +1,20 @@
 import { createMemo, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { parentFolderDisplayName } from "./path.ts";
 import { PickerLabel } from "./picker-label.tsx";
+import { PickerPopover } from "./picker-popover.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipOptions } from "./project-chip.ts";
 export function ProjectChip(props: { params: ProjectChipOptions }) {
+  let trigger!: HTMLButtonElement;
+  let popover!: PopoverHandle;
   const selectClone = (cloneUrl: string) =>
     props.params.onSelectRemoteProject({ identity: cloneUrl, cloneUrl });
   const view = createMemo(() => {
@@ -62,6 +65,9 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
       <span class="new-session-page__select">
         <button
           id="new-session-project-trigger"
+          ref={(node) => {
+            trigger = node;
+          }}
           type="button"
           class={[
             "new-session-page__trigger",
@@ -70,9 +76,15 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
           aria-label={`${t("newSession.what")}: ${props.params.state.label}`}
           data-project-id={props.params.projectId || undefined}
           aria-haspopup="dialog"
+          aria-controls="new-session-project-popover"
           aria-expanded={props.params.popoverOpen ? "true" : "false"}
           disabled={props.params.submitting || props.params.pendingPlacement}
-          ref={nativeListener("click", (event) => props.params.onGuardTransition(event))}
+          onClick={(event) => {
+            props.params.onGuardTransition(event);
+            if (!event.defaultPrevented) {
+              popover.overlay.request(!popover.overlay.open);
+            }
+          }}
         >
           <PickerLabel
             icon={props.params.projectId ? <Icon name="gitBranch" /> : <Icon name="folder" />}
@@ -80,15 +92,15 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
           />
         </button>
       </span>
-      <wa-popover
-        ref={syncPopoverLabel}
+      <PickerPopover
+        ref={(handle) => {
+          popover = handle;
+        }}
+        id="new-session-project-popover"
+        label={`${t("newSession.what")}: ${props.params.state.label}`}
+        anchor={trigger}
         class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover"
-        for="new-session-project-trigger"
-        placement="bottom-start"
-        without-arrow
-        onWa-show={() => props.params.onPopoverShow()}
-        onWa-hide={() => props.params.onPopoverHide()}
-        onWa-after-hide={() => props.params.onPopoverAfterHide()}
+        lifecycle={props.params}
       >
         {props.params.browserOpen ? (
           <PlaceBrowser
@@ -116,6 +128,23 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
                   sub: t("newSession.newWorkspaceDescription"),
                   checked: props.params.freshWorkspace === true,
                   onSelect: props.params.onNewWorkspace,
+                }}
+                submitting={props.params.submitting || props.params.pendingPlacement}
+              />
+            ) : undefined}
+            {props.params.onDeviceFolder && !view().query ? (
+              <SessionMenuItem
+                item={{
+                  value: "device-folder",
+                  label: t("newSession.deviceFolder"),
+                  icon: <Icon name="folder" />,
+                  sub:
+                    props.params.deviceFolderDisabledReason ??
+                    t("newSession.deviceFolderDescription"),
+                  disabled: Boolean(props.params.deviceFolderDisabledReason),
+                  title: props.params.deviceFolderDisabledReason,
+                  checked: props.params.deviceFolder === true,
+                  onSelect: props.params.onDeviceFolder,
                 }}
                 submitting={props.params.submitting || props.params.pendingPlacement}
               />
@@ -301,7 +330,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
             )}
           </div>
         )}
-      </wa-popover>
+      </PickerPopover>
     </>
   );
 }

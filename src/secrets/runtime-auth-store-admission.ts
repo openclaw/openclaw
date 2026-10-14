@@ -9,7 +9,9 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 
@@ -24,9 +26,20 @@ export async function loadAdmittedAuthStores(params: {
 }> {
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const degradedOwners: DegradedSecretOwner[] = [];
+  const statePath = resolveOpenClawStateSqlitePath(params.env);
   for (const agentDir of params.agentDirs) {
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    const refusal = readAgentDatabaseAdmissionRefusal(resolveAuthProfileDatabaseOwnerId(agentDir), {
+    const agentId = resolveAuthProfileDatabaseOwnerId(agentDir);
+    const isDeleted = () => {
+      const status = getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined);
+      return status === "pending" || status === "complete";
+    };
+    // A concurrent roster write can still name an owner whose deletion already committed.
+    // Never reopen or publish its credentials while the deletion owner retires its readers.
+    if (isDeleted()) {
+      continue;
+    }
+    const refusal = readAgentDatabaseAdmissionRefusal(agentId, {
       env: params.env,
     });
     if (
@@ -50,10 +63,16 @@ export async function loadAdmittedAuthStores(params: {
     }
     try {
       const source = await params.loadAuthStore(agentDir);
+      if (isDeleted()) {
+        continue;
+      }
       const store = structuredClone(source);
       copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
       authStores.push({ agentDir, store });
     } catch (error) {
+      if (isDeleted()) {
+        continue;
+      }
       if (!(error instanceof AuthProfileMigrationRequiredError) || !params.allowUnavailable) {
         throw error;
       }

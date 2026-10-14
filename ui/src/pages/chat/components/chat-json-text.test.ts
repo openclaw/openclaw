@@ -6,7 +6,7 @@ import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code
 import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
 import "./chat-tool-output.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";

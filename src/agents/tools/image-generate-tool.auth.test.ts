@@ -8,6 +8,7 @@ import {
   createAuthProfileStoreFixture,
   createOAuthRefreshCredential,
 } from "../auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
@@ -34,6 +35,7 @@ describe("image generation credential availability", () => {
         .spyOn(mediaGenerationRegistry, "withImageGenerationProviders")
         .mockImplementation(async (_config, run) => await run([provider]));
       try {
+        prepareSharedAuthStoreOwnershipForNative(state.env);
         setRuntimeAuthProfileStoreSnapshot(createAuthProfileStoreFixture({}), agentDir);
         const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
         expect(authProfileStoreSource).toBe(false);

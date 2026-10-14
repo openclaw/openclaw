@@ -38,6 +38,7 @@ function placementStoreDefaults(
 ) {
   return {
     readChangeSnapshot: async () => readPlacements(),
+    subscribeChanges: () => () => {},
     readEnvironmentOwner: async (environmentId: string) =>
       readPlacements().find((placement) => placement.environmentId === environmentId),
     readProjection: async () => ({
@@ -46,6 +47,12 @@ function placementStoreDefaults(
     workspaceResultInstanceId: () => "gateway-test",
     getAsync: async (sessionId: string) =>
       readPlacements().find((placement) => placement.sessionId === sessionId),
+    getManyAsync: async (sessionIds: readonly string[]) =>
+      new Map(
+        readPlacements()
+          .filter((placement) => sessionIds.includes(placement.sessionId))
+          .map((placement) => [placement.sessionId, placement]),
+      ),
     listAsync: async () => readPlacements(),
     retireSessionPlacementAsync: vi.fn(async () => {}),
     pruneOrphanedWorkspaceReconciliations: async () => [],
@@ -58,6 +65,8 @@ beforeEach(() => {
   runtimeFactoryMocks.createDiskSpace.mockReturnValue({
     read: vi.fn(),
     version: vi.fn(() => 0),
+    invalidate: vi.fn(),
+    nextSweepAtMs: () => Infinity,
     sweep: vi.fn().mockResolvedValue(undefined),
   });
 });
@@ -90,6 +99,8 @@ describe("worker placement startup health lifetime", () => {
     const diskSpace = {
       read: vi.fn(),
       version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => time.clock.now() + 60_000,
       sweep: vi.fn(async () => {
         if (holdScheduledWork) {
           scheduledHealthStarted.resolve();
@@ -148,7 +159,8 @@ describe("worker placement startup health lifetime", () => {
       expect(sidecar).not.toBeNull();
       expect(reconcileActive).not.toHaveBeenCalled();
       expect(diskSpace.sweep).toHaveBeenCalledOnce();
-      // The first scheduled pass joins the background startup retirement.
+      // Settle the background startup sweep before advancing its next deadline.
+      await setImmediate();
       await time.advanceBy(60_000);
       reconcileActive.mockClear();
       diskSpace.sweep.mockClear();
@@ -821,7 +833,7 @@ describe("worker placement startup recovery authority", () => {
                 await moveDestinationMocks.resolveCanonicalSession.withImplementation(
                   () => ({
                     sessionId: "session-replaced",
-                    worktree: { id: "worktree-recovery" },
+                    worktree: { id: "worktree-recovery", branch: "fixture", repoRoot: root },
                   }),
                   async () => {
                     await expect(

@@ -37,7 +37,6 @@ async function observePaneRenders(page: Page) {
         const sidebar = document.querySelector<
           HTMLElement & {
             updateComplete: Promise<boolean>;
-            sessionData: { presencePayload?: PresencePayload };
           }
         >("openclaw-app-sidebar");
         const sessions = appContext.sessions;
@@ -64,7 +63,6 @@ async function observePaneRenders(page: Page) {
               selectedKey: pane.state.sessionKey,
               messages: pane.state.chatMessages.length,
               panePresenceTs: pane.presencePayload?.presence[0]?.ts,
-              sidebarPresenceTs: sidebar.sessionData.presencePayload?.presence[0]?.ts,
             };
           },
           restore() {
@@ -189,7 +187,6 @@ suite.define(() => {
         counts.presence = presence.renders;
         expect(presence).toMatchObject({
           panePresenceTs: baseTime + 10,
-          sidebarPresenceTs: baseTime + 10,
         });
         expect.soft(counts.presence).toBe(0);
 
@@ -228,6 +225,15 @@ suite.define(() => {
         expect(
           await page.locator('.chat-pane__presence [data-viewer-id="collaborator"]').count(),
         ).toBe(1);
+        await expect
+          .poll(() =>
+            page
+              .locator(
+                `openclaw-app-sidebar [data-session-key="${selectedKey}"] [data-viewer-id="collaborator"]`,
+              )
+              .count(),
+          )
+          .toBe(1);
         console.info(JSON.stringify({ proof: "idle-conversation-event-renders", ...counts }));
       } finally {
         await probe.evaluate((owner) => owner.restore());

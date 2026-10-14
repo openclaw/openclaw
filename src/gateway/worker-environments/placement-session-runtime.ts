@@ -44,6 +44,7 @@ export function resolveWorkerPlacementSessionRuntime(params: {
 }): string {
   const { provider, model } = resolveSessionSelectedModelRef({
     ...params,
+    preparedRuntimeOwnership: params.preparedRuntimeOwnership,
     source: {
       entry: params.entry,
       readSourceEntry: params.readSourceEntry,
@@ -130,7 +131,10 @@ export async function readWorkerPlacementModelSource(
   },
   key: string,
 ): Promise<SessionEntry | undefined> {
-  const metadata = captureSessionEntryMetadataRead({ sessionKey: key, agentId: params.agentId });
+  const metadata = captureSessionEntryMetadataRead(
+    { sessionKey: key, agentId: params.agentId },
+    () => params.assertCurrent?.(),
+  );
   if (metadata) {
     return metadata.readCurrent();
   }
@@ -290,14 +294,6 @@ export function resolveDefaultWorkerPlacementExecutionMode(params: {
     sessionKey: `agent:${params.agentId}:dashboard:prepared-pool-presence`,
   });
   return resolveWorkerPlacementExecutionMode(runtime);
-}
-
-export async function resolveWorkerPlacementSessionRuntimeCapabilitiesAsync(
-  params: Parameters<typeof resolveWorkerPlacementSessionRuntimeAsync>[0],
-) {
-  return resolveWorkerPlacementCapabilities(
-    await resolveWorkerPlacementSessionRuntimeAsync(params),
-  );
 }
 
 export function projectWorkerPlacementAgentRuntime(

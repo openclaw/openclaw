@@ -17,6 +17,7 @@ import {
 import * as readiness from "./update-candidate-canary-readiness.test-support.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
+  registerCanarySnapshotCapacityTests,
   completeCanaryCommand,
   createCanarySnapshotResult,
   FakeChild,
@@ -147,37 +148,7 @@ afterEach(() => {
 describe("update candidate canary", () => {
   readiness.registerCanaryReadinessBudgetTests(() => root, mocks);
   registerCanaryMigrationPolicyTests({ mocks, canaryStateOptions, getChildEnv: () => childEnv });
-  it("records a typed capacity refusal before notifying the snapshot failure", async () => {
-    const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
-      targetPath,
-      checkedPath: targetPath,
-      availableBytes: 0,
-      totalBytes: 1024,
-    }));
-    const onStep = vi.fn();
-    try {
-      const env = { TMPDIR: "/synthetic/tmp" };
-      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env, onStep });
-      expect(result).toMatchObject({ status: "error", phase: "snapshot" });
-      const failed = canaryOutcomeStep(result.steps);
-      expect(failed).toMatchObject({
-        name: "candidate-state-snapshot",
-        exitCode: 1,
-        snapshotCapacity: {
-          reason: "snapshot-capacity-insufficient",
-          selection: null,
-        },
-      });
-      expect(
-        failed?.snapshotCapacity?.candidates.map((candidate) => candidate.availableBytes),
-      ).toEqual([0, 0, 0]);
-      expect(onStep).toHaveBeenCalledExactlyOnceWith(failed);
-      expect(mocks.snapshot).not.toHaveBeenCalled();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-    } finally {
-      capacity.mockRestore();
-    }
-  });
+  registerCanarySnapshotCapacityTests({ canaryStateOptions, getRoot: () => root, mocks });
 
   it.each(
     [

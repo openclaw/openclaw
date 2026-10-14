@@ -65,7 +65,7 @@ function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string })
   );
 }
 
-defineSolidBridge<ToolOutcomeSummaryProps>(
+export const ChatToolOutcomeSummary = defineSolidBridge<ToolOutcomeSummaryProps>(
   "openclaw-chat-tool-outcome-summary",
   ToolOutcomeSummary,
   {
@@ -76,7 +76,7 @@ defineSolidBridge<ToolOutcomeSummaryProps>(
     },
   },
 );
-defineSolidBridge<{
+export const ChatToolReviewOutcome = defineSolidBridge<{
   outcome: ReviewOutcome;
   reviewer: string;
 }>("openclaw-chat-tool-review-outcome", ToolReviewOutcome, {

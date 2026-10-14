@@ -11,6 +11,9 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
+import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -152,7 +155,15 @@ function createHarness(
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,
     isCurrent: () => true,
-    invoke,
+    async invoke(request) {
+      if (
+        (request.authorizeDispatch && !(await request.authorizeDispatch())) ||
+        !request.isDispatchAuthorized()
+      ) {
+        return { ok: false, error: { code: "APPROVAL_AUTHORITY_CLOSED" } };
+      }
+      return invoke(request);
+    },
   };
   const warn = vi.fn();
   const rows = () =>
@@ -204,6 +215,71 @@ function createHarness(
 }
 
 describe("node workspace retain coordinator", () => {
+  it("accepts bundle status when placement metadata changes after node dispatch", async () => {
+    const bundleHash = "c".repeat(64);
+    const placements = [placement()];
+    const { coordinator } = createHarness({
+      placements,
+      bundleRetention: {
+        currentBuild: async () => ({ bundleHash, openclawVersion: "2026.8.10" }),
+        isEnvironmentOwnedNode: () => false,
+      },
+    });
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+      () => new NodeRegistry(),
+    );
+    const dispatched = createDeferredCore<string>();
+    const client = makeClient("connection-1", "node-1", [], { clientId: "node-host" });
+    vi.spyOn(client.socket, "send").mockImplementation((data: unknown) => {
+      if (typeof data !== "string") {
+        return;
+      }
+      const frame = JSON.parse(data) as { event?: string; payload?: { id: string } };
+      if (frame.event === "node.invoke.request" && frame.payload) {
+        dispatched.resolve(frame.payload.id);
+      }
+    });
+    registerNodeSession(nodeRegistry, client, { pairingGeneration: "generation-1" });
+    updateNodeRunnerInventory({
+      registry: nodeRegistry,
+      nodeId: "node-1",
+      connId: "connection-1",
+      declaration: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: node.workerHost,
+      },
+    });
+    coordinator.bindTransport(nodeWorkerSupervisorTransport);
+    const publishing = coordinator.start();
+    try {
+      const id = await dispatched.promise;
+      placements[0] = placement({ updatedAtMs: 3 });
+      expect(
+        nodeRegistry.handleInvokeResult({
+          id,
+          nodeId: "node-1",
+          connId: "connection-1",
+          ok: true,
+          payloadJSON: JSON.stringify({
+            applied: true,
+            deleted: 0,
+            hasMore: false,
+            bundleStatus: { bundleHash, status: "installed" },
+          }),
+        }),
+      ).toBe(true);
+      await publishing;
+      expect(nodeWorkerSupervisorTransport.getBundleStatus?.("node-1")).toEqual({
+        bundleHash,
+        status: { status: "installed", version: "2026.8.10" },
+      });
+    } finally {
+      await coordinator.stop();
+      nodeRegistry.unregister("connection-1");
+      await publishing;
+    }
+  });
+
   it("publishes the complete durable retain snapshot for a connected device", async () => {
     const { coordinator, invoke } = createHarness({
       environments: [
@@ -743,10 +819,6 @@ describe("node workspace retain coordinator", () => {
             }),
           ],
         });
-        if (change === "current") {
-          sessionCurrent = false;
-          expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(false);
-        }
       } finally {
         release.resolve();
         await startup;

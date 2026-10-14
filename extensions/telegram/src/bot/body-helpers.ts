@@ -1,7 +1,8 @@
 import type { Chat, Message, RichBlock, RichBlockCaption, RichText } from "grammy/types";
-import type {
-  ChannelInboundMediaInput,
-  NormalizedLocation,
+import {
+  type ChannelInboundMediaInput,
+  formatLocationText,
+  type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -413,6 +414,24 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
       origin satisfies never;
       return null;
   }
+}
+
+/** Location counts as user text downstream and is forwarded structurally; dice is neither. */
+export type TelegramNonTextBody =
+  | { kind: "location"; text: string; location: NormalizedLocation }
+  | { kind: "dice"; text: string };
+
+/** Shared by inbound bodies, cached messages, and reply targets. */
+export function resolveTelegramNonTextBody(msg: Message): TelegramNonTextBody | undefined {
+  const location = extractTelegramLocation(msg);
+  if (location) {
+    return { kind: "location", text: formatLocationText(location), location };
+  }
+  const dice = msg.dice;
+  const emoji = normalizeOptionalString(dice?.emoji);
+  return dice && emoji && Number.isFinite(dice.value)
+    ? { kind: "dice", text: `[Dice ${emoji} = ${dice.value}]` }
+    : undefined;
 }
 
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {

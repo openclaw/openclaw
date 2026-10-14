@@ -518,7 +518,11 @@ it.each([
   },
 ] as const)("revalidates $write before preparing private chat metadata", async (scenario) => {
   await withOpenClawTestState(
-    { label: "metadata-read-acknowledgment", env: WITHOUT_OPENAI_ENV_AUTH },
+    {
+      label: "metadata-read-acknowledgment",
+      env: WITHOUT_OPENAI_ENV_AUTH,
+      prepareProfileCatalog: true,
+    },
     async (state) => {
       const config = { ...createOpenAIChatMetadataConfig(), ...rolePolicyConfig() };
       await state.writeConfig(config);

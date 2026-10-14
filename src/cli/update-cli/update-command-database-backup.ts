@@ -106,8 +106,13 @@ export async function captureUpdateDatabases(params: {
         stateDir: resolveStateDir(env),
         config: source.config,
         env,
+        // Under confirmed custody no writer can race a raw family copy. A native
+        // source open would rebuild an exited writer's WAL index, changing the
+        // recorded generation and disabling automatic restoration.
+        preserveSourceArtifacts: maintenance !== null && unavailable === undefined,
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
+        postgresOffline: maintenance !== null && unavailable === undefined,
       });
       params.assertCurrent();
       maintenance?.assertCurrent();

@@ -151,12 +151,15 @@ export type WorkerWorkspaceSyncRequest = {
   sessionKey?: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
-  source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;
+  source:
+    | { kind: "local"; path: string; projectKey?: string }
+    | { kind: "device-folder"; deviceId: string; path: string }
+    | WorkerRepositoryWorkspaceSource;
 };
 
 export type WorkerWorkspaceSyncResult =
   | {
-      mode: "git" | "plain";
+      mode: "git" | "plain" | "device-folder";
       remoteWorkspaceDir: string;
       manifestRef: string;
     }

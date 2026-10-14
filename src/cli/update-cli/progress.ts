@@ -3,6 +3,10 @@ import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../../infra/gateway-state-owner-record.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
@@ -35,6 +39,16 @@ const activeUpdateProgress = new Map<
 >();
 const UPDATE_PROGRESS_POLL_MS = 250;
 const UPDATE_STEP_NOTICE_MS = 30_000;
+
+function isProgressMaintenanceContention(error: unknown): boolean {
+  if (error instanceof AggregateError) {
+    return error.errors.length > 0 && error.errors.every(isProgressMaintenanceContention);
+  }
+  return (
+    error instanceof StateDatabaseAdmissionPendingError ||
+    error instanceof StateDatabaseOfflineMaintenanceError
+  );
+}
 
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
@@ -151,7 +165,8 @@ export function createUpdateProgress(
         polling = record?.status === "running";
       }
     } catch (error) {
-      if (!controller.signal.aborted) {
+      // Doctor children hold their own custody; observation waits without borrowing it.
+      if (!controller.signal.aborted && !isProgressMaintenanceContention(error)) {
         polling = false;
         defaultRuntime.error(`Update progress history unavailable: ${formatErrorMessage(error)}`);
       }

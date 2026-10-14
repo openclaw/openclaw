@@ -539,7 +539,7 @@ suite.define(() => {
         }
         for (const control of [phase, stop, send]) {
           const box = await control.boundingBox();
-          expect(box).not.toBeNull();
+          expect(box, control.toString()).not.toBeNull();
           if (!box) {
             throw new Error("expected visible dictation control layout box");
           }

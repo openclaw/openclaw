@@ -16,7 +16,7 @@ import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { renderStreamGroup } from "./chat-message-stream.ts";
 import {
@@ -2683,9 +2683,15 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
     expect(container.querySelectorAll(".chat-image-action")).toHaveLength(1);
+    container.querySelector<HTMLButtonElement>(".chat-image-action")!.click();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(".chat-image-actions .oc-menu")!.matches(":popover-open"),
+      ).toBe(true),
+    );
     container
-      .querySelector("wa-dropdown")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "download" } } }));
+      .querySelector<HTMLButtonElement>('.chat-image-actions [data-value="download"]')!
+      .click();
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(clickedDownloads[0]).toBe("Ticketed image.png");
 

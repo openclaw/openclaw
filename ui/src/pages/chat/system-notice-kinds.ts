@@ -34,6 +34,11 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
       cancelled: "chat.systemNotice.restartRecovery.cancelled",
     },
   },
+  cron_failure_repair: {
+    icon: "cpu",
+    labelKey: "chat.systemNotice.automationRecovery.label",
+    summaryKey: "chat.systemNotice.automationRecovery.summary",
+  },
   "restart-sentinel": {
     icon: "cpu",
     labelKey: "chat.systemNotice.gatewayRestarted.label",

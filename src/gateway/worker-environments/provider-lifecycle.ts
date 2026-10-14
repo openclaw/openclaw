@@ -16,7 +16,7 @@ import {
   WorkerEnvironmentServiceError,
   workerEnvironmentServiceError as serviceError,
 } from "./environment-errors.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
@@ -196,7 +196,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
               provider.resolveProvisionTimeoutMs?.(profile, { nodeBootstrapTimeoutMs }),
             )
           : undefined;
-      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      const preparation = readWorkerPreparation(record.profileSnapshot);
       const machineClass =
         preparation?.target.machineClass ??
         (typeof record.profileSnapshot.machineClass === "string"
