@@ -202,6 +202,78 @@ function assertNoOpenFiles(paths: readonly string[]) {
   }
 }
 
+const NOCOW_PROBE_PREFIX = ".openclaw-nocow-probe-";
+
+/** Probe fuser on a path this process owns, mirroring assertNoOpenFiles. */
+function probeFuserInspection(candidate: string): string | undefined {
+  const result = spawnSync("fuser", [path.resolve(candidate)], {
+    encoding: "utf8",
+    timeout: TOOL_TIMEOUT_MS,
+  });
+  const stdout = result.stdout?.trim() ?? "";
+  const stderr = result.stderr?.trim() ?? "";
+  if (result.status === 1 && !stdout && !stderr) {
+    return undefined;
+  }
+  if (result.status === 0 && /^\d+(?:\s+\d+)*$/u.test(stdout)) {
+    return undefined;
+  }
+  return (
+    stderr ||
+    result.error?.message ||
+    (result.signal ? `signal ${result.signal}` : stdout || `exit status ${result.status}`)
+  );
+}
+
+/** renameat2 RENAME_EXCHANGE is the repair's atomicity primitive (btrfs: Linux >= 4.7). */
+function probeDirectoryExchange(parentDirectory: string): string | undefined {
+  const stamp = `${process.pid.toString(36)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const source = path.join(parentDirectory, `${NOCOW_PROBE_PREFIX}${stamp}-source`);
+  const target = path.join(parentDirectory, `${NOCOW_PROBE_PREFIX}${stamp}-target`);
+  fs.mkdirSync(source);
+  fs.mkdirSync(target);
+  try {
+    const result = spawnSync("mv", ["--exchange", "--no-copy", "-T", "--", source, target], {
+      encoding: "utf8",
+      timeout: TOOL_TIMEOUT_MS,
+    });
+    if (result.error) {
+      return result.error.message;
+    }
+    if (result.status !== 0) {
+      return result.stderr?.trim() || `exit status ${result.status}`;
+    }
+    return undefined;
+  } finally {
+    fs.rmSync(source, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Cheap pre-flight: the per-file inventory and getfacl pass cost minutes on large
+ * stores, so a host or filesystem that cannot run the repair must be refused first.
+ */
+function inspectNoCowRepairSupport(parentDirectory: string): string | undefined {
+  const scratch = path.join(
+    parentDirectory,
+    `${NOCOW_PROBE_PREFIX}${process.pid.toString(36)}-${Date.now().toString(36)}`,
+  );
+  fs.writeFileSync(scratch, "");
+  try {
+    const fuserFailure = probeFuserInspection(scratch);
+    if (fuserFailure) {
+      return `fuser could not establish that all handles are closed: ${fuserFailure}; check that fuser is installed and can inspect processes using this store`;
+    }
+  } finally {
+    fs.rmSync(scratch, { force: true });
+  }
+  const exchangeFailure = probeDirectoryExchange(parentDirectory);
+  return exchangeFailure
+    ? `the filesystem cannot exchange directories (renameat2 RENAME_EXCHANGE): ${exchangeFailure}; SQLite NOCOW repair needs atomic directory exchange on this store`
+    : undefined;
+}
+
 function readStoreEntries(directory: string): fs.Dirent[] {
   const entries: fs.Dirent[] = [];
   const pending = [directory];
@@ -260,6 +332,12 @@ export async function repairDoctorSqliteNoCow(params: {
         [directory],
         [params.stateDir],
       );
+      // Refuse on a host or filesystem that cannot run the repair before the
+      // per-file inventory and getfacl pass, which cost minutes on large stores.
+      const unsupported = inspectNoCowRepairSupport(directory);
+      if (unsupported) {
+        throw new Error(unsupported);
+      }
       const entries = readStoreEntries(directory);
       const files = entries.map((entry) => path.join(entry.parentPath, entry.name));
       const inventory = new Map(

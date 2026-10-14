@@ -80,6 +80,13 @@ async function repair(assertCurrent = () => {}) {
   return [...result.changes, ...result.warnings];
 }
 
+// The capability pre-flight probes the host with its own scratch paths; those
+// calls are not store inspections and stay out of collection assertions.
+const NOCOW_PROBE_MARKER = ".openclaw-nocow-probe-";
+function isNoCowProbeCall(argv: readonly string[]): boolean {
+  return argv.length === 1 && String(argv[0]).includes(NOCOW_PROBE_MARKER);
+}
+
 describe("Doctor btrfs NOCOW", () => {
   it.skipIf(process.platform !== "linux")(
     "rewrites shared and agent stores after Doctor drains native and admission descriptors",
@@ -312,8 +319,12 @@ describe("Doctor btrfs NOCOW", () => {
       const tool = vi.mocked(spawnSync).getMockImplementation()!;
       vi.mocked(spawnSync).mockImplementation((command, args, options) => {
         if (command === "fuser") {
-          expect(args).toContain(lock);
-          for (const pathname of args ?? []) {
+          const argv = args ?? [];
+          if (isNoCowProbeCall(argv)) {
+            return { status: 1, stdout: "", stderr: "", pid: 0, output: [], signal: null };
+          }
+          expect(argv).toContain(lock);
+          for (const pathname of argv) {
             expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(false);
             expect(pathname.startsWith(external)).toBe(false);
           }
@@ -474,6 +485,9 @@ describe("Doctor btrfs NOCOW", () => {
         return tool(command, args, options);
       }
       const argv = [...(args ?? [])];
+      if (isNoCowProbeCall(argv)) {
+        return tool(command, args, options);
+      }
       batches.push(argv);
       const result = { status: 1, stdout: "", stderr: "", pid: 0, output: [], signal: null };
       if (
@@ -523,6 +537,37 @@ describe("Doctor btrfs NOCOW", () => {
     }
   });
 
+  it("refuses before the per-file inventory when the host cannot probe handles or exchange", async () => {
+    seedDatabase();
+    const original = fs.statSync(sqlitePath);
+    const getfaclCalls = () =>
+      vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl").length;
+
+    fixture.fuserResult = {
+      pid: 0,
+      output: [],
+      signal: null,
+      status: 2,
+      stdout: "",
+      stderr: "Cannot stat /state/openclaw.sqlite: Invalid argument",
+    };
+    const fuserNotes = (await repair()).join("\n");
+    expect(fuserNotes).toContain("fuser could not establish that all handles are closed");
+    expect(getfaclCalls()).toBe(0);
+    expect(fixture.exchanges).toBe(0);
+    expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
+
+    vi.mocked(spawnSync).mockClear();
+    fixture.fuserResult = undefined;
+    fixture.tools = "exchange-failed";
+    const exchangeNotes = (await repair()).join("\n");
+    expect(exchangeNotes).toContain("renameat2 RENAME_EXCHANGE");
+    expect(getfaclCalls()).toBe(0);
+    expect(fixture.exchanges).toBe(0);
+    expect(fixture.exchangeProbes).toBe(1);
+    expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
+  });
+
   it.each([
     "space",
     "getfacl",
@@ -563,7 +608,8 @@ describe("Doctor btrfs NOCOW", () => {
     });
     expect(notes.join(",")).not.toContain("Rewrote");
     expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
-    expect(fixture.exchanges).toBe(failure === "exchange-failed" ? 1 : 0);
+    // The pre-flight consumes the failing exchange before any store exchange.
+    expect(fixture.exchanges).toBe(0);
     expect(notes.join(",")).toMatch(
       failure === "getfacl" || failure === "setfacl" || failure === "verification"
         ? /refused/u

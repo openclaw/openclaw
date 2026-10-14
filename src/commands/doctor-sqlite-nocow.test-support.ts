@@ -14,6 +14,7 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
     tools: "ok" as "ok" | "unavailable" | "busy" | "exchange-failed" | "exchange-timeout",
     attributes: false,
     exchanges: 0,
+    exchangeProbes: 0,
     acls: new Map<string, string>(),
     unavailableAclTool: undefined as "getfacl" | "setfacl" | undefined,
     rejectAclVerification: false,
@@ -136,13 +137,27 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
       stdout = fixture.tools === "unavailable" ? "mv" : "--exchange --no-copy";
     } else if (command === "mv") {
       expect(argv.slice(0, 4)).toEqual(["--exchange", "--no-copy", "-T", "--"]);
+      const source = String(argv.at(-2));
+      const target = String(argv.at(-1));
+      if (`${source} ${target}`.includes(".openclaw-nocow-probe-")) {
+        // Capability pre-flight, not a store exchange: only the exit status matters.
+        fixture.exchangeProbes++;
+        return fixture.tools === "exchange-failed"
+          ? {
+              status: 1,
+              stdout: "",
+              stderr: "Operation not supported",
+              pid: 0,
+              output: [],
+              signal: null,
+            }
+          : { status: 0, stdout: "", stderr: "", pid: 0, output: [], signal: null };
+      }
       fixture.beforeExchange?.();
       fixture.exchanges++;
       if (fixture.tools === "exchange-failed") {
         return { status: 1, stdout: "", stderr: "denied", pid: 0, output: [], signal: null };
       }
-      const source = String(argv.at(-2));
-      const target = String(argv.at(-1));
       const temporary = `${target}.test-exchange`;
       fs.renameSync(target, temporary);
       fs.renameSync(source, target);
