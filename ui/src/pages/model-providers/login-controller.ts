@@ -353,7 +353,9 @@ export class ModelProviderLoginController {
       mode: this.mode === "access" ? "auth" : this.mode,
       busy: this.mutationActive,
       refreshWarning: this.refreshWarning,
-      doneMessage: t("modelSetup.wizard.connected"),
+      doneMessage: this.runner.state.authLabel
+        ? t("modelSetup.providerConnected", { provider: this.runner.state.authLabel })
+        : t("modelSetup.wizard.connected"),
       doneAction: this.completionModel
         ? {
             label: t("modelProviders.login.startChat", { model: this.completionModel.name }),

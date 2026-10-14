@@ -105,6 +105,11 @@ The credential stays in Muse Code's own credential store; OpenClaw does not
 copy it into an auth profile. This sign-in authorizes the Muse runtime, not
 the direct Meta API route.
 
+Keep the sign-in dialog open while it shows **Waiting for approval in your
+browser…**. The device code and **Open sign-in** link remain available during
+the wait. After approval, OpenClaw checks access before showing **Muse Code is
+connected**; you can then start a new chat or close the dialog.
+
 For Muse-owned sign-ins, OpenClaw checks that Muse can fetch the candidate model
 from Meta's live catalog. It does not run a model turn or expose native tools
 during verification. The same check runs again before activation is committed.

@@ -117,7 +117,7 @@ export async function runMuseLogin(ctx: ProviderAuthContext): Promise<ProviderAu
   if (!remembered) {
     await ctx.prompter.select({
       message:
-        "Muse Code will run on the Gateway host under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, will not be enforced for this harness. OpenClaw-hosted tools keep their own policy checks.",
+        "Muse Code runs on the Gateway host under its own permissions.\n\nOpenClaw’s optional native tool, sandbox, and workspace-only restrictions will not be enforced for this harness. OpenClaw-hosted tools keep their own policy checks.",
       options: [{ value: "continue", label: "Continue" }],
     });
   }

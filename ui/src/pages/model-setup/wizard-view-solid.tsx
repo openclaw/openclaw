@@ -1,11 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
 import { WizardStepControls } from "./wizard-step-controls.tsx";
+
+registerModelSetupEnglish();
 
 export type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
@@ -22,6 +26,14 @@ export type WizardViewProps = {
 };
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
+  let content: HTMLDivElement | undefined;
+  createEffect(
+    () =>
+      props.state.phase === "step"
+        ? props.state.step.id
+        : `${props.state.phase}:${Boolean(props.doneAction)}`,
+    () => content?.querySelector<HTMLElement>("[autofocus]")?.focus({ preventScroll: true }),
+  );
   const copy = createMemo(() => WIZARD_COPY[props.mode]);
   const canCancel = () => props.state.phase === "starting" || props.state.phase === "step";
   const stepState = createMemo(() => (props.state.phase === "step" ? props.state : undefined));
@@ -34,7 +46,12 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >
-        <div class="model-setup-wizard">
+        <div
+          class={["model-setup-wizard", { "model-setup-wizard--auth": props.mode === "auth" }]}
+          ref={(element) => {
+            content = element;
+          }}
+        >
           <div class="model-setup-wizard__header">
             <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
           </div>
@@ -57,10 +74,16 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
             </For>
             <Switch>
               <Match when={props.state.phase === "starting"}>
-                <div role="status">{t(copy().starting)}</div>
+                <div class="wizard-step__progress" role="status" aria-busy="true">
+                  <span class="wizard-step__spinner" aria-hidden="true" />
+                  {t(copy().starting)}
+                </div>
               </Match>
               <Match when={props.state.phase === "done"}>
-                <div role="status">
+                <div class="model-setup-wizard__success" role="status">
+                  <span class="model-setup-wizard__success-icon" aria-hidden="true">
+                    <Icon name="check" />
+                  </span>
                   {props.doneMessage ??
                     t(
                       props.mode === "auth"
@@ -103,11 +126,6 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                         {state().validationError}
                       </div>
                     </Show>
-                    <Show
-                      when={state().busy && !state().step.externalUrl && !state().step.deviceCode}
-                    >
-                      <div role="status">{t("modelSetup.wizard.working")}</div>
-                    </Show>
                     <WizardStepControls
                       step={state().step}
                       externalAuthInput={state().externalAuthInput}
@@ -130,6 +148,19 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       onValueChange={(value) => props.onValueChange(value)}
                       onAnswer={(value) => props.onAnswer(value)}
                     />
+                    <Show
+                      when={
+                        state().busy &&
+                        state().step.type !== "progress" &&
+                        !state().step.externalUrl &&
+                        !state().step.deviceCode
+                      }
+                    >
+                      <div class="wizard-step__progress" role="status" aria-busy="true">
+                        <span class="wizard-step__spinner" aria-hidden="true" />
+                        {t("modelSetup.wizard.working")}
+                      </div>
+                    </Show>
                   </>
                 )}
               </Match>
@@ -143,9 +174,14 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     type="button"
                     class="btn primary"
                     data-login-start-chat
+                    autofocus
                     disabled={action().disabled}
+                    aria-busy={action().disabled ? "true" : "false"}
                     onClick={() => action().onClick()}
                   >
+                    <Show when={action().disabled}>
+                      <span class="btn__spinner" aria-hidden="true" />
+                    </Show>
                     {action().label}
                   </button>
                 )}
@@ -153,6 +189,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
               <button
                 type="button"
                 class="btn"
+                autofocus={props.state.phase !== "done" || !props.doneAction}
                 onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
               >
                 {t(canCancel() ? "common.cancel" : "common.close")}
