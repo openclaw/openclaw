@@ -10,7 +10,7 @@ export type SessionSourceConversationPredicate = {
   sessionKey: string | null;
 };
 
-/** Prepared source facts are compared again on the existing writer's connection. */
+/** Same-store facts are compared on the writer; published foreign sources may admit once. */
 export type SessionSourcePredicate = {
   source: CapturedSessionEntryReadSource;
   sessionKey: string;
@@ -25,6 +25,26 @@ export type SessionSourcePredicateFacts = {
   entry: SessionEntry | undefined;
   members?: readonly string[];
 };
+
+const publishedSourceAdmissions = new WeakMap<SessionSourcePredicate, () => void>();
+
+/** Bind the existing owner's live publication without copying authority into another cache. */
+export function bindPublishedSessionSourceAdmission(
+  predicate: SessionSourcePredicate,
+  admit: () => void,
+): void {
+  publishedSourceAdmissions.set(predicate, admit);
+}
+
+/** Each durable operation admits anew; later disclosure and execution keep their live checks. */
+export function admitPublishedSessionSource(predicate: SessionSourcePredicate): boolean {
+  const admit = publishedSourceAdmissions.get(predicate);
+  if (!admit) {
+    return false;
+  }
+  admit();
+  return true;
+}
 
 /** Current source facts supplied by the mutation's own transaction. */
 export type SessionSourceTransactionGrant = {
@@ -74,6 +94,8 @@ export type PreparedSessionSourceAuthority = {
 export type SessionSourceAssertion = (() => void) & {
   nativeSource?: boolean;
   opaqueCommitGuard?: boolean;
+  /** Keep the source owner alive through accepted work that outlasts its request. */
+  retain?: () => () => void;
   /** Checks the scope owner without invoking storage-dependent source predicates. */
   assertScopeCurrent?: () => void;
   prepareSessionSource?: () => Promise<PreparedSessionSourceAuthority>;
@@ -348,6 +370,21 @@ export function composeSessionSourceAssertion(
       prepareSessionSourceScope: () => prepare(true),
     },
   );
+  if (sources.some((source) => source?.retain)) {
+    Object.assign(assertion, {
+      retain: () => {
+        using acquired = new DisposableStack();
+        for (const source of sources) {
+          const release = source?.retain?.();
+          if (release) {
+            acquired.defer(release);
+          }
+        }
+        const retained = acquired.move();
+        return () => retained.dispose();
+      },
+    });
+  }
   return Object.defineProperty(assertion, "nativeSource", {
     enumerable: true,
     get: () => sources.some((source) => source?.nativeSource),

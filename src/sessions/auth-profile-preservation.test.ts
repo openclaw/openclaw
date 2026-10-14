@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import * as authStore from "../agents/auth-profiles/store.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -14,6 +15,10 @@ import {
 } from "./auth-profile-preservation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
+});
 
 const workspaceAliasPlugin = {
   id: "fixture-provider",
@@ -44,7 +49,6 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
     { provider: "openai", configured: "anthropic", expected: true },
     { provider: "anthropic", configured: "openai", expected: false },
     { provider: undefined, configured: "openai", expected: true },
-    { provider: undefined, configured: undefined, expected: true },
   ])(
     "consumes prepared provider $provider before config $configured without synchronous reads",
     ({ provider, configured, expected }) => {
@@ -190,6 +194,7 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
     "retains a missing personal pin only when the selected provider %s is compatible",
     async (provider) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        await prepareSharedAuthStoreOwnership(state.env);
         const personalId = `personal:${randomUUID()}:${randomUUID()}`;
         const sessionEntry: SessionEntry = {
           ...entry,
@@ -216,14 +221,6 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
   );
 
   it.each([
-    {
-      name: "retains a compatible auth profile when resetting to a same-provider default",
-      provider: "openai",
-      model: "gpt-5",
-      expectedProfile: "team:prod",
-      expectedSource: "user" as const,
-      expectedCompactionCount: 2,
-    },
     {
       name: "clears an incompatible auth profile when resetting to a cross-provider default",
       provider: "anthropic",

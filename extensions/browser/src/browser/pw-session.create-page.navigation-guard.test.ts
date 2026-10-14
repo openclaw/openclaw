@@ -356,6 +356,68 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
     expect(f.pageClose).toHaveBeenCalledOnce();
   });
+  it("closes the created page to interrupt an opening navigation on cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled");
+    const started = createDeferred<void>();
+    const navigation = createDeferred<null>();
+    const closed = new Error("Target page has been closed");
+    f.pageGoto.mockImplementationOnce(() => {
+      started.resolve();
+      return navigation.promise;
+    });
+    const closePage = f.pageClose.getMockImplementation();
+    if (!closePage) {
+      throw new Error("missing page cleanup fixture");
+    }
+    f.pageClose.mockImplementationOnce(async () => {
+      await closePage();
+      navigation.reject(closed);
+    });
+    const result = create({ signal: controller.signal }).catch((error: unknown) => error);
+    await started.promise;
+    try {
+      controller.abort(reason);
+      expect(f.pageClose).toHaveBeenCalledOnce();
+      expect(await result).toBe(reason);
+      expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    } finally {
+      navigation.reject(closed);
+      await result;
+    }
+  });
+  it("closes a page allocated after cancellation without starting navigation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled during allocation");
+    const allocating = createDeferred<void>();
+    const allocation = createDeferred<import("playwright-core").Page>();
+    vi.spyOn(f.page.context(), "newPage").mockImplementationOnce(() => {
+      allocating.resolve();
+      return allocation.promise;
+    });
+    const result = create({ signal: controller.signal }).catch((error: unknown) => error);
+    await allocating.promise;
+    controller.abort(reason);
+    f.pushOpenPage();
+    allocation.resolve(f.page);
+    expect(await result).toBe(reason);
+    expect(f.pageGoto).not.toHaveBeenCalled();
+    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    expect(f.pageClose).toHaveBeenCalledOnce();
+  });
+  it("releases cancellation cleanup when a committed timed-out page is handed off", async () => {
+    const controller = new AbortController();
+    f.pageGoto.mockImplementationOnce(async () => {
+      f.pageUrl.mockReturnValue(publicUrl);
+      throw new errors.TimeoutError("load event timed out");
+    });
+    const owned = await create({ signal: controller.signal });
+    controller.abort(new Error("caller finished"));
+    expect(await getPage(owned.targetId)).toBe(f.page);
+    expect(f.pageClose).not.toHaveBeenCalled();
+    await owned.close();
+    expect(f.pageClose).toHaveBeenCalledOnce();
+  });
   it("propagates unsupported redirect protocols as navigation errors", async () => {
     blockedRedirect({ url: "file:///etc/passwd" });
     await expect(create()).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);

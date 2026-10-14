@@ -50,6 +50,11 @@ context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
+Blocked completion warnings identify the child run and retain the concrete delivery
+error across retries. A confirmed handoff remains delivered even if its receipt
+callback fails; cleanup must not replay an already consumed result. Failures before
+a delivery result is reported follow the same retryability policy as direct sends.
+
 If a chunk in a direct-message text fallback fails or is aborted after earlier
 chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
 retries to avoid duplicating chunks the recipient already received. A successful

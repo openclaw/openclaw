@@ -77,11 +77,18 @@ Use the returned `sessionId` as `expectedSessionId` when the `sessions` tool arc
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. When an eligible bound external CLI transcript contributes messages, history returns a merged snapshot instead of a numeric offset page—even with an explicit `offset`. The Gateway treats these as terminal snapshots (`hasMore: false`); oversized snapshots remain byte-bounded, so terminal does not imply complete. Local offset paging applies when no external import survives. Unanchored reads stay the current reset-relative view. An explicit `messageId` that remains in that current view, including a pre-reset row kept after reset, keeps current-view behavior. An explicit `messageId` for a retained active-path row outside the current view opens that original closed interval and does not mix later post-reset turns; a missing or off-path `messageId` returns empty history rather than the newest messages.
 
+Display history limits raw pages to 8 MiB before loading message bodies. A larger
+message returns an error instead of exhausting a transcript worker. If an anchored
+page exceeds this limit, request a smaller `limit`. The tool's text and response
+byte caps still apply.
+
 Durably admitted inputs from `sessions_send` or the Gateway `agent` method
 appear separately in `pendingInputs`, not in transcript `messages`. Each row
 records `queued`, `cancelled`, or `interrupted`.
-Cancelled and interrupted inputs are retained for inspection and never run
-automatically. Built-in and CLI agent turns also receive bounded text previews of recent
+Cancelled inputs never run automatically. Interrupted inputs are retained for
+inspection; the Gateway can re-admit an unconsumed ordinary peer send that has
+durable delivery ownership, as described below. Other interrupted inputs do not
+run automatically. Built-in and CLI agent turns also receive bounded text previews of recent
 visible interrupted inputs as historical context, even when session-history tools
 are unavailable. These previews do not consume input, restore old permissions, or
 resume work without a current request. The preview tells the agent to resume them
@@ -222,6 +229,21 @@ arbitrary target history. The target can still disclose data or act on the
 request; send-only access is not isolation from a privileged target's behavior.
 
 During healthy worker provisioning or workspace preparation, accepted input stays queued until the intended worker is ready. It starts once after OpenClaw rechecks the session and placement. Cancellation, failed setup, or a replaced destination does not silently run that input locally or on another worker. Check the retained input and setup error before submitting another message.
+
+Ordinary peer sends accepted by the Gateway retain delivery ownership with the
+saved input. After an unexpected shutdown or update restart, startup re-admits
+only unconsumed inputs whose exact source and target sessions still exist and
+whose current communication policies and visibility permit delivery. It reuses
+the original input identity, preserving per-target order and consumption
+deduplication; it does not rerun the sender's task. Cancellation, reset, archival,
+revoked access, or a policy requiring fresh approval prevents automatic recovery.
+Inputs saved by older versions without delivery ownership remain available for
+inspection, not automatic retry. In history, `queued` means an input has current
+custody, not that the model is executing it; an input that remains `interrupted`
+is saved but is not being retried. A display-only notice distinguishes changed
+sessions, denied communication, and unavailable admission without feeding those
+diagnostics back to the model. Task continuations and steering retain their
+separate lifecycle owners.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.

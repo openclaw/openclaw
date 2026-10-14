@@ -987,6 +987,7 @@ describe("scripts/pr wrappers", () => {
         cwd: fixture.linked,
         encoding: "utf8",
         env: { ...fixture.env, ...env },
+        maxBuffer: 8 * 1024 * 1024,
       });
     return { ...fixture, tooling, stale, run };
   }
@@ -1037,11 +1038,25 @@ describe("scripts/pr wrappers", () => {
     },
   );
 
-  itPosix.each([true, false])(
-    "refreshes a stale clean main tooling root once (install repairs=%s)",
-    (repairs) => {
+  itPosix.each([
+    { repairs: true, largeOutput: false },
+    { repairs: false, largeOutput: false },
+    { repairs: true, largeOutput: true },
+  ])(
+    "refreshes a stale clean main tooling root once (install repairs=$repairs, merge output over 1 MiB=$largeOutput)",
+    ({ repairs, largeOutput }) => {
       const fixture = makeToolingRootFixture();
       const advanced = advanceToolingMain(fixture);
+      if (largeOutput) {
+        // Stands in for a far-behind root's diffstat without checking out
+        // thousands of files; Git sends hook stdout to its stderr.
+        const hooks = join(fixture.root, "tooling-hooks");
+        mkdirSync(hooks);
+        fixture.git(fixture.tooling, ["config", "core.hooksPath", hooks]);
+        writeFileSync(join(hooks, "post-merge"), "#!/bin/sh\nyes x | head -c 1200000\n", {
+          mode: 0o755,
+        });
+      }
       const target = realpathSync(join(fixture.tooling, "node_modules/tsx"));
       rmSync(join(fixture.tooling, "node_modules/tsx"));
       symlinkSync(fixture.stale, join(fixture.tooling, "node_modules/tsx"), "dir");
@@ -1059,6 +1074,8 @@ if (${repairs}) {
       );
       const result = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
       expect(result.status, result.stdout + result.stderr).toBe(repairs ? 2 : 1);
+      // Merge output streams to the operator instead of filling a capture buffer.
+      expect(result.stderr.length).toBeGreaterThan(largeOutput ? 1_200_000 : 0);
       expect(result.stderr).toContain("has version 0.0.0; the trust anchor requires");
       expect(result.stderr).toContain(`Refreshing scripts/pr tooling root ${fixture.tooling}`);
       expect(

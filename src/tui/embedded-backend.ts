@@ -589,6 +589,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           key: opts.key,
           store: store as Record<string, SessionEntry>,
           agentId: opts.agentId,
+          target,
         });
         return { primaryKey, candidateKeys: migratedTarget.storeKeys };
       },

@@ -25,7 +25,7 @@ import { deleteRegistryWorktree, insertRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { resolveRepository } from "./service-preparation.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { IDLE_GC_MS, ManagedWorktreeService, WORKTREE_GC_INTERVAL_MS } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
@@ -354,7 +354,8 @@ describe("worktree Git maintenance", () => {
         lastActiveAt: 1,
       });
     }
-    const service = new ManagedWorktreeService({ env, now: () => 3 });
+    let now = 3;
+    const service = new ManagedWorktreeService({ env, now: () => now });
     const controller = new AbortController();
     const execute = gitExec.executeGitCommand;
     const maintenanceRoots: string[] = [];
@@ -411,14 +412,17 @@ describe("worktree Git maintenance", () => {
       );
       const warning = await logs.findText("worktree Git maintenance");
       expect(warning).toContain("gc is already running");
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc({ signal: controller.signal });
       expect(maintenanceRoots).toHaveLength(3);
       expect(repairRoots).toHaveLength(4);
       expect(maintenanceRoots.at(-1)).toBe(otherRepo);
       failPackRepair = true;
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc({ signal: controller.signal });
       expect(repairRoots).toHaveLength(6);
       failPackRepair = false;
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc({ signal: controller.signal });
       expect(repairRoots).toHaveLength(7);
       expect(maintenanceRoots).toHaveLength(5);
@@ -576,6 +580,18 @@ describe("worktree Git maintenance", () => {
       );
       await requireGit(repo, ["multi-pack-index", "verify"]);
       expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      // A repeated transfer below the rewrite threshold must still retire its
+      // redundant pack, without letting ordinary copies displace promises.
+      const duplicate = await requireGit(repo, ["pack-objects", path.join(packDirectory, "pack")], {
+        input: `${objects[1]}\n`,
+      });
+      await fs.writeFile(path.join(packDirectory, `pack-${duplicate}.promisor`), "");
+      await createWorktreeGitMaintenance(env)({});
+      const afterDuplicate = await fs.readdir(packDirectory);
+      expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
+      expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+      expect(await requireGit(repo, ["cat-file", "-t", objects[1]!])).toBe("blob");
+      await requireGit(repo, ["multi-pack-index", "verify"]);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -615,7 +631,8 @@ describe("worktree Git maintenance", () => {
         createdAt: 1,
         lastActiveAt: 1,
       });
-      const service = new ManagedWorktreeService({ env, now: () => 3 });
+      let now = 3;
+      const service = new ManagedWorktreeService({ env, now: () => now });
       const writer = await fs.open(active, "r+");
       try {
         await service.gc();
@@ -624,6 +641,7 @@ describe("worktree Git maintenance", () => {
       } finally {
         await writer.close();
       }
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc();
       await expect(fs.access(old)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(active)).rejects.toMatchObject({ code: "ENOENT" });

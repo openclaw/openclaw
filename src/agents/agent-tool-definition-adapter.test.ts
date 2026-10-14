@@ -19,8 +19,10 @@ import {
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
+import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -204,6 +206,45 @@ describe("agent tool definition adapter", () => {
       error: "exec denied: host=sandbox security=deny",
     });
     expect(validateWorkdir).not.toHaveBeenCalled();
+  });
+
+  it("preserves no-start evidence when presenting a script-preflight refusal", async () => {
+    const parameters = Type.Object({ command: Type.String(), workdir: Type.String() });
+    const tool: AgentTool<typeof parameters> = {
+      name: "exec",
+      label: "Exec",
+      description: "Validate the script before execution",
+      parameters,
+      execute: async (_id, params) => {
+        await validateScriptFileForShellBleed(params);
+        return { content: [], details: {} };
+      },
+    };
+    const [definition] = toToolDefinitions([tool]);
+    const args = { command: "cat bad.py | python", workdir: process.cwd() };
+    const result = await expectDefined(definition, "exec definition").execute(
+      "call-preflight-refused",
+      args,
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("exec preflight: complex interpreter invocation"),
+    });
+    const terminal = createToolTerminalObserver("run-preflight-refused")({
+      toolName: "exec",
+      arguments: args,
+      result,
+      executionStarted: true,
+      outcome: "failure",
+    });
+    expect(terminal.lastToolError).toMatchObject({
+      executionStarted: false,
+      mutatingAction: false,
+    });
   });
 
   it("does not throw WeakMap errors when preparing malformed exec params", async () => {

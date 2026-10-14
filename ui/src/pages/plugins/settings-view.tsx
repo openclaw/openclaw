@@ -1,8 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
-import { renderNode } from "../../components/config-form.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { ConfigNode } from "../../components/config-form.node.tsx";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -16,12 +16,11 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
+import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -257,22 +256,20 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
       >
         {(current) => (
           <>
-            <LitContent
-              render={() =>
-                renderNode({
-                  rawAvailable: false,
-                  maskSensitive: true,
-                  schema: current().schema,
-                  value: current().value.plugins ?? {},
-                  path: ["plugins"],
-                  hints: options.configHints,
-                  unsupported: new Set(options.configUnsupportedPaths),
-                  disabled: !options.canEditConfig || options.configBusy,
-                  showLabel: false,
-                  onPatch: options.onConfigPatch,
-                  onRemove: options.onConfigRemove,
-                })
-              }
+            <ConfigNode
+              params={{
+                rawAvailable: false,
+                maskSensitive: true,
+                schema: current().schema,
+                value: current().value.plugins ?? {},
+                path: ["plugins"],
+                hints: options.configHints,
+                unsupported: new Set(options.configUnsupportedPaths),
+                disabled: !options.canEditConfig || options.configBusy,
+                showLabel: false,
+                onPatch: options.onConfigPatch,
+                onRemove: options.onConfigRemove,
+              }}
             />
             {options.configError
               ? renderRetryError(options.configError, options.onConfigWriteRetry)
@@ -342,29 +339,19 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
         subtitle={t("pluginsPage.settingsDescription")}
       />
       <div class="plugins-settings-content">
-        <LitContent
-          render={() =>
-            renderHubTabs({
-              id: "plugin-settings",
-              active: props.tab,
-              tabs: [
-                {
-                  value: "installed",
-                  label: t("pluginsPage.settingsInstalled"),
-                },
-                {
-                  value: "advanced",
-                  label: t("pluginsPage.advanced"),
-                },
-              ],
-              ariaLabel: t("pluginsPage.settingsTabs"),
-              panelId: "plugin-settings-panel",
-              variant: "sub",
-              className: "plugins-settings-tabs",
-              carapace: true,
-              onSelect: props.onTabChange,
-            })
-          }
+        <HubTabs
+          id="plugin-settings"
+          active={props.tab}
+          tabs={[
+            { value: "installed", label: t("pluginsPage.settingsInstalled") },
+            { value: "advanced", label: t("pluginsPage.advanced") },
+          ]}
+          ariaLabel={t("pluginsPage.settingsTabs")}
+          panelId="plugin-settings-panel"
+          variant="sub"
+          class="plugins-settings-tabs"
+          carapace
+          onSelect={props.onTabChange}
         />
         <div
           id="plugin-settings-panel"

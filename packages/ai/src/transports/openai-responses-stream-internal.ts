@@ -30,6 +30,7 @@ import { createCompactionTracker } from "./openai-responses-compaction-replay.js
 import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
 import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
@@ -107,6 +108,7 @@ export async function processResponsesStream<TApi extends Api>(
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
       };
+      terminal.recordReasoningReplayReadiness(slot.contentIndex, false);
     } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
       const block = collapseCandidate ? null : createTextBlock(item, "");
@@ -503,7 +505,13 @@ export async function processResponsesStream<TApi extends Api>(
           const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
           outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
-          outputSlot.block.thinkingSignature = JSON.stringify(item);
+          outputSlot.block.thinkingSignature = JSON.stringify(
+            normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+          );
+          terminal.recordReasoningReplayReadiness(
+            outputSlot.contentIndex,
+            Boolean(item.encrypted_content),
+          );
           outputs.set(
             item,
             outputSlot.contentIndex,
@@ -658,15 +666,13 @@ export async function processResponsesStream<TApi extends Api>(
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
-        terminal.finalizeResponse(event.response, event.type, Boolean(rejectedToolCall));
-        if (rejectedToolCall) {
-          throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
-        }
+        terminal.finalizeResponse(event.response, event.type, rejectedToolCall);
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
           const completeToolCall =
             event.type === "response.completed" ? prepareTerminalToolCalls(items) : undefined;
           terminal.recoverTerminalOutput(items, completeToolCall);
+          terminal.releaseDeferredToolCompletions();
         }
         terminalResponse = event.type === "response.completed" ? event.response : null;
         if (

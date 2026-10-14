@@ -149,6 +149,7 @@ async function startOwnedGatewayChild(
         token: gatewayToken,
         configPath,
         runtimeEnv: launch.env,
+        logs,
       });
     }
     if (!initial || !params.allowUnhealthyStartup) {

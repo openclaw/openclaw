@@ -9,7 +9,7 @@ import {
   scheduleStaleChunkReload,
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
-import { kbdStyles } from "./components/kbd-styles.ts";
+import kbdStyles from "./components/kbd.css?inline";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
@@ -28,7 +28,7 @@ if (!unsupportedControlUiBrowser) {
   // Share the exact keyboard-hint rules with shadow roots without making renderers
   // depend on bundler-only CSS imports (they are also imported by Node consumers).
   const keyboardHintStyles = document.createElement("style");
-  keyboardHintStyles.textContent = kbdStyles.cssText;
+  keyboardHintStyles.textContent = kbdStyles;
   document.head.append(keyboardHintStyles);
 
   for (const [selector, asset] of [

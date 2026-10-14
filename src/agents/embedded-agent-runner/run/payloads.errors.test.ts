@@ -356,9 +356,16 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
   });
 
-  it.each([true, undefined])(
-    "keeps terminal errors suppressed after a completed message-tool reply (final=%s)",
-    (sourceReplyFinal) => {
+  it.each(
+    [true, undefined].flatMap((sourceReplyFinal) =>
+      ([undefined, "delivered"] as const).map((sourceReplyDeliveryState) => ({
+        sourceReplyFinal,
+        sourceReplyDeliveryState,
+      })),
+    ),
+  )(
+    "keeps terminal errors suppressed after a completed message-tool reply (final=$sourceReplyFinal, canonical=$sourceReplyDeliveryState)",
+    ({ sourceReplyFinal, sourceReplyDeliveryState }) => {
       const payloads = buildPayloads({
         lastAssistant: makeAssistant({
           stopReason: "error",
@@ -367,6 +374,7 @@ describe("buildEmbeddedRunPayloads", () => {
         }),
         didSendViaMessagingTool: true,
         didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState,
         messagingToolSentTargets: [
           {
             tool: "message",
@@ -379,6 +387,54 @@ describe("buildEmbeddedRunPayloads", () => {
       });
 
       expect(payloads).toEqual([]);
+    },
+  );
+
+  it.each(
+    (["pending", "delivered"] as const).flatMap((earlierDelivery) =>
+      (["pending", "missing"] as const).map((currentDelivery) => ({
+        earlierDelivery,
+        currentDelivery,
+      })),
+    ),
+  )(
+    "scopes error recovery to current custody ($earlierDelivery then $currentDelivery)",
+    ({ earlierDelivery, currentDelivery }) => {
+      const earlier = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Do not repeat the completed answer." }],
+      });
+      const payloads = buildPayloads({
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplyDeliveryState: currentDelivery,
+        didDeliverSourceReplyViaMessageTool: false,
+        assistantTexts: ["Do not repeat the completed answer."],
+        answerSegments: [
+          {
+            textEnd: 1,
+            messageEnd: 1,
+            finalMessageStart: 1,
+            lastAssistant: earlier,
+            sourceReplyDeliveryState: earlierDelivery,
+          },
+        ],
+        messagingToolSourceReplyPayloads:
+          earlierDelivery === "delivered"
+            ? [{ text: "Completed answer.", sourceReplyFinal: true }]
+            : [],
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          content: [],
+          errorMessage: "Current input failed.",
+        }),
+      });
+      expect(payloads).toEqual([
+        ...(earlierDelivery === "delivered"
+          ? [expect.objectContaining({ text: "Completed answer." })]
+          : []),
+        ...(currentDelivery === "missing"
+          ? [expect.objectContaining({ text: REDACTED_TEST_MODEL_FAILURE_TEXT, isError: true })]
+          : []),
+      ]);
     },
   );
 

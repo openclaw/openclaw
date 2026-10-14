@@ -14,7 +14,7 @@ import { applyClawPackageRemovals, planClawPackageRemovals } from "../../claws/p
 import { claimClawPackageRefStatus } from "../../claws/provenance-write.js";
 import { projectPluginRuntimeFailure } from "../../plugins/lifecycle.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import { prepareAgentDeletionJournalObservation } from "../../state/agent-deletion-journal.js";
 import {
   captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
@@ -55,22 +55,23 @@ export const clawsPackageHandlers = {
     const input = parsed.data;
     let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
     let entered = false;
+    let releaseObservation: (() => void) | undefined;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
         throw new Error("Claw plugin cleanup requires a running plugin lifecycle owner.");
       }
+      const observation = await prepareAgentDeletionJournalObservation(input.agentId);
+      releaseObservation = observation.release;
       const assertCurrent = () => {
         signal?.throwIfAborted();
         sessionMutationCommitGuard?.();
-        const journal = readAgentDeletionJournal(input.agentId);
+        observation.assertCurrent(input.operationId);
         if (
           !isDeepStrictEqual(
             input.binding,
             resolveClawMonitorCleanupBinding(context.cronStorePath),
           ) ||
-          journal?.operationId !== input.operationId ||
-          journal.cleanupCompleted ||
           listAgentEntries(context.getRuntimeConfig()).some((agent) => agent.id === input.agentId)
         ) {
           throw new Error("Claw package cleanup no longer owns the current removal state.");
@@ -156,6 +157,8 @@ export const clawsPackageHandlers = {
         undefined,
         pluginLifecycleError(error, { application: captured?.application, entered, signal }),
       );
+    } finally {
+      releaseObservation?.();
     }
   },
 } satisfies GatewayRequestHandlers;

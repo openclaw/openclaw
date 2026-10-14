@@ -97,41 +97,47 @@ it.for(["before commit", "after commit"] as const)(
       }
       return result;
     });
+    const wrapExecution = (
+      execution: ReturnType<typeof executionOwner.captureOpenClawAgentDatabaseExecution>,
+    ) => {
+      if (!producerScope.getStore()) {
+        return execution;
+      }
+      const runExisting: typeof execution.runExisting = (source, operation, options) =>
+        execution.runExisting(
+          source,
+          (scope) => {
+            const wrapped: AgentDatabaseExecutionScope = {
+              execute(command, commandOptions) {
+                const pending = scope.execute(command, commandOptions);
+                if (command.type !== "session.entries.replace" || holdingResult) {
+                  return pending;
+                }
+                holdingResult = true;
+                return pending.then(async (value) => {
+                  nativeHeld.resolve();
+                  await releaseNative.promise;
+                  return value;
+                });
+              },
+            };
+            return operation(wrapped);
+          },
+          options,
+        );
+      return new Proxy(execution, {
+        get(original, key, receiver) {
+          return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
+        },
+      });
+    };
     const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
     vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-      (...args) => {
-        const execution = capture(...args);
-        if (!producerScope.getStore()) {
-          return execution;
-        }
-        const runExisting: typeof execution.runExisting = (source, operation, options) =>
-          execution.runExisting(
-            source,
-            (scope) => {
-              const wrapped: AgentDatabaseExecutionScope = {
-                execute(command, commandOptions) {
-                  const pending = scope.execute(command, commandOptions);
-                  if (command.type !== "session.entries.replace" || holdingResult) {
-                    return pending;
-                  }
-                  holdingResult = true;
-                  return pending.then(async (value) => {
-                    nativeHeld.resolve();
-                    await releaseNative.promise;
-                    return value;
-                  });
-                },
-              };
-              return operation(wrapped);
-            },
-            options,
-          );
-        return new Proxy(execution, {
-          get(original, key, receiver) {
-            return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
-          },
-        });
-      },
+      (...args) => wrapExecution(capture(...args)),
+    );
+    const capturePreparation = executionOwner.captureOpenClawAgentDatabasePreparationExecution;
+    vi.spyOn(executionOwner, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
+      (...args) => wrapExecution(capturePreparation(...args)),
     );
     const startProducer = () => {
       producer ??= runOutsideAsyncWorkScope(() =>

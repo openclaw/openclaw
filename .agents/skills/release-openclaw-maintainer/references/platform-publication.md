@@ -98,6 +98,17 @@ advances the fixed `linux-stable` canonical manifest only forward, and mirrors
 it to the current latest release. Asset completeness and unfinished channel
 publication are separate: retrying complete public assets verifies and reuses
 their bytes and identities, then completes only the remaining metadata work.
+The signed Windows updater manifest exists only in the building run until
+published, so a publication interrupted before `latest-windows.json` recovers by
+rerunning that run's publish job (it passes its signed inputs and refuses any
+byte mismatch); a fresh request reuses public bytes and cannot recreate it.
+
+The immutable publication's asset inventory stays strict for the AppImage,
+`.deb`, and `SHA256SUMS.linux-app.txt`. A non-Linux companion it records (the
+Windows `.exe` or desktop-test macOS bundles) may be withdrawn by deleting the
+release asset; status and stable closeout then report it as
+`withdrawnCompanionAssets` while the immutable checksum file keeps its row. A
+companion that is still present must match its recorded id, size, and digest.
 
 An authorized Linux publication creates the `linux-stable` control release as
 prerelease/non-latest when absent; ordinary PR validation never initializes it.

@@ -2,6 +2,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveSqliteAgentId } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
   acceptSessionSourceValidation,
+  admitPublishedSessionSource,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
@@ -129,13 +130,17 @@ export function matchesClientVoiceRunSource(
   );
 }
 
-/** Foreign source checks retain their own readers; local predicates belong to the voice writer. */
+/** Published foreign sources admit once; local predicates belong to the voice writer. */
 export async function prepareClientVoiceSessionSourceChecks(
   writer: Pick<ClientVoiceSessionSource, "options" | "identity">,
   authorities: readonly PreparedSessionSourceAuthority[],
 ): Promise<PreparedSessionSourceAuthority> {
   const checks: PreparedSessionSourceAuthority["checks"] = [];
   const foreign = new Map<string | symbol, PreparedSessionSourceAuthority["checks"]>();
+  const canAdmitPublished = authorities.every(
+    (authority) =>
+      !authority.nativeSource && !authority.opaqueCommitGuard && !authority.hasOpaqueCheck,
+  );
   for (const check of authorities.flatMap((authority) => authority.checks)) {
     const source = check.predicate.source;
     if (
@@ -145,6 +150,10 @@ export async function prepareClientVoiceSessionSourceChecks(
     ) {
       checks.push(check);
     } else {
+      // An admitted durable write may finish after source revocation; later effects reauthorize.
+      if (canAdmitPublished && admitPublishedSessionSource(check.predicate)) {
+        continue;
+      }
       const group = foreign.get(source.databaseIdentity) ?? [];
       group.push(check);
       foreign.set(source.databaseIdentity, group);

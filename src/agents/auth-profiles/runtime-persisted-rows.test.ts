@@ -8,49 +8,131 @@ import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { createRuntimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { readAuthProfileRows } from "./sqlite-json.js";
+import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("shares immutable persisted rows across cache hits", async () => {
-  const databasePath = path.join(tempDirs.make("auth-row-cache-"), "auth.sqlite");
+function emptyRows(): AuthProfileRowRead {
+  return {
+    store: { status: "readable", raw: { version: 1, profiles: {} } },
+    state: { status: "readable", raw: { lastGood: {} } },
+    cacheable: true,
+  };
+}
+
+it("preserves absent source provenance through first database admission", () => {
+  const databasePath = path.join(tempDirs.make("auth-row-first-admission-"), "auth.sqlite");
+  const cache = createRuntimeAuthProfileRowsCache(() => "1");
+  cache.recordSource(databasePath, "absent", null);
+  expect(cache.hasSource(databasePath)).toBe(true);
+
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec("CREATE TABLE session_fixture (value INTEGER)");
+  expect(cache.hasSource(databasePath)).toBe(true);
+
+  cache.recordSource(databasePath, "created", null);
+  database.exec("INSERT INTO session_fixture VALUES (1)");
+  expect(cache.hasSource(databasePath)).toBe(false);
+});
+
+it("releases retired database baselines while retaining named live owners", async () => {
+  const databasePath = path.join(tempDirs.make("auth-row-retirement-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);
   database.exec("CREATE TABLE cache_fixture (value)");
-  const rows = {
-    store: {
-      status: "readable" as const,
-      raw: {
-        version: 1,
-        profiles: {
-          "example:key": {
-            type: "api_key",
-            provider: "example",
-            keyRef: { source: "env", provider: "default", id: "EXAMPLE_KEY" },
+  const cache = createRuntimeAuthProfileRowsCache(() => "1");
+  const read = vi.fn(async () => emptyRows());
+  const resolve = () => cache.prepare(databasePath, { read, assertCurrent() {} }).read();
+  await resolve();
+  cache.retire([{ path: databasePath }], new Set([databasePath]));
+  await resolve();
+  expect(read).toHaveBeenCalledOnce();
+  cache.retire([{ path: databasePath }]);
+  await resolve();
+  expect(read).toHaveBeenCalledTimes(2);
+  cache.publishSnapshots(new Set());
+  await resolve();
+  expect(read).toHaveBeenCalledTimes(3);
+});
+
+it.each([true, false])(
+  "shares immutable persisted rows regardless of worker cacheability: %s",
+  async (cacheable) => {
+    const databasePath = path.join(tempDirs.make("auth-row-cache-"), "auth.sqlite");
+    using database = openNodeSqliteDatabase(databasePath);
+    database.exec("CREATE TABLE cache_fixture (value)");
+    const rows = {
+      store: {
+        status: "readable" as const,
+        raw: {
+          version: 1,
+          profiles: {
+            "example:key": {
+              type: "api_key",
+              provider: "example",
+              keyRef: { source: "env", provider: "default", id: "EXAMPLE_KEY" },
+            },
           },
         },
       },
-    },
-    state: { status: "readable" as const, raw: { order: { example: ["example:key"] } } },
-    cacheable: true,
-  };
-  const read = vi.fn(async () => rows);
+      state: { status: "readable" as const, raw: { order: { example: ["example:key"] } } },
+      cacheable,
+    };
+    const read = vi.fn(async () => rows);
+    const cache = createRuntimeAuthProfileRowsCache(() => "1");
+    const resolve = () => cache.prepare(databasePath, { read, assertCurrent: () => {} }).read();
+    const first = await resolve();
+    expect(await resolve()).toBe(first);
+    expect(read).toHaveBeenCalledTimes(1);
+    // Reject changes at every retained level, including credential refs and order arrays.
+    function assertImmutable(value: unknown) {
+      if (value === null || typeof value !== "object") {
+        return;
+      }
+      expect(Reflect.set(value, "injected", true)).toBe(false);
+      for (const [key, child] of Object.entries(value)) {
+        expect(Reflect.set(value, key, null)).toBe(false);
+        assertImmutable(child);
+      }
+    }
+    assertImmutable(first);
+    expect(await resolve()).toEqual(rows);
+  },
+);
+
+it("serves a committed postimage without rereading or freezing its publisher", async () => {
+  const databasePath = path.join(tempDirs.make("auth-row-postimage-"), "auth.sqlite");
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec("CREATE TABLE cache_fixture (value)");
   const cache = createRuntimeAuthProfileRowsCache(() => "1");
-  const resolve = () => cache.prepare(databasePath, { read, assertCurrent: () => {} }).read();
-  const first = await resolve();
-  expect(await resolve()).toBe(first);
-  expect(read).toHaveBeenCalledTimes(1);
-  // Reject changes at every retained level, including credential refs and order arrays.
-  function assertImmutable(value: unknown) {
-    if (value === null || typeof value !== "object") {
-      return;
-    }
-    expect(Reflect.set(value, "injected", true)).toBe(false);
-    for (const [key, child] of Object.entries(value)) {
-      expect(Reflect.set(value, key, null)).toBe(false);
-      assertImmutable(child);
-    }
-  }
-  assertImmutable(first);
-  expect(await resolve()).toEqual(rows);
+  const read = vi.fn(async () => emptyRows());
+  const resolve = () =>
+    cache.prepare(databasePath, { identity: "fixture", read, assertCurrent() {} }).read();
+  await resolve();
+  const committed: AuthProfileStore = {
+    version: 1,
+    profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture-new" } },
+    lastGood: { example: "example:key" },
+  };
+  cache.recordSource(databasePath, "fixture", committed);
+  committed.profiles = {};
+  committed.lastGood!.example = "caller-edit";
+  const rows = await resolve();
+  expect(rows.store).toMatchObject({
+    status: "readable",
+    raw: {
+      profiles: {
+        "example:key": { key: "fixture-new" },
+      },
+    },
+  });
+  expect(rows.state).toMatchObject({
+    status: "readable",
+    raw: { lastGood: { example: "example:key" } },
+  });
+  expect(read).toHaveBeenCalledOnce();
+  cache.recordSource(databasePath, "fixture", null);
+  await resolve();
+  expect(read).toHaveBeenCalledTimes(2);
 });
 
 it("retains rows across session writes and invalidates them on auth writer-worker receipts", async () => {

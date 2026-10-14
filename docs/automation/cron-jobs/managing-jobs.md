@@ -158,6 +158,8 @@ Once a successful one-shot consumes its scheduled occurrence, its finished event
 
 Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
 
+Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.
+
 Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
 
 After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all runs** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
@@ -236,6 +238,8 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
     Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
 
     After each registry sweep, the Gateway waits until the next candidate expiry or a committed cron-session or store-topology change. Empty, unchanged registries do not need periodic reads. Protected expired sessions and failed sweeps retry every minute; run-history recovery keeps its existing minute cadence.
+
+    Per-agent session stores also retain their next cron-run expiry, so empty or unexpired stores do not require reads on every maintenance tick. Committed cron-run changes refresh that deadline; busy sessions and failed session-store sweeps retry after five minutes.
 
     Session retention skips agents with pending or completed deletion while continuing maintenance for healthy agents. Pending deletion cleanup remains owned by the agent deletion operation.
 

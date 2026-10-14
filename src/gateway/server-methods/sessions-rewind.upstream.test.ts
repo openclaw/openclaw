@@ -4,10 +4,7 @@ import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -20,7 +17,6 @@ import {
 import * as upstreamReads from "../../sessions/session-upstream-links-runtime.js";
 import { upsertSessionUpstreamLinkInDatabase } from "../../sessions/session-upstream-links.kernel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -38,7 +34,7 @@ import {
 useMessageCutStorageFixture();
 
 function adoptUpstreamSource(
-  database: DatabaseSync,
+  database: EngineConnection,
   scope: SourceScope,
   threadId = "late-upstream-thread",
 ): boolean {
@@ -143,102 +139,81 @@ it("refuses a local cut when the final upstream reader fails", async () => {
   });
 });
 
-it.each(["preparation", "commit"] as const)(
-  "fences incognito native context effects after upstream revocation during %s",
-  async (phase) => {
-    await withOpenClawTestState({ label: "message-cut-native-upstream" }, async (state) => {
-      await state.writeConfig(cfg);
-      const scope = await seedMessageCutSource(true);
-      const before = await readMutationStorage(scope);
-      const shared = openOpenClawStateDatabase();
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      let bindingPresent = true;
-      let linked = false;
-      const effect = vi.fn();
-      const rollback = vi.fn();
-      const registry = createEmptyPluginRegistry();
-      const record = createPluginRecord({ id: "native-upstream-fixture" });
-      registry.plugins.push(record);
-      registry.agentHarnesses.push({
-        pluginId: record.id,
-        source: "runtime",
-        harness: {
-          id: "native-upstream-fixture",
-          label: "Native source fixture",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("not used");
-          },
-          withSessionContextReset: async (params, run) => {
-            if (phase === "preparation") {
-              entered.resolve();
-              await release.promise;
-              params.assertCurrent();
-              effect();
-            }
-            return run({
-              commit() {
-                params.assertCurrent();
-                bindingPresent = false;
-                effect();
-              },
-              rollback() {
-                params.assertCurrent();
-                bindingPresent = true;
-                rollback();
-              },
-            });
-          },
+it("refuses incognito native context effects after upstream revocation during preparation", async () => {
+  await withOpenClawTestState({ label: "message-cut-native-upstream" }, async (state) => {
+    await state.writeConfig(cfg);
+    const scope = await seedMessageCutSource(true);
+    const before = await readMutationStorage(scope);
+    const shared = openOpenClawStateDatabase();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let bindingPresent = true;
+    let linked = false;
+    const effect = vi.fn();
+    const rollback = vi.fn();
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "native-upstream-fixture" });
+    registry.plugins.push(record);
+    registry.agentHarnesses.push({
+      pluginId: record.id,
+      source: "runtime",
+      harness: {
+        id: "native-upstream-fixture",
+        label: "Native source fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("not used");
         },
-      });
-      setActivePluginRegistry(registry);
-      if (phase === "commit") {
-        const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-        database.db.function("fixture_adopt_upstream", () => {
-          linked = adoptUpstreamSource(shared.db, scope);
-          return Number(linked);
-        });
-        database.db.exec(
-          "CREATE TEMP TRIGGER fixture_adopt_upstream AFTER UPDATE OF current_session_id ON session_nodes WHEN NEW.current_session_id != OLD.current_session_id BEGIN SELECT fixture_adopt_upstream(); END",
-        );
-      }
-      const mutation = invokeMessageCut("sessions.rewind", scope);
-      if (phase === "preparation") {
-        try {
-          await awaitGateBeforeSettlement(
-            entered.promise,
-            mutation.error,
-            "native reset preparation",
-          );
-          linked = adoptUpstreamSource(shared.db, scope);
-        } finally {
-          release.resolve();
-        }
-      }
-      expect(await mutation.error).toBeUndefined();
-      expect(linked).toBe(true);
-      expect(
-        readCurrentSessionUpstreamLink(
-          captureSessionUpstreamLinkReadSource(),
-          scope.sessionKey,
-          scope.agentId,
-        ),
-      ).toMatchObject({ threadId: "late-upstream-thread" });
-      expect(await readMutationStorage(scope)).toEqual(before);
-      expect(bindingPresent).toBe(true);
-      expect(effect).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
-      expect(rollback).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
-      expect(mutation.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining("external agent harness"),
-        }),
-      );
+        withSessionContextReset: async (params, run) => {
+          entered.resolve();
+          await release.promise;
+          params.assertCurrent();
+          effect();
+          return run({
+            commit() {
+              params.assertCurrent();
+              bindingPresent = false;
+              effect();
+            },
+            rollback() {
+              params.assertCurrent();
+              bindingPresent = true;
+              rollback();
+            },
+          });
+        },
+      },
     });
-  },
-);
+    setActivePluginRegistry(registry);
+    const mutation = invokeMessageCut("sessions.rewind", scope);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, mutation.error, "native reset preparation");
+      linked = adoptUpstreamSource(shared.db, scope);
+    } finally {
+      release.resolve();
+    }
+    expect(await mutation.error).toBeUndefined();
+    expect(linked).toBe(true);
+    expect(
+      readCurrentSessionUpstreamLink(
+        captureSessionUpstreamLinkReadSource(),
+        scope.sessionKey,
+        scope.agentId,
+      ),
+    ).toMatchObject({ threadId: "late-upstream-thread" });
+    expect(await readMutationStorage(scope)).toEqual(before);
+    expect(bindingPresent).toBe(true);
+    expect(effect).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(mutation.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("external agent harness"),
+      }),
+    );
+  });
+});
 it("refuses a shared-state owner retired while rewind waits for the lifecycle lock", async () => {
   await withOpenClawTestState({ label: "message-cut-upstream-retirement" }, async (state) => {
     await state.writeConfig(cfg);

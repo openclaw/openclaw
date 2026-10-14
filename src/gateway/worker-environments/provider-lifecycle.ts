@@ -1,3 +1,4 @@
+import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WorkerProviderError,
@@ -6,6 +7,7 @@ import {
   type WorkerNodeRuntimeIdentity,
   type WorkerProvider,
 } from "../../plugins/types.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import { MAX_NODE_BOOTSTRAP_TIMEOUT_MS } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
@@ -14,7 +16,7 @@ import {
   WorkerEnvironmentServiceError,
   workerEnvironmentServiceError as serviceError,
 } from "./environment-errors.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
@@ -38,6 +40,10 @@ const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOptions) {
   const { store, callBootstrap, callProvider, move, saveError } = options;
   const now = options.now ?? Date.now;
+  const startStatuses = new Map<
+    string,
+    { ownerEpoch: number; status: WorkerEnvironmentStartStatus }
+  >();
   const { commitReady, ensurePendingCredential } = options.credentialBroker;
   const dedicatedLeases = createDedicatedNodeLeaseAttestations(options, (record) =>
     requireCurrentOwner(record),
@@ -190,7 +196,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
               provider.resolveProvisionTimeoutMs?.(profile, { nodeBootstrapTimeoutMs }),
             )
           : undefined;
-      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+      const preparation = readWorkerPreparation(record.profileSnapshot);
       const machineClass =
         preparation?.target.machineClass ??
         (typeof record.profileSnapshot.machineClass === "string"
@@ -248,6 +254,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         nodeBootstrapTimeoutMs,
         profileId: record.profileId,
         assertCurrent,
+        reportStartStatus: (status: WorkerEnvironmentStartStatus) => {
+          const current = assertCurrent();
+          startStatuses.set(current.environmentId, { ownerEpoch: current.ownerEpoch, status });
+          sessionChanges.emit({ all: true, scope: "worker-environments" });
+        },
         ...(machineClass ? { machineClass } : {}),
         ...(os ? { os } : {}),
         ...(executionMode ? { executionMode } : {}),
@@ -344,6 +355,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     } finally {
       // A replay keeps its durable owner after timeout; this invocation must still close.
       attemptOpen = false;
+      if (startStatuses.delete(record.environmentId)) {
+        sessionChanges.emit({ all: true, scope: "worker-environments" });
+      }
       projectOperation?.close();
       enrollmentOperation?.close();
     }
@@ -659,6 +673,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     });
 
   return {
+    readStartStatus: (record: WorkerEnvironmentRecord) => {
+      const entry = startStatuses.get(record.environmentId);
+      return record.state === "provisioning" && entry?.ownerEpoch === record.ownerEpoch
+        ? entry.status
+        : undefined;
+    },
     getDedicatedNodeLeaseSignal: dedicatedLeases.signal,
     clearDedicatedNodeLeases: () => dedicatedLeases.clear(),
     createWithProfile,

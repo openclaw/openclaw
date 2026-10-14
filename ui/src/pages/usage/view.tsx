@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { Menu } from "../../components/solid/menu.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
 import {
   SettingsSection,
@@ -8,7 +9,6 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/usage.css";
 import { resolveUsageOverviewState } from "./cache-status.ts";
@@ -219,6 +219,10 @@ export function renderUsage(props: UsageProps) {
       displaySessionCount,
       exportSessionCount,
       displayTotals,
+      // Known subtotals cannot drive complete cumulative charts or comparisons.
+      usageUnavailable:
+        displayTotals?.usageReport?.state === "unavailable" ||
+        overview?.usageReport?.state === "unavailable",
       filterOptions,
       filteredDaily,
       filteredSessions,
@@ -368,8 +372,14 @@ export function renderUsage(props: UsageProps) {
                   {(totals) => (
                     <For
                       each={[
-                        [formatUsageTokens(totals().totalTokens), t("usage.metrics.tokens")],
-                        [formatUsageCost(totals().totalCost), t("usage.metrics.cost")],
+                        [
+                          formatUsageTokens(totals().totalTokens, totals().usageReport),
+                          t("usage.metrics.tokens"),
+                        ],
+                        [
+                          formatUsageCost(totals().totalCost, 2, totals().usageReport),
+                          t("usage.metrics.cost"),
+                        ],
                         [
                           state().displaySessionCount,
                           t(
@@ -394,52 +404,48 @@ export function renderUsage(props: UsageProps) {
                 >
                   {props.display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
                 </button>
-                <wa-dropdown
+                <Menu
+                  id="usage-export"
+                  label={t("usage.export.label")}
                   class="usage-export-menu"
+                  triggerClass="btn btn--sm"
                   placement="bottom-end"
-                  onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
-                    const value = event.detail.item.value;
-                    switch (value) {
+                  triggerAttributes={{ "aria-busy": props.data.exporting ? "true" : "false" }}
+                  trigger={
+                    <>{props.data.exporting ? t("common.loading") : t("usage.export.label")} ▾</>
+                  }
+                  items={[
+                    {
+                      id: "sessions-csv",
+                      label: t("usage.export.sessionsCsv"),
+                      disabled: props.data.exporting || state().exportSessionCount === 0,
+                    },
+                    {
+                      id: "daily-csv",
+                      label: t("usage.export.dailyCsv"),
+                      disabled: state().filteredDaily.length === 0,
+                    },
+                    {
+                      id: "json",
+                      label: t("usage.export.json"),
+                      disabled:
+                        props.data.exporting ||
+                        props.data.loading ||
+                        (state().exportSessionCount === 0 && state().filteredDaily.length === 0),
+                    },
+                  ]}
+                  onSelect={(item) => {
+                    switch (item.id) {
                       case "sessions-csv":
                       case "daily-csv":
-                        props.callbacks.display.onExportCsv(value);
+                        props.callbacks.display.onExportCsv(item.id);
                         break;
                       case "json":
                         props.callbacks.display.onExportJson();
                         break;
-                      case undefined:
-                        break;
                     }
                   }}
-                >
-                  <button
-                    slot="trigger"
-                    type="button"
-                    class="btn btn--sm"
-                    aria-busy={props.data.exporting ? "true" : "false"}
-                  >
-                    {props.data.exporting ? t("common.loading") : t("usage.export.label")} ▾
-                  </button>
-                  <wa-dropdown-item
-                    value="sessions-csv"
-                    disabled={props.data.exporting || state().exportSessionCount === 0}
-                  >
-                    {t("usage.export.sessionsCsv")}
-                  </wa-dropdown-item>
-                  <wa-dropdown-item value="daily-csv" disabled={state().filteredDaily.length === 0}>
-                    {t("usage.export.dailyCsv")}
-                  </wa-dropdown-item>
-                  <wa-dropdown-item
-                    value="json"
-                    disabled={
-                      props.data.exporting ||
-                      props.data.loading ||
-                      (state().exportSessionCount === 0 && state().filteredDaily.length === 0)
-                    }
-                  >
-                    {t("usage.export.json")}
-                  </wa-dropdown-item>
-                </wa-dropdown>
+                />
               </div>
             </div>
 
@@ -498,66 +504,71 @@ export function renderUsage(props: UsageProps) {
           renderUsageEmptyState(props.callbacks.filters.onRefresh)
         ) : (
           <>
-            <div class="settings-group usage-panel usage-left-card usage-trend-section">
+            <Show
+              when={!state().usageUnavailable}
+              fallback={<div class="callout warning usage-callout">{t("usage.unavailable")}</div>}
+            >
+              <div class="settings-group usage-panel usage-left-card usage-trend-section">
+                {
+                  <DailyChartCompact
+                    dailyEntries={state().filteredDaily}
+                    selectedDays={props.filters.selectedDays}
+                    chartMode={props.display.chartMode}
+                    dailyChartMode={props.display.dailyChartMode}
+                    onDailyChartModeChange={(dailyChartMode) =>
+                      props.callbacks.display.onChange({ dailyChartMode })
+                    }
+                    onSelectDay={props.callbacks.filters.onSelectDay}
+                    range={{
+                      startDate: props.filters.startDate,
+                      endDate: props.filters.endDate,
+                      complete: props.data.cacheRefresh === "complete",
+                    }}
+                  />
+                }
+                <Show when={state().displayTotals}>
+                  {(totals) => (
+                    <CostBreakdownCompact totals={totals()} mode={props.display.chartMode} />
+                  )}
+                </Show>
+              </div>
+              <UsageCreators
+                groups={state().activeAggregates.byCreator ?? []}
+                selectedKey={props.filters.creatorKey}
+                mode={props.display.chartMode}
+                onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
+              />
+              <UsageInsights
+                totals={state().insightTotals}
+                aggregates={state().insightAggregates}
+                stats={state().insightStats}
+                showCostHint={state().hasMissingCost}
+                showCostShares={
+                  /* Daily buckets are exact; category rollups remain full-session totals. */
+                  props.filters.selectedDays.length === 0
+                }
+                errorHours={buildPeakErrorHours(
+                  props.data.overview?.hourlyMessages ?? [],
+                  props.data.overview?.hourlyErrors ?? [],
+                )}
+                sessionCount={state().displaySessionCount}
+                totalSessions={state().totalSessions}
+              />
+              {state().costWindowComparison}
+              {renderUsageHeatmap(
+                state().filteredDaily,
+                props.filters.startDate,
+                props.filters.endDate,
+              )}
               {
-                <DailyChartCompact
-                  dailyEntries={state().filteredDaily}
-                  selectedDays={props.filters.selectedDays}
-                  chartMode={props.display.chartMode}
-                  dailyChartMode={props.display.dailyChartMode}
-                  onDailyChartModeChange={(dailyChartMode) =>
-                    props.callbacks.display.onChange({ dailyChartMode })
-                  }
-                  onSelectDay={props.callbacks.filters.onSelectDay}
-                  range={{
-                    startDate: props.filters.startDate,
-                    endDate: props.filters.endDate,
-                    complete: props.data.cacheRefresh === "complete",
-                  }}
+                <UsageMosaic
+                  overview={props.data.overview}
+                  timeZone={props.filters.timeZone}
+                  selectedHours={props.filters.selectedHours}
+                  onSelectHour={props.callbacks.filters.onSelectHour}
                 />
               }
-              <Show when={state().displayTotals}>
-                {(totals) => (
-                  <CostBreakdownCompact totals={totals()} mode={props.display.chartMode} />
-                )}
-              </Show>
-            </div>
-            <UsageCreators
-              groups={state().activeAggregates.byCreator ?? []}
-              selectedKey={props.filters.creatorKey}
-              mode={props.display.chartMode}
-              onSelect={(creatorKey) => props.callbacks.filters.onScopeChange({ creatorKey })}
-            />
-            <UsageInsights
-              totals={state().insightTotals}
-              aggregates={state().insightAggregates}
-              stats={state().insightStats}
-              showCostHint={state().hasMissingCost}
-              showCostShares={
-                /* Daily buckets are exact; category rollups remain full-session totals. */
-                props.filters.selectedDays.length === 0
-              }
-              errorHours={buildPeakErrorHours(
-                props.data.overview?.hourlyMessages ?? [],
-                props.data.overview?.hourlyErrors ?? [],
-              )}
-              sessionCount={state().displaySessionCount}
-              totalSessions={state().totalSessions}
-            />
-            {state().costWindowComparison}
-            {renderUsageHeatmap(
-              state().filteredDaily,
-              props.filters.startDate,
-              props.filters.endDate,
-            )}
-            {
-              <UsageMosaic
-                overview={props.data.overview}
-                timeZone={props.filters.timeZone}
-                selectedHours={props.filters.selectedHours}
-                onSelectHour={props.callbacks.filters.onSelectHour}
-              />
-            }
+            </Show>
 
             <div class="usage-grid">
               <div class="usage-grid-column">

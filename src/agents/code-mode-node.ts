@@ -41,6 +41,7 @@ import {
 } from "./code-mode-worker-types.js";
 
 type NodePool = {
+  id: string;
   tasks: WorkerTaskPool<NodeWorkerInput, CodeModeWorkerThreadResult<undefined>>;
   url: string;
   memoryLimitBytes: number;
@@ -177,6 +178,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     }
   }
   const owner: NodePool = {
+    id: `code-mode-node:${++nextPoolId}`,
     lifetime,
     url: workerUrl.href,
     memoryLimitBytes,
@@ -284,6 +286,7 @@ async function run(
   startedAt = performance.now(),
 ): Promise<CodeModeWorkerResult> {
   const inlineHost = options.inlineHost;
+  inlineHost?.onWorkerAssigned?.(pool.id);
   const progress = new CodeModeNodeProgress(input.config.maxOutputBytes);
   const deadline = new AbortController();
   const signal = options.signal
@@ -314,6 +317,15 @@ async function run(
         timeoutMs: Math.min(options.timeoutMs, input.config.timeoutMs) - preparationMs,
         hostTimeout: "owner",
         signal,
+        onNotification: (value) => {
+          if (isRecord(value) && value.status === "failure") {
+            inlineHost?.onFailure?.(
+              value.error,
+              value.failurePhase === "bridge" ? "bridge" : "guest",
+              pool.id,
+            );
+          }
+        },
         inputBytes: input.kind === "exec" ? input.source.length * 2 : 0,
         onInputConsumed: () => {
           if (input.kind === "exec") {
@@ -365,6 +377,7 @@ async function run(
     }
     return result;
   } catch (error) {
+    inlineHost?.onFailure?.(error, "host", pool.id);
     const reason = signal.aborted ? signal.reason : error;
     if (
       reason instanceof CodeModeHeadlessTimeoutError ||
@@ -382,6 +395,16 @@ async function run(
     }
     if (options.signal?.aborted || reason instanceof CodeModeHeadlessAbortError) {
       return failure("code mode execution aborted", "aborted");
+    }
+    if (
+      error instanceof WorkerTaskError &&
+      isRecord(error.cause) &&
+      error.cause.code === "ERR_WORKER_OUT_OF_MEMORY"
+    ) {
+      return failure(
+        `Code Mode worker exhausted its ${Math.floor(pool.memoryLimitBytes / (1024 * 1024))} MiB JavaScript heap. Paginate or narrow tool results and avoid retaining large arrays. Inspect any completed actions before retrying.`,
+        "runtime_unavailable",
+      );
     }
     return failure(
       error,

@@ -43,7 +43,9 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
 
-Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together.
+An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
+
+Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together. Sidebar refreshes reuse unchanged session rows while still receiving current counts, defaults, and filters. Reconnecting can reuse those rows when the same client retains their revision; changes to visible membership or row facts return a fresh page.
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
@@ -61,7 +63,9 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
-The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
+The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
+
+Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to an unchanged session reuses its details on the same connection. Session changes, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
@@ -75,7 +79,7 @@ Person hovercards keep their **Recent sessions** selection and order stable whil
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
-**My sessions** lists your sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
+**My sessions** and specific-owner selections list that owner’s sessions across configured agents, independently of the chat or workspace you are viewing. Other agent-scoped sidebar lists refresh immediately when you switch agents, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
 
 In **My sessions**, choosing an agent from the switcher resumes that agent's newest loaded active conversation from your list, or opens its Home when none is loaded. Agent unread indicators and Home activity use the same current list; Home controls keep their separate main-session behavior.
 
@@ -300,7 +304,7 @@ Auth is supplied during the WebSocket handshake via:
 
 Gateway auth runs before device pairing. A direct loopback connection does not bypass token or password auth. The login screen and **Settings → Gateway** use one **Gateway secret** field: paste the token or type the password. After a successful connection, the UI keeps the secret in session storage for the current browser tab and Gateway origin only when the Gateway reports token auth. Passwords stay in memory and are never persisted. After pairing, the browser can use its stored per-device token on later connections.
 
-When a plugin embeds the Control UI through [remote ingress](/plugins/sdk-gateway-ingress), its live grant admits the browser's signed device identity without a shared credential. The browser saves the returned device token for later connections and retries once without it if it is rejected. Embedded pages stay connected to the serving Gateway, hide Gateway URL and shared-secret controls, and do not register a service worker. Connection failures remain visible in the app without a token/password login screen.
+When a plugin such as [MCP Relay](/plugins/mcp-relay) embeds the Control UI through [remote ingress](/plugins/sdk-gateway-ingress), its live grant admits the browser's signed device identity without a shared credential. Access is bound to the grant's principal and capped by its access limit. The browser stores no device token; every reconnect is admitted by the live grant again. Embedded pages stay connected to the serving Gateway, hide Gateway URL and shared-secret controls, and do not register a service worker. Connection failures remain visible in the app without a token/password login screen.
 
 An embedder that supplies linked Gateways adds them to the identity menu's **Gateway** section. Select a Gateway to switch the embedded page, choose **Set as primary** when available, or open **Gateway settings…** in the host. The host owns the list, primary choice, and navigation. Native window actions, native Gateway keyboard shortcuts, and native reconnect actions are unavailable in embedded mode.
 

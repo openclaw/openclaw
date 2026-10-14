@@ -16,6 +16,11 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 const MODEL_SELECTION_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 const MEDIA_MODEL_KEYS = ["image", "video", "music"] as const;
 
+type ModelIdNormalizationPolicies = ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
+type ModelIdNormalizationPolicySource =
+  | ModelIdNormalizationPolicies
+  | (() => ModelIdNormalizationPolicies);
+
 /** Preserve a string model when a path write enters its supported object form. */
 export function normalizeConfigModelSelectionParent(
   value: unknown,
@@ -179,12 +184,13 @@ function normalizeAgentScopes(agents: unknown): unknown {
 
 function normalizeProviderCatalogs(
   models: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
+  modelIdNormalizationPolicies?: ModelIdNormalizationPolicySource,
 ): unknown {
   if (!isRecord(models) || !isRecord(models.providers)) {
     return models;
   }
 
+  let policies: ModelIdNormalizationPolicies | undefined;
   let providersChanged = false;
   const providers = Object.fromEntries(
     Object.entries(models.providers).map(([providerId, providerValue]) => {
@@ -200,11 +206,12 @@ function normalizeProviderCatalogs(
         if (!trimmed) {
           return model;
         }
-        const id = normalizeConfiguredProviderCatalogModelId(
-          providerId,
-          trimmed,
-          modelIdNormalizationPolicies,
-        );
+        // Only catalog IDs consume manifest policies; agent refs use core rules.
+        policies ??=
+          typeof modelIdNormalizationPolicies === "function"
+            ? modelIdNormalizationPolicies()
+            : modelIdNormalizationPolicies;
+        const id = normalizeConfiguredProviderCatalogModelId(providerId, trimmed, policies);
         return id === model.id ? model : { ...model, id };
       });
       if (providerModels.every((model, index) => model === originalModels[index])) {
@@ -220,14 +227,18 @@ function normalizeProviderCatalogs(
 /** Canonicalize model refs submitted through a config mutation API before persistence. */
 export function normalizeSubmittedConfigModelRefs(
   cfg: OpenClawConfig,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
+  modelIdNormalizationPolicies?: ModelIdNormalizationPolicySource,
+  options: { normalizeProviderCatalogs?: boolean } = {},
 ): OpenClawConfig {
   let next = cfg;
   const agents = normalizeAgentScopes(cfg.agents);
   if (agents !== cfg.agents) {
     next = { ...next, agents: agents as OpenClawConfig["agents"] };
   }
-  const models = normalizeProviderCatalogs(cfg.models, modelIdNormalizationPolicies);
+  const models =
+    options.normalizeProviderCatalogs === false
+      ? cfg.models
+      : normalizeProviderCatalogs(cfg.models, modelIdNormalizationPolicies);
   if (models !== cfg.models) {
     next = { ...next, models: models as OpenClawConfig["models"] };
   }

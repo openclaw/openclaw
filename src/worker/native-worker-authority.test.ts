@@ -123,11 +123,11 @@ describe("native turn admission lifetime", () => {
     } finally {
       embedded.release.resolve();
     }
-    expect(await running).toBeInstanceOf(Error);
+    expect(await running).toMatchObject({ status: "failed", reason: "node-lost" });
     expect(embedded.run).not.toHaveBeenCalled();
   });
   it.each(["connecting", "admitting", "reconnecting", "stopped"] as const)(
-    "rejects native departure to %s even if readmission follows",
+    "reports node loss on native departure to %s even if readmission follows",
     async (kind) => {
       const f = fixture();
       f.start.mockImplementation(async () => {
@@ -136,7 +136,7 @@ describe("native turn admission lifetime", () => {
         f.emit({ kind: "ready", hello: f.hello });
         return f.hello;
       });
-      await expect(f.run()).rejects.toThrow();
+      await expect(f.run()).resolves.toMatchObject({ status: "failed", reason: "node-lost" });
       expect(embedded.run).not.toHaveBeenCalled();
     },
   );

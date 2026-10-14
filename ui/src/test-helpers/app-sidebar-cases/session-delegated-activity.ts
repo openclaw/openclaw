@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
-import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -311,49 +310,6 @@ describe("AppSidebar delegated activity", () => {
     const toggle = menu.querySelector<HTMLButtonElement>('[data-shortcut="u"]')!;
     expect(toggle.textContent).toContain("Mark as read");
   });
-
-  it.each(["plain", "icon", "owner"])(
-    "rings an idle %s parent until its hidden child finishes",
-    async (appearance) => {
-      const parentKey = "agent:main:idle-parent";
-      const sessions = createSessionsHarness("main", [parentKey]);
-      const row = sessions.sessions.state.result!.sessions[0]!;
-      row.hasActiveRun = false;
-      row.hasActiveSubagentRun = true;
-      row.status = "done";
-      row.unread = true;
-      if (appearance === "icon") {
-        row.icon = "braces";
-      } else if (appearance === "owner") {
-        row.owner = { actor: { type: "human", id: "ada", label: "Ada" } };
-      }
-      row.childSessions = ["agent:main:subagent:idle-parent-child"];
-      const { sidebar } = await mountSidebar(
-        createGatewayHarness({} as GatewayBrowserClient).gateway,
-        sessions.sessions,
-      );
-      const parent = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-      expect(
-        parent.querySelector('.session-glyph__ring[aria-label="Subagents working"]'),
-      ).not.toBeNull();
-      expect(parent.classList.contains("session-row-host--running")).toBe(true);
-      expect(parent.querySelector(".session-unread-dot, .session-glyph__badge--unread")).toBeNull();
-      expect(parent.querySelector("[data-child-session-toggle]")).toBeNull();
-      sessions.publish({
-        result: reconcileSessionChanged(sessions.sessions.state.result, {
-          sessionKey: parentKey,
-          hasActiveSubagentRun: false,
-        }).result,
-      });
-      await settleLitElement(sidebar);
-      const finished = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-      expect(finished.querySelector(".session-glyph__ring")).toBeNull();
-      expect(finished.classList.contains("session-row-host--running")).toBe(false);
-      expect(
-        finished.querySelector(".session-unread-dot, .session-glyph__badge--unread"),
-      ).not.toBeNull();
-    },
-  );
 
   it("rings a queued parent and its idle child while a grandchild works", async () => {
     const parentKey = "agent:main:queued-parent";

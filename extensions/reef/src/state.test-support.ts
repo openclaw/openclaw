@@ -20,7 +20,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi } from "vitest";
 
-export function createRuntime(stateDir: string, registrationHost: "worker" | "legacy" = "worker") {
+export function createRuntime(stateDir: string) {
   const runtime = createPluginRuntimeMock();
   const stateStores: Array<Pick<PluginStateKeyedStore<unknown>, "createOperation">> = [];
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
@@ -34,15 +34,6 @@ export function createRuntime(stateDir: string, registrationHost: "worker" | "le
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
     stateStores.push(store);
-    if (registrationHost === "legacy") {
-      const {
-        createOperation: _createOperation,
-        observe: _observe,
-        compareAndApply: _compareAndApply,
-        ...legacy
-      } = store;
-      return legacy;
-    }
     return store;
   };
   runtime.state.openKeyedStoreV2 = <T>(

@@ -25,6 +25,7 @@ const cleanups: Array<() => void | Promise<void>> = [];
 type LaneController = ReturnType<typeof createEmbeddedRunLaneController>;
 
 async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
+  setRuntimeConfigSnapshot(overrides.config ?? {});
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
   const runId = overrides.runId ?? "attempt-controls-run";
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lane-controls-test");

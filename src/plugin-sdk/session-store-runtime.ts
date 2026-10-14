@@ -26,6 +26,7 @@ import {
   patchSessionEntryCore as patchAccessorSessionEntry,
   readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
+  resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -42,7 +43,6 @@ import {
   readSessionEntrySummariesInWorker,
   readSessionUpdatedAtInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   sessionEntryCommitGuardOptions,
@@ -243,6 +243,8 @@ export async function listSessionEntriesAsync(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
   storePath?: string;
+  /** External readers cannot reuse the Gateway process's writer receipts. */
+  readConsistency?: "latest";
 }): Promise<SessionStoreEntrySummary[]> {
   const entries = await readSessionEntrySummariesInWorker({
     ...params,
@@ -309,8 +311,22 @@ export const readTranscriptStatsAsync: (
 
 export { readSessionStoreTranscriptStatsSync as readTranscriptStatsSync };
 
-/** Resolves the persisted session key for one SQLite transcript identity. */
-export { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
+/** @deprecated Await resolveTranscriptSessionKeyBySessionIdAsync. Removal follows a stable deprecation period. */
+export function resolveTranscriptSessionKeyBySessionId(
+  params: Parameters<typeof resolveAccessorTranscriptSessionKeyBySessionId>[0],
+): string | undefined {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-transcript-key",
+      method: "resolveTranscriptSessionKeyBySessionId",
+      replacement: "resolveTranscriptSessionKeyBySessionIdAsync",
+    });
+  }
+  return resolveAccessorTranscriptSessionKeyBySessionId(params);
+}
+
+/** Resolves the exact persisted transcript window, including historical session identities. */
+export { resolveTranscriptSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.js";
 
 /** @deprecated Use prepareSessionEntryPatch or applySessionEntryPatch. Removal follows a stable deprecation period. */
 export async function patchSessionEntry(
@@ -567,31 +583,6 @@ export async function cleanupSessionLifecycleArtifacts(
       ? `agent:${params.agentId}:${params.sessionKeySegmentPrefix.trim()}`
       : undefined,
   };
-  const source = captureIncognitoSessionSource(selection);
-  if (source && "kind" in source) {
-    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
-  }
-  if (source) {
-    const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
-    if (!sessionKeySegmentPrefix || !params.transcriptContentMarker) {
-      return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
-    }
-    return cleanupAccessorSessionLifecycleArtifacts({
-      kind: "incognito",
-      actor: source.actor,
-      authority: { assertCurrent: () => source.actor.assertCurrent() },
-      admissionSignal: source.admissionSignal,
-      env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(source.actor.path, "../../../..") },
-      ownerStorePath: storePath,
-      input: {
-        sessionKeySegmentPrefix,
-        transcriptContentMarker: params.transcriptContentMarker,
-        pluginOwnerId: params.pluginOwnerId?.trim(),
-        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-        nowMs: params.nowMs ?? Date.now(),
-      },
-    });
-  }
   return await cleanupAccessorSessionLifecycleArtifacts({
     storePath: resolveExplicitSessionStorePathForScope(selection) ?? storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),

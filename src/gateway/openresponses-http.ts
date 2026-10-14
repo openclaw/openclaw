@@ -87,7 +87,7 @@ function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
-function extractUsageFromResult(result: unknown): Usage {
+function extractUsageFromResult(result: unknown): Usage | undefined {
   return toOpenAiResponsesUsage(resolveAgentRunUsage(result));
 }
 
@@ -514,7 +514,7 @@ export async function handleOpenResponsesHttpRequest(
     part: { type: "output_text", text: "" },
   });
 
-  handled.onDisconnect = startOpenAiCompatibleStream({
+  startOpenAiCompatibleStream({
     protocol: "responses",
     res,
     runId: responseId,
@@ -629,7 +629,7 @@ export async function handleOpenResponsesHttpRequest(
         type: "response.failed",
         response: createFailedResponse(
           { code: error.type, message: error.message },
-          extractUsageFromResult(result),
+          result === undefined ? undefined : extractUsageFromResult(result),
         ),
       }),
   });

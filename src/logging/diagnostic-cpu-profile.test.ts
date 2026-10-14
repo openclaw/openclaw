@@ -14,6 +14,14 @@ const native = vi.hoisted(() => ({
   resolveRoot: vi.fn(),
   tracingCategories: vi.fn(),
   unsupported: false,
+  start: vi.fn(),
+  stop: vi.fn(),
+  dispose: vi.fn(),
+}));
+const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+vi.mock("node:v8", async (original) => ({
+  ...(await original<typeof import("node:v8")>()),
+  startCpuProfile: native.start,
 }));
 vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: native.tracingCategories }));
@@ -96,6 +104,11 @@ beforeEach(() => {
   vi.stubEnv("BUN_INSPECT", "");
   vi.stubEnv("BUN_INSPECT_CONNECT_TO", "");
   native.unsupported = false;
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: "fixture" });
+  native.start.mockReturnValue({ stop: native.stop, [Symbol.dispose]: native.dispose });
+  native.stop.mockReturnValue(
+    JSON.stringify(profile()).replace(/"scriptId":"(\d+)"/g, '"scriptId":$1'),
+  );
   vi.doMock("node:inspector/promises", () => {
     if (native.unsupported) {
       throw new Error("inspector unavailable");
@@ -114,11 +127,60 @@ beforeEach(() => {
   native.wait.mockResolvedValue(undefined);
 });
 afterEach(() => {
+  if (bunVersion) {
+    Object.defineProperty(process.versions, "bun", bunVersion);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
 describe("diagnostic CPU profile owner", () => {
+  it("joins Node's warm native sampler instead of scanning a new inspector code map", async () => {
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    native.post.mockImplementation(async (method) => {
+      if (method === "Profiler.start") {
+        now += 2_100;
+      }
+      return method === "Profiler.stop" ? { profile: profile() } : {};
+    });
+    native.start.mockImplementation(() => {
+      now += 0.25;
+      return { stop: native.stop, [Symbol.dispose]: native.dispose };
+    });
+    const outcome = await capture();
+    expect(outcome).toMatchObject({ status: "complete", result: { startBlockedMs: 0.25 } });
+    expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
+    expect(native.start).toHaveBeenCalledWith({ sampleInterval: 10 });
+    expect(native.connect).not.toHaveBeenCalled();
+    expect(native.stop).toHaveBeenCalledOnce();
+    expect(native.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each(["start", "stop", "dispose"] as const)(
+    "settles Node native ownership when %s fails",
+    async (method) => {
+      Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+      native[method].mockImplementation(() => {
+        throw new Error("private native failure");
+      });
+      expect(await capture()).toEqual({
+        status: "unavailable",
+        reason: method === "dispose" ? "cleanup-failed" : "capture-failed",
+        cleanupFailed: method === "dispose",
+      });
+      if (method !== "start") {
+        expect(native.dispose).toHaveBeenCalledOnce();
+      }
+      if (method === "dispose") {
+        expect(await capture()).toMatchObject({ status: "unavailable", reason: "cleanup-failed" });
+        expect(native.start).toHaveBeenCalledOnce();
+      }
+    },
+  );
   it("reports synchronous start blocking separately from awaited capture time", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -385,7 +447,7 @@ describe("diagnostic CPU profile owner", () => {
         expect(native.connect).not.toHaveBeenCalled();
         Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
         expect(await capture()).toMatchObject({ status: "complete" });
-        expect(native.connect).toHaveBeenCalledOnce();
+        expect(native.connect).not.toHaveBeenCalled();
       } finally {
         if (original) {
           Object.defineProperty(process.versions, "bun", original);
@@ -484,6 +546,11 @@ describe("diagnostic CPU profile owner", () => {
   it.skipIf(process.platform === "win32")(
     "captures a real profile with the current runtime without opening a listener",
     async ({ signal }) => {
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        Reflect.deleteProperty(process.versions, "bun");
+      }
       // Keep V8 coverage and mocked inspector/timers in the test worker. The
       // fresh child exercises the prepared owner without inheriting either.
       const env: NodeJS.ProcessEnv = {};
@@ -499,7 +566,7 @@ import assert from 'node:assert/strict';
 import { url } from 'node:inspector/promises';
 import { captureDiagnosticCpuProfile } from ${JSON.stringify(ownerUrl.href)};
 assert.equal(url(), undefined);
-assert.equal(process.versions.bun ?? null, ${JSON.stringify(process.versions.bun ?? null)});
+assert.equal(process.versions.bun ?? null, ${JSON.stringify(bunVersion?.value ?? null)});
 const pid = process.pid;
 const outcome = await captureDiagnosticCpuProfile({ signal: new AbortController().signal, hasAuthority: () => true });
 assert.equal(outcome.status, 'complete', JSON.stringify(outcome));

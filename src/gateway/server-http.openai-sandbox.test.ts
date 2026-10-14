@@ -54,7 +54,11 @@ let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let releaseProfileCatalog: (() => void) | undefined;
 
 beforeAll(async () => {
-  state = await createOpenClawTestState({ label: "http-session-sandbox", scenario: "minimal" });
+  state = await createOpenClawTestState({
+    label: "http-session-sandbox",
+    scenario: "minimal",
+    prepareProfileCatalog: true,
+  });
   cfg = {
     agents: {
       entries: { main: {} },

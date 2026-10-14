@@ -220,16 +220,6 @@ export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
   cleanupAdmissionSink = cleanup;
 }
 
-export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
-  const waitForClaim = placements.waitForTurnClaimRelease;
-  vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
-    waitForClaim(sessionId, {
-      ...options,
-      signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal,
-    }),
-  );
-}
-
 export async function createWorkerTurnSessionRuntimeLoader() {
   await patchSessionEntryCore(
     sessionTarget,

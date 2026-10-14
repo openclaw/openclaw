@@ -1,17 +1,16 @@
-import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import { createMemo, For } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { resolveMacFormFactorFromName } from "../../lib/mac-form-factor.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem, CloudProfileMenuItems } from "./cloud-target-view.tsx";
 import type { DevicePlacementOption } from "./device-placement.ts";
-import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import { PickerLabel } from "./picker-label.tsx";
+import { PickerPopover } from "./picker-popover.tsx";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 import type { WhereChipOptions } from "./where-chip.ts";
 function DevicePoolIcon() {
@@ -138,6 +137,8 @@ function renderEnvironmentHeading(
 }
 
 export function WhereChip(props: { params: WhereChipOptions }) {
+  let trigger!: HTMLButtonElement;
+  let popover!: PopoverHandle;
   const view = createMemo(() => {
     const cloudPresentation = resolveCloudProfileIconData(
       props.params.state.cloudProfiles.find(
@@ -216,6 +217,17 @@ export function WhereChip(props: { params: WhereChipOptions }) {
           ),
         )
       : [];
+    const suggestion = props.params.suggestedProfile;
+    const showSuggestion =
+      props.params.isAdmin &&
+      props.params.state.cloudProfiles.length === 0 &&
+      suggestion !== undefined &&
+      matches(
+        t("newSession.cloud"),
+        suggestion.providerId,
+        suggestion.providerDisplayId,
+        resolveCloudProfileIconData(suggestion).label,
+      );
     const showMissingCloud =
       props.params.isAdmin &&
       Boolean(props.params.cloudProfileId) &&
@@ -248,6 +260,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
       hosted,
       showHostedSetup,
       cloudProfiles,
+      showSuggestion,
       showMissingCloud,
       showAuto,
       autoHelp,
@@ -261,6 +274,9 @@ export function WhereChip(props: { params: WhereChipOptions }) {
       <span class="new-session-page__select new-session-page__select--where">
         <button
           id="new-session-where-trigger"
+          ref={(node) => {
+            trigger = node;
+          }}
           type="button"
           class={[
             "new-session-page__trigger",
@@ -279,9 +295,15 @@ export function WhereChip(props: { params: WhereChipOptions }) {
           data-device-id={props.params.deviceId || undefined}
           data-auto-device={props.params.autoDevice ? "true" : undefined}
           aria-haspopup="dialog"
+          aria-controls="new-session-where-popover"
           aria-expanded={props.params.popoverOpen ? "true" : "false"}
           disabled={props.params.submitting || props.params.pendingPlacement}
-          ref={nativeListener("click", (event) => props.params.onGuardTransition(event))}
+          onClick={(event) => {
+            props.params.onGuardTransition(event);
+            if (!event.defaultPrevented) {
+              popover.overlay.request(!popover.overlay.open);
+            }
+          }}
         >
           <PickerLabel
             icon={view().icon}
@@ -290,22 +312,15 @@ export function WhereChip(props: { params: WhereChipOptions }) {
           />
         </button>
       </span>
-      <wa-popover
-        ref={syncPopoverLabel}
+      <PickerPopover
+        ref={(handle) => {
+          popover = handle;
+        }}
+        id="new-session-where-popover"
+        label={`${t("newSession.where")}: ${view().label}`}
+        anchor={trigger}
         class="new-session-page__select new-session-page__where-popover new-session-page__picker-popover"
-        for="new-session-where-trigger"
-        placement="bottom-start"
-        without-arrow
-        onWa-show={onOwnPopoverEvent((event) => {
-          if (event.currentTarget instanceof WaPopover) {
-            // Let the positioning owner recompute the scroll budget on open and resize.
-            event.currentTarget.popup.autoSize = "vertical";
-            event.currentTarget.popup.autoSizePadding = 8;
-          }
-          props.params.onPopoverShow();
-        })}
-        onWa-hide={onOwnPopoverEvent(() => props.params.onPopoverHide())}
-        onWa-after-hide={onOwnPopoverEvent(() => props.params.onPopoverAfterHide())}
+        lifecycle={props.params}
       >
         <div class="new-session-page__environment-layout">
           <div class="new-session-page__picker-root new-session-page__environment-picker">
@@ -470,16 +485,34 @@ export function WhereChip(props: { params: WhereChipOptions }) {
                   <span class="session-menu__text">{t("newSession.hostedSetup")}</span>
                 </a>
               ) : undefined}
-              {view().cloudProfiles.length || view().showMissingCloud || view().showCloudSkeletons
+              {view().cloudProfiles.length ||
+              view().showSuggestion ||
+              view().showMissingCloud ||
+              view().showCloudSkeletons
                 ? renderEnvironmentHeading(
                     t("newSession.cloud"),
                     "manage-cloud-workers",
                     view().busy,
-                    props.params.isAdmin && !view().showCloudSkeletons
+                    props.params.isAdmin && !view().showCloudSkeletons && !view().showSuggestion
                       ? props.params.onManageCloudWorkers
                       : undefined,
                   )
                 : undefined}
+              {view().showSuggestion ? (
+                <SessionMenuItem
+                  item={{
+                    value: "suggested-cloud",
+                    label: t("newSession.cloud"),
+                    icon: <CloudProfileIcon profile={props.params.suggestedProfile} />,
+                    compact: true,
+                    checked: false,
+                    disabled: Boolean(props.params.cloudDisabledReason),
+                    title: props.params.cloudDisabledReason,
+                    onSelect: () => props.params.onAdoptSuggestedProfile?.(),
+                  }}
+                  submitting={view().busy}
+                />
+              ) : undefined}
               <CloudProfileMenuItems
                 params={{
                   profiles: view().cloudProfiles,
@@ -519,6 +552,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
               view().hosted.length === 0 &&
               !view().showHostedSetup &&
               !view().showMissingCloud &&
+              !view().showSuggestion &&
               !view().showDeviceSkeletons &&
               !view().showCloudSkeletons ? (
                 <div class="new-session-page__environment-empty" role="status">
@@ -528,7 +562,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
             </div>
           </div>
         </div>
-      </wa-popover>
+      </PickerPopover>
     </>
   );
 }

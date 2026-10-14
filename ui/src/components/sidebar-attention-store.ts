@@ -1,5 +1,6 @@
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import type {
   SidebarAttentionStoreController as StoreController,
   SidebarAttentionStoreSources,
@@ -75,10 +76,8 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
-        if (event.event === "cron") {
+        if (event.event === "cron" || event.event === "config.changed") {
           this.load(false);
-        } else if (event.event === "config.changed") {
-          this.load();
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
         }
@@ -273,7 +272,11 @@ export class SidebarAttentionStoreController implements StoreController {
   private load(refreshModelAuth = true, refreshCron = true): void {
     const gateway = this.sources.gateway.snapshot;
     const client = gateway.client;
-    if (!isGatewayAvailable(gateway) || !client) {
+    if (
+      !isGatewayAvailable(gateway) ||
+      !client ||
+      !hasOperatorReadAccess(gateway.hello?.auth ?? null)
+    ) {
       return;
     }
     const owner = this.owner();
@@ -434,7 +437,11 @@ export class SidebarAttentionStoreController implements StoreController {
       this.dismissalKey = key;
       this.dismissed = loadDismissals(key);
     }
-    if (snapshot.phase !== "connected" || !snapshot.client) {
+    if (
+      snapshot.phase !== "connected" ||
+      !snapshot.client ||
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+    ) {
       this.loadGeneration += 1;
       this.loadedOwner = null;
       this.loadedClient = null;

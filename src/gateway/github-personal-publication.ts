@@ -103,12 +103,12 @@ export async function bindPersonalGitHubPublicationSelection(
   let prepared = await prepareUserGitHubConnection(action.owner).catch(rejectRevokedConnection);
   const assertCurrent = () => {
     action.assertCurrent();
+    let record: ReturnType<typeof prepared.read>;
     try {
-      prepared.assertCurrent();
+      record = prepared.read();
     } catch (error) {
       rejectRevokedConnection(error);
     }
-    const record = prepared.connection;
     if (
       record?.generation !== selected.generation ||
       record.selection.kind !== "connected" ||
@@ -146,7 +146,9 @@ export async function preparePersonalGitHubPublicationSelection(
   assertCurrent();
   try {
     await requestCurrentPersonalGitHubRefresh(bound.owner);
+    await bound.refresh();
   } catch {
+    await bound.refresh();
     assertCurrent();
     throw new Error(
       "My GitHub credentials are unavailable; reconnect My GitHub before publishing.",

@@ -435,7 +435,7 @@ export function loadTranscriptEventsFromDatabase(
       prepareTranscriptEventReadQuery(database, sessionId, options)
         .select([
           options.projection === "reset-boundary"
-            ? transcriptEventResetNavigationSql().as("event_json")
+            ? transcriptEventResetNavigationSql(database.db).as("event_json")
             : transcriptEventJsonSql(database.db).as("event_json"),
         ])
         .orderBy("seq", "asc"),
@@ -579,7 +579,7 @@ export function findTranscriptEventInDatabase(
       .selectFrom("transcript_events")
       .where("session_id", "=", sessionId);
     const selection = navigationMatch
-      ? transcriptEventNavigationSql()
+      ? transcriptEventNavigationSql(database.db)
       : transcriptEventJsonSql(database.db);
     for (const row of iterateSqliteQuerySync(
       database.db,

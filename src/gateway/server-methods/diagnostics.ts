@@ -73,7 +73,7 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
   "diagnostics.heapProfile": profileHandler(
     "Heap profile",
     validateDiagnosticsHeapProfileParams,
-    "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes, and boolean includeObjectsCollectedByMajorGC and includeObjectsCollectedByMinorGC",
+    "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes, and boolean includeCollected, includeObjectsCollectedByMajorGC and includeObjectsCollectedByMinorGC",
     async (params, authority) => {
       const { captureDiagnosticHeapProfile } =
         await import("../../logging/diagnostic-heap-profile.js");

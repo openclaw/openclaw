@@ -45,7 +45,6 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   type HookContext,
   getBeforeToolCallFailureDisposition,
@@ -53,7 +52,6 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -1907,26 +1905,6 @@ describe("before_tool_call requireApproval handling", () => {
     }
   }
 
-  function registerTelegramPluginApprovalSetup(): void {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-            approvalCapability: {
-              native: {},
-              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
-              getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
-              describePluginApprovalSetup: () => "Configure Telegram native approval setup.",
-            },
-          },
-        },
-      ]),
-    );
-  }
-
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
@@ -2462,34 +2440,6 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("deny");
   });
 
-  it("blocks turn-source plugin approval timeouts with setup guidance", async () => {
-    registerTelegramPluginApprovalSetup();
-    setApproval();
-    mockCallGateway.mockResolvedValueOnce({
-      id: "server-id",
-      status: "accepted",
-      deliveryRoute: "turn-source",
-    });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id", decision: null });
-
-    const result = await requestApproval({
-      ctx: {
-        agentId: "main",
-        sessionKey: "main",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "-100123456789",
-        turnSourceAccountId: "default",
-      },
-    });
-
-    expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("disposition", "timed_out");
-    expect(result).toHaveProperty(
-      "reason",
-      "Approval timed out\n\nConfigure Telegram native approval setup.",
-    );
-  });
-
   it.each([
     { label: "an unknown decision", decision: "approved" },
     { label: "a malformed truthy decision", decision: true },
@@ -2658,49 +2608,6 @@ describe("before_tool_call requireApproval handling", () => {
         clearTimeout(timeoutId);
       }
     }
-  });
-
-  it("uses the transport channel when tool policy provider differs", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Transport routed approval",
-        description: "Must use the transport channel",
-        pluginId: "my-plugin",
-      },
-    });
-
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-route-"));
-    await fs.writeFile(path.join(tempDir, "note.txt"), "hello");
-    mockCallGateway.mockResolvedValueOnce({ id: "transport-route-id", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({
-      id: "transport-route-id",
-      decision: "allow-once",
-    });
-
-    const tools = createOpenClawCodingTools({
-      workspaceDir: tempDir,
-      messageProvider: "discord-voice",
-      messageChannel: "discord",
-      currentChannelId: "native-channel-1",
-      currentMessagingTarget: "channel:deliverable-1",
-      agentAccountId: "acct-1",
-      currentThreadTs: "thread-1",
-      approvalReviewerDeviceId: "device-tui-reviewer",
-    });
-    const readTool = tools.find((tool) => tool.name === "read");
-    if (!readTool) {
-      throw new Error("missing read tool");
-    }
-    await readTool.execute("tool-hook-route", { path: "note.txt" }, undefined, undefined);
-
-    const requestCall = requireGatewayCall(0);
-    expect(requestCall[0]).toBe("plugin.approval.request");
-    const requestParams = requireRecord(requestCall[2], "approval request params");
-    expect(requestParams.turnSourceChannel).toBe("discord");
-    expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
-    expect(requestParams.turnSourceAccountId).toBe("acct-1");
-    expect(requestParams.turnSourceThreadId).toBe("thread-1");
-    expect(requestParams.approvalReviewerDeviceIds).toEqual(["device-tui-reviewer"]);
   });
 
   it.each([

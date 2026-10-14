@@ -180,6 +180,35 @@ function substituteRequest(params: {
     return swapped;
   };
   const target = new URL(swap(params.target.toString(), true));
+  const swapHeader = (name: string, value: string) => {
+    if (name !== "authorization" || !/^Basic(?:\s|$)/iu.test(value)) {
+      return swap(value);
+    }
+    const basic = /^(Basic)\s+([A-Za-z0-9+/]+={0,2})$/iu.exec(value);
+    if (!basic?.[2]) {
+      if (containsSecretSentinel(value)) {
+        throw new SecretEgressSubstitutionError("unresolved-sentinel");
+      }
+      return value;
+    }
+    const bytes = Buffer.from(basic[2], "base64");
+    const credentials = bytes.toString("utf8");
+    if (!containsSecretSentinel(credentials)) {
+      return value;
+    }
+    // Buffer's decoder is permissive. Accept only canonical UTF-8 credentials.
+    const canonical = bytes.toString("base64");
+    if (
+      (basic[2].includes("=") ? canonical : canonical.replace(/=+$/u, "")) !== basic[2] ||
+      !Buffer.from(credentials, "utf8").equals(bytes) ||
+      !credentials.includes(":") ||
+      // oxlint-disable-next-line no-control-regex -- Basic credentials prohibit C0 controls and DEL.
+      /[\u0000-\u001f\u007f]/u.test(credentials)
+    ) {
+      throw new SecretEgressSubstitutionError("unresolved-sentinel");
+    }
+    return `${basic[1]} ${Buffer.from(swap(credentials), "utf8").toString("base64")}`;
+  };
   const output: IncomingHttpHeaders = {};
   for (const [name, rawValue] of Object.entries(params.headers)) {
     const lowerName = name.toLowerCase();
@@ -187,9 +216,9 @@ function substituteRequest(params: {
       continue;
     }
     if (Array.isArray(rawValue)) {
-      output[name] = rawValue.map((value) => swap(value));
+      output[name] = rawValue.map((value) => swapHeader(lowerName, value));
     } else if (rawValue !== undefined) {
-      output[name] = swap(rawValue);
+      output[name] = swapHeader(lowerName, rawValue);
     }
   }
   output.host = target.host;

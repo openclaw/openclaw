@@ -82,7 +82,7 @@ export function buildCronSuggestions(params: {
     (channel === "last"
       ? Object.values(params.channels.channelsSnapshot?.channelAccounts ?? {}).flat()
       : (params.channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
-    ).flatMap((account) => [account.accountId, account.name]),
+    ).map((account) => account.accountId),
   );
   const forDeliveryMode = (targets: string[]) =>
     params.cron.cronForm.deliveryMode === "webhook"

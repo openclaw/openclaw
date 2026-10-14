@@ -436,7 +436,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // replacement window synchronously with its accepted rewrite.
           serverTokensAfter = estimateLlmBoundaryTokenPressure({
             messages: sessionManager.buildSessionContext().messages,
-            systemPrompt: systemPromptText,
+            systemPrompt: accountingRecorder?.requestBudget ? undefined : systemPromptText,
             prompt: "",
             replay: {
               model: effectiveModel,
@@ -445,6 +445,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               enabled: compactionReplayEnabled,
             },
           });
+          // Keep replay-aware history, but charge the foreground system/tools.
+          serverTokensAfter += accountingRecorder?.requestBudget
+            ? accountingRecorder.requestBudget.fixedTokens -
+              estimateLlmBoundaryTokenPressure({ messages: [], prompt: "" })
+            : 0;
           recordCompaction({
             tokensBefore,
             tokensAfter: serverTokensAfter,

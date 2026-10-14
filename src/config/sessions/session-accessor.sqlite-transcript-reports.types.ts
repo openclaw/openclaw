@@ -28,6 +28,7 @@ export type CustomMessageReportAppend = {
   customType: string;
   content: string;
   display: boolean;
+  excludeFromContext?: boolean;
   details?: unknown;
 };
 export type TranscriptReport =
@@ -35,7 +36,6 @@ export type TranscriptReport =
   | {
       kind: "custom";
       customTypes: readonly string[];
-      suppressWhenAssistantRun?: string;
       /** Pure selection; a definite concurrent transcript change may repeat it. */
       selectReport: (
         latest: CustomMessageReport | undefined,
@@ -48,10 +48,7 @@ export type SelectedTranscriptReport =
 
 export type TranscriptReportSelection =
   | { kind: "assistant"; responseId: string }
-  | Pick<
-      Extract<TranscriptReport, { kind: "custom" }>,
-      "kind" | "customTypes" | "suppressWhenAssistantRun"
-    >;
+  | Pick<Extract<TranscriptReport, { kind: "custom" }>, "kind" | "customTypes">;
 
 export type PreparedTranscriptReport = {
   appendParentId: string | null;

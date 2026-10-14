@@ -6,6 +6,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
@@ -92,7 +93,7 @@ type WrappedPendingContent = {
   payload: unknown;
 };
 
-/** Adapts a typed channel native approval spec with synchronous availability. */
+/** @deprecated Use createChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. */
 export function createChannelApprovalNativeRuntimeAdapter<
   TPendingPayload,
   TPreparedTarget,
@@ -120,6 +121,11 @@ export function createChannelApprovalNativeRuntimeAdapter<
   TBinding,
   TFinalPayload
 > {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createChannelApprovalNativeRuntimeAdapter",
+    replacement: "createChannelApprovalNativeRuntimeAdapterAsync",
+  });
   return {
     ...createChannelApprovalNativeRuntimeAdapterAsync(spec),
     availability: spec.availability,

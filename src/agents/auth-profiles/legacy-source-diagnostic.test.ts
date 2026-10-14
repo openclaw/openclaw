@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { refreshAuthProfileFileState } from "./file-state.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
@@ -154,6 +155,7 @@ describe("assertAuthProfileMigrationReady", () => {
       clearAuthProfileMigrationDiagnostics();
 
       await fs.rm(credentialPath);
+      await refreshAuthProfileFileState();
       expect(() => assertAuthProfileMigrationReady(credentialAgentDir)).not.toThrow();
     });
   });

@@ -2,7 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -97,8 +97,8 @@ export function installThreadBindingLifecycleTestHooks() {
     resetPluginStateStoreForTests();
     setDiscordRuntime({
       state: {
-        openKeyedStore: (options: OpenKeyedStoreOptions) =>
-          createPluginStateKeyedStoreForTests("discord", options),
+        openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreV2ForTests("discord", options, { assertCurrent() {} }),
         openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateSyncKeyedStoreForTests("discord", options),
       },

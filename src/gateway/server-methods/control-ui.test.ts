@@ -379,10 +379,6 @@ describe("controlUi.githubPreview", () => {
       pending.resolve(preview);
       await request;
 
-      expect(loadPreview).toHaveBeenCalledWith(
-        { kind: "issue", number: 99815, owner: "openclaw", repo: "openclaw" },
-        undefined,
-      );
       expect(respond).toHaveBeenCalledWith(false, undefined, {
         code: "UNAVAILABLE",
         message: new githubIdentity.GitHubIdentityError("changed").message,

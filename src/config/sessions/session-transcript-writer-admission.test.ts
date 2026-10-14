@@ -55,6 +55,8 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
         env: {},
       },
       databases: [database],
+      archiveStorePaths: [database.path],
+      stores: [{ agentId: database.agentId, storePath: database.path, database }],
       operation: { kind: "refresh", pricingFingerprint: "synthetic" },
     };
     nativePosts.observe = (worker, message) => {

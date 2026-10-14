@@ -139,6 +139,13 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
+  Visible settlement cohorts use the host-only binding when every captured
+  requester session and lifecycle revision matches the current parent. Private
+  cohorts retain their strict requester identity checks. This lets a guest's own yielded session
+  resume under its existing session-write scope without granting `operator.write`.
+  Stale, mixed-incarnation, or unbound visible history does not gain this scope
+  alternative; its existing authorized recovery path stays unchanged. Copied
+  request fields cannot supply the host-only binding.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
   unrelated inter-session messages do not adopt that row. An ordinary

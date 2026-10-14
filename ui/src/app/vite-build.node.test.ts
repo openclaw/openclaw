@@ -263,7 +263,7 @@ describe("Control UI Vite build", () => {
 
   it("caches attachment workers offline without preloading them as document modules", async () => {
     const config = createConfig();
-    const sidebar = fileURLToPath(new URL("../components/app-sidebar.ts", import.meta.url));
+    const sidebar = fileURLToPath(new URL("../components/app-sidebar.tsx", import.meta.url));
     const worker = path.join(root, "resize.js");
     await fs.writeFile(worker, 'self.onmessage = () => self.postMessage("resized");');
     await fs.writeFile(

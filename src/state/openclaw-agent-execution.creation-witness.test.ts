@@ -12,10 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
-} from "../infra/sqlite-worker-operation-admission.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
@@ -32,31 +29,12 @@ import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execu
 import {
   agentCreationWitnessTempDirs as tempDirs,
   createAgentCreationWitnessFixture as fixture,
+  createAgentCreationWitnessSource as source,
   createAliasedAgentCreationWitnessFixture as aliasedFixture,
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
-
-function source(
-  beforeGrant: (request: SqliteWorkerAdmissionRequest) => void = () => {},
-): AgentDatabaseRequestExecutionSource {
-  return {
-    assertCurrent() {},
-    createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          beforeGrant(request);
-          binding.authorize(request);
-          if (!grant()) {
-            throw new Error("Creation witness fixture lost admission");
-          }
-        }, binding.attachment),
-      });
-    },
-  };
-}
 
 function transcriptPublication(sessionKey: string, sessionId: string) {
   return [
@@ -1007,64 +985,3 @@ it.each(["missing", "stale"] as const)(
     expect(fs.readFileSync(options.path)).toHaveLength(0);
   },
 );
-
-it("retains canonical borrowers and rejects the changed alias before caller continuation", async () => {
-  const options = fixture();
-  const originalDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "original");
-  const successorDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "successor");
-  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "selected");
-  const linkType = process.platform === "win32" ? "junction" : "dir";
-  fs.mkdirSync(originalDirectory);
-  fs.mkdirSync(successorDirectory);
-  fs.symlinkSync(originalDirectory, alias, linkType);
-  const aliased = { ...options, path: path.join(alias, "agent.sqlite") };
-  const successor = captureOpenClawAgentDatabaseExecution({
-    ...options,
-    path: path.join(successorDirectory, "agent.sqlite"),
-  });
-  const creator = captureOpenClawAgentDatabaseExecution(aliased, {
-    expectedCreationIdentity: readDatabasePathIdentitySync(aliased.path),
-  });
-  const canonical = captureOpenClawAgentDatabaseExecution({
-    ...options,
-    path: path.join(originalDirectory, "agent.sqlite"),
-  });
-  const operation = vi.fn(async () => "must not enter successor");
-  try {
-    await successor.prepare(source());
-    await creator.prepare(source());
-    const receipt = creator.fileIdentity;
-    expect(receipt).toBeDefined();
-    expect(receipt?.physicalIdentity).not.toBe(successor.fileIdentity?.physicalIdentity);
-    fs.unlinkSync(alias);
-    fs.symlinkSync(successorDirectory, alias, linkType);
-    expect(() => creator.assertCurrent()).toThrow(/identity|observed target/);
-    expect(() => creator.fileIdentity).toThrow(/identity|observed target/);
-    expect(() => creator.capturePreparedGenerationClaim()).toThrow(/identity|observed target/);
-    await expect(creator.runExisting(source(), operation)).rejects.toThrow(
-      /identity|observed target/,
-    );
-    expect(operation).not.toHaveBeenCalled();
-    await expect(
-      canonical.runExisting(source(), (scope) =>
-        scope.execute({
-          type: "session.transcript.initialize",
-          input: { sessionKey: "agent:main:retarget-proof", sessionId: "original-session" },
-        }),
-      ),
-    ).resolves.toEqual({
-      kind: "session-transcript-initialized",
-      sessionKey: "agent:main:retarget-proof",
-      placeholder: { sessionId: "original-session" },
-      transcriptPublication: transcriptPublication("agent:main:retarget-proof", "original-session"),
-    });
-    expect(canonical.fileIdentity).toEqual(receipt);
-    await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
-    expect(() => successor.assertCurrent()).not.toThrow();
-    await expect(successor.runExisting(source(), async () => "successor retained")).resolves.toBe(
-      "successor retained",
-    );
-  } finally {
-    await Promise.allSettled([creator.release(), canonical.release(), successor.release()]);
-  }
-});

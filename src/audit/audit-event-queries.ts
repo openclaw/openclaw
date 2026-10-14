@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 type AuditEventsTable = OpenClawStateKyselyDatabase["audit_events"];
@@ -12,7 +12,7 @@ type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
 type AuditEventRow = Selectable<AuditEventsTable>;
 export type AuditEventInsert = Required<Omit<Insertable<AuditEventsTable>, "sequence">>;
 
-function createAuditEventQueries(db: DatabaseSync) {
+function createAuditEventQueries(db: EngineConnection) {
   const database = getNodeSqliteKysely<AuditDatabase>(db);
   return {
     insert: prepareSqliteQueryTakeFirstSync<AuditEventInsert, { sequence: string }>(

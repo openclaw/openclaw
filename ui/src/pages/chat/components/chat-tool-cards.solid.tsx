@@ -23,7 +23,8 @@ import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
@@ -31,7 +32,11 @@ import { DiffStatChips } from "./chat-diff-render.solid.tsx";
 import { renderChatPermissionCard } from "./chat-divider.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
-import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
+import {
+  toolResultSurfaceProps,
+  toolWorkspacePath,
+  type ToolRenderOptions,
+} from "./chat-tool-render-model.ts";
 
 const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   read: "chat.toolCards.verbs.read",
@@ -556,7 +561,7 @@ function ToolCardView(props: ToolCardProps) {
   );
 }
 
-defineSolidBridge<{
+const ToolCardHost = defineSolidBridge<{
   card: ToolCard | null;
   options: ToolCardOptions;
   hasChildren: boolean;
@@ -582,7 +587,7 @@ defineSolidBridge<{
     },
   },
 );
-defineSolidBridge<{
+export const ChatToolIcon = defineSolidBridge<{
   name: string;
   tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
 }>("openclaw-chat-tool-icon", (props) => <ToolIcon name={props.name} tool={props.tool} />, {
@@ -591,8 +596,36 @@ defineSolidBridge<{
     tool: { default: undefined, attribute: false },
   },
 });
-defineSolidBridge<{ card: ToolCard | null }>(
+export const ChatToolApprovalReviews = defineSolidBridge<{ card: ToolCard | null }>(
   "openclaw-chat-tool-reviews",
   (props) => <Show when={props.card}>{(card) => <ToolApprovalReviews card={card()} />}</Show>,
   { properties: { card: { default: null, attribute: false } } },
 );
+
+export function ChatToolCard(props: ToolCardProps) {
+  const fallback = solidContent(ToolCardHost, {
+    style: { display: "contents" },
+    get card() {
+      return props.card;
+    },
+    get options() {
+      return props.options;
+    },
+    get hasChildren() {
+      return props.hasChildren ?? Boolean(props.children);
+    },
+    get children() {
+      return props.children;
+    },
+  });
+  return (
+    <LitContent
+      value={renderPluginSurface(
+        "tool-result",
+        toolResultSurfaceProps(props.card, props.options),
+        fallback,
+        props.options.presented ?? true,
+      )}
+    />
+  );
+}

@@ -194,6 +194,7 @@ describe("prompt cache request observer", () => {
             contextUsage: { state: "available", promptTokens: 10_000, totalTokens: 10_100 },
           },
           { scopeDigest: "same-provider-scope", ...fingerprint },
+          { responseId: "resp-cache-fixture" },
         );
         expect(JSON.stringify(fingerprint)).not.toContain("private");
       };
@@ -206,9 +207,13 @@ describe("prompt cache request observer", () => {
         providerPrefix: expected,
         requestGapMs: 2_000,
         promptTokens: 10_000,
+        responseId: "resp-cache-fixture",
       });
       if (dropCause) {
         expect(observer.getObservation()?.dropCause).toBe(dropCause);
+      }
+      if (expected === "parameters:service_tier") {
+        expect(observer.getObservation()?.requests?.current?.serviceTier).toBe("default");
       }
       expect(JSON.stringify(observer.getObservation())).not.toContain("private");
     },

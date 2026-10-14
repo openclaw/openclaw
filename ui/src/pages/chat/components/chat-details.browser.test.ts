@@ -1,4 +1,3 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,16 +105,15 @@ describe("chat Details presentation", () => {
     document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    const disclosure = session.querySelector<HTMLDetailsElement>(".chat-details-session")!;
-    await toggle(disclosure);
+    const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-    expect(session.querySelector(".chat-details-session")).toBe(disclosure);
-    expect(disclosure.open).toBe(false);
+    expect(session.querySelector(".chat-details-session")).toBe(metadata);
+    expect(metadata.querySelector(":scope > summary")).toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(1320);
@@ -162,16 +160,46 @@ describe("chat Details presentation", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("closes Details when a child dropdown has already closed", async () => {
+  it("opens full-width mobile Details from Panels and restores focus to that control", async () => {
+    await page.viewport(420, 720);
+    const { element, frame, trigger, panel } = await fixture(props(), 380);
+    element.mobile = true;
+    const source = document.createElement("button");
+    source.textContent = "Panels";
+    frame.prepend(source);
+    await element.updateComplete;
+    expect(trigger.hidden).toBe(true);
+    element.open(source);
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(true);
+    expect(panel.getBoundingClientRect().width).toBe(364);
+    panel.querySelector<HTMLButtonElement>("button")!.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(source);
+    element.presented = false;
+    await element.updateComplete;
+    element.open(source);
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+  });
+
+  it("closes Details after its child menu closes", async () => {
     const { element, trigger, panel, progress } = await fixture();
     trigger.click();
     await element.updateComplete;
-    const menu = progress.querySelector<WaDropdown>("wa-dropdown")!;
+    const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
+    const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await menu.updateComplete;
-    expect(menu.open).toBe(true);
-    menu.open = false;
-    expect(menu.hasAttribute("open")).toBe(true);
+    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+    expect(menuSurface.matches(":popover-open")).toBe(true);
+    menu.querySelector<HTMLButtonElement>("button")!.click();
+    await expect
+      .poll(() => menu.querySelector("button")!.getAttribute("aria-expanded"))
+      .toBe("false");
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
@@ -180,25 +208,17 @@ describe("chat Details presentation", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("collapses session details and progress independently without revisions reopening them", async () => {
+  it("keeps metadata visible while progress retains its collapse across revisions", async () => {
     const { element, trigger, session, progress } = await fixture();
     trigger.click();
     await element.updateComplete;
     await session.updateComplete;
     await progress.updateComplete;
-    const sessionSection = session.querySelector<HTMLDetailsElement>(".chat-details-session")!;
+    const sessionSection = session.querySelector<HTMLElement>(".chat-details-session")!;
     const progressSection = progress.querySelector<HTMLDetailsElement>(".session-progress-card")!;
-    expect(sessionSection.open).toBe(true);
+    expect(sessionSection.querySelector(":scope > summary")).toBeNull();
     expect(progressSection.open).toBe(true);
-    expect(
-      session.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!.open,
-    ).toBe(false);
-    expect(
-      session.querySelector<HTMLDetailsElement>('[data-details-group="automations"]')!.open,
-    ).toBe(false);
-    await toggle(sessionSection);
-    await session.updateComplete;
-    expect(progressSection.open).toBe(true);
+    expect(session.querySelector("[data-details-group]")).toBeNull();
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
     expect(getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display).toBe(
@@ -207,9 +227,8 @@ describe("chat Details presentation", () => {
     element.props = { ...element.props!, progressCard: { ...card, revision: 3 } };
     await element.updateComplete;
     await progress.updateComplete;
-    expect(sessionSection.open).toBe(false);
+    expect(sessionSection.checkVisibility()).toBe(true);
     expect(progressSection.open).toBe(false);
-    await toggle(sessionSection);
     expect(progressSection.open).toBe(false);
   });
 
@@ -270,21 +289,26 @@ describe("chat Details presentation", () => {
     trigger.click();
     await element.updateComplete;
     await progress.updateComplete;
-    const menu = progress.querySelector<WaDropdown>("wa-dropdown")!;
+    const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
+    const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await menu.updateComplete;
-    expect(menu.open).toBe(true);
+    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+    expect(menuSurface.matches(":popover-open")).toBe(true);
     expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
-    const select = (value: string) =>
-      menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
-    select("hide");
+    const select = async (value: string) => {
+      if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
+        menu.querySelector<HTMLButtonElement>("button")!.click();
+        await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+      }
+      menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
+    };
+    await select("hide");
     expect(hide).toHaveBeenCalledOnce();
     expect(clear).not.toHaveBeenCalled();
-    menu.querySelector<HTMLElement>('wa-dropdown-item[value="collapse"]')!.click();
-    await menu.updateComplete;
+    await select("collapse");
     expect(collapse).toHaveBeenCalledWith(true);
     expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
-    select("settings");
+    await select("settings");
     expect(settings).toHaveBeenCalledOnce();
     progress.querySelector<HTMLButtonElement>(".session-progress-card__dismiss")!.click();
     expect(dismiss).toHaveBeenCalledWith(card);
@@ -293,12 +317,12 @@ describe("chat Details presentation", () => {
       .querySelector<HTMLButtonElement>('.session-progress-card__refresh[data-state="idle"]')!
       .click();
     expect(refresh).toHaveBeenCalledWith(card);
-    select("clear");
+    await select("clear");
     expect(clear).toHaveBeenCalledWith(card);
     element.presented = false;
     await element.updateComplete;
     await progress.updateComplete;
-    select("hide");
+    menu.querySelector<HTMLButtonElement>('[data-value="hide"]')!.click();
     expect(hide).toHaveBeenCalledTimes(1);
   });
 });

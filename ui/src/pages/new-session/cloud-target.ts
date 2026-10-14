@@ -19,6 +19,7 @@ export async function requestPlaceCatalog(
 ): Promise<{
   profiles: DraftCloudProfile[];
   environments: DraftEnvironment[];
+  suggestedProfile?: EnvironmentsListResult["suggestedProfile"];
 }> {
   const result = await client.request<EnvironmentsListResult>(
     "environments.list",
@@ -26,6 +27,7 @@ export async function requestPlaceCatalog(
   );
   return {
     profiles: readDraftCloudProfiles(result?.profiles),
+    suggestedProfile: result?.suggestedProfile,
     environments: readDraftEnvironments(result?.environments),
   };
 }

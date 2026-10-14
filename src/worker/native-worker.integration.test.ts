@@ -459,7 +459,10 @@ describe.skipIf(process.platform === "win32")(
         resume();
       }
       const outcome = await worker.finish();
-      expect(outcome.code).toBe(1);
+      expect(result(outcome)).toMatchObject({
+        result: { status: "failed", reason: "node-lost" },
+        retainWorker: false,
+      });
       expect(provider.requests).toHaveLength(1);
     }, 40_000);
 
@@ -477,11 +480,12 @@ describe.skipIf(process.platform === "win32")(
       expect(epoch).toBeGreaterThan(descriptor.admission.ownerEpoch);
       owner().partition();
       const outcome = await worker.finish();
-      // Terminal flush can race rejected readmission; neither may revive provider authority.
-      expect(outcome.code).toBe(1);
+      expect(result(outcome)).toMatchObject({
+        result: { status: "failed", reason: "node-lost" },
+        retainWorker: false,
+      });
       expect(owner().admissions).toHaveLength(admitted);
       expect(provider.requests).toHaveLength(1);
-      expect(outcome.stdout).toBe("");
       await withinTest(provider.disconnected, activeTestSignal);
       provider.release();
       expect(messages()).toEqual(before);

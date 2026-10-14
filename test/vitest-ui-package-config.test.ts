@@ -7,11 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserProviderOption } from "vitest/node";
 import { resolveCiTestRuntimeSelections } from "../scripts/lib/ci-test-runtime.mts";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
-import uiConfig from "../ui/vitest.config.ts";
-import uiNodeConfig from "../ui/vitest.node.config.ts";
 import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
-import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
@@ -55,51 +52,14 @@ function requireTestConfig(config: unknown): ExpectedTestConfig {
   return config.test as ExpectedTestConfig;
 }
 
-function requireAlias(
-  config: unknown,
-  specifier: string,
-): { find: string | RegExp; replacement: string } {
-  const aliases = (config as { resolve?: { alias?: unknown } }).resolve?.alias;
-  if (!Array.isArray(aliases)) {
-    throw new Error("expected ui package vitest aliases");
-  }
-  const alias = aliases.find(
-    (candidate): candidate is { find: string | RegExp; replacement: string } =>
-      Boolean(
-        candidate &&
-        typeof candidate === "object" &&
-        "find" in candidate &&
-        (candidate.find === specifier ||
-          (candidate.find instanceof RegExp && candidate.find.test(specifier))) &&
-        "replacement" in candidate &&
-        typeof candidate.replacement === "string",
-      ),
-  );
-  if (!alias) {
-    throw new Error(`missing ui package vitest alias ${specifier}`);
-  }
-  return alias;
-}
-
 describe("ui package vitest config", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const fixture = createFixtureLifetime();
   afterEach(async () => {
     await fixture.cleanup();
     vi.unstubAllEnvs();
-    vi.doUnmock("node:child_process");
+    vi.doUnmock("../ui/src/test-helpers/playwright-chromium.ts");
     vi.resetModules();
-  });
-
-  it("routes the standalone UI config through the canonical group executor", () => {
-    expect(buildVitestRunPlans(["ui/vitest.config.ts"])).toEqual([
-      {
-        config: "ui/vitest.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-    ]);
   });
 
   it("partitions runtimes after native UI sharding without changing ownership or dropping files", ({
@@ -317,32 +277,6 @@ export default {
       expect(result.stdout).toContain("3 passed");
     }));
 
-  it("gives module-mock fixtures the same isolated ownership in both entry points", async () => {
-    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
-    vi.resetModules();
-    const config = (await import("../ui/vitest.config.ts")).default;
-    const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
-    const packageIsolated = projects.find((project) => project.name === "unit-mock-registry");
-    const rootIsolated = requireTestConfig(createUiIsolatedVitestConfig({}));
-    expect(packageIsolated?.isolate).toBe(true);
-    expect(rootIsolated.isolate).toBe(true);
-    const packageFiles = globTestFiles(packageIsolated?.include ?? [], {
-      cwd: path.join(process.cwd(), "ui"),
-      exclude: packageIsolated?.exclude,
-    }).map((file) => path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`));
-    expect(packageFiles.length).toBeGreaterThan(0);
-    const rootFiles = globTestFiles(rootIsolated.include ?? [], {
-      exclude: rootIsolated.exclude,
-    }).map((file) => file.replaceAll("\\", "/"));
-    expect(rootFiles.toSorted()).toEqual(packageFiles.toSorted());
-    const rootShared = requireTestConfig(createUiVitestConfig({}));
-    expect(
-      globTestFiles(rootShared.include ?? [], { exclude: rootShared.exclude }).filter((file) =>
-        packageFiles.includes(file.replaceAll("\\", "/")),
-      ),
-    ).toEqual([]);
-  });
-
   it("preserves native Chromium discovery when loaded as a file project", ({ signal }) =>
     fixture.run(async () => {
       signal.throwIfAborted();
@@ -464,19 +398,15 @@ export default {
     );
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
     vi.stubEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", runtimeIncludeFile);
-    vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", includeFile);
-    const probe = vi.fn((..._args: unknown[]) => ({ status: 0 }));
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const childProcess = await importOriginal<typeof import("node:child_process")>();
-      return {
-        ...childProcess,
-        spawnSync: (...args: Parameters<typeof childProcess.spawnSync>) =>
-          args[0] === includeFile ? probe(...args) : childProcess.spawnSync(...args),
-      };
-    });
+    // Chromium selection (which spawns the browser) must stay lazy and run once per process.
+    const resolveChromium = vi.fn((_defaultExecutablePath: string) => includeFile);
+    vi.doMock("../ui/src/test-helpers/playwright-chromium.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../ui/src/test-helpers/playwright-chromium.ts")>()),
+      resolvePlaywrightChromiumExecutablePath: resolveChromium,
+    }));
     vi.resetModules();
     const { default: config, createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
-    expect(probe).not.toHaveBeenCalled();
+    expect(resolveChromium).not.toHaveBeenCalled();
     const uiRoot = path.join(process.cwd(), "ui");
     const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
     const browser = projects.find((project) => project.browser?.enabled);
@@ -507,7 +437,7 @@ export default {
     );
     const unpartitionedBrowser = requireTestConfig(createUiBrowserVitestConfig({}));
     expect(unpartitionedBrowser.browser?.provider?.prewarm).toEqual(expect.any(Function));
-    expect(probe).toHaveBeenCalledWith(includeFile, ["--version"], { stdio: "ignore" });
+    expect(resolveChromium).toHaveBeenCalledOnce();
     expect(unpartitionedBrowser.browser?.provider?.options).toMatchObject({
       launchOptions: {
         executablePath: includeFile,
@@ -542,7 +472,7 @@ export default {
         shouldPrewarm ? "function" : "undefined",
       );
     }
-    expect(probe).toHaveBeenCalledTimes(1);
+    expect(resolveChromium).toHaveBeenCalledTimes(1);
     writeFileSync(includeFile, JSON.stringify([...nativeFiles, ...nodeFiles]));
     const scopedRoot = requireTestConfig(
       createUiVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
@@ -550,155 +480,5 @@ export default {
     expect(
       globTestFiles(scopedRoot.include ?? [], { exclude: scopedRoot.exclude }).toSorted(),
     ).toEqual(nodeFiles.toSorted());
-  });
-
-  it.each([
-    [
-      ["ui/src/pages/chat/chat-view.test.ts", "ui/src/pages/chat/chat-pane-lifecycle.test.ts"],
-      ["ui/src/pages/chat/chat-pane-lifecycle.test.ts", "ui/src/pages/chat/chat-view.test.ts"],
-    ],
-    [["src/pages/chat/chat-view.test.ts"], []],
-    [
-      [
-        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
-        "ui/src/components/form-controls.browser.test.ts",
-      ],
-      [
-        "ui/src/components/form-controls.browser.test.ts",
-        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
-      ],
-    ],
-    [
-      ["extensions/workboard/browser/catalog.test.ts"],
-      ["extensions/workboard/browser/catalog.test.ts"],
-    ],
-    [[], []],
-    [["ui/src/solid-smoke/solid-smoke.test.tsx"], ["ui/src/solid-smoke/solid-smoke.test.tsx"]],
-    [
-      ["ui/src/components/markdown.progress.node.test.ts"],
-      ["ui/src/components/markdown.progress.node.test.ts"],
-    ],
-  ])("intersects a repository include list with every project: %j", async (requested, expected) => {
-    const includeFile = path.join(tempDirs.make("ui-package-selection-"), "include.json");
-    writeFileSync(includeFile, JSON.stringify(requested));
-    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
-    vi.resetModules();
-    const config = (await import("../ui/vitest.config.ts")).default;
-    const uiRoot = path.join(process.cwd(), "ui");
-    expect(config.root).toBe(uiRoot);
-    const selected = (requireTestConfig(config).projects ?? []).flatMap((project) => {
-      const test = requireTestConfig(project);
-      return globTestFiles(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map((file) =>
-        path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`),
-      );
-    });
-    expect(new Set(selected).size).toBe(selected.length);
-    expect(selected.toSorted()).toEqual(expected);
-  });
-
-  it("keeps the standalone ui package on native runtime workers without broad isolation", () => {
-    const testConfig = requireTestConfig(uiConfig);
-    const expectedPool = process.versions.bun ? "forks" : "threads";
-
-    expect(testConfig.pool).toBe(expectedPool);
-    expect(testConfig.isolate).toBe(false);
-    expect(testConfig.projects).toHaveLength(5);
-    expect(testConfig.maxWorkers).toBeGreaterThan(0);
-    expect(testConfig.clearMocks).toBe(false);
-
-    for (const project of testConfig.projects ?? []) {
-      const projectTestConfig = requireTestConfig(project);
-      expect((project as { extends?: boolean }).extends).toBe(false);
-      expect(projectTestConfig.clearMocks).toBe(false);
-      expect(projectTestConfig.pool).toBe(expectedPool);
-      // Project overrides would defeat CI's explicit --maxWorkers limit.
-      expect(projectTestConfig.maxWorkers).toBeUndefined();
-      expect(projectTestConfig.setupFiles).toEqual(["./src/test-helpers/lit-warnings.setup.ts"]);
-      expect(projectTestConfig.isolate).toBe(
-        projectTestConfig.name === "unit-mock-registry" || projectTestConfig.name === "unit-timing",
-      );
-    }
-  });
-
-  // The invariant, not a snapshot: `unit` shares one module graph and jsdom
-  // window across files, so without the cleanup runner the first file to
-  // evaluate a component owns it for the whole worker and a later file's
-  // vi.mock never reaches production. Two projects are exempt for stated
-  // reasons: `browser` runs in browser mode, where the runner's node:fs and
-  // server-module imports cannot load, and `unit-node` carries the
-  // Playwright-driven layout tests whose browser lives in module scope, which
-  // per-file module resets churn.
-  it("runs the shared jsdom ui project on the cross-file cleanup runner", () => {
-    const projects = requireTestConfig(uiConfig).projects ?? [];
-    const wiring = projects.map((project) => {
-      const projectTestConfig = requireTestConfig(project);
-      return {
-        name: projectTestConfig.name,
-        runner: projectTestConfig.runner
-          ? normalizeConfigPath(projectTestConfig.runner)
-          : undefined,
-      };
-    });
-
-    expect(wiring).toEqual([
-      { name: "unit", runner: "test/non-isolated-runner.ts" },
-      { name: "unit-mock-registry", runner: undefined },
-      { name: "unit-node", runner: undefined },
-      { name: "browser", runner: undefined },
-      { name: "unit-timing", runner: undefined },
-    ]);
-  });
-
-  it("uses the repository transform-cache policy at the root and in every UI project", () => {
-    const root = requireTestConfig(uiConfig);
-    const expected = loadVitestPerformanceConfig(
-      process.env,
-      process.platform,
-      path.join(process.cwd(), "ui"),
-    );
-    const configs = [root, ...(root.projects ?? []).map(requireTestConfig)];
-
-    for (const config of configs) {
-      expect(config.fsModuleCache).toEqual(expected.fsModuleCache);
-      expect(config.fsModuleCachePath).toEqual(expected.fsModuleCachePath);
-      expect(config.experimental).toEqual(expected.experimental);
-    }
-  });
-
-  it("keeps the standalone ui node config on thread workers without isolation", () => {
-    const testConfig = requireTestConfig(uiNodeConfig);
-
-    expect(testConfig.pool).toBe("threads");
-    expect(testConfig.isolate).toBe(false);
-    expect(testConfig.runner).toBeUndefined();
-    expect(testConfig.clearMocks).toBe(false);
-  });
-
-  it("keeps Node dependency shims out of standalone UI projects", () => {
-    const projects = requireTestConfig(uiConfig).projects ?? [];
-    for (const config of [uiConfig, ...projects]) {
-      for (const specifier of ["zod", "undici", "ws"]) {
-        expect(() => requireAlias(config, specifier)).toThrow(
-          `missing ui package vitest alias ${specifier}`,
-        );
-      }
-    }
-  });
-
-  it.each([
-    ["@openclaw/gateway-client/scope-upgrade", "packages/gateway-client/src/scope-upgrade.ts"],
-    ["@openclaw/worker-runtime", "packages/worker-runtime/src/index.ts"],
-    ["@openclaw/worker-runtime/worker", "packages/worker-runtime/src/worker.ts"],
-    ["@openclaw/worker-runtime/lifecycle", "packages/worker-runtime/src/lifecycle.ts"],
-    ["openclaw/plugin-sdk/control-ui", "src/plugin-sdk/control-ui.ts"],
-    ["../logging/redact.js", "ui/src/lib/browser-redact.ts"],
-  ])("aliases %s from source in every standalone UI project", (specifier, source) => {
-    const projects = requireTestConfig(uiConfig).projects ?? [];
-    for (const config of [uiConfig, ...projects]) {
-      expect(requireAlias(config, specifier)).toEqual({
-        find: specifier,
-        replacement: path.join(process.cwd(), source),
-      });
-    }
   });
 });

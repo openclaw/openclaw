@@ -29,6 +29,7 @@ import {
   ownReactionEmoji,
 } from "./chat-message-reaction-model.ts";
 import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
+import { ReadAloud } from "./chat-read-aloud.tsx";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -107,6 +108,7 @@ export function resolveMessageActionDetails(
   }
   return {
     copyMarkdown,
+    ...(role === "assistant" && visibleMarkdown ? { readAloudText: visibleMarkdown } : {}),
     ...(reactionMessageId ? { reactionMessageId } : {}),
     ...(markdown === undefined ? {} : { markdown }),
     fullMessage,
@@ -150,6 +152,9 @@ export function MessageActions(props: {
       </Show>
       <Show when={props.details?.markdown}>
         <LitContent value={renderCopyAsMarkdownButton(props.details!.markdown!)} />
+      </Show>
+      <Show when={props.details?.readAloudText}>
+        <ReadAloud text={props.details!.readAloudText!} />
       </Show>
       <Show when={props.details?.reactionMessageId && props.options.onReact}>
         <MessageReactionPicker

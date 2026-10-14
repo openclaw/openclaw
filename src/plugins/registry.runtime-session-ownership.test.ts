@@ -356,6 +356,7 @@ describe("plugin registry runtime session ownership", () => {
     } as unknown as Record<string, SessionEntry>;
     const subagent = {
       complete: vi.fn(async () => ({ text: "completed" })),
+      forkSession: vi.fn(async () => ({ text: "completed" })),
       run: vi.fn(async () => ({ runId: "subagent-run" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),

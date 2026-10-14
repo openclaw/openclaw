@@ -67,6 +67,10 @@ loads the selected active branch, and `openDetachedBoundedAsync` returns the sam
 selection without persistence. File-backed SQLite reads run on the history worker.
 The synchronous getters consume the prepared view without reading storage.
 
+Hydrated entry and message envelopes remain mutable local views. Their nested
+payloads are frozen after migration and can be shared across rewrite snapshots.
+Replace a payload with a new value instead of editing its nested objects or arrays.
+
 Full reads transfer bounded chunks from one committed SQLite snapshot without
 truncating the transcript to fit the worker. The caller still holds the complete
 result in memory; use the bounded methods when the complete history is unnecessary.
@@ -89,8 +93,9 @@ synchronous and does not access SQLite.
 
 The synchronous `open`, `openBounded`, `openDetachedBounded`, `openModelContext`,
 `setSessionTarget`, and `reloadPersistedTranscript` methods are deprecated
-third-party compatibility variants through the next Plugin SDK major. Runtime
-code should await their asynchronous counterparts.
+third-party compatibility variants. They will be removed in a later stable
+release after the deprecation period. Runtime code should await their
+asynchronous counterparts.
 
 ## Awaited transcript mutations
 
@@ -109,8 +114,8 @@ writing a leaf record by themselves. The synchronous `resetLeaf()` remains a
 supported in-memory operation.
 
 Synchronous persistence methods retain their immediate return values for
-third-party plugins and warn once per method per process. Their removal gate is
-the next Plugin SDK major. See the [migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+third-party plugins and warn once per method per process. They will be removed
+in a later stable release after the deprecation period. See the [migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
 for every replacement, return value, and the additive extension and provider
 replay APIs. Transcript formats, schemas, and update behavior are unchanged.
 

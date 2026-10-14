@@ -218,6 +218,13 @@ describe("source completion", () => {
         }
       : undefined;
     if (actualSessions) {
+      const actorScope = await import("../../config/sessions/session-actor-scope.js");
+      const actualActorScope = await vi.importActual<
+        typeof import("../../config/sessions/session-actor-scope.js")
+      >("../../config/sessions/session-actor-scope.js");
+      vi.spyOn(actorScope, "withSessionActor").mockImplementation(
+        actualActorScope.withSessionActor,
+      );
       const sessionAccessors = await import("../../config/sessions/session-accessor.js");
       const patch = actualSessions.patchSessionEntryCore;
       vi.spyOn(sessionAccessors, "patchSessionEntryCore").mockImplementation((...args) =>
