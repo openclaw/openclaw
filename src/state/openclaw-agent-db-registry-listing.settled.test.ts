@@ -8,6 +8,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   listOpenClawRegisteredAgentDatabasesAsync,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
@@ -115,7 +116,7 @@ it("reuses registry admission across writes and unrelated pending migrations", (
       readRegisteredAgentDatabaseRows(db, options.path, artifactPreserving),
     );
   const probes = trackSqliteStatementExecutions(
-    db,
+    requireNativeSqliteDatabase(db),
     ["legacyWatches", "auditSchema", "registryCatalog"],
     (sql) =>
       sql.includes('from "session_watch_cursors"')
@@ -163,7 +164,12 @@ it("refuses a pending migration that changes agent database registry paths", () 
   db.exec(`PRAGMA user_version = 8;
     UPDATE schema_meta SET schema_version = 8;
     DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
-  expect(detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, options.path)).toContainEqual({
+  expect(
+    detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
+      requireNativeSqliteDatabase(db),
+      options.path,
+    ),
+  ).toContainEqual({
     kind: "agent-databases-relative-paths-v9",
     path: options.path,
   });
@@ -233,7 +239,7 @@ it.each([false, true])(
     try {
       readOpenClawStateReadOnlyLocation(
         ({ db }) => {
-          retained = db;
+          retained = requireNativeSqliteDatabase(db);
           const closeSpy = vi.spyOn(db, "close").mockImplementation(() => {
             throw failure;
           });

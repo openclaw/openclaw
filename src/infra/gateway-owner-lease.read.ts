@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -7,6 +6,7 @@ import type {
   GatewayOwnerLeaseIdentity,
   GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
@@ -35,7 +35,7 @@ function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
 
 /** Read through the caller's admitted connection when ownership guards a write. */
 export function readGatewayOwnerLeaseFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   port?: number,
 ): GatewayOwnerLeaseIdentity | undefined {
   if (!tableExists(db, "state_leases")) {

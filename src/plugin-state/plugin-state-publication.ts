@@ -5,6 +5,7 @@ import { toUSVString } from "node:util";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
@@ -65,7 +66,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication
   observers: new Set<(change: PluginStateChange) => void>(),
 }));
 
-function sourceFor(db: DatabaseSync): SqliteCommitSource {
+function sourceFor(db: EngineConnection): SqliteCommitSource {
   const anchor = sqlPublicationAnchor(db);
   let source = state.sources.get(anchor);
   if (!source) {
@@ -84,7 +85,7 @@ export function pluginStatePublicationKey(row: EntryKey): string {
 }
 
 function captureReceipt(
-  db: DatabaseSync,
+  db: EngineConnection,
   facts: ReadonlyMap<string, SqliteCommittedFact<PluginStateRow>>,
 ) {
   return createSqliteCommitReceipt({
@@ -245,7 +246,7 @@ export async function capturePluginStateReadDependencies<T>(read: () => Promise<
   }
 }
 
-function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginStateRow>>) {
+function stage(db: EngineConnection, facts: Map<string, SqliteCommittedFact<PluginStateRow>>) {
   if (!facts.size) {
     return;
   }
@@ -280,19 +281,19 @@ function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginSt
   }
 }
 
-function stagePluginStatePostimage(db: DatabaseSync, row: PluginStateRow): void {
+function stagePluginStatePostimage(db: EngineConnection, row: PluginStateRow): void {
   stage(db, new Map([[pluginStatePublicationKey(row), { kind: "postimage", value: { ...row } }]]));
 }
 
 /** DELETE RETURNING captures exact tombstones, including eviction and whole-namespace clear. */
-function stagePluginStateDeletions(db: DatabaseSync, rows: readonly EntryKey[]): void {
+function stagePluginStateDeletions(db: EngineConnection, rows: readonly EntryKey[]): void {
   stage(db, new Map(rows.map((row) => [pluginStatePublicationKey(row), { kind: "absent" }])));
 }
 
 export type PluginStateCommitReceipt = Receipt;
 
 /** Lend exact staged facts to a compound owner's existing settlement receipt. */
-export function capturePluginStateReceipt<T>(db: DatabaseSync, write: () => T) {
+export function capturePluginStateReceipt<T>(db: EngineConnection, write: () => T) {
   return state.capture.run(new Map(), () => ({
     result: write(),
     receipt: captureReceipt(db, state.capture.getStore()!),
@@ -301,7 +302,7 @@ export function capturePluginStateReceipt<T>(db: DatabaseSync, write: () => T) {
 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
 export function withPluginStateWorkerReceipt<T>(
-  db: DatabaseSync,
+  db: EngineConnection,
   write: () => T,
   additionalFacts?: (result: T) => Record<string, unknown>,
 ): T {

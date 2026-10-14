@@ -130,7 +130,7 @@ export function runWriteTransaction<T>(
   }
   return runOpenClawStateWriteTransaction(
     (store) => {
-      const identity = readTrackedStateDatabaseIdentity(store.db)?.key;
+      const identity = readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key;
       if (!identity) {
         throw new Error("Plugin state writer has no admitted source");
       }

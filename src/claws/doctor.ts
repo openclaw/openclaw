@@ -1,11 +1,12 @@
 // Claw doctor diagnostics project the lifecycle ownership ledger into health findings.
-import type { DatabaseSync } from "node:sqlite";
+
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
@@ -278,7 +279,7 @@ function orphanedAgentIds(options: OpenClawStateDatabaseOptions): string[] {
   return [...referenced].filter((agentId) => !installed.has(agentId)).toSorted();
 }
 
-function hasClawMcpServerRefs(db: DatabaseSync): boolean {
+function hasClawMcpServerRefs(db: EngineConnection): boolean {
   return (
     tableExists(db, "claw_mcp_server_refs") &&
     Boolean(
