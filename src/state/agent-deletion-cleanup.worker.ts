@@ -78,6 +78,7 @@ export function withAgentDeletionWorkerCleanup<T>(
   return withAgentDeletionWorkerDatabaseCleanup(
     {
       ...target,
+      ownsDatabase: target.agentId === guard.predicate.agentId,
       assertCurrent,
       assertJournal: (statePath, entries) => {
         if (statePath !== target.statePath) {

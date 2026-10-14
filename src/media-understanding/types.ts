@@ -100,13 +100,19 @@ type MediaUnderstandingTextResult = {
 
 export type AudioTranscriptionResult = MediaUnderstandingTextResult;
 
-type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> & {
+export type AudioTranscriptionConfigContext = Pick<
+  AudioTranscriptionRequest,
+  "baseUrl" | "headers" | "request" | "model"
+> & {
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   profile?: string;
   preferredProfile?: string;
 };
+
+type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> &
+  AudioTranscriptionConfigContext;
 
 export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
@@ -212,6 +218,8 @@ export type MediaUnderstandingProvider = {
     ctx: MediaUnderstandingProviderAuthContext,
   ) => MediaUnderstandingProviderSyntheticAuthResult | null | undefined;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
+  /** Checks provider-owned credentials and transport settings without uploading audio. */
+  isAudioConfigured?: (context: AudioTranscriptionConfigContext) => boolean | Promise<boolean>;
   /** Called after file loading. Result.error is only a rejection before audio upload;
    * upload/HTTP failures must throw and stop automatic provider selection. */
   transcribeAudioWithContext?: (

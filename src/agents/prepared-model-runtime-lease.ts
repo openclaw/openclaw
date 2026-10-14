@@ -1,8 +1,12 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./auth-profiles/path-resolve.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
@@ -41,7 +45,9 @@ type PreparedModelRuntimeLeaseContext = {
   retainedGatewayRunOwners: PreparedModelRuntimeOwnerRetention;
   getBuildTimeoutMs(): number;
   getGatewayLifecycleActive(): boolean;
-  getPendingReplacement(): PreparedModelRuntimeReplacement | undefined;
+  getPendingReplacement(
+    input?: PreparedModelRuntimeInput,
+  ): PreparedModelRuntimeReplacement | undefined;
 };
 
 function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
@@ -96,13 +102,17 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
   };
   assertAdmission();
-  let replacement = context.getPendingReplacement();
+  if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    await prepareSharedAuthStoreOwnership(rawInput.env);
+  }
+  assertAdmission();
+  let replacement = context.getPendingReplacement(rawInput);
   // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.
   for (let waits = 0; replacement && waits < 3; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();
     await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
     assertAdmission();
-    replacement = context.getPendingReplacement();
+    replacement = context.getPendingReplacement(rawInput);
   }
   if (replacement) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -143,12 +153,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     pluginMetadataSnapshot =
       options.pluginGeneration?.pluginMetadataSnapshot ??
       pluginMetadataSnapshot ??
-      resolvePluginMetadataSnapshot({
+      (await resolvePluginMetadataSnapshotAsync({
         config: input.config,
         env: input.env,
         workspaceDir: input.workspaceDir,
         allowWorkspaceScopedCurrent: true,
-      });
+      }));
     const metadataSnapshot = pluginMetadataSnapshot;
     const deriveSelections = options.deriveRuntimePluginSelections;
     input = withPluginMetadataSnapshotScope(
@@ -208,6 +218,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       );
     }
 
+    // Gateway inventory belongs to the configured agent; the session cwd only controls execution.
+    const inventoryInput = context.getGatewayLifecycleActive()
+      ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
+      : input;
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
@@ -224,8 +238,8 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       !configuredOwner.refreshError &&
       configuredOwner.snapshot.config === input.config &&
       ownerKey({ ...configuredOwner.input, runtimePluginSelections: undefined }) ===
-        ownerKey({ ...input, runtimePluginSelections: undefined }) &&
-      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, input)
+        ownerKey({ ...inventoryInput, runtimePluginSelections: undefined }) &&
+      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, inventoryInput)
     ) {
       owner = configuredOwner;
     }
@@ -294,7 +308,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         ...configuredOwner.input,
         loadRuntimePlugins: false,
         runtimePluginSelections: undefined,
-      }) === ownerKey({ ...input, loadRuntimePlugins: false, runtimePluginSelections: undefined })
+      }) ===
+        ownerKey({
+          ...inventoryInput,
+          loadRuntimePlugins: false,
+          runtimePluginSelections: undefined,
+        })
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);

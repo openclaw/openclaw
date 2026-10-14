@@ -30,6 +30,7 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import {
@@ -95,8 +96,8 @@ type DeliverAgentCommandResultParams = {
   payloads: ReplyPayload[] | undefined;
   /** Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
-  assertDeliveryCurrent?: () => void;
-  onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
+  assertDeliveryCurrent?: SessionSourceAssertion;
+  onDeliveryResult?: (result: AgentCommandDeliveryResult, payloads: ReplyPayload[]) => void;
 } & FreshSessionDeliveryRefreshParams;
 
 function isFreshDeliverySessionMatch(
@@ -519,16 +520,10 @@ export async function deliverAgentCommandResult(
   } = deliveryRouting;
 
   let deliveryLoggedError = false;
-  const reportDeliveryError = (message: string) => {
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
-  };
   const logDeliveryError = (err: unknown) => {
     deliveryLoggedError = true;
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
-    reportDeliveryError(message);
+    runtime.error(message);
   };
   let strictPreDeliveryError: unknown;
   let deliveryStatus: AgentCommandDeliveryStatus | undefined;
@@ -647,6 +642,9 @@ export async function deliverAgentCommandResult(
     status?: AgentCommandDeliveryStatus,
     deliverySucceeded?: boolean,
   ): AgentCommandDeliveryResult => {
+    if (!opts.json && result.meta.requestShaping?.thinkingClamp) {
+      runtime.log(result.meta.requestShaping.thinkingClamp);
+    }
     if (opts.json) {
       const meta = result.meta;
       writeRuntimeJson(runtime, {
@@ -662,7 +660,10 @@ export async function deliverAgentCommandResult(
       deliverySucceeded,
       deliveryStatus: status,
     });
-    params.onDeliveryResult?.(deliveryResult);
+    params.onDeliveryResult?.(
+      deliveryResult,
+      projectOutboundPayloadPlanForDelivery(outboundPayloadPlan),
+    );
     return deliveryResult;
   };
   if (strictPreDeliveryError) {
@@ -755,7 +756,7 @@ export async function deliverAgentCommandResult(
           durability: bestEffortDeliver ? "best_effort" : "required",
           signal: restartAbort.signal,
           onDeliveryIntent: restartAbort.dispose,
-          onPlatformSendDispatch: async () => assertPlatformSendCurrent(),
+          onPlatformSendDispatch: assertPlatformSendCurrent.prepare,
           assertDirectAdapterHandoff: assertPlatformSendCurrent,
           onError: logDeliveryError,
           onPayload: logPayload,
@@ -763,6 +764,7 @@ export async function deliverAgentCommandResult(
         });
       } finally {
         restartAbort.dispose();
+        await assertPlatformSendCurrent.release();
       }
       if (restartAbort.signal?.aborted && send.status === "failed") {
         throw restartAbort.signal.reason;
@@ -784,7 +786,7 @@ export async function deliverAgentCommandResult(
       `(reason=${deliveryStatus?.reason ?? "none"} session=${effectiveSessionKey ?? "unknown"} ` +
       `channel=${deliveryChannel ?? "none"} target=${deliveryTarget ?? "none"} ` +
       `payloads=${deliveryPayloads.length})`;
-    reportDeliveryError(message);
+    runtime.error(message);
   }
 
   return completeDelivery(deliveryStatus, deliverySucceeded);

@@ -1,11 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   applySessionGoalOperation,
+  prepareSessionTurnGoalMessage,
+} from "./goals-operation-policy.js";
+import {
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
 } from "./goals-operations.js";
-import type { SessionTranscriptTurnMutation } from "./goals-operations.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readQualifiedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
@@ -33,7 +34,7 @@ import {
 } from "./session-transcript-append-postimage.js";
 import {
   buildExpectedTranscriptTurnSessionPatch,
-  sessionMatchesExpectedTranscriptTurn,
+  prepareSessionTranscriptTurnEntry,
 } from "./session-transcript-turn-state.js";
 import {
   sessionTurnPredicateMatches,
@@ -51,34 +52,7 @@ export function createSessionTranscriptTurnKernel(
   options: SqliteSessionTurnOptions,
   assertRouting?: (database: OpenClawAgentDatabase) => void,
 ) {
-  const initialEntry = options.initialSessionEntry
-    ? structuredClone(options.initialSessionEntry)
-    : undefined;
-  if (
-    initialEntry &&
-    (initialEntry.sessionId !== options.expectedSessionId ||
-      options.expectedLifecycleRevision !== undefined ||
-      options.expectedWriterRunId !== undefined ||
-      options.expectedSessionState !== undefined)
-  ) {
-    throw new Error(
-      "Session initialization requires its new identity and no existing writer state.",
-    );
-  }
-  const resolveExpectedEntry = (selected: { entry: SessionEntry } | undefined) => {
-    if (
-      options.selectedSessionId !== undefined &&
-      ((selected?.entry.sessionId ?? null) !== options.selectedSessionId ||
-        selected?.entry.lifecycleRevision !== (options.selectedLifecycleRevision ?? undefined))
-    ) {
-      return undefined;
-    }
-    // A prepared creation cannot adopt a row that appeared while admission was awaiting work.
-    if (initialEntry) {
-      return selected ? undefined : initialEntry;
-    }
-    return sessionMatchesExpectedTranscriptTurn(selected, options) ? selected.entry : undefined;
-  };
+  const { initialEntry, resolveExpectedEntry } = prepareSessionTranscriptTurnEntry(options);
   const readEntry = (
     database: Parameters<typeof readSessionEntryRow>[0],
     includeWindowFacts?: true,
@@ -173,7 +147,6 @@ export function createSessionTranscriptTurnKernel(
             ...appendOptions,
             ...append.workerPreparation,
             message,
-            messageAlreadyRedacted: options.atomicGroup === true || options.workerPrepared === true,
             ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
             ...((append.config ?? options.config)
               ? { config: append.config ?? options.config }
@@ -208,6 +181,8 @@ export function createSessionTranscriptTurnKernel(
             : "Session initialization requires a new transcript turn in the same transaction.",
         );
       }
+
+      options.assertCurrent?.();
 
       // Later explicit parents can abandon earlier rows. Capture every cursor
       // from the final active projection before this atomic transaction commits.
@@ -308,27 +283,5 @@ export function sqliteSessionTranscriptTurnRebound(
     rejectedReason: "session-rebound",
     sessionEntry: selected?.entry,
     sessionFile,
-  };
-}
-
-export function prepareSessionTurnGoalMessage(
-  message: unknown,
-  mutation: SessionTranscriptTurnMutation | undefined,
-  goalId: string | undefined,
-): unknown {
-  if (!mutation || !goalId || !isRecord(message) || message.role !== "user") {
-    return message;
-  }
-  return {
-    ...message,
-    __openclaw: {
-      ...(isRecord(message["__openclaw"]) ? message["__openclaw"] : {}),
-      intent: {
-        kind: mutation.operation.action === "start" ? "session-goal-start" : "session-goal-resume",
-        version: 1,
-        goalId,
-        operationId: mutation.operation.operationId,
-      },
-    },
   };
 }

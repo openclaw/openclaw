@@ -2,6 +2,7 @@ import { Type, type TSchema } from "typebox";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import {
   channelTargetSchema,
   channelTargetsSchema,
@@ -15,7 +16,6 @@ type MessageToolSchemaOptions = {
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
-  scopeToActions?: boolean;
   extraProperties?: Record<string, TSchema>;
 };
 
@@ -447,7 +447,6 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
     }),
     actions: ["timeout", "kick", "ban", "delete", "unsend"],
   },
-  { build: gatewayCallOptionSchemaProperties, actions: [] },
   {
     // Keep every action that reads channel-management fields here; omission hides valid params.
     build: () => ({
@@ -497,6 +496,24 @@ export function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: MessageToolSchemaOptions,
 ) {
+  return messageToolSchemas({ actions, options });
+}
+
+const messageToolSchemas = createCachedToolSchema({
+  key: ({ actions, options }: { actions: readonly string[]; options: MessageToolSchemaOptions }) =>
+    JSON.stringify([
+      actions,
+      options.includeClawHub === true,
+      options.includePresentation,
+      options.includeDeliveryPin,
+      options.includeBestEffort,
+      // Type.Object carries optional-property metadata into the JSON required list.
+      options.extraProperties ? Type.Object(options.extraProperties) : null,
+    ]),
+  build: ({ actions, options }) => buildMessageToolSchema(actions, options),
+});
+
+function buildMessageToolSchema(actions: readonly string[], options: MessageToolSchemaOptions) {
   const schemaOptions = {
     ...options,
     includeTeamId: actions.some(
@@ -504,31 +521,26 @@ export function buildMessageToolSchemaFromActions(
         action === "channel-info" || action === "channel-list" || action === "conversation-open",
     ),
   };
-  const sendOnly =
-    actions.length > 0 && actions.every((action) => action === "send" || action === "broadcast");
   // Keep one flat object: provider adapters reject per-action anyOf/oneOf schemas.
   // Groups prune unavailable fields; runtime still validates each action payload.
-  const scoped = sendOnly || (schemaOptions.scopeToActions && actions.length > 0);
   const properties: Record<string, TSchema> = {
     ...buildRoutingSchema(schemaOptions),
     ...buildSendSchema(schemaOptions),
-    ...(scoped ? gatewayCallOptionSchemaProperties() : {}),
+    ...gatewayCallOptionSchemaProperties(),
   };
   const activeActions = new Set(actions);
   for (const group of MESSAGE_SCHEMA_GROUPS) {
-    if (!scoped || (!sendOnly && group.actions.some((action) => activeActions.has(action)))) {
+    if (group.actions.some((action) => activeActions.has(action))) {
       Object.assign(properties, group.build());
     }
   }
-  const schemaProperties = scoped
-    ? Object.assign(properties, schemaOptions.extraProperties)
-    : { ...properties, ...schemaOptions.extraProperties };
   return Type.Object({
     action: stringEnum(actions, {
       description:
         'Select one action. For action="send", provide message or another send payload; fields for other actions do not count as send content.',
     }),
-    ...schemaProperties,
+    ...properties,
+    ...schemaOptions.extraProperties,
   });
 }
 

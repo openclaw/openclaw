@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -21,15 +23,18 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 const key = "agent:main:pending-stop";
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 describe("pending Stop producer binding", () => {
   it.each(["current", "replacement"] as const)(
     "uses the agent reservation's original row across %s admission",
     async (target) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState(profileState, async () => {
         const client = roleClient("view", "pending-agent-owner");
         client.connId = "pending-owner";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         const entry = {
           sessionId: "original",
@@ -109,11 +114,13 @@ describe("pending Stop producer binding", () => {
   );
 
   it("keeps a real chat admission abortable while its original session lifecycle is held", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const client = roleClient("view", "pending-chat-owner");
       client.connId = "pending-owner";
       client.connect.scopes = ["operator.sessions.write"];
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },
@@ -150,14 +157,14 @@ describe("pending Stop producer binding", () => {
         },
       });
       await entered.promise;
-      const preparedSession = qualifyChatSendSession(session.value);
+      const preparedSession = await qualifyChatSendSession(session.value);
       const admission = admitChatSend({
         request: request.value,
         session: preparedSession,
         client,
         context,
         respond: vi.fn(),
-      }).finally(preparedSession.releaseSessionTarget);
+      });
       try {
         await vi.waitFor(() =>
           expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),

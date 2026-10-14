@@ -15,6 +15,7 @@ const wizardTestMocks = vi.hoisted(() => {
     resolveSearchProviderOptions: vi.fn(),
     resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
+    runMemorySetupFlow: vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(),
     setupPluginConfig:
       vi.fn<typeof import("../wizard/setup.plugin-config.js").configurePluginConfig>(),
     setupSkills: vi.fn<typeof import("./onboard-skills.js").setupSkills>(),
@@ -70,6 +71,11 @@ vi.mock("@clack/prompts", () => ({
   text: wizardTestMocks.clackText,
   confirm: wizardTestMocks.clackConfirm,
   password: wizardTestMocks.clackPassword,
+}));
+
+vi.mock("../flows/memory-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/memory-setup.js")>()),
+  runMemorySetupFlow: wizardTestMocks.runMemorySetupFlow,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -275,6 +281,7 @@ export function createWizardTestRuntime() {
 }
 
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
+  wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });

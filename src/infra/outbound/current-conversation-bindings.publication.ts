@@ -6,6 +6,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
+import type { EngineConnection } from "../sql-connection.js";
+import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
@@ -59,20 +61,21 @@ const state = resolveGlobalSingleton(
   }),
 );
 
-function sourceFor(database: DatabaseSync): SqliteCommitSource {
-  let source = state.sources.get(database);
+function sourceFor(database: EngineConnection): SqliteCommitSource {
+  const anchor = sqlPublicationAnchor(database);
+  let source = state.sources.get(anchor);
   if (!source) {
     source = {
       identity:
-        readTrackedStateDatabaseIdentity(database)?.key ?? Symbol("untracked-binding-database"),
+        readTrackedStateDatabaseIdentity(anchor)?.key ?? Symbol("untracked-binding-database"),
       incarnation: randomUUID(),
     };
-    state.sources.set(database, source);
+    state.sources.set(anchor, source);
   }
   return source;
 }
 
-function capturePublication(database: DatabaseSync, changes: readonly BindingChange[]) {
+function capturePublication(database: EngineConnection, changes: readonly BindingChange[]) {
   const current = new Map(changes.map((change) => [change.key, change.current]));
   const receipt = createSqliteCommitReceipt({
     source: sourceFor(database),
@@ -149,7 +152,7 @@ export const currentConversationBindingPublication = {
 
 /** Called inside the owning write transaction using rows already read by its kernel. */
 function stageCurrentConversationBindingChanges(
-  database: DatabaseSync,
+  database: EngineConnection,
   changes: readonly BindingChange[],
 ): void {
   if (!changes.length) {
@@ -170,7 +173,7 @@ function stageCurrentConversationBindingChanges(
 
 /** One receipt covers every changed row in this worker transaction, including mutating reads. */
 export function withCurrentConversationBindingWorkerReceipt<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   update: () => T,
 ): T {
   return state.capture.run([], () => {

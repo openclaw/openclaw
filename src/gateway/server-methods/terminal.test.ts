@@ -54,7 +54,13 @@ vi.mock("../node-invoke-plugin-policy.js", () => ({
 
 vi.mock("../session-utils.js", async () => ({
   ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnlyAsync: sessionMocks.loadGatewaySessionEntryReadOnly,
+}));
+
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    sessionMocks.loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }),
 }));
 
 function makeOpts(
@@ -158,7 +164,6 @@ describe("terminal gateway policy", () => {
     ).toBeUndefined();
     expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
       agentId: "main",
-      clone: false,
     });
   });
 

@@ -56,6 +56,11 @@ Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
+Managed `local` and Ollama embeddings index one file at a time when batch
+indexing is disabled. This bounds background embedding requests during a full
+rebuild; large indexes can take longer on hosts that previously ran several
+local jobs in parallel.
+
 EmbeddingGemma uses its trained task prefixes automatically for queries and
 indexed documents, including through Ollama, LM Studio, and OpenAI-compatible
 providers. After upgrading, an existing unprefixed EmbeddingGemma index rebuilds
@@ -119,7 +124,7 @@ If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
 
-The builtin engine then applies deterministic ranking:
+The builtin engine then applies fixed ranking rules:
 
 ```text
 hybrid relevance × recency decay × importance multiplier
@@ -152,7 +157,9 @@ Hybrid ranking also scores retrieved keyword candidates from their stored
 embeddings when they fall outside the top vector candidates. This keeps a
 strong keyword answer eligible when many similar notes fill the vector window.
 
-## Deterministic trigger recall
+<a id="deterministic-trigger-recall" />
+
+## Rule-based trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
 message with short trigger phrases stored on indexed entries. Strong matches
@@ -195,7 +202,7 @@ vectors. Verify the provider's model, then rebuild with
 
 ## Improving search quality
 
-Two deterministic ranking passes are enabled by default for hybrid search.
+Two rule-based ranking passes are enabled by default for hybrid search.
 
 ### Recency decay
 

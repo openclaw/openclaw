@@ -30,6 +30,7 @@ import {
   setChatError,
   setChatHistoryLoad,
   setChatHistoryRetrying,
+  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -38,7 +39,7 @@ import {
   applyHistoryRun,
 } from "./chat-history-stream.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
@@ -100,11 +101,7 @@ export async function hydrateChatHistory(
       : undefined;
   };
   const startedAtMs = controlUiNowMs();
-  const previousMessages = state.chatMessages;
   const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
-  const previousPagination = state.chatHistoryPagination;
-  const previousSessionId = state.currentSessionId ?? null;
-  const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
   const previousRunId = state.chatRunId;
   const recordTiming = (
     phase: "start" | "applied" | "stream-reset" | "stale" | "error",
@@ -198,6 +195,16 @@ export async function hydrateChatHistory(
         return undefined;
       }
     }
+    // Fetch in parallel with IndexedDB, then reconcile against the cached paint.
+    // Joining at publication keeps a fast response from retiring the local read.
+    const hydration = waitForInitialChatSnapshot(state);
+    if ((hydration && !(await hydration)) || !isCurrent()) {
+      return undefined;
+    }
+    const previousMessages = state.chatMessages;
+    const previousPagination = state.chatHistoryPagination;
+    const previousSessionId = state.currentSessionId ?? null;
+    const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
     if (isHistoryCursor(response) && response.kind === "delta") {
       const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
       const runActive = isSessionRunActive(response.sessionInfo);
@@ -269,7 +276,8 @@ export async function hydrateChatHistory(
       sessionKey,
       visibleMessages,
     });
-    const nextDisplayedLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
+    const hasActiveLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId");
+    const nextDisplayedLeafEntryId = hasActiveLeafEntryId
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
       : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
@@ -290,9 +298,7 @@ export async function hydrateChatHistory(
       sessionKey,
       agentId: requestAgentId,
       sessionId: nextSessionId,
-      ...(Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
-        ? { activeLeafEntryId: nextDisplayedLeafEntryId }
-        : {}),
+      ...(hasActiveLeafEntryId ? { activeLeafEntryId: nextDisplayedLeafEntryId } : {}),
     });
     state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
@@ -315,7 +321,7 @@ export async function hydrateChatHistory(
             : undefined,
       },
     );
-    if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
+    if (hasActiveLeafEntryId) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
@@ -359,7 +365,7 @@ export async function hydrateChatHistory(
       if (
         state.chatRunId &&
         (hasVisibleStream || liveToolIds.length > 0) &&
-        !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+        !isChatRunRecoveryStatus(state.chatRunStartup)
       ) {
         reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
       }

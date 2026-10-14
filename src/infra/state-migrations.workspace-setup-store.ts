@@ -1,5 +1,3 @@
-// SQLite import and receipt semantics for retired workspace state.
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -20,6 +18,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+// SQLite import and receipt semantics for retired workspace state.
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
@@ -152,7 +152,10 @@ export function parseSource(
   return source.kind === "setup" ? parseSetup(snapshot.raw) : parseAttestation(snapshot);
 }
 
-function readGeneratedHashes(database: DatabaseSync, workspaceKey: string): Map<string, string> {
+function readGeneratedHashes(
+  database: EngineConnection,
+  workspaceKey: string,
+): Map<string, string> {
   return new Map(
     executeSqliteQuerySync(
       database,

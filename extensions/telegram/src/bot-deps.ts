@@ -19,17 +19,16 @@ import {
 import { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
-  getSessionEntry,
   getSessionEntryAsync,
   readSessionUpdatedAtAsync,
-  readAmbientTranscriptWatermark,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
@@ -68,7 +67,7 @@ type RequiredTelegramBotDeps = Pick<
   | "enqueueRoutedSystemEvent"
   | "dispatchReplyWithBufferedBlockDispatcher"
   | "buildModelsProviderData"
-  | "listSkillCommandsForAgents"
+  | "prepareSkillCommandsForAgents"
 >;
 
 export type TelegramBotDeps = RequiredTelegramBotDeps &
@@ -81,11 +80,10 @@ export type TelegramBotDeps = RequiredTelegramBotDeps &
 const telegramBotImplementations = {
   getRuntimeConfig,
   resolveStorePath,
-  getSessionEntry,
   getSessionEntryAsync,
   readChannelAllowFromStore,
   readSessionUpdatedAtAsync,
-  readAmbientTranscriptWatermark,
+  readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
   recordInboundSession,
   recordChannelActivity,
@@ -97,7 +95,7 @@ const telegramBotImplementations = {
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia,
   buildModelsProviderData: buildPreparedModelsProviderData,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   syncTelegramMenuCommands,
   wasSentByBot,
   resolveApproval: resolveApprovalOverGateway as ResolveTelegramApproval,

@@ -291,7 +291,7 @@ export class ChatPageRetainedSessions {
     if (
       !activePane ||
       !retainedKey ||
-      this.findPane(activePane.id, retainedKey)?.routeFace !== intent.face ||
+      (this.findPane(activePane.id, retainedKey)?.routeFace ?? "chat") !== intent.face ||
       areUiSessionKeysEquivalent(activePane.sessionKey, retainedKey)
     ) {
       return;
@@ -314,7 +314,7 @@ export class ChatPageRetainedSessions {
         this.previewFrame = undefined;
         if (
           this.preview === preview &&
-          (window.location.href !== preview.href || !preview.commit())
+          (!this.host.isConnected || window.location.href !== preview.href || !preview.commit())
         ) {
           this.cancelPreview();
         }

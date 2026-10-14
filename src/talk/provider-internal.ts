@@ -47,7 +47,12 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
   };
 
 export type InternalRealtimeVoiceProviderApi = {
+  /** @deprecated Use isBrowserSessionConfiguredAsync. Compatibility ends 2026-12-31. */
   isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  isBrowserSessionConfiguredAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext,
+  ) => Promise<boolean>;
+  /** @deprecated Use resolveBrowserSessionCapabilitiesAsync. Compatibility ends 2026-12-31. */
   resolveBrowserSessionCapabilities?: (
     ctx: RealtimeVoiceProviderConfiguredContext & {
       /** Effective per-session model after request overrides. */
@@ -55,7 +60,17 @@ export type InternalRealtimeVoiceProviderApi = {
       clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
     },
   ) => InternalRealtimeVoiceProviderCapabilities;
+  resolveBrowserSessionCapabilitiesAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => Promise<InternalRealtimeVoiceProviderCapabilities>;
+  /** @deprecated Use isGatewayRelayConfiguredAsync. Compatibility ends 2026-12-31. */
   isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
+  isGatewayRelayConfiguredAsync?: (
+    ctx: RealtimeVoiceProviderConfiguredContext,
+  ) => Promise<boolean | undefined>;
   resolveGatewayRelayCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;

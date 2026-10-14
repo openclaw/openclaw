@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -16,8 +17,10 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureNativePluginUiProof,
+  captureNativeWorkspaceFailure,
   catalog,
   expectComposerFooterLayout,
+  installNativeWorkspaceLitErrorTrace,
   pluginId,
   pluginModule,
   waitForPendingPluginInitializer,
@@ -465,6 +468,7 @@ suite.define(() => {
           : undefined,
       },
       async ({ page }) => {
+        await installNativeWorkspaceLitErrorTrace(page);
         const sessionKey = "agent:main:main";
         const otherSessionKey = "agent:main:accessory-peer";
         const boardSnapshot = {
@@ -545,7 +549,7 @@ suite.define(() => {
           .locator("openclaw-app-sidebar")
           .getByRole("button", { name: "Sessions", exact: true })
           .click();
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await restoreChatAsMain(page);
         await expectOneAccessory();
@@ -553,7 +557,7 @@ suite.define(() => {
           .locator("openclaw-app-sidebar")
           .getByRole("button", { name: "Sessions", exact: true })
           .click();
-        await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+        await selectChatLayoutAction(page, "Minimize side panel");
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
         await captureNativePluginUiProof(suite, page, "before.png", { fullPage: true });
@@ -630,7 +634,12 @@ suite.define(() => {
         await selectView(page, "Workspace", "ui-fixture/default-workspace");
         await selectView(page, "Workspace", "");
         await selectView(page, "Workspace", "ui-fixture/workspace");
-        await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
+        try {
+          await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
+        } catch (failure) {
+          await captureNativeWorkspaceFailure(page).catch(() => {});
+          throw failure;
+        }
         await captureNativePluginUiProof(suite, page, "custom-workspace.png", { fullPage: true });
         await visitCustomizeUi(page);
         await page.getByRole("combobox", { name: "Workspace", exact: true }).selectOption("");
@@ -844,11 +853,9 @@ suite.define(() => {
         await gateway.waitForRequest("connect", { after: connected });
         for (const collapsed of [false, true]) {
           if (collapsed) {
-            await page.locator(".sidebar-brand__collapse").click();
+            await page.locator('[data-navigation-view][aria-pressed="true"]').click();
           }
-          const chrome = page.locator(
-            collapsed ? ".shell-chrome-controls" : ".sidebar-brand__actions",
-          );
+          const chrome = page.locator(collapsed ? ".shell-chrome-controls" : ".sidebar-rail");
           await expect
             .poll(async () => {
               const banner = await page.locator(".connection-action-block").boundingBox();
@@ -863,7 +870,7 @@ suite.define(() => {
             })
             .toBeGreaterThanOrEqual(0);
         }
-        await page.locator(".shell-chrome-controls__nav-toggle").click();
+        await page.locator('[data-navigation-view="pages"]').click();
         const pluginPage = page.locator("openclaw-plugin-page");
         await pluginPage.getByRole("status", { name: "Loading…", exact: true }).waitFor();
         expect(

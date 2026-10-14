@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-import path from "node:path";
 import process from "node:process";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -9,13 +7,12 @@ import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
-import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
-import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
@@ -67,6 +64,7 @@ import {
   shouldHandleBareRoot,
   shouldBootstrapCliProxyBeforeFastPath,
   shouldEnsureCliPath,
+  shouldLoadCliDotEnv,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
@@ -416,14 +414,6 @@ function pauseNonTtyStdinForCliExit(): void {
   } catch {
     // Best-effort cleanup for command paths that only inspected stdin.
   }
-}
-
-function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
-  const cwd = tryProcessCwd();
-  if (cwd && existsSync(path.join(cwd, ".env"))) {
-    return true;
-  }
-  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
 }
 
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
@@ -870,12 +860,14 @@ async function runCliWithPreparedOutputMode(
   }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
-    // Debug capture can migrate shared state before Commander reaches Doctor.
-    // Resolve the update guard after selectors settle, before any bootstrap writer.
-    const { preflightUpdateDoctorCli } = await import("../commands/doctor-update-schema-guard.js");
-    doctorDatabasePreflight = await preflightUpdateDoctorCli({
+    const { prepareDoctorCliStartup } = await import("./run-main-doctor-startup.js");
+    const startup = await prepareDoctorCliStartup(normalizedArgv, {
       json: options.builtInMachineOutput,
     });
+    if (startup.handled) {
+      return;
+    }
+    doctorDatabasePreflight = startup.preflight;
   }
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
@@ -1283,7 +1275,7 @@ async function runCliWithPreparedOutputMode(
           console.error("[openclaw]", message);
         }
         restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-        exitAfterSignalExitBarriers(1);
+        exitAfterSignalExitBarriers(1, "uncaught exception");
       });
 
       const invocation = resolveCliArgvInvocation(parseArgv);

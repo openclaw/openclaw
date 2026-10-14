@@ -44,8 +44,14 @@ export async function resolveControlTarget(ctx: PluginCommandContext) {
 
 type CommandAppServerScope = Pick<
   CodexControlRequestOptions,
-  "assertCurrent" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions" | "storePath"
-> & { agentId: string; agentDir: string };
+  | "assertCurrent"
+  | "assertCurrentAsync"
+  | "authProfileId"
+  | "sessionId"
+  | "sessionKey"
+  | "startOptions"
+  | "storePath"
+> & { agentId: string; agentDir: string; release: () => void };
 
 export async function resolvePreparedCodexCommandAuthority(
   deps: CodexCommandDeps,
@@ -78,52 +84,71 @@ export async function resolvePreparedCodexCommandAuthority(
         storePath,
       })
     : undefined;
-  // Direct checks stay synchronous; entry writes retain the authority's prepared predicates.
-  const assertHostCurrent =
-    currentSession?.authority.assertLegacyCurrent ?? composeSessionEntryCommitGuards([]);
-  const resolvedTarget =
-    target && (!sessionIdentity || !isDeepStrictEqual(target.identity, sessionIdentity))
-      ? await resolveCodexSessionBinding({
-          bindingStore: deps.bindingStore,
-          identity: target.identity,
-          config: ctx.config,
-          storePath,
-          assertCurrent: assertHostCurrent,
-        })
-      : currentSession;
-  const binding = resolvedTarget?.binding;
-  const assertCurrent = composeSessionEntryCommitGuards(
-    [assertHostCurrent, ctx.assertNativePolicyCurrent],
-    (assertSource) => {
+  let resolvedTarget = currentSession;
+  const release = () => {
+    if (resolvedTarget !== currentSession) {
+      resolvedTarget?.release();
+    }
+    currentSession?.release();
+  };
+  try {
+    // Direct checks stay synchronous; entry writes retain the authority's prepared predicates.
+    const assertHostCurrent =
+      currentSession?.authority.assertLegacyCurrent ?? composeSessionEntryCommitGuards([]);
+    resolvedTarget =
+      target && (!sessionIdentity || !isDeepStrictEqual(target.identity, sessionIdentity))
+        ? await resolveCodexSessionBinding({
+            bindingStore: deps.bindingStore,
+            identity: target.identity,
+            config: ctx.config,
+            storePath,
+            assertCurrent: assertHostCurrent,
+          })
+        : currentSession;
+    const binding = resolvedTarget?.binding;
+    const assertCurrent = composeSessionEntryCommitGuards([assertHostCurrent], (assertSource) => {
       assertSource();
       if (target && !isDeepStrictEqual(deps.bindingStore.read(target.identity), binding)) {
         throw new Error("Codex command binding changed before dispatch");
       }
       assertSource();
-    },
-  );
-  assertCurrent();
-  return {
-    target,
-    binding,
-    currentSessionBinding: currentSession?.binding,
-    sessionId,
-    sessionKey,
-    storePath,
-    assertHostCurrent,
-    assertCurrent,
-    assertMutationCurrent: composeSessionEntryCommitGuards([assertCurrent], (assertSource) => {
-      assertCodexHostOwnerCurrent(ctx);
-      assertSource();
-    }),
-    assertHostMutationCurrent: composeSessionEntryCommitGuards(
-      [assertHostCurrent],
-      (assertSource) => {
+    });
+    assertCurrent();
+    const assertCurrentAsync = async () => {
+      await ctx.assertNativePolicyCurrent?.();
+      await resolvedTarget?.authority.withCurrent(assertCurrent);
+      if (!resolvedTarget) {
+        assertCurrent();
+      }
+    };
+    return {
+      release,
+      target,
+      binding,
+      currentSessionBinding: currentSession?.binding,
+      sessionId,
+      sessionKey,
+      storePath,
+      assertHostCurrent,
+      assertCurrent,
+      assertCurrentAsync,
+      mutationSource: composeSessionEntryCommitGuards([assertCurrent, ctx.nativePolicySource]),
+      assertMutationCurrent: composeSessionEntryCommitGuards([assertCurrent], (assertSource) => {
         assertCodexHostOwnerCurrent(ctx);
         assertSource();
-      },
-    ),
-  };
+      }),
+      assertHostMutationCurrent: composeSessionEntryCommitGuards(
+        [assertHostCurrent],
+        (assertSource) => {
+          assertCodexHostOwnerCurrent(ctx);
+          assertSource();
+        },
+      ),
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 export async function resolveCommandAppServerContext(
@@ -132,38 +157,46 @@ export async function resolveCommandAppServerContext(
   pluginConfig: unknown,
 ) {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
-  const { target, binding } = authority;
-  const fallback = resolveCodexConversationControlScope(ctx);
-  const agentDir = target?.agentDir ?? fallback.agentDir;
-  const authProfileId =
-    binding?.connectionScope === "supervision"
-      ? undefined
-      : resolveCodexAppServerAuthProfileIdForAgent({
-          authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
-          agentDir,
-          config: ctx.config,
-        });
-  const connection = await resolveCodexBindingAppServerConnection({
-    binding,
-    authProfileId,
-    pluginConfig,
-    agentDir,
-    config: ctx.config,
-    assertCurrent: authority.assertCurrent,
-  });
-  const scope: CommandAppServerScope = {
-    agentId: target?.agentId ?? fallback.agentId,
-    agentDir,
-    ...(connection.clientAuthProfileId !== undefined
-      ? { authProfileId: connection.clientAuthProfileId }
-      : {}),
-    ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
-    ...(authority.sessionKey ? { sessionKey: authority.sessionKey } : {}),
-    ...(authority.sessionId ? { sessionId: authority.sessionId } : {}),
-    ...(authority.storePath ? { storePath: authority.storePath } : {}),
-    assertCurrent: authority.assertCurrent,
-  };
-  return { scope, target, binding };
+  try {
+    const { target, binding } = authority;
+    const fallback = resolveCodexConversationControlScope(ctx);
+    const agentDir = target?.agentDir ?? fallback.agentDir;
+    const authProfileId =
+      binding?.connectionScope === "supervision"
+        ? undefined
+        : await resolveCodexAppServerAuthProfileIdForAgent({
+            authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
+            agentDir,
+            config: ctx.config,
+          });
+    const connection = await resolveCodexBindingAppServerConnection({
+      binding,
+      authProfileId,
+      pluginConfig,
+      agentDir,
+      config: ctx.config,
+      assertCurrent: authority.assertCurrent,
+      assertCurrentAsync: authority.assertCurrentAsync,
+    });
+    const scope: CommandAppServerScope = {
+      agentId: target?.agentId ?? fallback.agentId,
+      agentDir,
+      ...(connection.clientAuthProfileId !== undefined
+        ? { authProfileId: connection.clientAuthProfileId }
+        : {}),
+      ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
+      ...(authority.sessionKey ? { sessionKey: authority.sessionKey } : {}),
+      ...(authority.sessionId ? { sessionId: authority.sessionId } : {}),
+      ...(authority.storePath ? { storePath: authority.storePath } : {}),
+      assertCurrent: authority.assertCurrent,
+      assertCurrentAsync: authority.assertCurrentAsync,
+      release: authority.release,
+    };
+    return { scope, target, binding };
+  } catch (error) {
+    authority.release();
+    throw error;
+  }
 }
 
 export async function resolveCommandAppServerScope(

@@ -27,7 +27,7 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - Use `x-openclaw-session-key` for explicit session routing (rejected with `400 invalid_request_error` if it uses a reserved namespace: `subagent:`, `cron:`, `acp:`).
 - Use `x-openclaw-message-channel` for a non-default synthetic ingress channel context.
 
-For the canonical explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
+For the shared explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
 
 See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security).
 
@@ -35,11 +35,16 @@ See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).
 
+If a routed session is archived, non-streaming requests return HTTP `409` with
+`invalid_request_error` and guidance to restore it in the Control UI. Streaming
+requests report the same error in the stream. Unarchive the session before
+retrying; the rejected request preserves its archived state and history.
+
 If the request includes an OpenResponses `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session.
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
 
-Continuation mappings survive Gateway restarts in the shared state database's core keyed store (`core:openresponses`, namespace `response-sessions`) for up to 30 days, capped at the newest 5,000 responses across the Gateway. This matches the default session maintenance age and count; it does not extend the lifetime of the underlying session or transcript. Mappings contain only response/session identifiers, the auth subject (an installation-keyed bearer HMAC or verified proxy identity), agent and requested-session scope, and store-managed timestamps. No response content is copied, and no separate table or schema migration is required. The keyed store rejects expired mappings immediately on lookup and removes expired rows on subsequent writes and through the shared plugin-state maintenance sweep, which runs once per minute in bounded batches. If continuity persistence fails after an otherwise successful run, the endpoint returns HTTP `500` or a streaming `response.failed`, rather than reporting a success whose response ID cannot be continued.
+Continuation mappings survive Gateway restarts in the shared state database's core keyed store (`core:openresponses`, namespace `response-sessions`) for up to 30 days, capped at the newest 5,000 responses across the Gateway. This matches the default session maintenance age and count; it does not extend the lifetime of the underlying session or transcript. Mappings contain only response/session identifiers, the auth subject (an installation-keyed bearer HMAC or verified proxy identity), agent and requested-session scope, and store-managed timestamps. No response content is copied, and no separate table or schema migration is required. The keyed store rejects expired mappings immediately on lookup and removes expired rows in bounded batches on subsequent writes to that namespace. Idle Gateways do not run a plugin-state expiry sweep; expired mappings remain unavailable even before their rows are removed. If continuity persistence fails after an otherwise successful run, the endpoint returns HTTP `500` or a streaming `response.failed`, rather than reporting a success whose response ID cannot be continued.
 
 An unknown, expired, evicted, or out-of-scope `previous_response_id` returns the same HTTP `400` with `invalid_request_error`, including when `stream: true`. To recover, resend the full input history and omit `previous_response_id`; the Gateway never silently starts a new conversation for an unresolved continuation. Responses issued before this storage change cannot be recovered after the old Gateway exits.
 
@@ -166,7 +171,8 @@ URL fetch defaults:
 
 ## File + image limits
 
-The endpoint uses a built-in 20 MB request-body limit. File and image source
+The endpoint uses a built-in 20 MB request-body limit and a 60-second body-read
+deadline. Uploads that exceed the deadline return HTTP `408`. File and image source
 policy remains configurable under `gateway.http.endpoints.responses`:
 
 ```json5
@@ -261,6 +267,8 @@ Disconnecting the HTTP client cancels active source-URL downloads and the agent 
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts. OpenClaw normalizes common OpenAI-style aliases before those counters reach downstream status/session surfaces, including `input_tokens` / `output_tokens` and `prompt_tokens` / `completion_tokens`.
+
+If a response ends before complete usage arrives, JSON responses and terminal streaming resources omit `usage` instead of presenting zero or provisional counts as complete. Stream completion does not depend on a usage report arriving.
 
 ## Errors
 

@@ -2,9 +2,12 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createPluginSdkApiDiffSet,
+  encodePluginSdkApiArtifact,
+  decodePluginSdkApiArtifact,
   expandPluginSdkApiDiffSet,
   selectPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidence,
@@ -43,7 +46,9 @@ describe("Plugin SDK API release evidence", () => {
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        pluginSdkApi: createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
+        pluginSdkApi: encodePluginSdkApiArtifact(
+          createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
+        ),
       }),
     );
     const run = (acknowledgement?: string) =>
@@ -105,6 +110,74 @@ describe("Plugin SDK API release evidence", () => {
         validatePluginSdkApiReleaseEvidence({ ...input, evidence: legacy }),
       );
     }
+  });
+
+  it("preserves distinct overlapping comparisons and logical digests in bounded transport", () => {
+    const declaration = "declare interface Shared { value: string; }\n".repeat(1000);
+    const beta = evidence([{ declaration, change: "added" }]);
+    const latest = evidence([{ declaration, change: "removed" }]);
+    const logical = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
+    const encodedBytes = JSON.stringify(encodePluginSdkApiArtifact(logical));
+    const encoded = JSON.parse(encodedBytes);
+    expect(encodedBytes.length).toBeLessThan(JSON.stringify(logical).length / 2);
+    expect(decodePluginSdkApiArtifact(encoded)).toEqual(logical);
+    for (const npmDistTag of ["beta", "latest"] as const) {
+      const receipt = { beta, latest }[npmDistTag];
+      expect(selectPluginSdkApiReleaseEvidence({ evidence: encoded, npmDistTag })).toEqual(receipt);
+      expect(
+        validatePluginSdkApiReleaseEvidence({
+          evidence: encoded,
+          npmDistTag,
+          acknowledgement: receipt.digest.slice(0, 8),
+          expectedHeadSha: headSha,
+          expectedWorkflowSha: workflowSha,
+        }),
+      ).toMatchObject({ digest: receipt.digest });
+    }
+    const report = createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff });
+    expect(expandPluginSdkApiDiffSet(encodePluginSdkApiArtifact(report))).toEqual({
+      beta: beta.diff,
+      latest: latest.diff,
+    });
+    expect(
+      selectPluginSdkApiReleaseEvidence({
+        evidence: encodePluginSdkApiArtifact(beta),
+        npmDistTag: "beta",
+      }),
+    ).toEqual(beta);
+  });
+
+  it("rejects malformed transport, nested envelopes and bounded expansion bombs", () => {
+    const encoded = encodePluginSdkApiArtifact(evidence());
+    for (const invalid of [
+      { ...encoded, data: encoded.data + "!" },
+      { ...encoded, data: Buffer.from("not gzip").toString("base64") },
+      { ...encoded, encoding: "brotli+base64" },
+      { ...encoded, extra: true },
+      { ...encoded, data: "A".repeat(16 * 1024 * 1024 + 1) },
+      encodePluginSdkApiArtifact(encoded),
+    ]) {
+      expect(() => decodePluginSdkApiArtifact(invalid)).toThrow();
+    }
+    const bomb = {
+      ...encoded,
+      data: gzipSync(Buffer.alloc(64 * 1024 * 1024 + 1, 32)).toString("base64"),
+    };
+    expect(() => decodePluginSdkApiArtifact(bomb)).toThrow();
+    const beta = evidence([{ declaration: "beta" }]);
+    const latest = evidence([{ declaration: "latest" }]);
+    const logical = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
+    const latestDiff = logical.diffs[latest.digest];
+    if (!latestDiff) {
+      throw new Error("Missing latest comparison fixture");
+    }
+    latestDiff.exports.push({ declaration: "tampered unselected comparison" });
+    expect(() =>
+      selectPluginSdkApiReleaseEvidence({
+        evidence: encodePluginSdkApiArtifact(logical),
+        npmDistTag: "beta",
+      }),
+    ).toThrow("digest does not match");
   });
 
   it("rejects missing, extra, redirected and modified pooled comparisons", () => {

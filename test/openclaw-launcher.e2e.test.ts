@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";
 import { parseNodeReleaseVersion } from "../node-version.mjs";
 import {
   inspectManagedProcessGroup,
@@ -1165,7 +1166,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         expect(result.stdout).not.toContain(path.join(cwd, "openclaw"));
       } else {
         expect(result.stdout).toBe(
-          mode === "source" ? "cache:disabled;respawn:1" : "cache:enabled;respawn:0",
+          mode === "source"
+            ? "cache:disabled;respawn:1"
+            : mode === "default"
+              ? "cache:disabled;respawn:0"
+              : "cache:enabled;respawn:0",
         );
       }
     },
@@ -1519,14 +1524,27 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     },
   );
 
-  it.each(["denied writes", "denied workers", "unrestricted"] as const)(
+  it.each(["denied writes", "denied workers", "denied replacement", "unrestricted"] as const)(
     "keeps packaged cache maintenance within Node permissions: %s",
     async (mode) => {
       const fixtureRoot = await makeLauncherFixture(fixtures);
       const cache = path.join(fixtureRoot, "cache");
       const retired = path.join(cache, "openclaw", "old", "build-retired");
+      const expiredEntry = path.join(retired, "sentinel");
       await fs.mkdir(retired, { recursive: true });
-      await fs.writeFile(path.join(retired, "sentinel"), "preserve restricted cache");
+      await fs.writeFile(expiredEntry, "preserve restricted cache");
+      const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      const directory = resolveOpenClawCompileCacheDirectory({
+        installRoot: fixtureRoot,
+        env: { NODE_COMPILE_CACHE: cache },
+      });
+      if (!directory) {
+        throw new Error("Fixture compile-cache directory must be available");
+      }
+      // Seed the namespace before aging its maintenance timestamp.
+      await fs.mkdir(directory, { recursive: true });
+      await fs.utimes(expiredEntry, expired, expired);
+      await fs.utimes(path.join(cache, "openclaw"), expired, expired);
       const preload = path.join(fixtureRoot, "observe-maintenance.mjs");
       await fs.writeFile(
         preload,
@@ -1537,8 +1555,16 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           "const OriginalWorker = threads.Worker;",
           "threads.Worker = class extends OriginalWorker {",
           "  constructor(url, options) {",
-          "    if (options?.workerData?.openclawCompileCacheDirectory) globalThis.maintenanceStarts++;",
+          "    const maintenance = Boolean(options?.workerData?.openclawCompileCacheDirectory);",
+          "    if (maintenance) globalThis.maintenanceStarts++;",
           "    super(url, options);",
+          "    if (maintenance) {",
+          "      const { port1, port2 } = new threads.MessageChannel();",
+          '      port1.on("message", () => {});',
+          "      globalThis.maintenanceCompleted = new Promise((resolve) => {",
+          '        this.once("exit", () => { port1.close(); port2.close(); resolve(); });',
+          "      });",
+          "    }",
           "  }",
           "};",
           "syncBuiltinESMExports();",
@@ -1547,13 +1573,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       await fs.writeFile(
         path.join(fixtureRoot, "dist", "entry.js"),
         [
-          'import { MessageChannel } from "node:worker_threads";',
-          'import { maintainOpenClawCompileCache, resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";',
-          "const { port1, port2 } = new MessageChannel();",
-          'port1.on("message", () => {});',
-          `const directory = resolveOpenClawCompileCacheDirectory({ installRoot: ${JSON.stringify(fixtureRoot)} });`,
-          "await maintainOpenClawCompileCache(directory);",
-          "port1.close(); port2.close();",
+          "await globalThis.maintenanceCompleted;",
           "process.stdout.write(JSON.stringify({ maintenanceStarts: globalThis.maintenanceStarts }));",
         ].join("\n"),
       );
@@ -1579,8 +1599,9 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           cwd: fixtureRoot,
           env: launcherEnv({
             NODE_OPTIONS: undefined,
-            NODE_COMPILE_CACHE: cache,
-            OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+            NODE_COMPILE_CACHE: mode === "denied replacement" ? cache : directory,
+            OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED:
+              mode === "denied replacement" ? undefined : "1",
           }),
           encoding: "utf8",
           timeout: 5000,
@@ -1590,7 +1611,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       expect(result.status, result.stderr).toBe(0);
       if (mode === "unrestricted") {
         expect(JSON.parse(result.stdout).maintenanceStarts).toBeGreaterThan(0);
-        await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(expiredEntry)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         expect(JSON.parse(result.stdout).maintenanceStarts).toBe(0);
         expect(await fs.readFile(path.join(retired, "sentinel"), "utf8")).toBe(
@@ -1656,8 +1677,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       const host = path.join(fixtureRoot, "host.mjs");
       await fs.writeFile(host, "");
       const cache = path.join(fixtureRoot, "cache");
-      const retired = path.join(cache, "openclaw", "old", "build-retired");
-      await fs.mkdir(retired, { recursive: true });
+      const directory = resolveOpenClawCompileCacheDirectory({
+        installRoot: fixtureRoot,
+        env: { NODE_COMPILE_CACHE: cache },
+      });
+      expect(directory).toBeDefined();
       const preloads = ["--import", pathToFileURL(preload).href, "--import", "openclaw/cli-entry"];
       const result = spawnSync(
         testNodeExecPath,
@@ -1666,7 +1690,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           cwd: fixtureRoot,
           env: launcherEnv({
             NODE_OPTIONS: source === "NODE_OPTIONS" ? preloads.join(" ") : undefined,
-            NODE_COMPILE_CACHE: cache,
+            NODE_COMPILE_CACHE: directory,
             OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
           }),
           encoding: "utf8",
@@ -1680,7 +1704,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         "maintenance:true",
         "entry:true",
       ]);
-      await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 
@@ -1775,13 +1798,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
 
   it.each([
     "owned",
+    "inherited",
+    "inherited-windows",
     "direct",
     "foreign",
     "source",
     "disabled-zero",
     "disabled-empty",
     "cache-empty",
-  ])("shares the first-success compile cache base with bundled helpers: %s", async (mode) => {
+  ])("keeps Gateway main uncached and shares the worker cache base: %s", async (mode) => {
     const fixtureRoot = await makeLauncherFixture(fixtures);
     const tmpRoot = fixtures.createTempDir("openclaw-launcher-cache-");
     await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.9.6"}\n');
@@ -1831,15 +1856,17 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          import { resolveNodeCompileCacheEnv as resolveB } from "./cache-b.mjs";
          import { enableOpenClawCompileCache } from "./cache-owner.mjs";
          const before = { ...process.env };
-         // First enable for direct entry; ALREADY_ENABLED after the real launcher.
-         enableOpenClawCompileCache({ installRoot: ${JSON.stringify(fixtureRoot)} });
+         // Direct entry and launcher consumers share the same worker cache owner.
+         enableOpenClawCompileCache({ currentFile: ${JSON.stringify(path.join(fixtureRoot, mode === "source" ? "src/entry.ts" : "dist/entry.js"))}, installRoot: ${JSON.stringify(fixtureRoot)} });
          const parentDirectory = getCompileCacheDir() ?? null;
          const a = resolveA();
          const b = resolveB();
          assert.deepEqual(a, b, "separate built helpers must share the launcher fact");
-         if (["owned", "direct"].includes(${JSON.stringify(mode)})) {
-           assert.ok(parentDirectory);
-           assert.equal(process.env.NODE_COMPILE_CACHE, undefined);
+         const cachedWorkers = ["owned", "inherited", "inherited-windows", "direct", "source"].includes(${JSON.stringify(mode)});
+         if (cachedWorkers) {
+           assert.equal(parentDirectory, null);
+           assert.ok(a.NODE_COMPILE_CACHE);
+           process.on("exit", () => assert.equal(getCompileCacheDir(), undefined));
          } else if (${JSON.stringify(mode)} === "foreign") {
            assert.ok(parentDirectory);
            assert.equal(process.env.NODE_COMPILE_CACHE, undefined);
@@ -1856,11 +1883,19 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          const [directory] = await once(worker, "message");
          const [code] = await exited;
          assert.equal(code, 0);
-         assert.equal(directory, ["owned", "direct"].includes(${JSON.stringify(mode)}) ? parentDirectory : null);
+         if (cachedWorkers) {
+           assert.ok(directory);
+           assert.ok(directory.startsWith(a.NODE_COMPILE_CACHE));
+         } else {
+           assert.equal(directory, null);
+         }
          assert.deepEqual({ ...process.env }, before);
          process.stdout.write("cache-base:verified");`,
     );
-    const args = [path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs")];
+    const args = [
+      path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs"),
+      ...(mode === "foreign" ? ["status"] : ["gateway", "run"]),
+    ];
     if (mode === "foreign") {
       const preload = path.join(fixtureRoot, "foreign.mjs");
       await fs.writeFile(
@@ -1869,6 +1904,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
            import { enableCompileCache, constants } from "node:module";
            assert.equal(enableCompileCache(${JSON.stringify(path.join(tmpRoot, "foreign"))}).status,
              constants.compileCacheStatus.ENABLED);`,
+      );
+      args.unshift("--import", pathToFileURL(preload).href);
+    }
+    if (mode === "inherited-windows") {
+      const preload = path.join(fixtureRoot, "windows-execve.mjs");
+      await fs.writeFile(
+        preload,
+        `Object.defineProperty(process, "platform", { value: "win32" });
+         process.execve = () => { throw new Error("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"); };`,
       );
       args.unshift("--import", pathToFileURL(preload).href);
     }
@@ -1882,7 +1926,12 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         NODE_OPTIONS: undefined,
         NODE_DISABLE_COMPILE_CACHE:
           mode === "disabled-zero" ? "0" : mode === "disabled-empty" ? "" : undefined,
-        NODE_COMPILE_CACHE: mode === "cache-empty" ? "" : undefined,
+        NODE_COMPILE_CACHE:
+          mode === "cache-empty"
+            ? ""
+            : mode === "inherited" || mode === "inherited-windows"
+              ? path.join(tmpRoot, "inherited")
+              : undefined,
         // This negative control must retain its foreign first enable in the same
         // Node instance; all ordinary launch modes scrub inherited sentinels.
         OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: mode === "foreign" ? "1" : undefined,

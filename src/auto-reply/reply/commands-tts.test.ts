@@ -2,14 +2,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessageSync,
+  appendTranscriptMessage,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 
 const ttsMocks = vi.hoisted(() => ({
@@ -17,13 +19,13 @@ const ttsMocks = vi.hoisted(() => ({
   getLastTtsAttempt: vi.fn(),
   getTtsMaxLength: vi.fn(),
   getTtsPersona: vi.fn(),
-  getTtsProvider: vi.fn(),
+  getTtsProviderAsync: vi.fn(),
   isSummarizationEnabled: vi.fn(),
   isTtsEnabled: vi.fn(),
-  isTtsProviderConfigured: vi.fn(),
+  isTtsProviderConfiguredAsync: vi.fn(),
   listTtsPersonas: vi.fn(),
   resolveTtsConfig: vi.fn(),
-  resolveTtsPrefsPath: vi.fn(),
+  resolveTtsPrefsPathAsync: vi.fn(),
   setLastTtsAttempt: vi.fn(),
   setSummarizationEnabled: vi.fn(),
   setTtsEnabled: vi.fn(),
@@ -49,6 +51,8 @@ const { handleTtsCommands } = await import("./commands-tts.js");
 const PRIMARY_TTS_PROVIDER = "acme-speech";
 const FALLBACK_TTS_PROVIDER = "backup-speech";
 type TtsCommandResult = Awaited<ReturnType<typeof handleTtsCommands>>;
+
+afterEach(() => memorySessionActorOwners.reset());
 
 function buildTtsParams(
   commandBodyNormalized: string,
@@ -101,11 +105,11 @@ describe("handleTtsCommands status fallback reporting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ttsMocks.resolveTtsConfig.mockReturnValue({});
-    ttsMocks.resolveTtsPrefsPath.mockReturnValue("/tmp/tts-prefs.json");
+    ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue("/tmp/tts-prefs.json");
     ttsMocks.isTtsEnabled.mockReturnValue(true);
-    ttsMocks.getTtsProvider.mockReturnValue(PRIMARY_TTS_PROVIDER);
+    ttsMocks.getTtsProviderAsync.mockReturnValue(PRIMARY_TTS_PROVIDER);
     ttsMocks.getTtsPersona.mockReturnValue(undefined);
-    ttsMocks.isTtsProviderConfigured.mockReturnValue(true);
+    ttsMocks.isTtsProviderConfiguredAsync.mockReturnValue(true);
     ttsMocks.getTtsMaxLength.mockReturnValue(1500);
     ttsMocks.isSummarizationEnabled.mockReturnValue(true);
     ttsMocks.getLastTtsAttempt.mockReturnValue(undefined);
@@ -352,7 +356,7 @@ describe("handleTtsCommands status fallback reporting", () => {
       { agentId: "main", sessionKey, storePath: scopedStorePath },
       sessionEntry,
     );
-    appendTranscriptMessageSync(
+    await appendTranscriptMessage(
       {
         agentId: "main",
         sessionId: sessionEntry.sessionId,

@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasSensitiveConfigData } from "../../components/config-form.shared.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -16,14 +15,10 @@ import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import type { PluginSettingsField } from "./settings-editor.tsx";
 
 /** The page publishes its loaded selection; the existing Ask store owns conversation state. */
-export class PluginHelpController implements ReactiveController {
+export class PluginHelpController {
   private context?: ApplicationContext;
   private plugin?: PluginHelpReference;
   private release?: () => void;
-
-  constructor(host: ReactiveControllerHost) {
-    host.addController(this);
-  }
 
   get available(): boolean {
     return this.plugin !== undefined;
@@ -112,7 +107,7 @@ export class PluginHelpController implements ReactiveController {
     };
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.release?.();
     this.release = undefined;
     this.plugin = undefined;

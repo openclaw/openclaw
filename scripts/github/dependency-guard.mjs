@@ -652,8 +652,7 @@ export async function reviewDependencyChanges(
     return true;
   }
 
-  const comments = await api.paginate(`${issuePath}/comments`);
-  const labels = await api.paginate(`${issuePath}/labels`);
+  const { comments, labelNames } = await guard.readIssueNotices();
   const trustedCommentAuthors = dependencyGuardCommentAuthors(
     process.env.OPENCLAW_DEPENDENCY_GUARD_COMMENT_BOTS,
   );
@@ -668,7 +667,7 @@ export async function reviewDependencyChanges(
       issuePath,
       owner,
       repo,
-      labelNames: new Set(labels.map((label) => label.name)),
+      labelNames,
       recoverCommentWrites: mode === "enforce",
     });
   // Consolidate the former awareness and enforcement comments into one notice.

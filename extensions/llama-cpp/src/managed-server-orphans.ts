@@ -45,10 +45,6 @@ export async function recoverManagedLlamaServer(params: {
   if (!recovery) {
     recovery = (async () => {
       const { reapOrphanedProcesses } = await import("openclaw/plugin-sdk/process-runtime");
-      // Released 2026.9.9 hosts lack this helper; remove when the minimum plugin API advances.
-      if (typeof reapOrphanedProcesses !== "function") {
-        return;
-      }
       await reapOrphanedProcesses({
         command: params.command,
         cwd,

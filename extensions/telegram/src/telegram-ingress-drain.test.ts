@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
+  resolveTelegramUpdateReceivedAtSeconds,
   runWithTelegramUpdateProcessingFrame,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
@@ -164,6 +165,18 @@ describe("createTelegramIngressMonitor", () => {
       reason: "missing-agent-harness",
       message: 'Requested agent harness "missing-harness-85470" is not registered.',
     },
+    {
+      name: "wrapped archived session rejection",
+      error: new Error("Command failed", {
+        cause: Object.assign(new Error("Restore the archived session before starting work."), {
+          name: "SessionWorkStartError",
+          reason: "archived",
+          retryable: false,
+        }),
+      }),
+      reason: "session-archived",
+      message: "Restore the archived session before starting work.",
+    },
   ])("dead-letters a $name without retrying it", async ({ error, reason, message }) => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
@@ -297,7 +310,7 @@ describe("createTelegramIngressMonitor", () => {
       const payload: TelegramSpooledUpdatePayload = {
         version: 1,
         updateId: update.update_id,
-        receivedAt: Date.now(),
+        receivedAt: 1_736_382_000_123,
         update,
       };
       await createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions).enqueue(
@@ -310,7 +323,8 @@ describe("createTelegramIngressMonitor", () => {
 
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions);
       const controlLaneKey = `telegram:${testCase.chat.id}:control`;
-      const dispatch = vi.fn(async () => {
+      const dispatch = vi.fn(async (dispatchedUpdate: unknown) => {
+        expect(resolveTelegramUpdateReceivedAtSeconds(dispatchedUpdate)).toBe(1_736_382_000);
         expect(await queue.listClaims()).toMatchObject([{ laneKey: controlLaneKey }]);
         return { kind: "completed" as const };
       });
@@ -346,7 +360,15 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
-  it("applies a late deferred retry failure with the real error", async () => {
+  it.each([
+    new Error("late provider blip"),
+    Object.assign(new Error("workspace is not ready"), {
+      name: "SessionWorkStartError",
+      reason: "workspace_pending",
+      retryable: true,
+    }),
+    new Error("Session is archived"),
+  ])("preserves retry for a late deferred failure: %s", async (error) => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
         channelId: "telegram",
@@ -373,12 +395,12 @@ describe("createTelegramIngressMonitor", () => {
       expect(await queue.listClaims()).toHaveLength(1);
       participant.current?.settle({
         kind: "failed-retryable",
-        error: new Error("late provider blip"),
+        error,
       });
 
       await vi.waitFor(async () =>
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 1, lastError: "late provider blip" },
+          { id: eventId, attempts: 1, lastError: error.message },
         ]),
       );
       await monitor.stop();

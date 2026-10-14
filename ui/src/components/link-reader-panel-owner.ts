@@ -5,10 +5,8 @@ import type {
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { icons } from "./icons.ts";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
 import { LinkReaderImages } from "./link-reader-images.ts";
 import {
@@ -25,13 +23,12 @@ import {
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, type PanelHostedTab } from "./panel-hosted-tabs.ts";
-import { renderPanelIconButton } from "./panel-icon-button.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 registerLinkReaderEnglish();
 
 const HISTORY_LIMIT = 30;
-const TAB_LIMIT = 10;
+export const LINK_READER_TAB_LIMIT = 10;
 // Only the still-shared dock controller participates in this lifecycle adapter.
 type DockController = { hostConnected?(): void; hostDisconnected?(): void };
 export type LinkReaderPanelProps = {
@@ -117,15 +114,6 @@ export class LinkReaderPanelOwner {
   }
   get activeHostedTabId(): string | null {
     return this.activeId;
-  }
-  get hostedActions() {
-    return renderPanelIconButton({
-      className: "rail-header__action bp-icon",
-      label: t("linkReader.newTab"),
-      icon: icons.plus,
-      onClick: () => this.createTab(),
-      disabled: this.tabs.length >= TAB_LIMIT || !this.available || !this.readers.length,
-    });
   }
   async closeHostedTab(id: string): Promise<void> {
     this.closeTab(id);
@@ -347,7 +335,7 @@ export class LinkReaderPanelOwner {
     this.requestUpdate();
   }
   createTab(target?: LinkReaderTarget): void {
-    if (this.tabs.length >= TAB_LIMIT) {
+    if (this.tabs.length >= LINK_READER_TAB_LIMIT) {
       this.tabLimitUrl = target?.href ?? null;
       this.requestUpdate();
       return;

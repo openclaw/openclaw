@@ -29,6 +29,7 @@ import {
 } from "./stale-chunk-reload.ts";
 
 export type ApplicationPlacementStartupStatus = {
+  readonly startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
   readonly sessionKey: string;
   // A restored key holds admission before the lazy runtime validates its target and payload.
   readonly targetKind?: SessionPlacementTarget["kind"];

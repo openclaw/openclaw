@@ -1,9 +1,9 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
-  listCrabboxWarmImages,
   openCrabboxWarmImageStore,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
@@ -67,26 +67,37 @@ function observeComparisons(before: () => void | Promise<void>, after?: () => vo
 }
 
 describe("Crabbox asynchronous warm-image mutations", () => {
-  it("preserves and projects a native-capture refusal through allocation updates", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-capture-unsupported-"));
-    const captureUnsupported = {
-      atMs: 0,
-      provider: "p".repeat(128),
-      message: "m".repeat(1024),
-    };
+  it("normalizes optional recipe diagnostics without migrating existing v3 records", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-recipe-diagnostics-"));
     const fixture = openWarmImageStore();
-    fixture.register("profile", { version: 3, allocations: {}, captureUnsupported });
-
-    await recordAllocation();
-
-    expect(fixture.lookup("profile")?.captureUnsupported).toEqual(captureUnsupported);
-    expect(await listCrabboxWarmImages(crabboxState)).toMatchObject([
-      {
-        profileKey: "profile",
-        captureUnsupported,
-        allocations: { new: { choice: { kind: "cold" } } },
+    const store = openCrabboxWarmImageStore(crabboxState);
+    fixture.register("old", { version: 3, allocations: {} });
+    createPluginStateSyncKeyedStoreForTests<unknown>("crabbox", {
+      namespace: "warm-images",
+      maxEntries: 128,
+      overflowPolicy: "reject-new",
+    }).register("malformed", {
+      version: 3,
+      allocations: {},
+      recipePreparation: { source: "unknown", commands: ["must not appear"] },
+    });
+    fixture.register("oversized", {
+      version: 3,
+      allocations: {},
+      recipePreparation: {
+        source: "detected",
+        phaseDurationsMs: { detectedInstall: 20 },
+        failure: { reason: "install failed", outputTail: "☃".repeat(6000) },
       },
-    ]);
+    });
+
+    expect(await store.lookup("old")).toEqual({ version: 3, allocations: {} });
+    expect((await store.lookup("malformed"))?.recipePreparation).toBeUndefined();
+    const diagnostics = (await store.entries()).find(({ key }) => key === "oversized")?.value
+      .recipePreparation;
+    expect(diagnostics?.phaseDurationsMs).toEqual({ detectedInstall: 20 });
+    expect(Buffer.byteLength(diagnostics?.failure?.outputTail ?? "")).toBeLessThanOrEqual(16_384);
+    expect(diagnostics?.failure?.outputTail).toMatch(/☃$/u);
   });
 
   it("rejects malformed native-capture refusal markers before reading or updating state", async () => {

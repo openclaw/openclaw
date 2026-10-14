@@ -41,9 +41,7 @@ export async function withOpenClawAgentDatabaseWrite<T>(
   }
   const run = async (database: OpenClawAgentDatabase): Promise<T> => {
     const { identity, birthtime } = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity === "string") {
-      assertExistingDatabaseIdentity(pathname, `file:${identity}`, birthtime);
-    }
+    assertExistingDatabaseIdentity(pathname, `file:${identity}`, birthtime);
     const result = operation(database);
     if (isPromiseLike(result)) {
       // A malformed callback must not leave an admitted tail writing after the

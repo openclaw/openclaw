@@ -6,8 +6,6 @@ import {
   defaultRuntime,
   formatCliJsonFailure,
   formatErrorMessage,
-  getMemoryEmbeddingCommandSecretTargetIds,
-  resolveCommandSecretRefsViaGateway,
   shortenHomePath,
   theme,
   withManager,
@@ -16,12 +14,15 @@ import {
 import {
   listAgentIds,
   resolveConfiguredAgentId,
-  getRuntimeConfig,
   resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
+import {
+  formatMemoryCoreSidecarNotice,
+  loadMemoryCommandConfig,
+  resolveForeignMemorySlotOwner,
+} from "./cli-memory-slot.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { getMemorySearchManager } from "./memory/index.js";
@@ -98,61 +99,6 @@ export async function syncMemoryWithProgress(params: {
 }
 
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
-  const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-  if (
-    candidate.ownerKind === "capability" &&
-    typeof candidate.ownerId === "string" &&
-    candidate.ownerId.startsWith("memory-provider:")
-  ) {
-    return true;
-  }
-  if (
-    Array.isArray(candidate.paths) &&
-    candidate.paths.some(
-      (entry) => typeof entry === "string" && entry.includes("memory.search.remote.apiKey"),
-    )
-  ) {
-    return true;
-  }
-  // Gateway RPC errors preserve the typed owner's redacted message even when
-  // structured owner fields are unavailable to the CLI process.
-  return message.includes("capability:memory-provider:");
-}
-async function loadMemoryCommandConfig(
-  commandName: string,
-  mode?: "enforce_resolved" | "read_only_status",
-) {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
-  try {
-    const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-      config,
-      commandName,
-      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
-      ...(mode ? { mode } : {}),
-    });
-    return { config: resolvedConfig, diagnostics };
-  } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : "";
-    const message = formatErrorMessage(error);
-    if (
-      mode !== "read_only_status" ||
-      isMemorySecretOwnerFailure(error, message) ||
-      (code !== "SECRET_SURFACE_UNAVAILABLE" && !message.includes("SECRET_SURFACE_UNAVAILABLE"))
-    ) {
-      throw error;
-    }
-    return {
-      config,
-      diagnostics: [
-        `${commandName}: ${message}; continuing with degraded read-only config so healthy memory surfaces remain visible.`,
-      ],
-    };
-  }
-}
 function emitMemoryCommandWarning(message: string, toStderr: boolean): void {
   defaultRuntime[toStderr ? "error" : "log"](warn(message));
 }

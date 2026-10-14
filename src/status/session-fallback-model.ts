@@ -1,7 +1,5 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
@@ -9,8 +7,7 @@ import {
 } from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
-import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { readSessionTranscriptTerminalModel } from "../sessions/transcript-terminal-model.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 
 type SessionTerminalModel = { modelProvider: string; model: string };
@@ -19,17 +16,14 @@ type SessionFallbackSource = {
   sessionScope?: Pick<SessionTranscriptReadScope, "agentId" | "sessionKey" | "storePath">;
 };
 
-/** Reads a terminal fallback model only when the run, selection, and notice agree. */
-export function readSessionFallbackModel(
-  params: SessionFallbackSource & {
-    selectedProvider: string;
-    selectedModel: string;
-    parseSelectedProvider?: boolean;
-    config?: OpenClawConfig;
-    /** Null is a prepared absence; only undefined permits a synchronous read. */
-    terminalModel?: SessionTerminalModel | null;
-  },
-): SessionTerminalModel | undefined {
+type SessionFallbackParams = SessionFallbackSource & {
+  selectedProvider: string;
+  selectedModel: string;
+  parseSelectedProvider?: boolean;
+  config?: OpenClawConfig;
+};
+
+function resolveCompletedFallbackEntry(params: SessionFallbackParams) {
   const entry = params.sessionEntry;
   if (
     !params.sessionScope?.sessionKey ||
@@ -45,13 +39,16 @@ export function readSessionFallbackModel(
     selectedModel: params.selectedModel,
     parseSelectedProvider: params.parseSelectedProvider,
   }).selected.label;
-  if (normalizeOptionalString(entry.fallbackNotice.selectedModel) !== selectedLabel) {
-    return undefined;
-  }
-  const terminalModel =
-    params.terminalModel === undefined
-      ? readSessionTerminalFallbackModel(params)
-      : params.terminalModel;
+  return normalizeOptionalString(entry.fallbackNotice.selectedModel) === selectedLabel
+    ? { entry, scope: params.sessionScope }
+    : undefined;
+}
+
+function selectCompletedFallbackModel(
+  params: SessionFallbackParams,
+  entry: InternalSessionEntry,
+  terminalModel: SessionTerminalModel | null | undefined,
+): SessionTerminalModel | undefined {
   if (!terminalModel) {
     return undefined;
   }
@@ -69,35 +66,43 @@ export function readSessionFallbackModel(
     : undefined;
 }
 
-/** Storage readers prepare terminal facts; the host retains runtime alias policy. */
-export function readSessionTerminalFallbackModel(
-  params: SessionFallbackSource,
+/** Present prepared terminal facts without opening storage. */
+export function readSessionFallbackModel(
+  params: SessionFallbackParams & { terminalModel: SessionTerminalModel | null },
 ): SessionTerminalModel | undefined {
-  const entry = params.sessionEntry;
-  if (
-    !params.sessionScope?.sessionKey ||
-    !entry?.sessionId ||
-    entry.status !== "done" ||
-    !entry.lastRunId ||
-    !entry.fallbackNotice
-  ) {
+  const completed = resolveCompletedFallbackEntry(params);
+  return completed
+    ? selectCompletedFallbackModel(params, completed.entry, params.terminalModel)
+    : undefined;
+}
+
+/** Read terminal facts through the retained asynchronous history owner. */
+export async function readSessionFallbackModelAsync(
+  params: SessionFallbackParams,
+): Promise<SessionTerminalModel | undefined> {
+  const completed = resolveCompletedFallbackEntry(params);
+  if (!completed) {
     return undefined;
   }
+  const terminalModel = await readSessionTerminalFallbackModelAsync({
+    sessionEntry: completed.entry,
+    sessionScope: completed.scope,
+  });
+  return selectCompletedFallbackModel(params, completed.entry, terminalModel);
+}
+
+async function readSessionTerminalFallbackModelAsync(params: {
+  sessionEntry: InternalSessionEntry;
+  sessionScope: NonNullable<SessionFallbackSource["sessionScope"]>;
+}) {
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../gateway/session-transcript-readers.js");
   try {
-    const page = readSessionTranscriptBoundedMessageTailPage(
-      { ...params.sessionScope, sessionId: entry.sessionId },
+    const page = await readSessionTranscriptBoundedMessageTailPageAsync(
+      { ...params.sessionScope, sessionId: params.sessionEntry.sessionId },
       { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
     );
-    const message = asOptionalRecord(asOptionalRecord(page.events[0]?.event)?.message);
-    if (
-      (message?.stopReason === "stop" || message?.stopReason === "length") &&
-      readSessionTranscriptRunId(message) === entry.lastRunId &&
-      projectSessionDisplayMessage(message)?.role === "assistant" &&
-      typeof message.provider === "string" &&
-      typeof message.model === "string"
-    ) {
-      return { modelProvider: message.provider, model: message.model };
-    }
+    return selectSessionTerminalFallbackModel(params.sessionEntry, page.events[0]?.event);
   } catch (error) {
     if (
       !isSessionTranscriptProjectionUnavailableError(error) &&
@@ -107,4 +112,15 @@ export function readSessionTerminalFallbackModel(
     }
   }
   return undefined;
+}
+
+/** Durable and memory readers apply the same terminal-run selection to a bounded tail. */
+export function selectSessionTerminalFallbackModel(
+  entry: InternalSessionEntry,
+  event: unknown,
+): SessionTerminalModel | undefined {
+  const terminal = readSessionTranscriptTerminalModel(event);
+  return terminal && terminal.runId === entry.lastRunId
+    ? { modelProvider: terminal.modelProvider, model: terminal.model }
+    : undefined;
 }

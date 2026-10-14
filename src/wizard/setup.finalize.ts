@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
@@ -804,17 +805,20 @@ export async function finalizeSetupWizard(
       const hasKey = keyConfigured || envAvailable;
       const authProviderId = entry?.authProviderId?.trim();
       const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
+      const authStore = authProviderId
+        ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)
+        : undefined;
       const providerAuthProfileAvailable = authProviderId
         ? hasAuthProfileForProvider({
             provider: authProviderId,
-            agentDir,
+            authStore,
           })
         : false;
       const oauthAuthProfileAvailable =
         authProviderId && providerAuthProfileAvailable
           ? hasAuthProfileForProvider({
               provider: authProviderId,
-              agentDir,
+              authStore,
               type: "oauth",
             })
           : false;

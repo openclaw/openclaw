@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type { McpAppSettings } from "../../../../src/shared/mcp-app-extensions.js";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -17,12 +17,14 @@ export type McpAppSettingsView = {
 export function McpAppSettingsForm(props: McpAppSettingsView) {
   const hasChanges = () =>
     Object.entries(props.values).some(([key, value]) => props.settings.values[key] !== value);
-  const rendered = () =>
-    new Set(
-      props.settings.layout?.flatMap((group) =>
-        group.items.flatMap((item) => (item.kind === "property" ? [item.property] : [])),
+  const rendered = createMemo(
+    () =>
+      new Set(
+        props.settings.layout?.flatMap((group) =>
+          group.items.flatMap((item) => (item.kind === "property" ? [item.property] : [])),
+        ),
       ),
-    );
+  );
   const field = (key: string) => (
     <Show when={props.settings.schema.properties[key]} keyed>
       {(schema) => {

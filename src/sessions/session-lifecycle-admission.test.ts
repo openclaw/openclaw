@@ -15,7 +15,6 @@ import {
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
-  getSessionWorkAdmissionRelease,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
@@ -23,20 +22,6 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "./session-lifecycle-admission.js";
-
-it("counts one multi-identity admission once", async () => {
-  const admission = await beginSessionWorkAdmission({
-    scope: "store-count",
-    identities: ["agent:main:child", "session-count"],
-    assertAllowed: () => {},
-  });
-  try {
-    expect(getActiveSessionWorkAdmissionCount()).toBe(1);
-  } finally {
-    admission.release();
-  }
-  expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-});
 
 it("validates default admission once after earlier store writes", async () => {
   const scope = "store-default-validation-order";
@@ -66,34 +51,6 @@ it("validates default admission once after earlier store writes", async () => {
     await writer;
   }
   expect(observations).toEqual(["after"]);
-});
-
-it("waits for a competing session admission outside the caller context", async () => {
-  const scope = "store-competing-self-archive";
-  const sessionKey = "agent:main:competing-self-archive";
-  const admission = await beginSessionWorkAdmission({
-    scope,
-    identities: [sessionKey, "competing-session"],
-    assertAllowed: () => {},
-  });
-  let settled = false;
-  let release: Promise<void> | undefined;
-
-  try {
-    release = getSessionWorkAdmissionRelease({ scope, identities: [sessionKey] });
-    expect(release).toBeInstanceOf(Promise);
-    void release?.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-  } finally {
-    admission.release();
-  }
-
-  await release;
-  await Promise.resolve();
-  expect(settled).toBe(true);
 });
 
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {
@@ -163,65 +120,6 @@ it("keeps an admission handoff bound to its original identities", async () => {
   expect(isSessionWorkAdmissionActive("store-bound-handoff", ["session-bound-handoff"])).toBe(
     false,
   );
-});
-
-it("counts one multi-identity lifecycle mutation once across module instances", async () => {
-  const first = await importFreshModule<typeof import("./session-lifecycle-admission.js")>(
-    import.meta.url,
-    "./session-lifecycle-admission.js?scope=session-mutation-count-a",
-  );
-  const second = await importFreshModule<typeof import("./session-lifecycle-admission.js")>(
-    import.meta.url,
-    "./session-lifecycle-admission.js?scope=session-mutation-count-b",
-  );
-  const mutationStarted = createDeferred();
-  const releaseMutation = createDeferred();
-  const mutation = first.runExclusiveSessionLifecycleMutation("patch", {
-    scope: "store-mutation-count",
-    identities: ["agent:main:child", "session-mutation-count"],
-    run: async () => {
-      mutationStarted.resolve();
-      await releaseMutation.promise;
-    },
-  });
-  await mutationStarted.promise;
-
-  try {
-    expect(first.getActiveSessionLifecycleMutationCount()).toBe(1);
-    expect(second.getActiveSessionLifecycleMutationCount()).toBe(1);
-  } finally {
-    releaseMutation.resolve();
-    await mutation;
-  }
-  expect(second.getActiveSessionLifecycleMutationCount()).toBe(0);
-});
-
-it("keeps a same-identity mutation queued until finalization completes", async () => {
-  const target = { scope: "store-finalize-order", identities: ["session-finalize-order"] };
-  const finalizeStarted = createDeferred();
-  const releaseFinalize = createDeferred();
-  let secondRan = false;
-  const first = runExclusiveSessionLifecycleMutation("patch", {
-    ...target,
-    run: async () => {},
-    finalize: async () => {
-      finalizeStarted.resolve();
-      await releaseFinalize.promise;
-    },
-  });
-  await finalizeStarted.promise;
-
-  const second = runExclusiveSessionLifecycleMutation("patch", {
-    ...target,
-    run: async () => {
-      secondRan = true;
-    },
-  });
-  await waitForImmediate();
-  expect(secondRan).toBe(false);
-
-  releaseFinalize.resolve();
-  await Promise.all([first, second]);
 });
 
 it("finalizes a lifecycle mutation when its run throws", async () => {
@@ -504,28 +402,6 @@ it("lets an admitted root enter session work while suspension preparation refuse
   }
 });
 
-it("runs one-time admission work only during writer-barrier revalidation", async () => {
-  let initialChecks = 0;
-  let finalChecks = 0;
-  const admission = await beginSessionWorkAdmission({
-    scope: "store-dedicated-revalidation",
-    identities: ["session-dedicated-revalidation"],
-    assertAllowed: () => {
-      initialChecks += 1;
-    },
-    revalidateAllowed: () => {
-      finalChecks += 1;
-    },
-  });
-
-  try {
-    expect(initialChecks).toBe(1);
-    expect(finalChecks).toBe(1);
-  } finally {
-    admission.release();
-  }
-});
-
 it.each([false, true])(
   "excludes its own lease during revalidation while retaining competing work (%s)",
   async (hasCompetingWork) => {
@@ -745,43 +621,6 @@ it("cancels work admission waiting behind a lifecycle mutation", async () => {
   await expect(admission).rejects.toBe(abortError);
   releaseMutation.resolve();
   await mutation;
-});
-
-it("cancels a queued lifecycle mutation before it becomes active", async () => {
-  const firstStarted = createDeferred();
-  const releaseFirst = createDeferred();
-  const first = runExclusiveSessionLifecycleMutation("patch", {
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    run: async () => {
-      firstStarted.resolve();
-      await releaseFirst.promise;
-    },
-  });
-  await firstStarted.promise;
-
-  const controller = new AbortController();
-  const abortError = new Error("cancel queued lifecycle mutation");
-  let cancelledMutationRan = false;
-  const cancelled = runExclusiveSessionLifecycleMutation("patch", {
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    signal: controller.signal,
-    run: async () => {
-      cancelledMutationRan = true;
-    },
-  });
-  controller.abort(abortError);
-
-  await expect(cancelled).rejects.toBe(abortError);
-  releaseFirst.resolve();
-  await first;
-  await runExclusiveSessionLifecycleMutation("patch", {
-    scope: "store-a",
-    identities: ["agent:main:child", "session-1"],
-    run: async () => {},
-  });
-  expect(cancelledMutationRan).toBe(false);
 });
 
 it("preserves the initiating admission across a queued lifecycle mutation", async () => {

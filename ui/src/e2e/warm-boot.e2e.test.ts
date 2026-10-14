@@ -4,11 +4,11 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -112,7 +112,7 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
 }
 
 suite.define(() => {
-  it.each(["matching", "different", "device-token", "trusted-proxy"])(
+  it.each(["matching", "different", "device-token", "trusted-proxy", "legacy-rail"])(
     "reconciles the cached shell, roster, and transcript with a %s profile",
     async (profile) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
@@ -199,6 +199,30 @@ suite.define(() => {
             },
           },
         });
+        // Observe the mock's real wire response, without reading renderer-owned runtime fields.
+        await page.addInitScript(() => {
+          window.WebSocket = new Proxy(window.WebSocket, {
+            construct(Target, args) {
+              const socket = Reflect.construct(Target, args) as WebSocket;
+              socket.addEventListener("message", (event: MessageEvent) => {
+                if (typeof event.data !== "string") {
+                  return;
+                }
+                const frame = JSON.parse(event.data) as {
+                  type?: string;
+                  payload?: { type?: string };
+                };
+                if (frame.type === "res" && frame.payload?.type === "hello-ok") {
+                  sessionStorage.setItem(
+                    "openclaw.warm-boot-proof.hello",
+                    JSON.stringify(frame.payload),
+                  );
+                }
+              });
+              return socket;
+            },
+          });
+        });
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, sessionKey) +
             (profile === "device-token" || profile === "trusted-proxy" ? "" : "#token=test-token"),
@@ -215,16 +239,100 @@ suite.define(() => {
           await expectOwnMessageAlignment(page);
         }
         await waitForPersistedWarmState(page);
-        const hello = await page.evaluate(() => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
+        const hello: unknown = await page.evaluate(() =>
+          JSON.parse(sessionStorage.getItem("openclaw.warm-boot-proof.hello") ?? "null"),
+        );
+        if (!isRecord(hello) || !isRecord(hello.auth) || !isRecord(hello.snapshot)) {
+          throw new Error("Expected the mock Gateway's first hello response");
+        }
+        expect(hello.snapshot.presence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ user: expect.objectContaining({ id: "profile-a" }) }),
+          ]),
+        );
+
+        if (profile === "legacy-rail") {
+          const records = await page.evaluate(async () => {
+            const open = indexedDB.open("openclaw-chat-snapshots");
+            await new Promise<void>((resolve, reject) => {
+              open.addEventListener("success", () => resolve());
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Snapshot open failed")),
+              );
+            });
+            const database = open.result;
+            const request = database
+              .transaction("sidebarSnapshots")
+              .objectStore("sidebarSnapshots")
+              .getAll();
+            const saved = await new Promise<Array<{ model: { entries: string[] } }>>(
+              (resolve, reject) => {
+                request.addEventListener("success", () => resolve(request.result));
+                request.addEventListener("error", () =>
+                  reject(request.error ?? new Error("Snapshot read failed")),
+                );
+              },
+            );
+            database.close();
+            for (const record of saved) {
+              record.model.entries = ["route:usage", "route:cron"];
+            }
+            return saved;
+          });
+          expect(records.length).toBeGreaterThan(0);
+          const url = page.url();
+          await page.goto("about:blank");
+          const modules = await holdModuleResponse(page, /\/assets\/.*\.js(?:\?|$)/u);
+          await page.goto(url, { waitUntil: "commit" });
+          await modules.request;
+          await page.evaluate(async (saved) => {
+            const deleted = indexedDB.deleteDatabase("openclaw-chat-snapshots");
+            await new Promise<void>((resolve, reject) => {
+              deleted.addEventListener("success", () => resolve());
+              deleted.addEventListener("error", () =>
+                reject(deleted.error ?? new Error("Snapshot deletion failed")),
+              );
+              deleted.addEventListener("blocked", () =>
+                reject(new Error("Old snapshot database remained open")),
+              );
+            });
+            const open = indexedDB.open("openclaw-chat-snapshots", 6);
+            open.addEventListener("upgradeneeded", () => {
+              for (const name of ["snapshots", "snapshotMetadata", "sidebarSnapshots"]) {
+                open.result.createObjectStore(name, { keyPath: "sessionKey" });
+              }
+            });
+            await new Promise<void>((resolve, reject) => {
+              open.addEventListener("success", () => resolve());
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Legacy snapshot open failed")),
+              );
+            });
+            const database = open.result;
+            const transaction = database.transaction("sidebarSnapshots", "readwrite");
+            for (const record of saved) {
+              transaction.objectStore("sidebarSnapshots").put(record);
+            }
+            await new Promise<void>((resolve, reject) => {
+              transaction.addEventListener("complete", () => resolve());
+              transaction.addEventListener("error", () =>
+                reject(transaction.error ?? new Error("Legacy snapshot write failed")),
+              );
+            });
+            database.close();
+          }, records);
+          modules.release();
+          await gateway.waitForRequest("connect");
+          await sidebar.locator("aside.sidebar").waitFor();
+          expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+          expect(await sidebar.locator("aside.sidebar").getAttribute("data-snapshot-state")).toBe(
+            "live",
           );
-          const snapshot = app?.runtime?.context.gateway.snapshot;
-          if (snapshot?.selfUser?.id !== "profile-a" || !snapshot.hello) {
-            throw new Error("Expected the first connection to belong to profile-a");
-          }
-          return snapshot.hello;
-        });
+          expect(await gateway.getRequests("sessions.list")).toEqual([]);
+          await gateway.resolveDeferred("connect");
+          await transcript.getByText(transcriptText, { exact: true }).waitFor();
+          return;
+        }
 
         let bootstrapRequests = 0;
         if (profile === "trusted-proxy") {
@@ -268,16 +376,8 @@ suite.define(() => {
           await page.screenshot({
             path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
           });
-          expect(
-            await page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-                  "openclaw-app",
-                )?.runtime?.context.config.current.assistantIdentity.name,
-            ),
-          ).toBe("Observatory");
           expect(bootstrapRequests).toBe(0);
-          await sidebar.getByText("Observatory", { exact: true }).waitFor();
+          await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);

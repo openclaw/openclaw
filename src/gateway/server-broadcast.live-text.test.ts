@@ -2,6 +2,14 @@ import { EventEmitter, getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  getLatestWebSocket,
+  MockWebSocket,
+  stubWindowGlobals,
+  useNodeFakeTimers,
+  wsInstances,
+} from "../../ui/src/api/gateway-socket.test-support.js";
+import { GatewayBrowserClient } from "../../ui/src/api/gateway.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
@@ -88,6 +96,93 @@ const textProjection = {
 };
 
 describe("connection live-text delivery", () => {
+  it("keeps a shared chat stream when one full observer unsubscribes", async () => {
+    useNodeFakeTimers();
+    stubWindowGlobals();
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const onEvent = vi.fn();
+    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789", onEvent });
+    client.start();
+    const ws = getLatestWebSocket();
+    const peer = createPeer("shared-observers", true);
+    peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    const send = peer.socket.send;
+    peer.socket.send = (frame, options, callback) => {
+      send(frame, options, callback);
+      ws.emitMessage(String(frame));
+    };
+    const subscribers = createSessionMessageSubscriberRegistry();
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+      sessionMessageSubscribers: subscribers,
+    });
+    const sessionKey = "agent:main:chat";
+    const owner = new AbortController();
+    const requestObserver = async (method: "subscribe" | "unsubscribe", subscriptionId: string) => {
+      const pending = client.request(`sessions.messages.${method}`, {
+        key: sessionKey,
+        subscriptionId,
+      });
+      const request = JSON.parse(ws.sent.at(-1) ?? "{}");
+      if (method === "subscribe") {
+        subscribers.subscribe(peer.client.connId, request.params.key, {
+          subscriptionId: request.params.subscriptionId,
+        });
+      } else {
+        subscribers.unsubscribe(
+          peer.client.connId,
+          request.params.key,
+          request.params.subscriptionId,
+        );
+      }
+      ws.emitMessage({
+        type: "res",
+        id: request.id,
+        ok: true,
+        payload: { key: sessionKey, subscribed: method === "subscribe" },
+      });
+      await pending;
+    };
+    const publish = (content: string, deltaText: string) => {
+      const payload = { sessionKey, runId: "run-1", state: "delta", deltaText };
+      broadcast(
+        "chat",
+        { ...payload, message: { role: "assistant", content } },
+        {
+          liveText: { group: owner.signal, projection: { key: "chat", delta: () => payload } },
+        },
+      );
+    };
+    try {
+      await requestObserver("subscribe", "first");
+      await requestObserver("subscribe", "second");
+      publish("A", "A");
+      await requestObserver("unsubscribe", "first");
+      publish("AB", "B");
+      expect(ws.lastClose).toBeNull();
+      expect(onEvent.mock.lastCall?.[0].payload.message).toEqual({
+        role: "assistant",
+        content: "AB",
+      });
+      await requestObserver("unsubscribe", "second");
+      publish("ABC", "C");
+      expect(onEvent).toHaveBeenCalledTimes(2);
+      await requestObserver("subscribe", "third");
+      publish("ABCD", "D");
+      expect(onEvent.mock.lastCall?.[0].payload.message).toEqual({
+        role: "assistant",
+        content: "ABCD",
+      });
+      expect(ws.lastClose).toBeNull();
+    } finally {
+      owner.abort();
+      client.stop();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      wsInstances.length = 0;
+    }
+  });
+
   it("sends one baseline per recipient and concatenates blocked appends without repeating it", () => {
     const slow = createPeer("slow");
     const fast = createPeer("fast", true);

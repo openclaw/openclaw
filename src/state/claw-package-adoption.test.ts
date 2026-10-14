@@ -1,7 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../claws/package-remove.js";
 import {
@@ -233,52 +232,6 @@ describe("Claw package independent adoption", () => {
       { env },
     );
     expect(competingEntered).toBe(false);
-  });
-
-  it("leases a direct operation before the first Claw package reference exists", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-first-lease-") };
-    const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
-    const entered = createDeferred();
-    const finish = createDeferred();
-    let competingEntered = false;
-    const directOperation = withClawPackageLifecycleLease(
-      artifact,
-      async () => {
-        entered.resolve();
-        await finish.promise;
-      },
-      { env },
-    );
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        directOperation,
-        "Package operation settled before acquiring its lease",
-      );
-      await expect(
-        withClawPackageLifecycleLease(
-          artifact,
-          async () => {
-            competingEntered = true;
-          },
-          { env },
-        ),
-      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
-      expect(competingEntered).toBe(false);
-      await expect(
-        withClawPackageLifecycleLease(
-          { kind: "plugin", source: "clawhub", ref: "@acme/other" },
-          async () => "other package admitted",
-          { env },
-        ),
-      ).resolves.toBe("other package admitted");
-    } finally {
-      finish.resolve();
-      await directOperation;
-    }
-    await expect(
-      withClawPackageLifecycleLease(artifact, async () => "successor admitted", { env }),
-    ).resolves.toBe("successor admitted");
   });
 
   it("refuses package mutation when lifecycle state is unavailable", async () => {

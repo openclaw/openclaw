@@ -201,7 +201,8 @@ describe("interactive Doctor auth migration", () => {
       const output = stripVTControlCharacters(
         stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
       )
-        .replaceAll("│", "")
+        // Notes draw ASCII borders where Unicode is unsupported (for example TERM=linux).
+        .replace(/[│|]/gu, "")
         .replace(/\s+/g, " ");
       stdout.mockRestore();
       if (outcome === "failed") {

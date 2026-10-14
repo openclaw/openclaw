@@ -137,6 +137,99 @@ it("preserves SQL quotation state across substitutions and reports the original 
   ]);
 });
 
+it("counts only SQLite-specific transaction modes across owners", () => {
+  const { root, write } = fixture();
+  const standardSql = [
+    "SAVEPOINT openclaw_tx_nested;",
+    "SAVEPOINT another;",
+    "RELEASE SAVEPOINT another;",
+    "ROLLBACK TO SAVEPOINT another;",
+    "BEGIN;",
+    "BEGIN ISOLATION LEVEL READ COMMITTED;",
+  ].join("\n");
+  write("packages/store/transaction.sql", standardSql);
+  write("src/infra/postgres-sync/transaction.ts", `db.exec(${JSON.stringify(standardSql)});`);
+  write("src/other.ts", 'db.exec("BEGIN IMMEDIATE; BEGIN DEFERRED; BEGIN EXCLUSIVE;");');
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "src/other.ts",
+      matches: [
+        { construct: "transaction-mode" },
+        { construct: "transaction-mode" },
+        { construct: "transaction-mode" },
+      ],
+    },
+  ]);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([3]);
+});
+
+it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors", () => {
+  const { root, write } = fixture();
+  write(
+    "src/postgres.ts",
+    'const sql = "SELECT jsonb_build_object(), jsonb_build_array(), jsonb_agg(value), pg_catalog.jsonb_object_agg(key, value) FROM facts";',
+  );
+  write(
+    "src/sqlite.ts",
+    'const sql = "SELECT jsonb_object(), jsonb_array(), jsonb_extract(value), jsonb_group_array(value) FROM facts";',
+  );
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "src/sqlite.ts",
+      matches: Array.from({ length: 4 }, () => ({ construct: "json-projection" })),
+    },
+  ]);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([4]);
+});
+
+it("excludes generated PostgreSQL SQL while retaining SQLite JSON debt", () => {
+  const { root, write, git } = fixture();
+  write("src/sqlite.ts", "export {};\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  for (const file of ["agent.postgres.sql", "fragment-cache.postgres.sql"]) {
+    write(
+      `src/state/postgres-schema.generated/${file}`,
+      "SELECT value ->> 'id' FROM json_each('{}'::json);",
+    );
+  }
+  expect(changedProductionFiles(root, base, false)).toEqual([]);
+  expect(inventory(root)).toEqual([]);
+  expect(main(root, ["--base", base])).toBe(0);
+  expect(main(root, ["--base", base, "--full-tree"])).toBe(0);
+  write("src/sqlite.ts", "const sql = \"SELECT value ->> 'id' FROM json_each(?)\";");
+  expect(main(root, ["--base", base])).toBe(1);
+});
+
+it("distinguishes table column lists from custom function calls", () => {
+  const { root, write } = fixture();
+  write(
+    "packages/store/schema.sql",
+    [
+      "CREATE TABLE openclaw_items (id TEXT);",
+      "create table if not exists openclaw_new_items (id TEXT);",
+      "INSERT INTO openclaw_items (id) VALUES ('id');",
+      "create table children (parent TEXT references openclaw_items (id));",
+      "CREATE INDEX item_index ON openclaw_items (id);",
+      "SELECT openclaw_transform(id) FROM openclaw_items;",
+      "SELECT exists(openclaw_check(id)) FROM openclaw_items;",
+    ].join("\n"),
+  );
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "packages/store/schema.sql",
+      matches: [
+        { construct: "custom-function", line: 6 },
+        { construct: "custom-function", line: 7 },
+      ],
+    },
+  ]);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([2]);
+});
+
 it("compares base to working tree or index using only changed files, and permits shrinkage and moves", () => {
   const { root, write, git } = fixture();
   write(
@@ -188,3 +281,40 @@ it("compares base to working tree or index using only changed files, and permits
   expect(main(root, ["--prune"])).toBe(1);
   expect(errors).toHaveBeenCalledWith("SQLite dialect ratchet has no baseline to prune.");
 });
+
+it.each([
+  { file: "src/infra/sqlite-strict.ts", sql: "PRAGMA foreign_keys = OFF", result: 0, owner: true },
+  { file: "src/consumer.ts", sql: "PRAGMA foreign_keys = OFF", result: 1, owner: false },
+  {
+    file: "src/infra/sqlite-strict.ts",
+    sql: "INSERT OR IGNORE INTO t VALUES (1)",
+    result: 1,
+    owner: true,
+  },
+  {
+    file: "src/infra/sqlite-strict.ts",
+    sql: "SELECT json_extract(value, '$') FROM t",
+    result: 1,
+    owner: true,
+  },
+])(
+  "ratchets $sql in $file with only primitive maintenance excluded",
+  ({ file, sql, result, owner }) => {
+    const { root, write, git } = fixture();
+    write(file, "export {};\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    write(file, `db.exec(${JSON.stringify(sql)});`);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", base])).toBe(result);
+    expect(inventory(root)).toMatchObject([{ file, matches: [{ owner }] }]);
+    if (result === 0) {
+      expect(logs).toHaveBeenCalledWith(
+        "SQLite primitive owners: 1 engine-maintenance matches in changed files (excluded from comparison).",
+      );
+      expect(logs).toHaveBeenCalledWith(expect.stringContaining("pragma (owner)"));
+    }
+  },
+);

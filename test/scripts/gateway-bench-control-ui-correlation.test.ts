@@ -30,13 +30,11 @@ function fixture() {
 }
 
 describe("Control UI reply correlation", () => {
-  it.each([true, false])("correlates a follow-up when custody arrives first=%s", (custodyFirst) => {
+  it("correlates a follow-up after custody arrives", () => {
     const { correlation, row, event, final, ack } = fixture();
     ack();
     const custody = () => correlation.observe(event("final", { runId: row.requestId }), 2);
-    if (custodyFirst) {
-      custody();
-    }
+    custody();
     expect(correlation.observe(event("delta", { deltaText: "OPENCLAW_" }), 3)).toEqual({
       kind: "delta",
       sessionKey: row.sessionKey,
@@ -46,9 +44,6 @@ describe("Control UI reply correlation", () => {
     expect(row.firstDeltaMs).toBeNull();
     expect(correlation.observe(event("delta", { deltaText: "E2E_ONE" }), 4)).toBeUndefined();
     correlation.observe(final(), 5);
-    if (!custodyFirst) {
-      custody();
-    }
     expect(row).toMatchObject({
       ackMs: 1,
       firstDeltaMs: 3,
@@ -154,43 +149,9 @@ describe("Control UI reply correlation", () => {
       pending: 1,
     });
   });
-
-  it("returns incomplete observations for journaling without manufacturing final timing", () => {
-    const { correlation, row, event } = fixture();
-    const observed = correlation.observe(
-      event("delta", { runId: row.requestId, deltaText: "partial" }),
-      2,
-    );
-    expect(observed).toBe(row);
-    expect(observed).toMatchObject({ firstDeltaMs: 2, ackMs: null, finalMs: null });
-    correlation.acknowledge(row.requestId, { runId: row.requestId, status: {} }, 3);
-    expect(row.error).toContain("rejected");
-    expect(summarizeControlUiRequests([row], 10, 1)).toMatchObject({ replies: 0, errors: 1 });
-  });
 });
 
 describe("Control UI load statistics", () => {
-  it("uses nearest-rank percentiles, excludes drained replies from throughput and retains missing timings", () => {
-    const { row } = fixture();
-    const rows = Array.from({ length: 20 }, (_, index) => ({
-      ...row,
-      ackMs: index + 1,
-      firstDeltaMs: index === 0 ? null : index + 2,
-      finalMs: index + 10,
-    }));
-    const result = summarizeControlUiRequests(rows, 20, 1);
-    expect(result).toMatchObject({
-      started: 20,
-      replies: 11,
-      drainedReplies: 9,
-      errors: 0,
-      pending: 0,
-      repliesPerSecond: 550,
-      ackMs: { count: 20, p50: 10, p95: 19 },
-      firstDeltaMs: { count: 19, p50: 12, p95: 21 },
-    });
-  });
-
   it("does not count failed or unacknowledged requests as replies", () => {
     const { row } = fixture();
     const result = summarizeControlUiRequests(

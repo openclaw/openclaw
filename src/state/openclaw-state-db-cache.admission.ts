@@ -1,3 +1,5 @@
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -23,10 +25,15 @@ type CacheAdmissionOwner = {
 export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
   return {
     initialize(database: OpenClawStateDatabase) {
-      admitSqliteSchema(database.db);
-      return runSqliteReadOperationSync(database.db, () => {
-        assertSupportedStateSchemaVersion(database.db, database.path);
-        return getAdmittedSqliteSchemaFacts(database.db);
+      const db = database.db;
+      if (isPostgresSqlConnection(db)) {
+        assertSupportedStateSchemaVersion(db, database.path);
+        return getPostgresPhysicalFacts(db);
+      }
+      admitSqliteSchema(db);
+      return runSqliteReadOperationSync(db, () => {
+        assertSupportedStateSchemaVersion(db, database.path);
+        return getAdmittedSqliteSchemaFacts(db);
       });
     },
     closeTerminalFailure(pathname: string, error: Error): void {
@@ -56,12 +63,18 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
       if (!database.db.isOpen) {
         return operation(database);
       }
+      const db = database.db;
+      if (isPostgresSqlConnection(db)) {
+        assertSupportedStateSchemaVersion(db, database.path);
+        database.schemaFacts = getPostgresPhysicalFacts(db);
+        return operation(database);
+      }
       let admitted = false;
       try {
-        return runSqliteReadOperationSync(database.db, () => {
-          const facts = getAdmittedSqliteSchemaFacts(database.db);
+        return runSqliteReadOperationSync(db, () => {
+          const facts = getAdmittedSqliteSchemaFacts(db);
           if (!facts || facts !== database.schemaFacts) {
-            assertSupportedStateSchemaVersion(database.db, database.path);
+            assertSupportedStateSchemaVersion(db, database.path);
             database.schemaFacts = facts;
           }
           admitted = true;

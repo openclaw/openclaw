@@ -35,7 +35,7 @@ const DEFAULT_TRUSTED_PROXY_DEVICE_AUTO_APPROVE_SCOPES = [
 function resolveTrustedProxyDeviceAutoApproveScopes(params: {
   requestedScopes: string[];
   hasRequestedScopes: boolean;
-  configuredScopes?: string[];
+  configuredScopes?: readonly string[];
 }): string[] {
   const configuredScopes = normalizeSortedUniqueTrimmedStringList(
     params.configuredScopes ?? [...DEFAULT_TRUSTED_PROXY_DEVICE_AUTO_APPROVE_SCOPES],
@@ -57,9 +57,10 @@ export type PairingApprovalPlan = {
   /** Request is created silent and immediately self-approved by its lane. */
   silent: boolean;
   localApproval: "silent" | "trusted-cidr" | null;
-  trustedProxyAutoApproveScopes: string[] | null;
+  autoApproveOperatorScopes: string[] | null;
+  operatorApprovalKind: "trusted-proxy" | "remote-ingress" | null;
   trustedProxyUser: string | undefined;
-  isTrustedProxySameKeyUpgrade: boolean;
+  isSameKeyScopeUpgrade: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
   bootstrapPairingRoles: string[] | undefined;
@@ -160,23 +161,31 @@ export async function resolvePairingApprovalPlan(
   const trustedProxyUser = authResult.user?.trim();
   // A scope upgrade from a device whose paired public key matches the one
   // this connect just proved by signature is the same physical device
-  // behind the SSO proxy — auto-approvable like a first pairing. A key
+  // behind the trusted ingress — auto-approvable like a first pairing. A key
   // mismatch stays a manual owner decision (possible deviceId squat).
-  const isTrustedProxySameKeyUpgrade =
+  const isSameKeyScopeUpgrade =
     reason === "scope-upgrade" && existingPairedDevice?.publicKey === params.devicePublicKey;
-  const trustedProxyAutoApproveScopes =
-    ((reason === "not-paired" && !existingPairedDevice) || isTrustedProxySameKeyUpgrade) &&
+  const operatorApprovalKind =
+    authMethod === "remote-ingress" && state.remoteIngressPrincipal
+      ? "remote-ingress"
+      : authMethod === "trusted-proxy" &&
+          (isBrowserOperatorUi || isWebchat || isNativeAppUi) &&
+          Boolean(trustedProxyUser) &&
+          trustedProxyAutoApproveConfig?.enabled === true
+        ? "trusted-proxy"
+        : null;
+  const autoApproveOperatorScopes =
+    ((reason === "not-paired" && !existingPairedDevice) || isSameKeyScopeUpgrade) &&
     role === "operator" &&
-    (isBrowserOperatorUi || isWebchat || isNativeAppUi) &&
-    authMethod === "trusted-proxy" &&
-    Boolean(trustedProxyUser) &&
-    trustedProxyAutoApproveConfig?.enabled === true
+    operatorApprovalKind !== null
       ? params.connectionScopeCap(
-          resolveTrustedProxyDeviceAutoApproveScopes({
-            requestedScopes: scopes,
-            hasRequestedScopes: params.hasRequestedScopes,
-            configuredScopes: trustedProxyAutoApproveConfig?.scopes,
-          }),
+          operatorApprovalKind === "remote-ingress"
+            ? scopes
+            : resolveTrustedProxyDeviceAutoApproveScopes({
+                requestedScopes: scopes,
+                hasRequestedScopes: params.hasRequestedScopes,
+                configuredScopes: trustedProxyAutoApproveConfig?.scopes,
+              }),
         )
       : null;
   const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({
@@ -259,9 +268,10 @@ export async function resolvePairingApprovalPlan(
       allowSetupCodeHandoffBootstrapPairing ||
       allowControlUiOperatorBootstrapPairing,
     localApproval,
-    trustedProxyAutoApproveScopes,
+    autoApproveOperatorScopes,
+    operatorApprovalKind,
     trustedProxyUser,
-    isTrustedProxySameKeyUpgrade,
+    isSameKeyScopeUpgrade,
     allowSetupCodeHandoffBootstrapPairing,
     bootstrapApprovalProfile: setupCodeHandoffBootstrapProfile ?? controlUiOperatorBootstrapProfile,
     bootstrapPairingRoles,

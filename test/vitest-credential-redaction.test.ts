@@ -1,7 +1,51 @@
 import { describe, expect, it } from "vitest";
+import { isCredentialEnvName } from "./vitest/credential-env-name.ts";
 import { redactCredentialText, redactDiagnostic } from "./vitest/credential-redaction.ts";
 
 describe("public test diagnostic redaction", () => {
+  it("recognizes credential env names without hiding ordinary key fields", () => {
+    for (const name of [
+      "FAL_KEY",
+      "AZURE_SPEECH_KEY",
+      "BYTEPLUS_ACCESS_KEY_ID",
+      "OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY",
+      "OPENCLAW_CLAUDE_CREDENTIALS_JSON",
+      "OPENCLAW_CODEX_AUTH_JSON",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "GH_TOKEN",
+      "OPENAI_API_KEY",
+      "APIKEY",
+      "SOME_APIKEY",
+      "EXAMPLE_KEYS",
+      "EXAMPLE_CREDENTIAL",
+      "EXAMPLE_TOKEN",
+      "PASSWORD",
+      "SESSION_COOKIE",
+    ]) {
+      expect(isCredentialEnvName(name), name).toBe(true);
+    }
+    for (const name of [
+      "key",
+      "cacheKey",
+      "primaryKey",
+      "keys",
+      "sortKey",
+      "apiKey",
+      "SOMEAPIKEY",
+      "DBUS_SESSION_BUS_ADDRESS",
+      "XDG_SESSION_ID",
+      "TERM_SESSION_ID",
+      "SSH_AUTH_SOCK",
+      "MONKEY_PATCH",
+      "KEYBOARD_LAYOUT",
+      "PATH",
+      "HOME",
+      "fal_key",
+      "Example_CREDENTIAL",
+    ]) {
+      expect(isCredentialEnvName(name), name).toBe(false);
+    }
+  });
   const encodedObject = JSON.stringify({ EXAMPLE_TOKEN: "synthetic", NORMAL: "visible" });
   const encodedClean = JSON.stringify({ EXAMPLE_TOKEN: "<redacted len=9>", NORMAL: "visible" });
   const wrap = (input: string, depth: number) => {
@@ -13,7 +57,14 @@ describe("public test diagnostic redaction", () => {
   };
   it("redacts credential text without altering nonsecret fields", () => {
     const cases: [string, string][] = [
-      ...["EXAMPLE_TOKEN", "PASSWD"].flatMap((key): [string, string][] => [
+      ...[
+        "EXAMPLE_TOKEN",
+        "PASSWD",
+        "FAL_KEY",
+        "OPENCLAW_CODEX_AUTH_JSON",
+        "apiKey",
+        "sessionId",
+      ].flatMap((key): [string, string][] => [
         [`${key}: 'synthetic'`, `${key}: '<redacted len=9>'`],
         [`${key}: "synthetic"`, `${key}: "<redacted len=9>"`],
         [`"${key}": "synthetic"`, `"${key}": "<redacted len=9>"`],

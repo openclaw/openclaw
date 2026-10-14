@@ -45,12 +45,13 @@ platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
 neither is copied into the generic decision-fact table.
 
-Scheduled runs are an owner-native source too. After exact run admission, a lazy
-lifecycle metadata table binds the admitted context and execution ids to the
-stored `cron_run_receipts` row. Inspection joins that metadata to the receipt
-directly and preserves its recorded status. New task and flow lifecycle binding
-writes and inspection joins are retired, but their existing tables and rows are
-not dropped or migrated. This removal leaves the database schemas unchanged;
+Scheduled runs with execution identity collection enabled bind their admitted
+context and execution ids to the stored `cron_run_receipts` row. Inspection joins
+that exact binding and preserves the receipt's recorded status, including for
+runs recorded by older versions. Disabled collection creates no binding table
+or rows. New task and flow lifecycle binding writes and inspection joins are
+retired, but their existing tables and rows are not dropped or migrated. These
+changes leave the database schemas unchanged;
 see the [versioning contract](/reference/database-schemas/versioning).
 Independent audit events and decision facts retain their existing retention
 policies; they are not reconstructed from retained Task or TaskFlow rows. A
@@ -499,8 +500,10 @@ Fresh and upgraded installations do not populate identity contexts until an
 operator enables collection.
 First-use schema creation, HMAC-key access, canonical context construction, and
 SQLite persistence happen in the process-owned audit queue drain, never in
-agent admission. Lock attempts fail fast and retry asynchronously with bounded
-backoff so SQLite contention does not synchronously wait on the Gateway thread.
+agent admission. Audit writes use the shared worker's SQLite busy timeout. A
+competing writer can delay that worker until the timeout, while the Gateway
+thread remains nonblocking. Failed lock attempts retain FIFO retries with
+bounded asynchronous backoff.
 Contexts are retained for 30 days and capped at 100,000 rows. Exact-execution
 inspection and run discovery never return a context, candidate, or admission
 decision after that context is older than 30 days, even if physical cleanup

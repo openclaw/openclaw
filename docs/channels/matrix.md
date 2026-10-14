@@ -20,6 +20,11 @@ Stop the Gateway through its service owner, run the command, then restart it.
 Commands refuse before loading account state when a Gateway owns the state
 directory. Offline ownership lasts through crypto persistence and client shutdown.
 
+After an interrupted encrypted session, `openclaw matrix doctor inspect` reports
+accounts that need explicit snapshot recovery. Clean sessions retain their crypto
+guard files; do not delete them. See [encrypted-state recovery](/channels/matrix/encryption)
+before accepting a snapshot rollback.
+
 <CardGroup cols={3}>
   <Card title="Setup" icon="download" href="/channels/matrix/setup">
     Install the plugin and connect a homeserver account.
@@ -170,6 +175,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
 - `groups`: per-room policy map. Session identity uses the stable room ID after resolution. (`rooms` is a legacy alias.)
+  Room tool and mention policies use room IDs resolved from configured keys; inbound display names never select another room's policy.
   - `groups.<room>.account`: restrict one inherited room entry to a specific account.
   - `groups.<room>.enabled`: per-room toggle. When `false`, the room is ignored as if it were not in the map.
   - `groups.<room>.requireMention`: per-room override of the channel-level mention requirement.

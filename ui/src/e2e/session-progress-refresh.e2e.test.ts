@@ -103,7 +103,7 @@ suite.define(() => {
           .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
           .toBe(!collapsed);
         await card.getByRole("button", { name: "Refresh task progress", exact: true }).waitFor();
-        const button = card.locator(".session-progress-card__refresh[data-state]");
+        const button = card.locator(".session-progress-card__refresh[aria-busy]");
         await button.locator("svg path").first().waitFor({ state: "attached" });
         const idleIcon = await button.locator("svg").innerHTML();
         const iconBounds = await button.locator("svg").boundingBox();
@@ -227,7 +227,7 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       const initial = await transcriptSnapshot(page);
       const timestamp = await card.locator("time").getAttribute("datetime");
-      const button = card.locator(".session-progress-card__refresh[data-state]");
+      const button = card.locator(".session-progress-card__refresh[aria-busy]");
       await button.click();
       const request = await gateway.waitForRequest("progressCard.refresh");
       await gateway.rejectDeferred("progressCard.refresh", {

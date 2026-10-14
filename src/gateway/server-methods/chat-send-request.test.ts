@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { createHmac } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+vi.mock("../../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-identity-async.js")>()),
+  loadChatRequestIdentityKeyAsync: vi.fn(async (): Promise<Buffer | null> => Buffer.alloc(32, 7)),
+}));
 
 function copilotClient(caps: string[] = []): NonNullable<GatewayRequestHandlerOptions["client"]> {
   return {
@@ -42,6 +49,37 @@ function humanClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
 }
 
 describe("normalizeChatSendRequest", () => {
+  it("fingerprints input with the purpose-specific identity key", async () => {
+    const result = await normalizeChatSendRequest({ params: validParams(), client: null });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        requestIdentity: createHmac("sha256", Buffer.alloc(32, 7))
+          .update(JSON.stringify([" hello ", []]))
+          .digest("hex"),
+      },
+    });
+  });
+
+  it("normalizes a first-time send without a fingerprint when the Gateway identity is missing", async () => {
+    vi.mocked(loadChatRequestIdentityKeyAsync).mockResolvedValueOnce(null);
+    const result = await normalizeChatSendRequest({ params: validParams(), client: null });
+    expect(result).toMatchObject({ ok: true, value: { rawMessage: "hello" } });
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.value).not.toHaveProperty("requestIdentity");
+  });
+
+  it("keeps Stop normalization synchronous", () => {
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ message: "/stop" }),
+        client: humanClient(),
+      }),
+    ).toMatchObject({ ok: true, value: { stopCommand: true } });
+  });
+
   it.each([{ page: "chat", title: "Parser work", sessionKey: "agent:main:parser" }])(
     "keeps $page context out of authored text while preserving the model payload",
     async (workContext) => {
@@ -88,10 +126,10 @@ describe("normalizeChatSendRequest", () => {
     ).toBe(false);
   });
 
-  it("normalizes ordinary chat and selected mention spans without yielding", () => {
+  it("normalizes ordinary chat and selected mention spans before fingerprinting", async () => {
     const message = "  e\u0301 @Zoe\u0308 🌈  ";
     const mentions = [{ profileId: "zoe", start: 5, end: 10 }];
-    const result = normalizeChatSendRequest({
+    const result = await normalizeChatSendRequest({
       params: validParams({ message, mentions }),
       client: humanClient(),
     });

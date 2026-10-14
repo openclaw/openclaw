@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -77,6 +78,37 @@ function extractInstallE2eInstallerFunction(): string {
     throw new Error("install E2E installer function was not found");
   }
   return script.slice(start, end);
+}
+
+function scanInstallE2eTranscript(text: string, limits: Record<string, string> = {}) {
+  const root = tempDirs.make("openclaw-install-e2e-transcript-");
+  const file = join(root, "session.jsonl");
+  writeFileSync(file, text);
+  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+  const marker = `node - <<'NODE' "$jsonl" "$@" || scan_status="$?"\n`;
+  const start = script.indexOf(marker);
+  const source = script.slice(start + marker.length, script.indexOf("\nNODE", start));
+  const errors: string[] = [];
+  try {
+    runInNewContext(source, {
+      Buffer,
+      require: createRequire(import.meta.url),
+      console: { error: (message: string) => errors.push(message) },
+      process: {
+        argv: ["node", "-", file, "exec|bash"],
+        env: limits,
+        exit: (code: number) => {
+          throw new ScriptExit(code);
+        },
+      },
+    });
+    return { code: 0, errors };
+  } catch (error) {
+    if (error instanceof ScriptExit) {
+      return { code: error.status, errors };
+    }
+    throw error;
+  }
 }
 
 function extractNonrootInstallerStep(): string {
@@ -1365,22 +1397,6 @@ printf 'status=%s\\n' "$status"
     );
   });
 
-  it("runs candidate tarballs through the installer script instead of direct npm", () => {
-    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
-    const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
-
-    expect(wrapper).toContain('-v "$INSTALL_SCRIPT_PATH:/tmp/openclaw-install.sh:ro"');
-    expect(wrapper).toContain(
-      'FROZEN_PAYLOAD_DIR="${OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR:-}"',
-    );
-    expect(wrapper).toContain('FROZEN_NODE_VERSION="${OPENCLAW_INSTALL_SMOKE_NODE_VERSION:-}"');
-    expect(wrapper).toContain('-e "OPENCLAW_NODE_VERSION=$FROZEN_NODE_VERSION"');
-    expect(runner).toContain("Run official installer one-liner for latest release tarball");
-    expect(runner).toContain("run_installer_pipeline");
-    expect(runner).toContain('--version "$FRESH_TAG_URL"');
-    expect(runner).not.toContain('npm_install_global "install latest release tarball"');
-  });
-
   it("bounds both non-root installer pipelines and propagates curl failures", () => {
     const wrapper = readFileSync(SCRIPT_PATH, "utf8");
     const nonrootRunner = readFileSync(NONROOT_RUNNER_PATH, "utf8");
@@ -1419,6 +1435,24 @@ printf 'status=%s\\n' "$status"
 });
 
 describe("install-sh E2E runner", () => {
+  it("scans bounded completed transcripts and excludes oversized or partial records", () => {
+    const tool = JSON.stringify({ type: "tool_use", name: "exec", input: {} });
+    expect(scanInstallE2eTranscript(`unparseable\n${tool}\n`).code).toBe(0);
+    expect(scanInstallE2eTranscript(tool).code).toBe(0);
+    expect(
+      scanInstallE2eTranscript(tool, { OPENCLAW_INSTALL_E2E_SESSION_SCAN_BYTES: "20" }),
+    ).toMatchObject({
+      code: 1,
+      errors: expect.arrayContaining(["Transcript scan stopped after 20 bytes"]),
+    });
+    expect(
+      scanInstallE2eTranscript(`${tool}\n`, { OPENCLAW_INSTALL_E2E_SESSION_LINE_BYTES: "20" }),
+    ).toMatchObject({
+      code: 1,
+      errors: expect.arrayContaining(["Skipped 1 oversized transcript line(s)"]),
+    });
+  });
+
   it("does not execute a partial installer after a bounded download fails", () => {
     const fixture = runInstallE2eInstallerFixture({
       curlExitCode: 28,
@@ -1450,27 +1484,6 @@ describe("install-sh E2E runner", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
     expect(result.stdout).not.toContain("==> Build image:");
-  });
-
-  it("validates agent timing and toggle knobs before running provider setup", () => {
-    const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
-
-    expect(script).toContain(
-      'AGENT_TURN_TIMEOUT_SECONDS="$(read_positive_int_env OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS 300)"',
-    );
-    expect(script).toContain(
-      'AGENT_TURNS_PARALLEL="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL 1)"',
-    );
-    expect(script).toContain(
-      'AGENT_TOOL_SMOKE="$(read_boolean_env OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE 1)"',
-    );
-    expect(script).toContain(
-      'OPENAI_PROVIDER_TIMEOUT_SECONDS="$(read_positive_int_env OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS")"',
-    );
-    expect(script).toContain('timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s"');
-    expect(script).toContain('\\"timeoutSeconds\\":${OPENAI_PROVIDER_TIMEOUT_SECONDS}');
-    expect(script).toContain('openclaw --profile "$profile" agent \\');
-    expect(script).not.toContain("\n    --local \\\n");
   });
 
   it("normalizes agent JSON when structured lifecycle diagnostics follow the result", () => {
@@ -1912,29 +1925,6 @@ fs.readFileSync = (file, ...args) => {
     expect(result.stderr).not.toContain("unsupported OPENCLAW_INSTALL_SMOKE_MODE");
   });
 
-  it("covers plain npm global installs and npm-driven updates", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-    const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
-
-    expect(script).toContain('SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"');
-    expect(script).toContain('NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"');
-    expect(script).toContain("-e npm_config_cache=/npm-cache");
-    expect(script).toContain('${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"}');
-    expect(script).toContain("remove_owned_npm_cache");
-    expect(script).toContain('sudo -n rm -rf "$NPM_CACHE_DIR"');
-    expect(script).not.toMatch(
-      /Run installer non-root test:[\s\S]*"\$\{NPM_CACHE_DOCKER_ARGS\[@\]\}"/,
-    );
-    expect(script).not.toMatch(
-      /Run CLI installer non-root test[\s\S]*"\$\{NPM_CACHE_DOCKER_ARGS\[@\]\}"/,
-    );
-    expect(script).toContain("==> Run direct npm global smoke");
-    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_MODE=npm-global");
-    expect(runner).toContain("run_npm_global_smoke");
-    expect(runner).toContain("==> Direct npm global install candidate");
-    expect(runner).toContain("==> Direct npm global update candidate");
-  });
-
   it("forwards smoke-runner control knobs into Docker containers", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -2215,7 +2205,7 @@ syncBuiltinESMExports();
       `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "--version" ]; then
-  echo "1.4.0"
+  echo "1.4.3"
   exit 0
 fi
 if [ "\${1:-}" = "pm" ] && [ "\${2:-}" = "-g" ] && [ "\${3:-}" = "untrusted" ]; then
@@ -2303,6 +2293,11 @@ if (args[0] === "--version") {
 } else if (args[0] === "gateway") {
   const port = Number(args[args.indexOf("--port") + 1]);
   http.createServer((_req, res) => {
+      if (_req.url === "/readyz") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ready: true }));
+        return;
+      }
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("ok");
     })
@@ -2357,7 +2352,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
       expect(result.stdout).not.toContain("Gateway runtime OK");
     } else if (statusExit === 0) {
       expect(result.stdout).toContain(
-        `bun-global-install-smoke: Bun 1.4.0 install with ${bunRuntime === "supported" ? "Bun" : "Node"} CLI, local agent, and Gateway runtime OK`,
+        `bun-global-install-smoke: Bun 1.4.3 install with ${bunRuntime === "supported" ? "Bun" : "Node"} CLI, local agent, and Gateway runtime OK`,
       );
     } else {
       expect(result.stderr).toContain("bun global install smoke failed with exit code 23");

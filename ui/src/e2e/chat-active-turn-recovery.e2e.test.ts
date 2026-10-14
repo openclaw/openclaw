@@ -198,16 +198,9 @@ async function readWorkingStartedAts(page: Page): Promise<number[]> {
 
 async function waitForGatewayConnected(page: Page): Promise<void> {
   await expect
-    .poll(
-      () =>
-        page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-          };
-          return app.runtime?.context.gateway.snapshot.phase;
-        }),
-      { timeout: 15_000 },
-    )
+    .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase), {
+      timeout: 15_000,
+    })
     .toBe("connected");
 }
 
@@ -314,9 +307,7 @@ suite.define(() => {
 
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-        .click();
+      await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
       await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
       await openHomeFullPage(page);
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });

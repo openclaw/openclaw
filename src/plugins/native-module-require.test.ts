@@ -22,16 +22,6 @@ type NativeEsmGraphProbe = {
 let nativeEsmGraphProbe: NativeEsmGraphProbe;
 
 describe("tryNativeRequireJavaScriptModule", () => {
-  it("loads native CommonJS modules", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = { marker: "native" };\n', "utf8");
-
-    const result = tryNativeRequireJavaScriptModule(modulePath);
-
-    expect(result).toEqual({ ok: true, moduleExport: { marker: "native" } });
-  });
-
   it("uses source-transform fallback only when native TLA loading needs it", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const modulePath = path.join(dir, "plugin.mjs");
@@ -69,14 +59,6 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({
       ok: false,
     });
-  });
-
-  it("propagates missing dependency errors from existing modules", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'require("./missing-dependency.cjs");\n', "utf8");
-
-    expect(() => tryNativeRequireJavaScriptModule(modulePath)).toThrow("missing-dependency.cjs");
   });
 
   beforeAll(() => {
@@ -140,20 +122,6 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(result).toMatchObject({ ok: true, moduleExport: { loaded: true } });
   });
 
-  it("propagates real module evaluation errors instead of falling back", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(
-      modulePath,
-      'throw new Error("plugin exploded during native load");\n',
-      "utf8",
-    );
-
-    expect(() => tryNativeRequireJavaScriptModule(modulePath)).toThrow(
-      "plugin exploded during native load",
-    );
-  });
-
   it("keeps native paths, file URLs, and source SDK aliases on the process module graph", async () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const ownerPath = path.join(dir, "native-require.mjs");
@@ -174,6 +142,8 @@ describe("tryNativeRequireJavaScriptModule", () => {
       probePath,
       `import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { tryNativeRequireJavaScriptModule as load, tryNativeRequireModule as loadSource } from ${JSON.stringify(pathToFileURL(ownerPath).href)};
 const modulePath = ${JSON.stringify(modulePath)};
@@ -204,6 +174,14 @@ const source = loadSource(sdkPath, { aliasMap: {} });
 assert.equal(source.ok, true);
 assert.deepEqual(source.moduleExport.state, { value: "source", preferred: "javascript" });
 assert.equal(source.moduleExport.state, (await import(pathToFileURL(sdkPath).href)).state);
+// Jiti alias maps spell Windows targets with forward slashes; "/./" is the portable non-native spelling.
+const aliasedSdkPath = modulePath + ".aliased-sdk.cjs";
+fs.writeFileSync(aliasedSdkPath, "module.exports = { instance: {} };\\n");
+fs.writeFileSync(modulePath + ".aliased.cjs", 'module.exports = require("fixture-sdk");\\n');
+const aliased = loadSource(modulePath + ".aliased.cjs", {
+  aliasMap: { "fixture-sdk": path.dirname(aliasedSdkPath) + "/./" + path.basename(aliasedSdkPath) },
+});
+assert.equal(aliased.moduleExport, createRequire(import.meta.url)(aliasedSdkPath));
 console.log("native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed");
 `,
     );

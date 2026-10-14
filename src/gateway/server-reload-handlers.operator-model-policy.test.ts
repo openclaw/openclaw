@@ -27,8 +27,12 @@ import {
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -60,7 +64,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.useRealTimers();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
   restoreActivePluginRegistrySnapshot(registrySnapshot);
@@ -82,9 +85,11 @@ function makePreparedSecretsSnapshot(config: OpenClawConfig) {
 }
 
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+  await withOpenClawTestState(profileState, async () => {
+    const clock = createGatewaySchedulerClock(Date.now());
     const profile = ensureProfileForEmail("reload-model-reader@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const roleName = "reader.modelPolicy.allow";
     const initialConfig: OpenClawConfig = {
       agents: {
@@ -141,7 +146,7 @@ it("commits model-only role changes without retiring permitted models or origina
     });
     const log = createInfoWarnErrorLogger();
     const reloader = startManagedGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+      scheduler: createTestGatewayScheduler(clock.clock),
       getPluginRegistry: () => registry,
       configRevisionProjector: createTestConfigRevisionProjector(),
       minimalTestGateway: false,
@@ -253,7 +258,7 @@ it("commits model-only role changes without retiring permitted models or origina
           ),
         );
       const rejected = write(1);
-      await vi.advanceTimersByTimeAsync(0);
+      const rejectedReload = clock.wake();
       await Promise.race([
         entered.promise,
         rejected.then(() => {
@@ -267,6 +272,8 @@ it("commits model-only role changes without retiring permitted models or origina
       expect(close).not.toHaveBeenCalled();
       releasePreparation.resolve();
       await expect(rejected).resolves.toBe("failed");
+      // The receipt precedes lease cleanup; join the scheduler turn before the next wake.
+      await rejectedReload;
       expect(getCommittedRuntimeConfig()).toBe(initialConfig);
       expect(modelA.signal.aborted).toBe(false);
       expect(modelB.signal.aborted).toBe(false);
@@ -274,7 +281,7 @@ it("commits model-only role changes without retiring permitted models or origina
 
       rejectCandidate = false;
       const accepted = write(2);
-      await vi.advanceTimersByTimeAsync(0);
+      await clock.wake();
       await expect(accepted).resolves.toBe("applied");
       expect(getCommittedRuntimeConfig()).toEqual(candidate);
       expect(modelA.signal.aborted).toBe(true);
@@ -296,7 +303,6 @@ it("commits model-only role changes without retiring permitted models or origina
         modelA?.release();
         modelB?.release();
         original?.release();
-        vi.useRealTimers();
       }
     }
   });

@@ -1,38 +1,27 @@
-import { assert, expect, it } from "vitest";
-import { AgentEmojiPicker } from "./agent-emoji-picker.ts";
+import { expect, it, vi } from "vitest";
+import "./agent-emoji-picker.ts";
 
-it("settles a pending popover update after removal and restores its trigger on reconnect", async () => {
-  const container = document.createElement("section");
-  // The shared fixture adds this method, but native detached Element roots do not have it.
-  Object.defineProperty(container, "getElementById", { value: undefined });
-  const picker = new AgentEmojiPicker();
-  let removeAfterRender = true;
-  picker.addController({
-    hostUpdated() {
-      if (removeAfterRender) {
-        container.remove();
-      }
-    },
-  });
-  container.append(picker);
-  document.body.append(container);
-
+it("filters emoji choices, selects their value, and remounts after removal", async () => {
+  const picker = document.createElement("openclaw-agent-emoji-picker");
+  const onSelect = vi.fn();
+  picker.onSelect = onSelect;
+  document.body.append(picker);
   try {
     await picker.updateComplete;
-    const popover = picker.querySelector("wa-popover");
-    const trigger = picker.querySelector("button");
-    assert(popover);
-    assert(trigger);
-    expect(picker.isConnected).toBe(false);
-    await expect(popover.updateComplete).resolves.toBe(true);
-
-    removeAfterRender = false;
-    document.body.append(container);
+    const search = picker.querySelector<HTMLInputElement>(".agent-emoji-picker__search")!;
+    search.value = "rocket";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
     await picker.updateComplete;
-    await popover.updateComplete;
-    expect(popover.anchor).toBe(trigger);
-    expect(popover.for).toBe(trigger.id);
+    const choice = picker.querySelector<HTMLButtonElement>(".agent-emoji-picker__choice")!;
+    expect(choice.textContent).toBe("🚀");
+    choice.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("🚀");
+    picker.remove();
+    await Promise.resolve();
+    document.body.append(picker);
+    await picker.updateComplete;
+    expect(picker.querySelectorAll(".agent-emoji-picker__choice")).toHaveLength(24);
   } finally {
-    container.remove();
+    picker.remove();
   }
 });

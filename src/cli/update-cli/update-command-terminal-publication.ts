@@ -1,11 +1,8 @@
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { classifyDoctorMaintenanceRefusal } from "../../commands/doctor-maintenance-inspection.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
-import {
-  collectUpdateDoctorFailureFacts,
-  DoctorMaintenanceRefusalError,
-} from "../../infra/update-doctor-result.js";
+import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -20,7 +17,7 @@ import {
   recordMutableUpdateInterruption,
 } from "./update-command-mutable-signals.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
-import { resolveAutomaticUpdateTriage, UpdateCommandFailure } from "./update-command-result.js";
+import { isUpdateStateReadContention, UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
 import {
@@ -101,18 +98,13 @@ export async function withUpdateProgressSettlement(
   }
 }
 
-export function bindUpdateFinalizationFailure(
-  params: FinishUpdateParams,
-  progressFailure: { cause: unknown } | undefined,
-  readTriage: () => { triageAllowed: boolean; gateway: TriageFailureContext["gateway"] },
-) {
+export function bindUpdateFinalizationFailure(progressFailure: { cause: unknown } | undefined) {
   return (
     result: UpdateRunResult,
     detail?: string,
     options?: ErrorOptions,
     exitCode = resolveManagedServiceUpdateFailureExitCode(result),
   ) => {
-    const { triageAllowed, gateway } = readTriage();
     const failureOptions =
       progressFailure &&
       !collectNestedErrorCandidates(options?.cause).includes(progressFailure.cause)
@@ -126,12 +118,7 @@ export function bindUpdateFinalizationFailure(
                 : progressFailure.cause,
           }
         : options;
-    return new UpdateCommandFailure(result, exitCode, detail, {
-      ...failureOptions,
-      automaticTriage: triageAllowed
-        ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
-        : undefined,
-    });
+    return new UpdateCommandFailure(result, exitCode, detail, failureOptions);
   };
 }
 
@@ -198,7 +185,6 @@ export async function publishSettledUpdateCommandResult(
     state.terminalRecord,
   );
   const result = completeUpdateCommandResult(params, settled.result);
-  result.recovery = settled.settlementFailed ? undefined : result.recovery;
   const reporting = state.readReportingState();
   const reportDowntime = !settled.settlementFailed && reporting.pendingRestartAtMs === undefined;
   if (reporting.notify) {
@@ -224,24 +210,19 @@ export function createPostUpdateFailureResult(
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
-  const dataAtRisk = collectNestedErrorCandidates(error).some(
-    (cause) =>
-      cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind === "data-at-risk",
-  );
+  const version = params.result.after?.version?.trim();
   return {
     message,
     result: {
       ...params.result,
       status: "error",
       reason: "post-update-failed",
-      ...(dataAtRisk
-        ? {
-            recovery: {
-              serviceRestartSafe: false as const,
-              reason: "runtime-verification-failed" as const,
-            },
-          }
-        : {}),
+      recovery:
+        classifyDoctorMaintenanceRefusal(error).kind === "data-at-risk"
+          ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
+          : isUpdateStateReadContention(error) && version
+            ? (params.result.recovery ?? { serviceRestartSafe: true, version })
+            : params.result.recovery,
       steps: [
         ...params.result.steps,
         {

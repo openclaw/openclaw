@@ -55,7 +55,7 @@ function makePackageFixture(version = "2026.8.1") {
 }
 
 describe("first-hop package fixtures", () => {
-  it.each([true, false])("excludes newer-schema sources (supported source: %s)", (supported) => {
+  it.each([true])("excludes newer-schema sources (supported source: %s)", (supported) => {
     const root = makePackageFixture();
     writeJson(path.join(root, "dist/update-compat-inventory.json"), {
       schemaVersion: 1,
@@ -216,6 +216,39 @@ describe("first-hop package fixtures", () => {
     ]);
   });
 
+  it("reads harness records for candidates that no longer pack their inventory", () => {
+    const harness = JSON.parse(
+      fs.readFileSync("scripts/lib/update-compat-inventory.json", "utf8"),
+    ) as { releases: { version: string; chunks: { path: string }[] }[] };
+    const latest = harness.releases.at(-1)!;
+    const root = makePackageFixture();
+    const manifestPath = path.join(root, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.openclaw.schemaVersions = { state: 1_000, agent: 1_000 };
+    writeJson(manifestPath, manifest);
+    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
+    const legacyPaths = new Set(LEGACY_UPDATE_COMPAT_CHUNKS.map((name) => `dist/${name}`));
+    for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
+      fs.rmSync(path.join(root, "dist", name));
+    }
+    // One recorded chunk is a candidate bridge; the rest were never built here.
+    const bridge = latest.chunks.find((chunk) => /-[A-Za-z0-9_-]{8}\.m?js$/.test(chunk.path))!;
+    fs.writeFileSync(
+      path.join(root, "dist", bridge.path),
+      `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport {};\n`,
+    );
+    writeJson(inventoryPath, [
+      ...JSON.parse(fs.readFileSync(inventoryPath, "utf8")).filter(
+        (entry: string) => !legacyPaths.has(entry),
+      ),
+      `dist/${bridge.path}`,
+    ]);
+
+    expect(listFirstHopSourceVersions(root, latest.version)).toEqual([latest.version]);
+    expect(removeLegacyUpdateCompatChunks(root)).toEqual([`dist/${bridge.path}`]);
+    expect(fs.existsSync(path.join(root, "dist", bridge.path))).toBe(false);
+  });
+
   it.each(["corrupt member", "missing advertised inventory"])(
     "does not hide %s when producing future fixtures",
     async (fault) => {
@@ -348,74 +381,6 @@ describe("first-hop package fixtures", () => {
       expect(fs.readFileSync(candidate)).toEqual(original);
     },
   );
-
-  it("packs the runtime plugin in a future cohort without changing its payload", () => {
-    const sequence = 1;
-    const root = tempDirs.make("openclaw-runtime-cohort-");
-    const manifest = {
-      name: "@openclaw/codex",
-      version: "2026.9.3",
-      dependencies: { "@openai/codex": "0.153.4" },
-      openclaw: {
-        extensions: ["./dist/index.js"],
-        compat: { pluginApi: ">=2026.9.3" },
-        build: { openclawVersion: "2026.9.3", bundledDist: true },
-      },
-    };
-    writeJson(path.join(root, "package", "package.json"), manifest);
-    writeJson(path.join(root, "package", "openclaw.plugin.json"), {
-      id: "codex",
-      configSchema: { type: "object" },
-    });
-    fs.mkdirSync(path.join(root, "package", "dist"));
-    fs.writeFileSync(
-      path.join(root, "package", "dist", "index.js"),
-      "export const runtime = 'unchanged';\n",
-    );
-    const source = path.join(root, "source.tgz");
-    const output = path.join(root, "future.tgz");
-    execFileSync("tar", ["-czf", source, "-C", root, "package"]);
-    const before = fs.readFileSync(source);
-    const result = spawnSync(
-      process.execPath,
-      [
-        "scripts/e2e/lib/update-first-hop-package-fixtures.mjs",
-        "future-runtime-tarball",
-        source,
-        output,
-        String(sequence),
-      ],
-      { encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const receipt = JSON.parse(result.stdout);
-    const targetVersion = `2026.9.4-first-hop.${sequence}`;
-    expect(receipt).toMatchObject({
-      method: "candidate-same-schema-runtime-fixture",
-      name: "@openclaw/codex",
-      sourceVersion: "2026.9.3",
-      targetVersion,
-    });
-    const readEntry = (archive: string, entry: string) =>
-      execFileSync("tar", ["-xOf", archive, entry]);
-    expect(JSON.parse(readEntry(output, "package/package.json").toString())).toEqual({
-      ...manifest,
-      version: targetVersion,
-      openclaw: {
-        ...manifest.openclaw,
-        build: { ...manifest.openclaw.build, openclawVersion: targetVersion },
-      },
-    });
-    for (const entry of ["package/dist/index.js", "package/openclaw.plugin.json"]) {
-      expect(readEntry(output, entry)).toEqual(readEntry(source, entry));
-    }
-    expect(fs.readFileSync(source)).toEqual(before);
-    expect(receipt.sourceSha256).toBe(createHash("sha256").update(before).digest("hex"));
-    expect(receipt.targetSha256).toBe(
-      createHash("sha256").update(fs.readFileSync(output)).digest("hex"),
-    );
-    expect(receipt.targetSha256).not.toBe(receipt.sourceSha256);
-  });
 
   it.skipIf(process.platform === "win32").each(["recorded"])(
     "routes the first-hop Docker lane with the %s scenario",

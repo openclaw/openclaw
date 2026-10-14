@@ -288,6 +288,23 @@ enum ApplicationRelocator {
         }
     }
 
+    /// The system cleans scratch directories, so nothing persistent may point into them.
+    /// Relocation still leaves deliberate local builds there alone.
+    static func allowsPersistentIntegration(
+        _ bundleURL: URL,
+        homeDirectory: URL,
+        temporaryDirectory: URL,
+        isReadOnlyVolume: Bool) -> Bool
+    {
+        // `/tmp` and `$TMPDIR` live under `/private`; compare both spellings alike.
+        let path = { (url: URL) in
+            url.standardizedFileURL.path.replacingOccurrences(of: "/private/", with: "/", options: .anchored)
+        }
+        let bundlePath = path(bundleURL)
+        return !self.isTransientLocation(bundleURL, homeDirectory: homeDirectory, isReadOnlyVolume: isReadOnlyVolume)
+            && !["/tmp", path(temporaryDirectory)].contains { self.isInside(bundlePath, root: $0) }
+    }
+
     static func currentBundleAllowsPersistentIntegration(
         bundle: Bundle = .main,
         fileManager: FileManager = .default,
@@ -301,9 +318,10 @@ enum ApplicationRelocator {
             fallback: bundle.bundleURL)
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
-        return !self.isTransientLocation(
+        return self.allowsPersistentIntegration(
             bundleURL,
             homeDirectory: fileManager.homeDirectoryForCurrentUser,
+            temporaryDirectory: fileManager.temporaryDirectory,
             isReadOnlyVolume: isReadOnlyVolume)
     }
 }

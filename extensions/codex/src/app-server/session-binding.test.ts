@@ -409,7 +409,7 @@ describe("Codex app-server binding store", () => {
     });
     expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext });
 
-    const imported = createStoredCodexAppServerBinding({
+    const imported = await createStoredCodexAppServerBinding({
       schemaVersion: 2,
       threadId: "thread-account",
       cwd: "/repo",
@@ -448,7 +448,7 @@ describe("Codex app-server binding store", () => {
     });
     expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext });
 
-    const imported = createStoredCodexAppServerBinding({
+    const imported = await createStoredCodexAppServerBinding({
       schemaVersion: 2,
       threadId: "thread-security-review",
       cwd: "/repo/company",
@@ -726,9 +726,13 @@ describe("Codex app-server binding store", () => {
         });
         await store.mutate(previous, { kind: "set", binding });
 
-        await expect(
-          resolveCodexSessionBinding({ bindingStore: store, identity: current, storePath }),
-        ).resolves.toMatchObject({ binding: undefined });
+        const resolved = await resolveCodexSessionBinding({
+          bindingStore: store,
+          identity: current,
+          storePath,
+        });
+        using _ = { [Symbol.dispose]: resolved.release };
+        expect(resolved.binding).toBeUndefined();
         expect(store.read(previous)).toEqual(binding);
         await expect(
           reclaimCurrentCodexSessionGeneration({

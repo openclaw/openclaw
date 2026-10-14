@@ -5,7 +5,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { GatewayClient } from "../gateway/client.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
+import { handleInvoke } from "./invoke.js";
 import { startNodeHostMcpManager } from "./mcp.js";
 
 function tool(name: string, description?: string): Tool {
@@ -642,22 +644,43 @@ describe("node host MCP manager", () => {
     await manager.close();
   });
 
-  it("bounds remote MCP error messages", async () => {
+  it("preserves remote MCP error text within the node invoke limit", async () => {
+    const prefix = "API_TOKEN = computeToken(); Authorization: Bearer sk-fixture1234567890 ";
     const client = createClient({
       tools: [tool("fail")],
       call: async () => {
-        throw new Error("x".repeat(2_000));
+        throw new Error(prefix + "x".repeat(2_000));
       },
     });
     const manager = await startNodeHostMcpManager(
       { docs: { command: "docs" } },
       { createClient: () => client, resolveTransport: () => transport, warn: vi.fn() },
     );
-    const error = await manager
-      .callMcpTool({ server: "docs", tool: "fail" })
-      .catch((caught: unknown) => caught);
-    expect(error).toMatchObject({ code: "MCP_TOOL_ERROR" });
-    expect((error as Error).message).toHaveLength(1_024);
-    await manager.close();
+    const connection = new GatewayClient({});
+    const request = vi.spyOn(connection, "request").mockResolvedValue(null);
+    try {
+      await handleInvoke(
+        {
+          id: "mcp-fidelity",
+          nodeId: "node-1",
+          command: "mcp.tools.call.v1",
+          paramsJSON: JSON.stringify({ server: "docs", tool: "fail" }),
+        },
+        connection,
+        { current: async () => [] },
+        manager,
+      );
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.result",
+        expect.objectContaining({
+          id: "mcp-fidelity",
+          ok: false,
+          error: { code: "MCP_TOOL_ERROR", message: prefix + "x".repeat(1_024 - prefix.length) },
+        }),
+      );
+    } finally {
+      request.mockRestore();
+      await manager.close();
+    }
   });
 });

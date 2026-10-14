@@ -4,12 +4,11 @@ import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
 import {
-  formatModelsAvailableHeader,
+  formatModelsAvailableHeaderAsync,
   MODEL_PICKER_CHANGED_MESSAGE,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -41,6 +40,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
+  resolveTelegramUpdateReceivedAtSeconds,
 } from "./bot-processing-outcome.js";
 import {
   resolveTelegramForumFlag,
@@ -368,7 +368,7 @@ export function createTelegramCallbackRouter({
         }
         const agentId = paginationMatch[2]?.trim() || (await resolveSessionState()).agentId;
         const result = await retryModelAction(async () => {
-          const skillCommands = telegramDeps.listSkillCommandsForAgents({
+          const skillCommands = await telegramDeps.prepareSkillCommandsForAgents({
             cfg: runtimeCfg,
             agentIds: [agentId],
           });
@@ -498,7 +498,7 @@ export function createTelegramCallbackRouter({
             totalPages,
             modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
           });
-          const text = `${formatModelsAvailableHeader({
+          const text = `${await formatModelsAvailableHeaderAsync({
             provider,
             total: models.length,
             cfg: runtimeCfg,
@@ -533,10 +533,7 @@ export function createTelegramCallbackRouter({
           const isDefaultSelection =
             selection.provider === resolvedDefault.provider &&
             selection.model === resolvedDefault.model;
-          const persistedSessionEntry =
-            sessionState.sessionEntry ??
-            telegramDeps.getSessionEntry?.({ storePath, sessionKey: sessionState.sessionKey }) ??
-            getSessionEntry({ storePath, sessionKey: sessionState.sessionKey });
+          const persistedSessionEntry = sessionState.sessionEntry;
           const sessionEntryMissing = persistedSessionEntry === undefined;
           const sessionEntry = persistedSessionEntry ?? {
             sessionId: randomUUID(),
@@ -620,6 +617,7 @@ export function createTelegramCallbackRouter({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
         text: callbackCommandText,
+        date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
       });
       const syntheticCtx = buildSyntheticContext(ctx, syntheticMessage);
       await processMessageWithReplyChain({

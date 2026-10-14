@@ -1,6 +1,6 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -16,10 +16,7 @@ import {
   recordSessionHumanDirectMessage,
   recordSessionStateEventAsync,
 } from "./session-state-events.js";
-import {
-  isSessionUpstreamLinkCurrent,
-  settleSessionUpstreamLink,
-} from "./session-upstream-links-runtime.js";
+import { settleSessionUpstreamLink } from "./session-upstream-links-runtime.js";
 import { listWatchedSessionUpstreamLinks } from "./session-upstream-links.js";
 
 const SESSION_UPSTREAM_MONITOR_INTERVAL_MS = 60_000;
@@ -143,6 +140,15 @@ async function runSessionUpstreamMonitorTick(
   if (options.signal?.aborted) {
     return;
   }
+  const providers =
+    options.providers ??
+    (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
+      (registration) => registration.provider,
+    );
+  if (!providers.some((provider) => provider.checkUpstreamActivity)) {
+    missingCounts.clear();
+    return;
+  }
   const dbOptions = {
     ...(options.env ? { env: options.env } : {}),
     ...(options.path ? { path: options.path } : {}),
@@ -160,11 +166,6 @@ async function runSessionUpstreamMonitorTick(
       missingCounts.delete(key);
     }
   }
-  const providers =
-    options.providers ??
-    (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
-      (registration) => registration.provider,
-    );
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   for (const [catalogId, links] of linksByCatalog) {
     const provider = providerById.get(catalogId);
@@ -248,11 +249,6 @@ async function runSessionUpstreamMonitorTick(
           const admission = { assertCurrent: () => assertMonitorCurrent(options) };
           const missingCountKey = upstreamMonitorLinkKey(probe);
           if (outcome.kind === "missing") {
-            // Provider I/O may outlive a new run or Continue. Only the scanned owner counts.
-            if (!(await isSessionUpstreamLinkCurrent(currentLink, dbOptions))) {
-              missingCounts.delete(missingCountKey);
-              continue;
-            }
             const previous = missingCounts.get(missingCountKey);
             const missingCount = Math.min(
               SESSION_UPSTREAM_MISSING_THRESHOLD,

@@ -757,6 +757,53 @@ describe("Telegram send recovery conformance over HTTP", () => {
     );
   });
 
+  it.each([
+    { entry: "durable", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
+    { entry: "durable", method: "sendAudio", contentType: "audio/mpeg", asVoice: false },
+    { entry: "streaming", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
+    { entry: "streaming", method: "sendAudio", contentType: "audio/mp4", asVoice: false },
+  ] as const)(
+    "sends a rounded probed duration with $entry $method uploads",
+    async ({ entry, method, contentType, asVoice }) => {
+      vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("12.6\n");
+      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+        buffer: Buffer.from("audio-bytes"),
+        kind: "audio",
+        contentType,
+        fileName: "clip",
+      });
+      const mediaUrl = "https://example.com/clip";
+      if (entry === "durable") {
+        await sendMessageTelegram("123", "", { cfg, api: bot.api, mediaUrl, asVoice });
+      } else {
+        await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
+      }
+      expect(requests.map((request) => request.method)).toEqual([method]);
+      expect(String(requests[0]!.fields.duration)).toBe("13");
+    },
+  );
+
+  it.each(["N/A", "0", "Infinity", new Error("ffprobe unavailable")])(
+    "still sends audio when duration probing yields %s",
+    async (result) => {
+      const probe = vi.spyOn(mediaRuntime, "runFfprobe");
+      if (result instanceof Error) {
+        probe.mockRejectedValue(result);
+      } else {
+        probe.mockResolvedValue(result);
+      }
+      await sendMessageTelegram("123", "", {
+        cfg,
+        api: bot.api,
+        mediaUrl: voicePath,
+        mediaLocalRoots: [fixture.mediaDir],
+        asVoice: true,
+      });
+      expect(requests.map((request) => request.method)).toEqual(["sendVoice"]);
+      expect(requests[0]!.fields.duration).toBeUndefined();
+    },
+  );
+
   it("does not claim delivery when all text is rejected as empty", async () => {
     const description = "text must be non-empty";
     rejections.push(`Bad Request: ${description}`, `Bad Request: ${description}`);

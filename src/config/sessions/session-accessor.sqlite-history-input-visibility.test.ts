@@ -1,8 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { createSessionHistorySubagentProjection } from "../../gateway/session-history-subagent-projection.js";
+import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
+import {
+  OpenClawAgentDatabaseReadOnlyScope,
+  withScopedOpenClawAgentDatabaseReadOnly,
+} from "../../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry, waitForSessionTranscriptProjection } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
@@ -10,6 +15,7 @@ it.each([false, true])(
   "bounds legacy coordination lookups and reuses scanned inputs (compacted=%s)",
   async (compacted) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const scope = {
         agentId: "main",
@@ -90,31 +96,43 @@ it.each([false, true])(
       const extractJson = nativeJson.prepare("SELECT jsonb_extract(?, ?) AS value");
       let laterInputInspections = 0;
       let hiddenSteerInspections = 0;
-      database.db.function("json_extract", { deterministic: true }, (value, jsonPath) => {
-        if (jsonPath === "$.message.role" && typeof value === "string") {
-          laterInputInspections += Number(value.includes("Unrelated later input"));
-          hiddenSteerInspections += Number(value.includes("Counted hidden steering input"));
-        }
-        return extractJson.get(value, jsonPath)?.value ?? null;
-      });
+      const retained = new OpenClawAgentDatabaseReadOnlyScope();
+      const target = { agentId: "main", path: database.path };
       try {
-        const resolver = createSessionHistorySubagentProjection(scope);
-        const boundaryOffset = Number(compacted);
-        expect(resolver.isSubagentRunMessage("quiet-run", 2 + boundaryOffset)).toBe(true);
-        expect(laterInputInspections).toBe(0);
-        expect(hiddenSteerInspections).toBe(0);
-        expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
-        expect(hiddenSteerInspections).toBe(0);
-        expect(resolver.isSubagentRunMessage("steered-run", 6 + boundaryOffset)).toBe(true);
-        const inspectedHiddenSteer = hiddenSteerInspections;
-        expect(inspectedHiddenSteer).toBeGreaterThan(0);
-        expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
-        expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
-        expect(resolver.isSubagentRunMessage("steered-run", 8 + boundaryOffset)).toBe(false);
-        expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
-        expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
-        expect(laterInputInspections).toBe(0);
+        retained.run(target, () => {
+          const opened = withScopedOpenClawAgentDatabaseReadOnly((reader) => reader, target);
+          if (!opened.found) {
+            throw new Error("Expected the seeded history reader");
+          }
+          opened.value.db.function("json_extract", { deterministic: true }, (value, jsonPath) => {
+            if (jsonPath === "$.message.role" && typeof value === "string") {
+              laterInputInspections += Number(value.includes("Unrelated later input"));
+              hiddenSteerInspections += Number(value.includes("Counted hidden steering input"));
+            }
+            return extractJson.get(value, jsonPath)?.value ?? null;
+          });
+          const resolver = createReadonlySessionHistoryReader({
+            transcript: { ...scope, sessionFile: scope.sessionKey },
+            database: target,
+          }).subagentCoordination;
+          const boundaryOffset = Number(compacted);
+          expect(resolver.isSubagentRunMessage("quiet-run", 2 + boundaryOffset)).toBe(true);
+          expect(laterInputInspections).toBe(0);
+          expect(hiddenSteerInspections).toBe(0);
+          expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
+          expect(hiddenSteerInspections).toBe(0);
+          expect(resolver.isSubagentRunMessage("steered-run", 6 + boundaryOffset)).toBe(true);
+          const inspectedHiddenSteer = hiddenSteerInspections;
+          expect(inspectedHiddenSteer).toBeGreaterThan(0);
+          expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
+          expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
+          expect(resolver.isSubagentRunMessage("steered-run", 8 + boundaryOffset)).toBe(false);
+          expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
+          expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
+          expect(laterInputInspections).toBe(0);
+        });
       } finally {
+        retained.close();
         nativeJson.close();
       }
     });

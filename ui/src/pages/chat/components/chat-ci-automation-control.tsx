@@ -117,17 +117,11 @@ class ChatCiAutomationController extends ChatCiDisclosure<Props> {
       this.reset();
       const gateway = this.gateway;
       this.stopGateway = gateway?.subscribe(() => {
-        if (this.gateway === gateway && this.boundGateway === gateway) {
-          this.syncConnection();
-          this.publish();
-        }
+        this.syncConnection();
+        this.publish();
       });
       this.stopEvents = gateway?.subscribeEvents((event) => {
-        if (
-          this.gateway === gateway &&
-          this.boundGateway === gateway &&
-          (event.event === "cron" || event.event === "config.changed")
-        ) {
+        if (event.event === "cron" || event.event === "config.changed") {
           this.invalidate();
         }
       });
@@ -211,29 +205,14 @@ class ChatCiAutomationController extends ChatCiDisclosure<Props> {
       return null;
     }
     const version = this.version;
-    const targetKey = this.currentTargetKey();
-    const revision = gateway.connectionRevision;
-    const generation = scope.client.connectionGeneration;
-    const auth = JSON.stringify(gateway.snapshot.hello?.auth ?? null);
     return {
       client: scope.client,
       target,
       current: () =>
         this.isConnected &&
         version === this.version &&
-        targetKey === this.currentTargetKey() &&
-        targetKey === this.targetKey &&
         gateway === this.gateway &&
-        gateway === this.boundGateway &&
-        revision === this.connectionRevision &&
-        generation === this.connectionGeneration &&
-        auth === this.authKey &&
-        gateway.connectionRevision === revision &&
-        gateway.snapshot.client === scope.client &&
-        gateway.snapshot.phase === "connected" &&
-        this.connection.isCurrent(scope) &&
-        scope.client.connectionGeneration === generation &&
-        JSON.stringify(gateway.snapshot.hello?.auth ?? null) === auth,
+        this.connection.isCurrent(scope),
     };
   }
 
@@ -374,22 +353,7 @@ function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) 
     model.connect({ sessionId: host.sessionId });
     return () => model.dispose();
   });
-  return (
-    <ChatCiAutomationView
-      options={read().options}
-      pending={read().pending}
-      jobs={read().jobs}
-      schedulerEnabled={read().schedulerEnabled}
-      loading={read().loading}
-      saving={read().saving}
-      error={read().error}
-      disabled={read().disabled}
-      disabledReason={read().disabledReason}
-      retryDisabled={read().retryDisabled}
-      onChange={(option, enabled) => model.view().onChange(option, enabled)}
-      onRetry={() => model.view().onRetry()}
-    />
-  );
+  return <ChatCiAutomationView {...read()} />;
 }
 
 defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {

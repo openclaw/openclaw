@@ -1,5 +1,3 @@
-import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import type { ConfigFormStructuredDraftProps } from "../../components/config-form-structured-draft.ts";
 import type { FilePreviewModalFile } from "../../components/file-preview-modal.ts";
 
 type OpenClawFilePreviewModal = HTMLElementTagNameMap["openclaw-file-preview-modal"];
@@ -8,12 +6,6 @@ type OpenClawFilePreviewModal = HTMLElementTagNameMap["openclaw-file-preview-mod
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-config-form-structured-draft": HTMLAttributes<HTMLElement> & {
-        "prop:props"?: ConfigFormStructuredDraftProps;
-      };
-      "wa-popup": HTMLAttributes<WaPopup> & {
-        "prop:active"?: WaPopup["active"];
-      };
       "openclaw-plugin-manager": HTMLAttributes<HTMLElement>;
       "openclaw-file-preview-modal": HTMLAttributes<OpenClawFilePreviewModal> & {
         layout?: OpenClawFilePreviewModal["layout"];

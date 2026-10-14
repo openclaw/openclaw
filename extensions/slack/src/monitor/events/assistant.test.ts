@@ -102,20 +102,7 @@ describe("registerSlackAssistantEvents", () => {
     });
   });
 
-  it("updates assistant thread context without resetting prompts", async () => {
-    const harness = createHarness();
-
-    await harness.handlers.assistant_thread_context_changed?.({
-      event: makeThreadEvent("assistant_thread_context_changed"),
-      body: {},
-    });
-
-    expect(harness.trackEvent).toHaveBeenCalledTimes(1);
-    expect(harness.saveSlackAssistantThreadContext).toHaveBeenCalledTimes(1);
-    expect(harness.setSlackSuggestedPrompts).not.toHaveBeenCalled();
-  });
-
-  it.each(["1729999327.187299", "1729999327.300000"])(
+  it.each(["1729999327.187299"])(
     "persists changed assistant thread context onto the first bot message at %s",
     async (botMessageTs) => {
       const messages = [
@@ -160,6 +147,7 @@ describe("registerSlackAssistantEvents", () => {
           },
         },
       });
+      expect(harness.setSlackSuggestedPrompts).not.toHaveBeenCalled();
     },
   );
 

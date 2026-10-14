@@ -25,6 +25,7 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -44,7 +45,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createRegisteredCompletionPair } from "./server.subagent-completion-authority.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -64,7 +65,7 @@ async function createCompletion(context: GatewayRequestContext) {
     { agentId: "main", sessionKey: requesterSessionKey },
     { sessionId, updatedAt: Date.now() },
   );
-  const loaded = loadSessionEntry(requesterSessionKey, { agentId: "main" });
+  const loaded = await loadSessionEntryAsync(requesterSessionKey, { agentId: "main" });
   const sessionScope = {
     agentId: "main",
     sessionKey: requesterSessionKey,
@@ -205,9 +206,9 @@ describe("native completion final-effect authority", () => {
             result.type === "return" ? [result.value] : [],
           ),
         );
-      const stage = sessionAccessor.stageSessionPendingInput;
+      const stage = pendingInputs.stageSessionPendingInput;
       const stageSpy = vi
-        .spyOn(sessionAccessor, "stageSessionPendingInput")
+        .spyOn(pendingInputs, "stageSessionPendingInput")
         .mockImplementation(async (...args) => {
           const index = pair.runs.findIndex(
             (run) =>
@@ -328,9 +329,9 @@ describe("native completion final-effect authority", () => {
             result.type === "return" ? [result.value] : [],
           ),
         );
-      const stage = sessionAccessor.stageSessionPendingInput;
+      const stage = pendingInputs.stageSessionPendingInput;
       const stageSpy = vi
-        .spyOn(sessionAccessor, "stageSessionPendingInput")
+        .spyOn(pendingInputs, "stageSessionPendingInput")
         .mockImplementationOnce(async (...args) => {
           entered.resolve();
           // Hold before acquiring the writer so a requester replacement can commit.
@@ -538,7 +539,7 @@ describe("native completion final-effect authority", () => {
         await session.abort();
         await Promise.allSettled([delivery, steering, prompt]);
         unsubscribe();
-        prepared.deferredLifecycleOwner?.discard();
+        await prepared.deferredLifecycleOwner?.discard();
         prepared.subscription.unsubscribe();
         embeddedRuns.clearActiveEmbeddedRun(
           completion.sessionScope.sessionId,

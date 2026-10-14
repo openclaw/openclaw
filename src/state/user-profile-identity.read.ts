@@ -1,9 +1,9 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -30,10 +30,7 @@ import {
   userProfileDisplaySelection,
   toUserProfile,
 } from "./user-profiles-internal.js";
-import {
-  ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
-} from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -46,7 +43,7 @@ export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
 
 /** Worker hydration retains unknown legacy bindings without inventing their lifetime. */
 export function readUserProfileEmailBindings(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileIds?: string | readonly string[],
 ): UserProfileEmailBinding[] {
   if (
@@ -80,7 +77,7 @@ export function readUserProfileEmailBindings(
 
 /** Alias lookup is observational and never initializes profile storage. */
 export function readUserProfileSnapshotCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<
     OpenClawStateReadCommand,
     { type: "userProfiles.reconcile" | "userProfiles.catalog" }
@@ -101,7 +98,7 @@ export function readUserProfileSnapshotCommand(
   );
 }
 
-export function readUserProfileIdForEmail(db: DatabaseSync, email: string): string | undefined {
+export function readUserProfileIdForEmail(db: EngineConnection, email: string): string | undefined {
   if (!tableExists(db, "user_profile_emails") || !tableExists(db, "user_profiles")) {
     return undefined;
   }
@@ -126,11 +123,7 @@ export function readUserProfileSnapshotSync(
           .select([
             ...userProfileDisplaySelection,
             "created_at",
-            // The native role writer can add this column after a worker has opened.
-            ...(hasEnsuredUserProfileRoleSchema(database.db) ||
-            tableHasColumn(database.db, "user_profiles", "role")
-              ? (["role"] as const)
-              : []),
+            ...(tableHasColumn(database.db, "user_profiles", "role") ? (["role"] as const) : []),
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),
@@ -172,7 +165,7 @@ export function readUserProfileSnapshotSync(
 
 /** Resolve current authority and display together on the caller's admitted connection. */
 export function readUserProfileAuthorityCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "userProfiles.authority.resolve" }>,
 ) {
   const { profileId, includeProfile = false } = command;
@@ -219,7 +212,7 @@ export function readUserProfileAuthorityCommand(
 }
 
 /** Disclosure scopes need current aliases, never the resident display catalog. */
-export function readCurrentUserProfileAliasesInDatabase(db: DatabaseSync, profileId: string) {
+export function readCurrentUserProfileAliasesInDatabase(db: EngineConnection, profileId: string) {
   return runSqliteDeferredTransactionSync(
     db,
     () => {
@@ -254,7 +247,7 @@ export function projectHasMultipleSessionSharingIdentities(
 }
 
 /** True when session-sharing policy can distinguish at least two durable people. */
-export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boolean {
+export function selectHasMultipleSessionSharingIdentities(db: EngineConnection): boolean {
   const profiles = executeSqliteQuerySync(
     db,
     userProfilesDb(db)
@@ -269,7 +262,7 @@ export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boo
 
 /** Exact canonical identity and aliases selected on the caller's admitted connection. */
 export function selectUserProfileIdentityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
 ): UserProfileIdentity | undefined {
   const profile = selectResolvedUserProfileMetadataById(db, profileId);
@@ -292,7 +285,7 @@ export function selectUserProfileIdentityInDatabase(
 
 /** Read display rows and their one-hop aliases without creating profile storage. */
 export function selectUserProfileDisplaysInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   ids: readonly string[],
 ): Map<string, Omit<ProfileDisplayRow, "role"> | undefined> {
   const profiles = userProfilesDb(db).selectFrom("user_profiles");
@@ -320,12 +313,14 @@ export function selectUserProfileDisplaysInDatabase(
     )
   ) {
     // Native BLOB keys compare by value in SQLite, not by Map object identity.
-    return new Map(
-      ids.map((id) => [
+    const displays: Map<string, Omit<ProfileDisplayRow, "role"> | undefined> = new Map();
+    for (const id of ids) {
+      displays.set(
         id,
         selectResolvedUserProfile(db, id, profiles.select(userProfileDisplaySelection)),
-      ]),
-    );
+      );
+    }
+    return displays;
   }
   const byId = new Map(rows.map((row) => [row.id, row]));
   return new Map(

@@ -4,20 +4,19 @@ import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-work
 import { listActiveCronJobIds } from "../active-jobs.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
-import { listLocallyOwnedCronRunReceiptIds } from "./run-receipt-store.js";
 
-/** Original host authority for history that follows an awaited committed mutation. */
+/** Captured storage context and attribution for an already-committed outcome. */
 export type CronRunHistorySource = {
   context: OpenClawStateWorkerContext;
   storeKey: string;
   defaultAgentId?: string;
-  assertCurrent: () => void;
 };
 
 export async function maintainCronRunHistory(
   context: OpenClawStateWorkerContext,
   assertCurrent: () => void,
-): Promise<void> {
+): Promise<{ nextSweepAtMs: number | null }> {
+  let nextSweepAtMs: number | null = null;
   await runCronRuntimeMutation({
     context,
     type: "cron.maintainHistory",
@@ -26,10 +25,12 @@ export async function maintainCronRunHistory(
     snapshot: {
       nowMs: Date.now(),
       protectedJobIds: listActiveCronJobIds(),
-      locallyOwnedReceiptIds: listLocallyOwnedCronRunReceiptIds(),
     },
-    publish() {},
+    publish(outcome) {
+      nextSweepAtMs = outcome.nextSweepAtMs;
+    },
   });
+  return { nextSweepAtMs };
 }
 
 export async function recordCronRun(
@@ -40,7 +41,6 @@ export async function recordCronRun(
   const captured = structuredClone(input);
   const assertCurrent = () => {
     context.admission.assertCurrent();
-    source?.assertCurrent();
   };
   await runOpenClawStateWorkerOperation(
     context,

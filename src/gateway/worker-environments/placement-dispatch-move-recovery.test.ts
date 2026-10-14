@@ -2,16 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateSessionsMoveParams } from "../../../packages/gateway-protocol/src/index.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { projectWorkerPlacementMove } from "./placement-projector.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
@@ -22,10 +29,76 @@ describe("worker Gateway move recovery", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(clearRuntimeConfigSnapshot);
 
+  it("retries a failed Move from fresh projected facts without weakening source or caller authority", async () => {
+    // This local fixture must not inherit a host-injected command-config tuple.
+    vi.stubEnv("GIT_CONFIG_COUNT", "0");
+    const root = support.testState.root;
+    const database = support.testState.stateDb;
+    const placementStore = createWorkerSessionPlacementStore({ database });
+    const workspacePath = path.join(root, "retry-move-workspace");
+    const initialized = await runCommandWithTimeout(["git", "init", "--quiet", workspacePath], {
+      timeoutMs: 10_000,
+    });
+    expect(initialized.code, initialized.stderr).toBe(0);
+    const harness = await createHarness(database, placementStore, {
+      workspacePath,
+      reconcileFailureCount: 1,
+    });
+    const active = await harness.service.dispatch(REQUEST);
+    await expect(
+      harness.service.move({
+        ...REQUEST,
+        source: {
+          generation: active.generation,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+        target: { kind: "gateway" },
+      }),
+    ).rejects.toThrow("workspace conflict");
+    const draining = await placementStore.getAsync(REQUEST.sessionId);
+    const intent = await placementStore.getPlacementMoveAsync(REQUEST.sessionId);
+    if (draining?.state !== "draining" || !intent) {
+      throw new Error("Expected a retained failed Move");
+    }
+    // A reconnected caller has only the newly projected row, not its original request.
+    const { retry } = projectWorkerPlacementMove(intent);
+    expect(retry).toBeDefined();
+    if (!retry) {
+      throw new Error("Failed Move did not project its retry request");
+    }
+    expect(validateSessionsMoveParams({ key: REQUEST.sessionKey, ...retry })).toBe(true);
+    expect(retry.expected.generation).toBe(draining.generation - 1);
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      source: retry.expected,
+      target: retry.target,
+      ...(retry.abandonSource ? { abandonSource: retry.abandonSource } : {}),
+    };
+    await expect(
+      harness.service.move({
+        ...request,
+        source: { ...request.source, generation: draining.generation },
+      }),
+    ).rejects.toThrow("conflicting placement move");
+    await expect(
+      harness.service.move(request, undefined, () => {
+        throw new Error("retry requester revoked");
+      }),
+    ).rejects.toThrow("retry requester revoked");
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(await placementStore.getAsync(REQUEST.sessionId)).toEqual(draining);
+    await expect(harness.service.move(request)).resolves.toMatchObject({ state: "local" });
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    expect(await placementStore.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
+  });
+
   async function abandonmentFixture() {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const options = { deviceRunnerAvailable: false, workspacePath: support.testState.root };
-    const harness = createHarness(support.testState.stateDb, placements, options);
+    const harness = await createHarness(support.testState.stateDb, placements, options);
     const active = await harness.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("Move source was not active");
@@ -126,7 +199,7 @@ describe("worker Gateway move recovery", () => {
     "preserves the accepted checkpoint when pending Gateway move recovery is %s",
     async (mode) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -192,7 +265,7 @@ describe("worker Gateway move recovery", () => {
         );
         expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(false);
       });
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentOwnerEpoch(2);
@@ -234,7 +307,7 @@ describe("worker Gateway move recovery", () => {
     "Stop settles an accepted $kind result with $source source without resuming a policy-rejected Gateway move",
     async ({ kind, source }) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -278,24 +351,32 @@ describe("worker Gateway move recovery", () => {
       const pending = await placements.listPendingWorkspaceResultsAsync();
       const entry = { sessionId: active.sessionId, updatedAt: 1 };
       const target = {
-        storePath: path.join(support.testState.root, "sessions.sqlite"),
+        storePath: resolveSessionStorePathCore(undefined, { agentId: active.agentId }),
         canonicalKey: active.sessionKey,
         storeKeys: [active.sessionKey],
         agentId: active.agentId,
         store: { [active.sessionKey]: entry },
       };
+      await replaceSessionEntry(
+        { agentId: active.agentId, sessionKey: active.sessionKey, storePath: target.storePath },
+        entry,
+      );
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
         placements,
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
-          resolveGatewaySessionStoreTargetWithStore: () => target,
-          resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+          resolveGatewaySessionStoreTargetInWorker: (params) =>
+            resolveGatewaySessionStoreTargetInWorker({
+              ...params,
+              cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
+            }),
+          resolveCanonicalSessionEntryFromStoreKeys,
         }),
         cancelSessionWork: async ({ assertCurrent }) => assertCurrent(),
         revokeSessionAuthority: vi.fn(),
       });
       const prepareGatewayMove = vi.fn();
-      const stopping = createHarness(support.testState.stateDb, placements, {
+      const stopping = await createHarness(support.testState.stateDb, placements, {
         runReclaimPreparation: barriers.runReclaimPreparation,
         prepareGatewayMove,
       });
@@ -339,7 +420,7 @@ describe("worker Gateway move recovery", () => {
     "materializes a torn-down Gateway move before local recovery while its owner is %s",
     async (owner) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const ready = await support.seedReady(original.ready.environmentId);
       const environments = support.createService(support.createProvider());
       const attached = await environments.attachSession({
@@ -408,7 +489,7 @@ describe("worker Gateway move recovery", () => {
           restoreAdmission = () => admission.mockRestore();
         }
       });
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentDestroyed();
@@ -480,7 +561,7 @@ describe("worker Gateway move recovery", () => {
     "recovers a persisted draining $name under current policy without blocking Stop",
     async ({ target, allowed }) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -499,7 +580,7 @@ describe("worker Gateway move recovery", () => {
         database: support.testState.stateDb,
       });
       const prepareGatewayMove = vi.fn();
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentOwnerEpoch(2);

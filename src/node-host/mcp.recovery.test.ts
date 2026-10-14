@@ -219,7 +219,7 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("redacts Streamable HTTP response bodies from node diagnostics", async () => {
+  it("preserves Streamable HTTP response bodies in tool errors", async () => {
     const client = createClient({
       tools: () => [tool("fail")],
       call: async () => {
@@ -234,8 +234,10 @@ describe("node host MCP live lifecycle", () => {
     const error = await manager
       .callMcpTool({ server: "docs", tool: "fail" })
       .catch((caught: unknown) => caught);
-    expect(String(error)).not.toContain("body-secret");
-    expect(String(error)).toContain("[redacted response body]");
+    expect(error).toMatchObject({
+      code: "MCP_TOOL_ERROR",
+      message: "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
+    });
     await manager.close();
   });
 
@@ -628,8 +630,17 @@ describe("node host MCP live lifecycle", () => {
     expect(attempts).toBe(attemptsAtClose);
   });
 
-  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async ({
+    onTestFinished,
+  }) => {
     vi.useFakeTimers();
+    // Native AbortSignal deadlines otherwise advance independently of the retry clock.
+    const deadline = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+      return controller.signal;
+    });
+    onTestFinished(() => deadline.mockRestore());
     let active = 0;
     let maxActive = 0;
     const attemptsByServer = new Map<string, number>();

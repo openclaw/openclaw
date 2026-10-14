@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  createControlUiMockBootstrapConfig,
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -53,9 +54,24 @@ suite.define(() => {
       const chatUrl = controlUiSessionUrl(suite.server.baseUrl, sessionKey);
       const otherChatUrl = controlUiSessionUrl(suite.server.baseUrl, otherSessionKey);
       const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+      await page.route("**/control-ui-config.json", async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          json: { ...(await response.json()), chatBubblesEnabled: true },
+        });
+      });
+      await page.addInitScript(
+        ({ key, session }) => {
+          if (!localStorage.getItem(key)) {
+            localStorage.setItem(key, JSON.stringify({ chatBubbleDisabledSessionKeys: [session] }));
+          }
+        },
+        { key: settingsKey, session: sessionKey },
+      );
       const openBubbleMenu = async () => {
         await page.locator(".chat-header-session-menu__trigger").click();
-        const menu = page.locator("wa-dropdown.chat-header-session-menu");
+        const menu = page.locator("openclaw-chat-header-session-menu > .chat-header-session-menu");
         const view = menu.getByRole("menuitem", { name: "View", exact: true });
         if (
           await menu.evaluate((el) => el.classList.contains("chat-header-session-menu--compact"))
@@ -131,9 +147,9 @@ suite.define(() => {
       await browserExpect(chat).toContainText("This conversation keeps its own view.");
       await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
       await page.setViewportSize({ width: 390, height: 844 });
-      await browserExpect(page.locator("wa-dropdown.chat-header-session-menu")).toHaveClass(
-        /chat-header-session-menu--compact/,
-      );
+      await browserExpect(
+        page.locator("openclaw-chat-header-session-menu > .chat-header-session-menu"),
+      ).toHaveClass(/chat-header-session-menu--compact/);
       const otherToggle = await openBubbleMenu();
       await browserExpect(otherToggle).toHaveAttribute("aria-checked", "false");
       await otherToggle.click();
@@ -198,6 +214,48 @@ suite.define(() => {
       expect(await assistant.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
         "rgba(0, 0, 0, 0)",
       );
+    });
+  });
+  it("defaults Home on only while the lab is enabled and retains an explicit opt-out", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      let enabled = false;
+      const gateway = await installMockGateway(page, {
+        historyMessages: [{ role: "assistant", content: "Home conversation." }],
+      });
+      await page.route("**/control-ui-config.json", (route) =>
+        route.fulfill({
+          json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: enabled },
+        }),
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      const chat = page.locator("section.chat");
+      await browserExpect(chat.getByText("Home conversation.", { exact: true })).toBeVisible();
+      await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
+      enabled = true;
+      await gateway.emitGatewayEvent("config.changed", {});
+      await browserExpect(chat).toHaveClass(/chat--bubbles/);
+      await page.locator(".chat-header-session-menu__trigger").click();
+      const menu = page.locator("openclaw-chat-header-session-menu > .chat-header-session-menu");
+      await menu.getByRole("menuitem", { name: "View", exact: true }).hover();
+      await menu.getByRole("menuitemcheckbox", { name: "Speech bubbles", exact: true }).click();
+      await page.locator(".chat-header-session-menu__trigger").click();
+      await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
+      enabled = false;
+      await gateway.emitGatewayEvent("config.changed", {});
+      await browserExpect
+        .poll(() =>
+          page.evaluate(
+            (key) => JSON.parse(localStorage.getItem(key) ?? "{}").chatBubbleDisabledSessionKeys,
+            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          ),
+        )
+        .toEqual(["agent:main:main"]);
+      enabled = true;
+      await gateway.emitGatewayEvent("config.changed", {});
+      await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
+      await page.reload();
+      await browserExpect(chat.getByText("Home conversation.", { exact: true })).toBeVisible();
+      await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
     });
   });
 });

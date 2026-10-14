@@ -21,7 +21,7 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { readSessionRowInputs } from "./session-utils-row.js";
 
-function createRowThinkingFixture() {
+function createRowThinkingFixture(runtimeRoute = false) {
   const provider = "row-thinking-fixture";
   const cfg: OpenClawConfig = {
     agents: {
@@ -53,7 +53,17 @@ function createRowThinkingFixture() {
   };
   const catalog: ModelCatalogSnapshot = {
     entries: [{ provider, id: "reasoner", name: "Reasoner", reasoning: true }],
-    routeVariants: [],
+    routeVariants: runtimeRoute
+      ? [
+          {
+            provider,
+            id: "reasoner",
+            name: "Runtime reasoner",
+            reasoning: true,
+            nativeRuntime: "openclaw",
+          },
+        ]
+      : [],
   };
   prepareModelCatalogThinkingPolicies({
     catalog,
@@ -93,7 +103,6 @@ function createRowThinkingFixture() {
       modelCatalog: models,
       rowContext,
       activeModel: null,
-      skipTranscriptUsageFallback: true,
     }).inputs.thinkingProjection;
   return {
     cfg,
@@ -139,6 +148,33 @@ test.each(["missing", "identity-only"] as const)(
   },
 );
 
+test("retains warmed runtime-route thinking facts when a prepared catalog omits the model", async () => {
+  await withStateDirEnv("openclaw-row-thinking-runtime-route-", async () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const fixture = createRowThinkingFixture(true);
+    const warmed = fixture.read(undefined, fixture.modelCatalog);
+    expect(warmed.catalogEntry?.nativeRuntime).toBe("openclaw");
+    const warmCalls = fixture.policyCalls();
+    const catalog = new Map([
+      [
+        "main",
+        createPreparedGatewayModelCatalog({
+          entries: [],
+          pluginRegistry: fixture.pluginRegistry,
+        }),
+      ],
+    ]);
+    expect(fixture.read("medium", catalog, 1)).toMatchObject({
+      thinkingLevel: "medium",
+      effectiveThinkingLevel: "medium",
+      thinkingDefault: "off",
+      thinkingOptions: ["Off", "Deep", "Light", "ultra"],
+    });
+    expect(fixture.policyCalls()).toBe(warmCalls);
+  });
+});
+
 test("rebuilds resident thinking facts on config and catalog publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     resetPluginRuntimeStateForTest();
@@ -165,7 +201,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
     const read = () => projection.snapshot({ agentId: "main", key }).row;
     try {
       await projection.ensureMaterialized();
-      expect(read()).toMatchObject({ thinkingLevel: "high", thinkingDefault: "off" });
+      expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "off" });
       const initialCalls = fixture.policyCalls();
       cfg = {
         ...cfg,
@@ -174,7 +210,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       expect(read()?.thinkingDefault).toBe("off");
       sessionChanges.emit({ all: true, scope: "config" });
       await projection.ensureMaterialized();
-      expect(read()).toMatchObject({ thinkingLevel: "high", thinkingDefault: "high" });
+      expect(read()).toMatchObject({ thinkingLevel: "medium", thinkingDefault: "high" });
       expect(fixture.policyCalls()).toBeGreaterThan(initialCalls);
       const configuredCalls = fixture.policyCalls();
       const next: ModelCatalogSnapshot = {
@@ -194,11 +230,11 @@ test("rebuilds resident thinking facts on config and catalog publication", async
           createPreparedGatewayModelCatalog({ ...next, pluginRegistry: fixture.pluginRegistry }),
         ],
       ]);
-      expect(read()?.thinkingLevel).toBe("high");
+      expect(read()?.thinkingLevel).toBe("medium");
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
       await projection.ensureMaterialized();
       expect(read()).toMatchObject({
-        thinkingLevel: "off",
+        thinkingLevel: "medium",
         thinkingDefault: "off",
         thinkingOptions: ["off", "ultra"],
       });

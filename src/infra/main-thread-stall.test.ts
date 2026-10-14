@@ -27,25 +27,31 @@ describe("main-thread stall attribution", () => {
     expect(monitor.drain()).toEqual({
       stalls: [{ elapsedMs: 1_220, task: "transcript-index", taskMs: 1_200 }],
       dropped: 0,
+      delayMaxMs: 1_220,
     });
-    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0 });
+    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
-  it("ignores time awaiting I/O and attributes a blocking continuation to its named owner", async () => {
+  it("returns the original promise without observing its continuations", async () => {
     const { monitor, elapse } = fixture();
     const ready = createDeferredCore();
-    const operation = runWithMainThreadTask("maintenance:resume", async () => {
-      await ready.promise;
-      elapse(1_200);
-    });
+    const operation = ready.promise.then(() => elapse(1_200));
+    expect(runWithMainThreadTask("maintenance:resume", () => operation)).toBe(operation);
     elapse(5_000);
-    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0 });
     ready.resolve();
     await operation;
-    expect(monitor.drain()).toEqual({
-      stalls: [{ elapsedMs: 1_200, task: "maintenance:resume", taskMs: 1_200 }],
-      dropped: 0,
+    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
+  });
+
+  it("starts a fresh observation when reset interrupts an active callback", () => {
+    const { monitor, elapse } = fixture();
+    runWithMainThreadTask("maintenance", () => elapse(1_200));
+    runWithMainThreadTask("host-thaw", () => {
+      elapse(90_000);
+      monitor.reset();
+      elapse(20);
     });
+    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 20 });
   });
 
   it("bounds retained stalls and releases observation with the Gateway lifetime", () => {
@@ -58,6 +64,6 @@ describe("main-thread stall attribution", () => {
     expect(report.dropped).toBe(4);
     monitor.stop();
     runWithMainThreadTask("maintenance", () => elapse(1_001));
-    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0 });
+    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 });

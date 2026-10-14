@@ -12,6 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   captureRuntimeWorkerSource,
@@ -19,6 +20,7 @@ import {
 } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import type {
   NativeWorkerReply,
@@ -143,13 +145,16 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       }
     };
     const receive = (reply: NativeWorkerReply) => {
+      observeWorkerMessage(reply, "from_worker", "lifecycle");
       handles.get(reply.id)?.receive(reply);
     };
     const runtime: NativeRuntime = {
       handles,
       service() {
         for (;;) {
-          const next = receiveMessageOnPort(port1);
+          const next = runWithMainThreadTask("worker:control-decode", () =>
+            receiveMessageOnPort(port1),
+          );
           if (!next) {
             break;
           }
@@ -185,7 +190,9 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         if (runtime.failure) {
           throw runtime.failure;
         }
+        const bytes = workerMessagePayloadBytes(message);
         port1.postMessage(message, [...transfers]);
+        observeWorkerMessage(message, "to_worker", "lifecycle", bytes ?? null);
       },
       resourceBroker() {
         return (source.broker ??= runInDetachedAsyncContext(() =>

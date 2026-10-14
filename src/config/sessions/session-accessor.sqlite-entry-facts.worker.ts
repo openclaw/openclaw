@@ -2,6 +2,7 @@ import { toUSVString } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { expressionBuilder } from "kysely";
+import { jsonArrayValue, jsonOrderedArray } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -13,10 +14,8 @@ import {
 } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
-import {
-  sessionEntrySnapshotColumnsForKeys,
-  type SessionEntryProjection,
-} from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -55,36 +54,36 @@ export function readExactSessionEntryFactsInDatabase(
   const participants = eb
     .selectFrom("session_participants")
     .select((builder) =>
-      builder.fn
-        .agg<string>("json_group_array", [
-          builder.fn("json_array", [
-            builder.ref("identity_namespace"),
-            builder.ref("actor_id"),
-            builder.ref("contribution_count"),
-            builder.ref("first_prompted_at"),
-            builder.ref("last_prompted_at"),
-          ]),
-        ])
-        .orderBy("first_prompted_at")
-        .orderBy("actor_id")
-        .orderBy("identity_namespace")
-        .as("records"),
+      jsonOrderedArray(
+        database.db,
+        jsonArrayValue(database.db, [
+          builder.ref("identity_namespace"),
+          builder.ref("actor_id"),
+          builder.ref("contribution_count"),
+          builder.ref("first_prompted_at"),
+          builder.ref("last_prompted_at"),
+        ]),
+        [
+          builder.ref("first_prompted_at"),
+          builder.ref("actor_id"),
+          builder.ref("identity_namespace"),
+        ],
+      ).as("records"),
     )
     .whereRef("session_participants.session_key", "=", "session_nodes.session_key")
     .$asScalar();
   const membership = eb
     .selectFrom("session_members")
     .select((builder) =>
-      builder.fn
-        .agg<string>("json_group_array", [
-          builder.fn("json_array", [
-            builder.ref("identity_id"),
-            builder.ref("added_by"),
-            builder.ref("added_at"),
-          ]),
-        ])
-        .orderBy("identity_id")
-        .as("records"),
+      jsonOrderedArray(
+        database.db,
+        jsonArrayValue(database.db, [
+          builder.ref("identity_id"),
+          builder.ref("added_by"),
+          builder.ref("added_at"),
+        ]),
+        [builder.ref("identity_id")],
+      ).as("records"),
     )
     .whereRef("session_members.session_key", "=", "session_nodes.session_key")
     .$asScalar();

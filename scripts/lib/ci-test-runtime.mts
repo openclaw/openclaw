@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { globSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   gatewayMethodsTestExclude,
@@ -67,6 +68,9 @@ export type CiTestRuntimeSelection =
 export const BUN_UI_TEST_ENV = {
   BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: "512000",
   BUN_JSC_thresholdForFTLOptimizeSoon: "8000",
+  // Each shared worker otherwise grows against the whole runner's RAM. Collect
+  // after 256 MiB of allocation per cycle; this does not cap the live heap.
+  BUN_JSC_gcMaxHeapSize: "268435456",
   // Avoid sweeping parked allocator threads between short UI update cycles.
   MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
@@ -92,6 +96,14 @@ const bunCompatibleWholeOwners = new Map<
   { dir: string; include: readonly string[]; exclude: readonly string[] }
 >([
   [agentVitestProjectOwners.support.config, agentVitestProjectOwners.support],
+  [
+    "test/vitest/vitest.commands.config.ts",
+    {
+      dir: "src/commands",
+      include: ["src/commands/**/*.test.ts"],
+      exclude: [...commandsLightTestFiles, ...databaseWorkerCoreTestFiles],
+    },
+  ],
   [
     gatewayMethodsConfig,
     { dir: ".", include: gatewayMethodsTestInclude, exclude: gatewayMethodsTestExclude },
@@ -231,17 +243,6 @@ const bunCompatibleScopedOwners = new Map([
         "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
         "src/cli/update-cli/update-command-lease.test.ts",
         "src/cli/update-cli/update-command-migrated.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.commands.config.ts",
-    {
-      dir: "src/commands",
-      files: [
-        "src/commands/doctor-config-preflight.process.test.ts",
-        "src/commands/doctor-lint.native-capture.test.ts",
-        "src/commands/doctor-tools-md-migration.test.ts",
       ],
     },
   ],

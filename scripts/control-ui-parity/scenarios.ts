@@ -498,6 +498,28 @@ export const scenes: Scene[] = [
   },
   {
     ...chat,
+    id: "sidebar-session-menu",
+    label: "Sidebar session menu: actions and owner controls",
+    prepare: async (page) => {
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      await row.waitFor({ state: "visible" });
+      await row.click({ button: "right" });
+      await page.locator("openclaw-session-menu").getByRole("menu").waitFor();
+    },
+  },
+  {
+    ...chat,
+    id: "sidebar-session-hovercard",
+    label: "Sidebar session hovercard: title and attribution",
+    prepare: async (page) => {
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      await row.waitFor({ state: "visible" });
+      await row.hover();
+      await page.locator(".session-progress-hovercard").waitFor({ state: "visible" });
+    },
+  },
+  {
+    ...chat,
     id: "session-menu",
     label: "Session menu: icons and actions",
     prepare: async (page) => {
@@ -514,8 +536,10 @@ export const scenes: Scene[] = [
       await page.keyboard.press("Enter");
       // Compact menus drill into a sheet; wide menus retain nested popovers.
       if (page.viewportSize()!.width <= 560) {
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
         await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
       } else {
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
         await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
       }
       await page.locator(".session-menu__appearance:visible").waitFor();

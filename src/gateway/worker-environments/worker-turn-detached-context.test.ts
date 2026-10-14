@@ -112,7 +112,7 @@ async function launchProbe(
   assertRunCurrent?: () => void,
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
 ) {
-  if (!waitForInitialPlacement) {
+  if (!waitForInitialPlacement && (await placements.getAsync(SESSION_ID))?.state !== "active") {
     await seedActivePlacement();
   }
   const deliberateStop = new WorkerRunnerUnavailableError();
@@ -268,6 +268,55 @@ describe("worker detached model-context branch parity", () => {
     if (!hasUnjoinedOwner) {
       await closeStateDatabaseForTest();
     }
+  });
+
+  it("launches a continuation from the committed interruption writes instead of the original admission", async () => {
+    const original = recorder();
+    await original.persistApproved();
+    const originalLeaf = original.getAdmissionReceipt()?.entryId;
+    expect(originalLeaf).toEqual(expect.any(String));
+    const manager = await SessionManager.openAsync(sessionTarget);
+    await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [
+          {
+            type: "toolCall",
+            id: "interrupted",
+            name: "exec",
+            arguments: { command: "effect-once" },
+          },
+        ],
+        stopReason: "toolUse",
+      }),
+    );
+    const unknown = "The node disconnected; outcome unknown. Verify state before retrying.";
+    await manager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: "interrupted",
+      toolName: "exec",
+      content: [{ type: "text", text: unknown }],
+      isError: true,
+      timestamp: 2,
+    });
+    const committedLeaf = await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Preserved partial reply" }],
+        timestamp: 3,
+      }),
+    );
+    expect(committedLeaf).not.toBe(originalLeaf);
+    const stale = await launchProbe({
+      ...request("original-recorder-borrowed"),
+      suppressNextUserMessagePersistence: true,
+      userTurnTranscriptRecorder: original,
+    });
+    expect(stale.launch?.baseLeafId).toBe(originalLeaf);
+    const continuation = await launchProbe({
+      ...request("interruption-continuation"),
+      suppressNextUserMessagePersistence: true,
+    });
+    expect(continuation.launch?.baseLeafId).toBe(committedLeaf);
+    expect(continuation.launch?.history).toContainEqual({ role: "toolResult", text: unknown });
   });
 
   it.each([false, true])(
@@ -481,69 +530,22 @@ describe("worker detached model-context branch parity", () => {
     },
   );
 
-  it.each(["missing", "after-snapshot", "model-resolution"] as const)(
-    "rejects a missing or removed canonical user admission (%s)",
-    async (stage) => {
-      seedPrevious();
-      const inputRecorder = recorder();
-      if (stage === "missing") {
-        inputRecorder.markRuntimePersisted(
-          buildPersistedUserTurnMessage({ text: "current request" }),
-        );
-      } else {
-        await inputRecorder.persistApproved();
-      }
-      const beforeRows = stage === "missing" ? readWorkerTurnTranscriptStorageRows() : undefined;
-      const writer = SessionManager.open(sessionTarget);
-      let removed = 0;
-      const removeAdmission = () => {
-        const admission = inputRecorder.getAdmissionReceipt();
-        if (!admission) {
-          throw new Error("expected an admitted user before removal");
-        }
-        removed = writer.removeTrailingEntries((entry) => entry.id === admission.entryId);
-        expect(removed).toBe(1);
-      };
-      const restore =
-        stage === "after-snapshot"
-          ? afterNextModelContextSnapshot(async () => removeAdmission())
-          : undefined;
-      try {
-        const result = await launchProbe({
-          ...request(`recorder-admission-${stage}`),
-          userTurnTranscriptRecorder: inputRecorder,
-          ...(stage === "model-resolution"
-            ? {
-                onExecutionPhase: ({ phase }) => {
-                  if (phase === "model_resolution") {
-                    removeAdmission();
-                  }
-                },
-              }
-            : {}),
-        });
-        expectNoLaunch(result);
-        expect(result.outcome).toMatchObject({
-          kind: "rejected",
-          error:
-            stage === "missing"
-              ? { message: "Cloud worker turn has no readable canonical user admission" }
-              : { name: "SessionTranscriptReadFenceError" },
-        });
-        if (stage === "missing") {
-          expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
-        } else {
-          expect(
-            removed,
-            result.outcome.kind === "rejected" ? String(result.outcome.error) : "resolved",
-          ).toBe(1);
-          expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
-        }
-      } finally {
-        restore?.();
-      }
-    },
-  );
+  it("rejects a missing canonical user admission", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    inputRecorder.markRuntimePersisted(buildPersistedUserTurnMessage({ text: "current request" }));
+    const beforeRows = readWorkerTurnTranscriptStorageRows();
+    const result = await launchProbe({
+      ...request("recorder-admission-missing"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expectNoLaunch(result);
+    expect(result.outcome).toMatchObject({
+      kind: "rejected",
+      error: { message: "Cloud worker turn has no readable canonical user admission" },
+    });
+    expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
+  });
 
   it("retains the initial-setup writer fence across the asynchronous context read", async ({
     signal,

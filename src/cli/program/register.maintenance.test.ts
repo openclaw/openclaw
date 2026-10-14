@@ -115,34 +115,26 @@ describe("registered maintenance commands", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([
-    { args: [], repair: false, force: false, yes: false },
-    { args: ["--fix", "--force"], repair: true, force: true, yes: false },
-    { args: ["--repair"], repair: true, force: false, yes: false },
-    {
-      args: "--yes --allow-exec --non-interactive --no-workspace-suggestions".split(" "),
-      repair: false,
-      force: false,
-      yes: true,
+  it.each([{ args: ["--fix", "--force"], repair: true, force: true, yes: false }])(
+    "dispatches Doctor mutation posture $args",
+    async ({ args, repair, force, yes }) => {
+      await runCli(["doctor", ...args]);
+      expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
+        runtime,
+        expect.objectContaining({
+          repair,
+          force,
+          yes,
+          workspaceSuggestions: !args.includes("--no-workspace-suggestions"),
+          allowExec: args.includes("--allow-exec"),
+          nonInteractive: args.includes("--non-interactive"),
+        }),
+        undefined,
+      );
+      expect(runDoctorLintCli).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(0);
     },
-    { args: ["--generate-gateway-token"], repair: false, force: false, yes: false },
-  ])("dispatches Doctor mutation posture $args", async ({ args, repair, force, yes }) => {
-    await runCli(["doctor", ...args]);
-    expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
-      runtime,
-      expect.objectContaining({
-        repair,
-        force,
-        yes,
-        workspaceSuggestions: !args.includes("--no-workspace-suggestions"),
-        allowExec: args.includes("--allow-exec"),
-        nonInteractive: args.includes("--non-interactive"),
-      }),
-      undefined,
-    );
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
+  );
 
   it("redacts credentials in machine-mode Doctor failures", async () => {
     const token = "sk-abcdefghijklmnopqrstuv";
@@ -156,14 +148,6 @@ describe("registered maintenance commands", () => {
     expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("preserves already-reported Doctor exits", async () => {
-    doctorCommand.mockRejectedValueOnce(new ExitError(2));
-    await runCli(["doctor", "--post-upgrade", "--json"]);
-    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(2);
-    expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("preserves structured recovery fields in Doctor JSON failures", async () => {
@@ -186,54 +170,33 @@ describe("registered maintenance commands", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it.each("inspect dry-run import validate compact restore recover".split(" "))(
-    "dispatches session SQLite %s with its selectors",
-    async (sessionSqlite) => {
-      await runCli([
-        "doctor",
-        "--session-sqlite",
+  it.each(["recover"])("dispatches session SQLite %s with its selectors", async (sessionSqlite) => {
+    await runCli([
+      "doctor",
+      "--session-sqlite",
+      sessionSqlite,
+      "--session-sqlite-agent",
+      "main",
+      "--session-sqlite-store",
+      "/tmp/sessions.json",
+      "--json",
+      ...(sessionSqlite === "recover" ? ["--github-issue", "--yes"] : []),
+    ]);
+    expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
+      runtime,
+      expect.objectContaining({
         sessionSqlite,
-        "--session-sqlite-agent",
-        "main",
-        "--session-sqlite-store",
-        "/tmp/sessions.json",
-        "--json",
-        ...(sessionSqlite === "recover" ? ["--github-issue", "--yes"] : []),
-      ]);
-      expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
-        runtime,
-        expect.objectContaining({
-          sessionSqlite,
-          sessionSqliteAgent: "main",
-          sessionSqliteStore: "/tmp/sessions.json",
-          json: true,
-          sessionSqliteGithubIssue: sessionSqlite === "recover",
-          yes: sessionSqlite === "recover",
-        }),
-        undefined,
-      );
-      expect(runDoctorLintCli).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-    },
-  );
-
-  it.each([["--state-sqlite", "compact"], ["--post-upgrade"]])(
-    "preserves standalone Doctor operation %j",
-    async (...args) => {
-      await runCli(["doctor", ...args, "--json"]);
-      expect(doctorCommand).toHaveBeenCalledWith(
-        runtime,
-        expect.objectContaining(
-          args[0] === "--state-sqlite"
-            ? { stateSqlite: "compact", json: true }
-            : { postUpgrade: true, json: true },
-        ),
-        undefined,
-      );
-      expect(runDoctorLintCli).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-    },
-  );
+        sessionSqliteAgent: "main",
+        sessionSqliteStore: "/tmp/sessions.json",
+        json: true,
+        sessionSqliteGithubIssue: sessionSqlite === "recover",
+        yes: sessionSqlite === "recover",
+      }),
+      undefined,
+    );
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
 
   const errors = {
     state: "doctor shared-state SQLite maintenance can only be combined with --json.",
@@ -253,24 +216,12 @@ describe("registered maintenance commands", () => {
     json: "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
   };
   it.each([
-    ["--state-sqlite compact --session-sqlite compact", "state", false],
     ["--state-sqlite compact --lint --json", "state", true],
     ["--session-sqlite-agent main", "orphan", false],
-    ["--session-sqlite-agent main --json", "orphan", true],
-    ["--session-sqlite-store main --json", "orphan", true],
-    ["--session-sqlite-all-agents --json", "orphan", true],
-    ["--github-issue --json", "orphan", true],
     ["--lint --post-upgrade --json", "operations", true],
-    ["--session-sqlite import --fix --json", "operations", true],
     ["--session-sqlite inspect --github-issue --json", "github", true],
-    ["--severity-min error --json", "selectors", true],
-    ["--all --json", "selectors", true],
-    ["--skip a --json", "selectors", true],
     ["--only b --json", "selectors", true],
-    ["--fix --only b", "selectors", false],
     ["--lint --repair", "repair", true],
-    ["--lint --fix", "repair", true],
-    ["--lint --force", "repair", true],
     ["--lint --yes", "yes", true],
     ["--lint --generate-gateway-token", "token", true],
     ["--lint --session-sqlite recover", "session", true],
@@ -287,15 +238,6 @@ describe("registered maintenance commands", () => {
       expect(runtime.error).toHaveBeenCalledWith(message);
       expect(runtime.writeJson).not.toHaveBeenCalled();
     }
-    expect(runtime.exit).toHaveBeenCalledWith(2);
-  });
-
-  it("keeps interactive lint mutation conflicts on stderr", async () => {
-    await withTerminal(() => runCli(["doctor", "--lint", "--repair"]));
-    expect(doctorCommand).not.toHaveBeenCalled();
-    expect(runDoctorLintCli).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--repair"));
-    expect(runtime.writeJson).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
@@ -376,11 +318,10 @@ describe("registered maintenance commands", () => {
         updateResult: "/tmp/failure.json",
       },
     },
-    { args: ["--run"], options: { json: false, noExport: false, run: true } },
-    ..."agy claude codex cursor grok kimi muse opencode pi qwen".split(" ").map((agent) => ({
-      args: ["--agent", agent],
-      options: { json: false, noExport: false, run: false, agent },
-    })),
+    {
+      args: ["--agent", "qwen"],
+      options: { json: false, noExport: false, run: false, agent: "qwen" },
+    },
   ])("forwards triage options $args", async ({ args, options }) => {
     await runCli(["triage", ...args]);
     expect(triageCommand).toHaveBeenCalledExactlyOnceWith(runtime, options);

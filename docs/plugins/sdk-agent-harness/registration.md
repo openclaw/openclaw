@@ -96,8 +96,8 @@ api.registerAgentExecutorController(controller);
 `workspaceDirectory` is an absolute path on the executor. It can differ from the
 Gateway's workspace. `AgentExecutorBinding` contains `sessionKey`, `agentId`,
 `nativeSessionId`, `environmentId`, `remoteUrl`, and `workspaceDirectory`.
-`ensure` idempotently connects or reconnects that exact environment; `retire`
-idempotently releases that environment's connection. Neither operation creates
+`ensure` connects or reconnects that exact environment without creating duplicates; `retire`
+releases that environment's connection and has no additional effect when repeated. Neither operation creates
 or deletes the native agent session. The controller owns its transport,
 credentials, and process management. For Agents API, each native session owns
 its direct executor process; multiple sessions can share the same host and
@@ -142,6 +142,13 @@ deadline controls, and one prepared `authorization`:
 - `owner: "harness"` contains the prepared runtime auth plan and a credential
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
+
+When supplied, `onRequestComplete(durationMs)` reports inference dispatch through
+settlement, including a dispatched failure. Measure at the runtime's request
+boundary, not around its entire completion method: credential, model, client,
+and session preparation and post-request cleanup are excluded. Preparation
+failures must not report request timing. Core does not invent a duration when
+a harness does not report one.
 
 Agents API is a documented exception to the literal empty tool surface: it
 creates a fresh session without an executor, supplied functions, web search,
@@ -194,7 +201,7 @@ Older external harnesses may ignore the policy; a final title filter cannot
 restore provenance that a harness already discarded, so this is not a universal
 reasoning-privacy guarantee. Except for the documented Agents API limitation,
 if the harness cannot enforce isolation, omit the capability.
-Callers that require isolated completion then fail closed before invoking that
+Callers that require isolated completion then reject the run before invoking that
 harness; OpenClaw does not replay the request through another runtime.
 Plugin callers request isolated execution through
 `api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;

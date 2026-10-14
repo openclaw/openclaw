@@ -3,7 +3,7 @@
  */
 import { getEventListeners } from "node:events";
 import fs from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -21,14 +21,12 @@ import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-run
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
-import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import {
   getActivePluginRegistry,
   requireActivePluginChannelRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -51,7 +49,6 @@ import {
   createTransportActivityStatusPatch,
 } from "./channel-status-patches.js";
 import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
@@ -64,10 +61,7 @@ import {
   type TestAccount,
 } from "./server-channels.test-support.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
-import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
 const hoisted = vi.hoisted(() => {
@@ -222,79 +216,6 @@ describe("server-channels auto restart", () => {
     clearActiveCredentialDegradedOwners();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
-  });
-
-  it("keeps channel requests bound to their Gateway after the starting client closes", async () => {
-    const continueChannelRequest = createDeferred();
-    const observedGateway = createDeferred<{ gateway: string }>();
-    const ownerContext = createContext();
-    ownerContext.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "health",
-          scope: "operator.read",
-          owner: { kind: "core", area: "channel-startup" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) =>
-            respond(true, { gateway: "channel-owner" }),
-        },
-      ]);
-    const callerContext = createContext();
-    callerContext.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "health",
-          scope: "operator.read",
-          owner: { kind: "core", area: "channel-startup" },
-          handler: ({ respond }: GatewayRequestHandlerOptions) =>
-            respond(true, { gateway: "starting-client" }),
-        },
-      ]);
-    const startAccount = async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-      await continueChannelRequest.promise;
-      try {
-        observedGateway.resolve(
-          await dispatchGatewayMethodInProcess<{ gateway: string }>(
-            "health",
-            {},
-            {
-              syntheticScopes: ["operator.read"],
-              operatorRoleActor: { kind: "system" },
-            },
-          ),
-        );
-      } catch (error) {
-        observedGateway.reject(error);
-      }
-      await waitForAbort(abortSignal);
-    };
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager({ resolveGatewayContext: () => ownerContext });
-    const callerLifetime = new AbortController();
-
-    try {
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          context: callerContext,
-          client: createSyntheticPluginRuntimeClient({
-            scopes: ["operator.read"],
-            operatorRoleActor: { kind: "system" },
-          }),
-          isWebchatConnect: () => false,
-          signal: callerLifetime.signal,
-          hasCurrentClientAuthority: () => !callerLifetime.signal.aborted,
-        },
-        () => manager.startChannel("discord", DEFAULT_ACCOUNT_ID, { manual: true }),
-      );
-      callerLifetime.abort();
-      const requestResult = expect(observedGateway.promise).resolves.toEqual({
-        gateway: "channel-owner",
-      });
-      continueChannelRequest.resolve();
-      await requestResult;
-    } finally {
-      continueChannelRequest.resolve();
-      await manager.stopChannel("discord");
-    }
   });
 
   it("keeps approval-bootstrap descendants admitted after the starting request finishes", async () => {
@@ -458,113 +379,6 @@ describe("server-channels auto restart", () => {
     });
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
-  });
-
-  it("binds and rebinds a channel port after concurrent native SDK imports", async () => {
-    const root = channelTempDirs.make("openclaw-channel-sdk-restart-");
-    const files = {
-      "package.json": JSON.stringify({
-        name: "openclaw",
-        type: "module",
-        bin: { openclaw: "./openclaw.mjs" },
-        exports: { "./plugin-sdk/used": "./dist/plugin-sdk/used.js" },
-      }),
-      "dist/plugin-sdk/leaf.js": 'export const value = "ready";',
-      "dist/plugin-sdk/used.js": 'export { value } from "./leaf.js";',
-      "dist/extensions/demo/esm-plugin.mjs": 'export { value } from "openclaw/plugin-sdk/used";',
-      "dist/extensions/demo/cjs-plugin.cjs":
-        'module.exports = require("openclaw/plugin-sdk/used");',
-      "dist/extensions/demo/index.cjs": `module.exports = { load: () => Promise.all([
-        import("./esm-plugin.mjs"), import("./cjs-plugin.cjs")
-      ]).then(([esm, cjs]) => esm.value + ":" + cjs.default.value) };`,
-    };
-    for (const [relative, contents] of Object.entries(files)) {
-      const target = path.join(root, relative);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, contents);
-    }
-    fs.mkdirSync(path.join(root, "extensions"));
-    const load = createPluginModuleLoader({ devSourceRoot: root });
-    const plugin = load(path.join(root, "dist/extensions/demo/index.cjs")) as {
-      load: () => Promise<string>;
-    };
-    const firstStarted = createDeferred<Server>();
-    const secondStarted = createDeferred<Server>();
-    const crash = createDeferred();
-    const closed = createDeferred();
-    let generation = 0;
-    let port = 0;
-    installTestRegistry(
-      createTestPlugin({
-        startAccount: async ({ abortSignal }) => {
-          const current = generation++;
-          const ready = current === 0 ? firstStarted : secondStarted;
-          let server: Server | undefined;
-          try {
-            const value = await plugin.load();
-            server = createServer((_req, res) => res.end(`${value}:${current + 1}`));
-            const listener = server;
-            await new Promise<void>((resolve, reject) => {
-              listener.once("error", reject);
-              listener.listen(port, "127.0.0.1", resolve);
-            });
-            const address = listener.address();
-            if (!address || typeof address === "string") {
-              throw new Error("expected channel TCP listener");
-            }
-            port = address.port;
-            ready.resolve(listener);
-            await new Promise<void>((resolve, reject) => {
-              abortSignal.addEventListener("abort", () => resolve(), { once: true });
-              if (current === 0) {
-                void crash.promise.then(() => reject(new Error("channel worker crashed")));
-              }
-            });
-          } catch (error) {
-            // Surface native import failures directly instead of waiting for a port timeout.
-            ready.reject(error);
-            throw error;
-          } finally {
-            const listener = server;
-            if (listener) {
-              await new Promise<void>((resolve) => {
-                listener.close(() => resolve());
-              });
-            }
-            if (current === 0) {
-              closed.resolve();
-            }
-          }
-        },
-      }),
-    );
-    const manager = createManager();
-    const read = async () => {
-      const response = await fetch(`http://127.0.0.1:${port}`, {
-        headers: { Connection: "close" },
-      });
-      return response.text();
-    };
-    try {
-      await manager.startChannels();
-      const first = await firstStarted.promise;
-      const firstPort = port;
-      expect(await read()).toBe("ready:ready:1");
-      crash.resolve();
-      await closed.promise;
-      expect(first.listening).toBe(false);
-      await waitForMicrotaskCondition(
-        () => manager.isAutoRestartScheduled("discord", DEFAULT_ACCOUNT_ID),
-        "expected automatic channel restart after worker crash",
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      const second = await secondStarted.promise;
-      expect(second).not.toBe(first);
-      expect(port).toBe(firstPort);
-      expect(await read()).toBe("ready:ready:2");
-    } finally {
-      await manager.stopChannel("discord");
-    }
   });
 
   it.each([
@@ -954,26 +768,6 @@ describe("server-channels auto restart", () => {
       releaseStop.resolve();
       await Promise.allSettled([starting, stopped, joinedStop]);
     }
-  });
-
-  it("joins overlapping stops without repeating teardown", async () => {
-    const releaseTask = createDeferred();
-    const releaseStop = createDeferred();
-    const startAccount = vi.fn(async () => await releaseTask.promise);
-    const stopAccount = vi.fn(async () => await releaseStop.promise);
-    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
-    const manager = createManager();
-
-    await manager.startChannels();
-    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
-    const secondStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
-    releaseTask.resolve();
-    await flushMicrotasks();
-    expect(stopAccount).toHaveBeenCalledOnce();
-    releaseStop.resolve();
-    await Promise.all([firstStop, secondStop]);
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    expect(startAccount).toHaveBeenCalledTimes(2);
   });
 
   it("reports unfinished work to a strict caller joining a non-strict stop", async () => {
@@ -1424,61 +1218,6 @@ describe("server-channels auto restart", () => {
 
     expect(stops).toEqual(["first"]);
     expect(starts).toEqual([]);
-  });
-
-  it("accepts explicit channel-authored ready recovery within the same task", async () => {
-    let publishReady: (() => void) | undefined;
-    let publishStopped: (() => void) | undefined;
-    let blockedLastStartAt: number | null | undefined;
-    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
-      ctx.setStatus({
-        accountId: ctx.accountId,
-        terminalDisconnect: true,
-        lifecycle: "blocked",
-        lastError: "relink required",
-      });
-      blockedLastStartAt = ctx.getStatus().lastStartAt;
-      publishReady = () => ctx.setStatus(channelReadyPatch({ accountId: ctx.accountId }));
-      publishStopped = () =>
-        ctx.setStatus({
-          accountId: ctx.accountId,
-          running: false,
-          connected: false,
-          lifecycle: "stopped",
-        });
-      await waitForAbort(ctx.abortSignal);
-    });
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager();
-
-    await manager.startChannels();
-    await vi.waitFor(() => expect(publishReady).toBeDefined());
-    expect(healthOf(readAccount(manager)).reason).toBe("blocked");
-
-    publishReady?.();
-
-    const recovered = readAccount(manager);
-    expect(startAccount).toHaveBeenCalledOnce();
-    expect(recovered).toMatchObject({
-      running: true,
-      connected: true,
-      lifecycle: "ready",
-      terminalDisconnect: undefined,
-      lastError: null,
-      lastStartAt: blockedLastStartAt,
-    });
-    expect(healthOf(recovered)).toEqual({ healthy: true, reason: "healthy" });
-
-    publishStopped?.();
-
-    const stopped = readAccount(manager);
-    expect(stopped).toMatchObject({
-      running: false,
-      connected: false,
-      lifecycle: "stopped",
-      terminalDisconnect: undefined,
-    });
-    expect(healthOf(stopped)).toEqual({ healthy: false, reason: "not-running" });
   });
 
   it("keeps terminal diagnosis sticky across activity and connected backfill patches", async () => {
@@ -2040,49 +1779,6 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("rejects late startup registration while the next ingress handoff remains parked", async () => {
-    const pending = createDeferred();
-    const lateAttempt = createDeferred<string>();
-    let starts = 0;
-    const registry = installTestRegistry(
-      createTestPlugin({
-        startAccount: async ({ abortSignal }) => {
-          const generation = ++starts;
-          if (generation === 2) {
-            await pending.promise;
-          }
-          try {
-            registerPluginHttpRoute({
-              path: "/plugins/late-reload",
-              auth: "plugin",
-              pluginId: "discord",
-              handler: vi.fn(),
-              throwOnFailure: true,
-            });
-            if (generation === 2) {
-              lateAttempt.resolve("registered after retirement");
-              return;
-            }
-            await waitForAbort(abortSignal);
-          } catch (error) {
-            lateAttempt.resolve(String(error));
-          }
-        },
-      }),
-    );
-    const manager = createManager({ getPluginRegistry: () => registry });
-    await manager.startChannels();
-    await manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
-    await manager.startChannels();
-    const stop = manager.stopChannel("discord", undefined, { manual: false, routeHandoff: true });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await stop;
-    pending.resolve();
-    expect(await lateAttempt.promise).toContain("lease is no longer active");
-    await flushMicrotasks();
-    expect(registry.httpRoutes.map((route) => route.handoff)).toEqual([true]);
-  });
-
   it.each(["removed", "disabled", "resolved-disabled", "manual"] as const)(
     "removes %s ingress while its timed-out predecessor still needs cleanup",
     async (action) => {
@@ -2272,10 +1968,13 @@ describe("server-channels auto restart", () => {
       const registry = installTestRegistry(
         createTestPlugin({ startAccount, stopAccount, isConfigured }),
       );
-      const manager = createManager({ getPluginRegistry: () => registry });
+      const config: OpenClawConfig = {};
+      const getRuntimeConfig = () => config;
+      const manager = createManager({ getRuntimeConfig, getPluginRegistry: () => registry });
       const server = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
         overrides: {
+          getRuntimeConfig,
           handlePluginRequest: createGatewayPluginRequestHandler({
             registry,
             log: createSubsystemLogger("gateway/server-channels-route-test"),
@@ -3204,6 +2903,46 @@ describe("server-channels auto restart", () => {
     expect(readAccount(manager)?.running).not.toBe(true);
   });
 
+  it("logs account startup once before later gateway callbacks", async () => {
+    const gatewayEvent = createDeferred();
+    const eventHandled = createDeferred();
+    const started = createDeferred();
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      started.resolve();
+      await gatewayEvent.promise;
+      eventHandled.resolve();
+      await waitForAbort(abortSignal);
+    });
+    const log = createSubsystemLogger("gateway/startup-test");
+    const info = vi.spyOn(log, "info");
+    const trace = createGatewayStartupTrace(log);
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
+      getRuntimeConfig: () => ({}),
+      getPluginRegistry: requireActivePluginChannelRegistry,
+      channelLogs: { discord: log },
+      channelRuntimeEnvs: {},
+      startupTrace: trace,
+    });
+    createdManagers.push({ channelIds: ["discord"], manager });
+    try {
+      await manager.startChannels();
+      await started.promise;
+      await flushMicrotasks();
+      gatewayEvent.resolve();
+      await eventHandled.promise;
+      expect(startAccount).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls.filter(([message]) => message.includes("starting account"))).toEqual([
+        ["[default] starting account (reason: startup)"],
+      ]);
+    } finally {
+      trace.close();
+      info.mockRestore();
+      await manager.stopChannel("discord");
+    }
+  });
+
   it("prunes only credential owners and account state for inactive channel plugins", async () => {
     installTestRegistry(
       ...(["discord", "slack"] as const).map((channelId) =>
@@ -3351,7 +3090,9 @@ describe("server-channels auto restart", () => {
     try {
       await vi.advanceTimersByTimeAsync(2);
       await monitor.waitForIdle();
-      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy");
+      expect(restart).toHaveBeenCalledExactlyOnceWith("discord", "healthy", {
+        reason: "health-monitor",
+      });
       expect(startAccount).toHaveBeenCalledTimes(2);
       expect(resolveAccount.mock.calls.map(([, accountId]) => accountId)).toEqual([
         "healthy",

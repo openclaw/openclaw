@@ -195,14 +195,14 @@ async function handleFileTransferInvoke(
     return policyDeniedResult({
       op,
       code: "CANONICAL_PATH_MISSING",
-      message: "node result did not return a canonical path",
+      message: "node result did not return a resolved path",
     });
   }
   if (preflight.canonicalPath !== canonicalPath) {
     return policyDeniedResult({
       op,
       code: "CANONICAL_PATH_CHANGED",
-      message: "the canonical path changed after preflight; refusing the result",
+      message: "the resolved path changed after preflight; refusing the result",
       details: { path: canonicalPath },
     });
   }

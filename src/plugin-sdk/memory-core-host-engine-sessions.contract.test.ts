@@ -18,6 +18,12 @@ it("retains released Memory reader signatures without internal actor sources", (
   expectTypeOf<ReturnType<MemorySessions["buildSessionEntry"]>>().toEqualTypeOf<
     Promise<SessionFileEntry | null>
   >();
+  expectTypeOf<Parameters<MemorySessions["buildSessionEntries"]>>().toEqualTypeOf<
+    [readonly { absPath: string; options?: BuildSessionEntryOptions }[]]
+  >();
+  expectTypeOf<ReturnType<MemorySessions["buildSessionEntries"]>>().toEqualTypeOf<
+    Promise<(SessionFileEntry | null)[]>
+  >();
   expectTypeOf<BuildSessionEntryOptions["onTranscriptMessage"]>().toEqualTypeOf<
     ((message: unknown, observedAt: number) => void) | undefined
   >();

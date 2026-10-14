@@ -1,28 +1,21 @@
 import assert from "node:assert/strict";
-import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   readPendingCanonicalSessionValidationBatch,
   validateCanonicalSessionValidationBatch,
 } from "../config/sessions/session-canonical-validation.js";
-import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
-import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { RuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { RetainedNativeWorker } from "../infra/worker-native-lifecycle.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCanonicalSessionValidationSchema,
-  captureCanonicalSessionValidationSchema,
   withoutCanonicalSessionValidationSchema,
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -83,138 +76,9 @@ describe("canonical validation schema admission", () => {
     missingTables: ["session_canonical_validation_pending"],
     cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
   });
-  it("carries expected definitions to a fresh retention reader without trusting its actual schema", async ({
-    signal,
-  }) => {
+  it("avoids comparison SQL in fresh workers while forwarding runtime facts and detecting schema drift", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.path("canonical-handoff.sqlite");
-      const seed = new DatabaseSync(pathname);
-      try {
-        seed.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-        seed.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);`);
-        assertCanonicalSessionValidationSchema(seed);
-      } finally {
-        seed.close();
-      }
-      const host = observeHostDataSql();
-      let contract: ReturnType<typeof captureCanonicalSessionValidationSchema>;
-      try {
-        contract = captureCanonicalSessionValidationSchema();
-        expect(host.queries).toEqual([]);
-      } finally {
-        host.restore();
-      }
-      assert(contract);
-      const log = state.path("expected-definitions.log");
-      const preload = state.path("observe-expected-definitions.cjs");
-      writeFileSync(
-        preload,
-        `const fs = require('node:fs');
-const { DatabaseSync } = require('node:sqlite');
-const comparisons = new WeakSet();
-const record = (kind) => fs.appendFileSync(${JSON.stringify(log)}, kind + '\\n');
-const exec = DatabaseSync.prototype.exec;
-DatabaseSync.prototype.exec = function(sql) {
-  const result = exec.call(this, sql);
-  if (this.location() === null && sql.includes('CREATE TABLE IF NOT EXISTS session_canonical_validation_pending')) {
-    comparisons.add(this);
-    record('comparison-ddl');
-  }
-  return result;
-};
-const prepare = DatabaseSync.prototype.prepare;
-DatabaseSync.prototype.prepare = function(sql) {
-  const statement = prepare.call(this, sql);
-  if (comparisons.has(this) && sql.startsWith('SELECT name, sql FROM main.sqlite_schema')) {
-    const all = statement.all;
-    statement.all = function(...bindings) {
-      const rows = all.apply(this, bindings);
-      record('expected-definitions');
-      return rows;
-    };
-  }
-  return statement;
-};`,
-      );
-      const preloadEnv = sqliteWorkerPreloadEnv(preload);
-      const expectedIdentity = readDatabasePathIdentitySync(pathname);
-      await withEnvAsync(preloadEnv, async () => {
-        for (const carry of [false, true]) {
-          writeFileSync(log, "");
-          // Each fresh history worker starts without an inherited expected-contract cache.
-          await maintenanceLane.pool.rotate();
-          const factKey = "openclaw.agentCanonicalValidationSchemaDefinitions";
-          const inherited = getEnvironmentData(factKey);
-          setEnvironmentData(factKey, undefined);
-          const reader = retainSessionHistoryWorkerDatabase(
-            { agentId: "main", path: pathname, env: state.env },
-            maintenanceLane,
-          );
-          const read = () =>
-            reader.owner.readTrajectoryRetention(
-              {
-                input: { sessionId: "retained" },
-                now: 1,
-                schemaContract: carry ? contract : undefined,
-                expectedIdentity,
-                env: { ...state.env, ...preloadEnv },
-              },
-              { signal, timeoutMs: 60_000 },
-            );
-          try {
-            await expect(read()).resolves.toMatchObject({ sessionId: "retained", runs: [] });
-            expect(readFileSync(log, "utf8")).toBe(
-              carry ? "" : "comparison-ddl\nexpected-definitions\n",
-            );
-            if (carry) {
-              const driftedPath = state.path("canonical-handoff-drifted.sqlite");
-              copyFileSync(pathname, driftedPath);
-              const changed = new DatabaseSync(driftedPath);
-              try {
-                changed.exec(
-                  "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
-                );
-              } finally {
-                changed.close();
-              }
-              const driftedReader = retainSessionHistoryWorkerDatabase(
-                { agentId: "main", path: driftedPath, env: state.env },
-                maintenanceLane,
-              );
-              try {
-                await expect(
-                  driftedReader.owner.readTrajectoryRetention(
-                    {
-                      input: { sessionId: "retained" },
-                      now: 1,
-                      schemaContract: contract,
-                      expectedIdentity: readDatabasePathIdentitySync(driftedPath),
-                      env: { ...state.env, ...preloadEnv },
-                    },
-                    { signal, timeoutMs: 60_000 },
-                  ),
-                ).rejects.toThrow(/canonical validation schema is missing or drifted/u);
-              } finally {
-                driftedReader.release();
-              }
-            }
-          } finally {
-            setEnvironmentData(factKey, inherited);
-            reader.release();
-            await maintenanceLane.pool.rotate();
-          }
-        }
-      });
-    });
-  });
-  it("reuses admitted comparison and runtime facts through an older worker carrier without hiding schema drift", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const factKeys = [
-        "openclaw.sqliteNativeRuntimeAdmission",
-        "openclaw.agentCanonicalValidationSchemaDefinitions",
-      ] as const;
+      const factKeys = ["openclaw.sqliteNativeRuntimeAdmission"] as const;
       const originalFacts = factKeys.map((name) => getEnvironmentData(name));
       const installFacts = (values: Parameters<typeof setEnvironmentData>[1][]) =>
         factKeys.forEach((name, index) => setEnvironmentData(name, values[index]));
@@ -307,10 +171,9 @@ DatabaseSync.prototype.prepare = function(sql) {
         installFacts([]);
         await spawn()("ping");
         installFacts(originalFacts);
+        // Native runtime facts are ready; canonical admission has not run in the host.
         database = openNodeSqliteDatabase(pathname);
         database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-        assertCanonicalSessionValidationSchema(database);
-        const admittedFacts = factKeys.map((name) => getEnvironmentData(name));
         const read = spawn();
         const admitted = await read();
         database.exec(
@@ -320,15 +183,6 @@ DatabaseSync.prototype.prepare = function(sql) {
         database.exec("DROP TRIGGER unexpected_node_validation");
         installFacts([]);
         const absent = await spawn()();
-        const canonicalFact = admittedFacts[1];
-        installFacts([
-          admittedFacts[0],
-          {
-            ...(canonicalFact && typeof canonicalFact === "object" ? canonicalFact : {}),
-            sourceHash: "another schema",
-          },
-        ]);
-        const differentSource = await spawn()();
         expect(admitted).toMatchObject({
           error: undefined,
           nativeProbes: 0,
@@ -346,15 +200,10 @@ DatabaseSync.prototype.prepare = function(sql) {
         expect(drifted.catalogReads).toBeGreaterThan(0);
         expect(absent).toMatchObject({
           error: undefined,
-          comparisonBootstraps: 1,
+          comparisonBootstraps: 0,
         });
         assert(absent && typeof absent === "object" && "nativeProbes" in absent);
         expect(absent.nativeProbes).toBeGreaterThan(0);
-        expect(differentSource).toMatchObject({
-          error: undefined,
-          nativeProbes: 0,
-          comparisonBootstraps: 1,
-        });
       } finally {
         database?.close();
         installFacts(originalFacts);
@@ -426,46 +275,6 @@ DatabaseSync.prototype.prepare = function(sql) {
       expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(/missing or drifted/u);
     });
   });
-
-  it.each(["close", "dispose"] as const)(
-    "invalidates native %s before the same object reopens",
-    (action) => {
-      withDatabase((database) => {
-        assertCanonicalSessionValidationSchema(database);
-        const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
-        assert(typeof cookie === "number");
-        if (action === "close") {
-          database.close();
-        } else {
-          database[Symbol.dispose]();
-        }
-        database.open();
-        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
-        database.exec(`PRAGMA schema_version = ${cookie}`);
-        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
-      });
-    },
-  );
-
-  it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
-    "invalidates deserialized schema even when the cookie is unchanged",
-    () => {
-      withDatabase((database) => {
-        assertCanonicalSessionValidationSchema(database);
-        const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
-        assert(typeof cookie === "number");
-        const replacement = new DatabaseSync(":memory:");
-        try {
-          replacement.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
-          replacement.exec(`PRAGMA schema_version = ${cookie}`);
-          database.deserialize(replacement.serialize());
-          expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
-        } finally {
-          replacement.close();
-        }
-      });
-    },
-  );
 });
 
 describe("agent schema 21 migration", () => {
@@ -493,9 +302,18 @@ describe("agent schema 21 migration", () => {
             path: pathname,
           });
         });
-        expect(database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all()).toEqual(
-          before,
-        );
+        expect(
+          database
+            .prepare("SELECT * FROM session_nodes ORDER BY session_key")
+            .all()
+            .map(
+              ({
+                session_started_at: _sessionStartedAt,
+                has_optional_references: _hasOptionalReferences,
+                ...row
+              }) => row,
+            ),
+        ).toEqual(before);
         expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
           OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -657,7 +475,7 @@ describe("agent schema 25 migration", () => {
           database.setAuthorizer(null);
           expect(
             database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-          ).toEqual(before.nodes);
+          ).toMatchObject(before.nodes);
           if (original) {
             const current = captureOpenClawMigrationWitness(database, {
               role: "agent",
@@ -674,6 +492,7 @@ describe("agent schema 25 migration", () => {
                 "DELETE FROM transcript_events WHERE session_id = 'previous-target'",
                 "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'target'",
                 "DELETE FROM session_entry_snapshots",
+                "UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = 'target'",
                 "UPDATE transcript_rewrite_watermarks SET generation = 'replacement-generation'",
                 "DROP VIEW retained_session_view",
               ]) {

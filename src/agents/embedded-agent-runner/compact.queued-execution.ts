@@ -1,11 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import {
-  loadSessionEntry,
-  type SessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
-import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -197,7 +200,12 @@ export async function executeQueuedContextEngineCompaction(input: {
     attemptNativeHarnessCompaction,
     transcriptBytePreflightAuthority,
   } = input;
-  const incognito = captureIncognitoSessionSource(runtimeTarget);
+  const incognito = captureSessionActorStorageOwner(runtimeTarget, {
+    assertCurrent() {
+      host.assertActive?.();
+    },
+    authorize() {},
+  });
   let expected = { ...expectedEntry };
   return await enqueueCompactionInLanes(params, async () => {
     let closed = false;
@@ -594,27 +602,29 @@ export async function executeQueuedContextEngineCompaction(input: {
                 nativeCompactionRequest: "after_context_engine",
                 preparedModelRuntime,
                 sourceAuthority: {
-                  // Retained native capabilities require a synchronous exact-row authority check.
                   assertActive: () => {
                     assertCallerActive();
-                    incognito?.admissionSignal?.throwIfAborted();
-                    if (incognito && "kind" in incognito) {
-                      incognito.assertCurrent();
+                    if (incognito) {
+                      requireCompactionWriterEntry(
+                        readCapturedSessionActorEntry(
+                          incognito,
+                          postCompactionSessionTarget.sessionKey,
+                        ),
+                        nativeCompactionOwner,
+                      );
                     }
-                    requireCompactionWriterEntry(
-                      incognito
-                        ? "kind" in incognito
-                          ? undefined
-                          : incognito.actor.sessions.readSharing(
-                              postCompactionSessionTarget.sessionKey,
-                            )?.entry
-                        : loadSessionEntry({
-                            ...postCompactionSessionTarget,
-                            readConsistency: "latest",
-                          }),
-                      nativeCompactionOwner,
-                    );
                   },
+                  prepareDispatch: incognito
+                    ? undefined
+                    : async () => {
+                        requireCompactionWriterEntry(
+                          await readSessionEntryReadOnlyInWorker(
+                            { ...postCompactionSessionTarget, readConsistency: "latest" },
+                            assertCallerActive,
+                          ),
+                          nativeCompactionOwner,
+                        );
+                      },
                   operatorAuthority: host.sourceAuthority.operatorAuthority,
                 },
               },

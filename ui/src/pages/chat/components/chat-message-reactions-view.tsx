@@ -1,14 +1,12 @@
-import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/index.js";
-import { sessionEmojiPickerShortcut } from "../../../components/session-icon-picker.ts";
+import { sessionEmojiPickerShortcut } from "../../../components/session-icon-choices.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
+import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts";
 import "./chat-message-reactions.css";
-
-export type MessageReactionPlacement = "bottom-start" | "bottom-end";
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
 let nextPickerId = 0;
@@ -20,7 +18,7 @@ type MessageReactionPickerProps = {
   compact: boolean;
 };
 
-defineSolidBridge<MessageReactionPickerProps>(
+export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProps>(
   "openclaw-message-reaction-picker",
   (props, host) => {
     const [custom, setCustom] = createSignal(false);
@@ -28,7 +26,8 @@ defineSolidBridge<MessageReactionPickerProps>(
     const [invalid, setInvalid] = createSignal(false);
     // Popovers now share the document's ID namespace instead of individual shadow roots.
     const triggerId = `reaction-trigger-${++nextPickerId}`;
-    let popover: WaPopover | undefined;
+    let popover: PopoverHandle | undefined;
+    let trigger!: HTMLButtonElement;
     let focusAfterCommit: "input" | "palette" | undefined;
     const paletteButtons = () => [...host.querySelectorAll<HTMLButtonElement>(".palette button")];
     const focusPalette = () => {
@@ -37,6 +36,17 @@ defineSolidBridge<MessageReactionPickerProps>(
         buttons.find((button) => button.getAttribute("aria-pressed") === "true") ?? buttons[0]
       )?.focus();
     };
+    const focusPicker = () => {
+      if (custom()) {
+        host.querySelector("input")?.focus();
+      } else {
+        focusPalette();
+      }
+    };
+    onCleanup(() => {
+      popover?.overlay.surface.removeEventListener("overlay-after-show", focusPicker);
+      popover?.overlay.surface.removeEventListener("overlay-after-hide", reset);
+    });
     createEffect(custom, () => {
       if (focusAfterCommit === "input") {
         host.querySelector("input")?.focus();
@@ -46,9 +56,7 @@ defineSolidBridge<MessageReactionPickerProps>(
       focusAfterCommit = undefined;
     });
     const close = () => {
-      if (popover) {
-        popover.open = false;
-      }
+      popover?.overlay.request(false, "return");
     };
     const select = (emoji: string) => {
       props.onSelect?.(emoji, props.activeEmoji.has(emoji));
@@ -98,12 +106,16 @@ defineSolidBridge<MessageReactionPickerProps>(
       <>
         <openclaw-tooltip prop:content={t("chat.reactions.add")}>
           <button
+            ref={(element) => {
+              trigger = element;
+            }}
             id={triggerId}
             class="trigger"
             type="button"
             aria-label={t("chat.reactions.add")}
             aria-haspopup="dialog"
             aria-expanded="false"
+            onClick={() => popover?.overlay.request(!popover.overlay.open)}
           >
             <svg
               viewBox="0 0 24 24"
@@ -120,28 +132,20 @@ defineSolidBridge<MessageReactionPickerProps>(
             </svg>
           </button>
         </openclaw-tooltip>
-        <wa-popover
-          ref={(element: WaPopover) => {
-            popover = element;
-            syncPopoverLabel(element);
+        <Popover
+          id={`${triggerId}-popover`}
+          ref={(handle) => {
+            popover = handle;
+            handle.overlay.surface.addEventListener("overlay-after-show", focusPicker);
+            handle.overlay.surface.addEventListener("overlay-after-hide", reset);
           }}
-          class={["chat-reaction-picker", { custom: custom() }]}
-          for={triggerId}
+          anchor={trigger}
+          class={custom() ? "chat-reaction-picker custom" : "chat-reaction-picker"}
           placement={props.placement}
-          distance="6"
-          without-arrow
-          aria-label={t("chat.reactions.add")}
-          onWa-show={() => popover?.anchor?.setAttribute("aria-expanded", "true")}
-          onWa-after-show={() => (custom() ? host.querySelector("input")?.focus() : focusPalette())}
-          onWa-hide={() => popover?.anchor?.setAttribute("aria-expanded", "false")}
-          onWa-after-hide={() => {
-            focusAfterCommit = undefined;
-            reset();
-          }}
-          onKeyDown={(event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-              event.stopPropagation();
-              close();
+          label={t("chat.reactions.add")}
+          onOpenChange={(open) => {
+            if (!open) {
+              focusAfterCommit = undefined;
             }
           }}
         >
@@ -237,7 +241,7 @@ defineSolidBridge<MessageReactionPickerProps>(
               </p>
             </div>
           </Show>
-        </wa-popover>
+        </Popover>
       </>
     );
   },

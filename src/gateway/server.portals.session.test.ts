@@ -8,7 +8,7 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -23,6 +23,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import * as nodePairing from "../infra/device-pairing-node-state.js";
@@ -46,7 +47,7 @@ import { adoptPluginRegistryRecords } from "../plugins/registry-lifecycle.js";
 import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv } from "../test-utils/env.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import * as workerStartup from "./server-worker-environment-startup.js";
 import {
@@ -56,27 +57,42 @@ import {
   NODE_CLIENT,
   rpcReq,
   testState,
-  withGatewayServer,
 } from "./server.auth.test-helpers.js";
-import { trackConnectChallengeNonce } from "./test-helpers.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
+import { createGatewaySuiteHarness, trackConnectChallengeNonce } from "./test-helpers.js";
 import * as workerBundles from "./worker-environments/bundle.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import * as workerService from "./worker-environments/service.js";
 
-installGatewayTestHooks({ scope: "suite" });
+let portalProof: Awaited<ReturnType<typeof createSessionPortalProof>>;
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    portalProof = await createSessionPortalProof();
+  },
+  cleanup: async () => {
+    await portalProof?.cleanup();
+  },
+});
 
 describe("session portal fixture", () => {
   const fixture = createFixtureLifetime();
+  beforeEach(() => {
+    testState.gatewayAuth = portalProof.auth;
+    testState.gatewayControlUi = { allowedOrigins: [portalProof.origin] };
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
+  });
   // This inner hook joins the body before parent hooks reset shared Gateway state.
   afterEach(() => fixture.cleanup());
   it(
     "carries authenticated session previews through the node and retires access before persistence",
-    ({ signal }) => fixture.run(() => runSessionPortalProof(signal)),
+    ({ signal }) => fixture.run(() => portalProof.run(signal)),
     30_000,
   );
 });
 
-async function runSessionPortalProof(signal: AbortSignal) {
+async function createSessionPortalProof() {
   const origin = "https://control.example.test";
   const auth = {
     mode: "trusted-proxy" as const,
@@ -177,14 +193,42 @@ async function runSessionPortalProof(signal: AbortSignal) {
     },
   );
 
+  const environment = captureEnv(["OPENCLAW_TEST_MINIMAL_GATEWAY"]);
+  let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
+  const cleanup = () =>
+    runQaGatewayFixture(
+      async () => {
+        try {
+          await gateway?.close();
+        } finally {
+          environment.restore();
+        }
+      },
+      async () => {
+        vi.restoreAllMocks();
+        destination.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          destination.close(() => resolve());
+        });
+      },
+    );
   try {
     // Worker startup is intentionally omitted by the minimal auth harness.
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: "0" }, () =>
-      withGatewayServer(async ({ port, server }) => {
-        await server.startupSettled;
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+    gateway = await createGatewaySuiteHarness();
+    await gateway.server.startupSettled;
+    const { port } = gateway;
+    const startup = runtimeFactory.mock.calls.at(-1)?.[0];
+    assert(startup, "Gateway must create its real worker runtime");
+    const runtime = await runtimeFactory.mock.results.at(-1)!.value;
+    const serviceOptions = serviceFactory.mock.calls.at(-1)?.[0];
+    assert(serviceOptions, "Gateway must own the worker bundle producer");
+    return {
+      auth,
+      origin,
+      cleanup,
+      run: async (signal: AbortSignal) => {
         signal.throwIfAborted();
-        const startup = runtimeFactory.mock.calls.at(-1)?.[0];
-        assert(startup, "Gateway must create its real worker runtime");
         const { config, registry } = createPluginRegistryFixture();
         registerVirtualTestPlugin({
           config,
@@ -213,13 +257,10 @@ async function runSessionPortalProof(signal: AbortSignal) {
         adoptPluginRegistryRecords(liveRegistry);
         const context = startup.resolveGatewayContext();
         assert(context);
-        const runtime = await runtimeFactory.mock.results.at(-1)!.value;
         const environments = runtime.workerEnvironmentService;
         const portals = context.portalService;
         assert(environments && portals);
         const store = startup.startup.store;
-        const serviceOptions = serviceFactory.mock.calls.at(-1)?.[0];
-        assert(serviceOptions, "Gateway must own the worker bundle producer");
         const artifact = await serviceOptions.prepareInstallation("bundle");
         const bootstrapReceipt: WorkerAdmissionHandshake = {
           bundleHash: artifact.bundleHash,
@@ -559,13 +600,11 @@ async function runSessionPortalProof(signal: AbortSignal) {
             () => Promise.all(sockets.map(closeGatewayTestWebSocket)),
           );
         }
-      }),
-    );
-  } finally {
-    vi.restoreAllMocks();
-    destination.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      destination.close(() => resolve());
-    });
+      },
+    };
+  } catch (error) {
+    return await runQaGatewayFixture(async () => {
+      throw error;
+    }, cleanup);
   }
 }

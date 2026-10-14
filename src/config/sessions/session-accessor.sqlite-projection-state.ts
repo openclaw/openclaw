@@ -2,7 +2,10 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
-import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  sqliteSessionEntriesEqual,
+  type SqliteLifecycleTargetSnapshot,
+} from "./session-accessor.sqlite-entry-equality.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
@@ -16,7 +19,6 @@ import {
 import {
   assertRawSessionEntryRemovalUnchanged,
   deleteMaterializedSessionStatePlans,
-  shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ProjectedLifecycleCommitResult,
@@ -28,8 +30,10 @@ import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-maintenance-store.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
@@ -42,6 +46,7 @@ type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "main
     postimages?: SessionEntryWritePostimages,
   ) => SessionEntryMaintenancePlan;
   postimages?: SessionEntryWritePostimages;
+  currentEntrySnapshot?: SqliteLifecycleTargetSnapshot[number];
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void;
   onResetBoundary?: (facts: {
     sessionKey: string;
@@ -50,7 +55,6 @@ type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "main
     projectionNeedsReconcile: boolean;
   }) => void;
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
 };
 
 function readProjectedRemovalEntry(
@@ -84,6 +88,7 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     pendingArchives = projected.archiveRecovery.pending;
   }
   const beforeCount = readSessionEntryCount(database);
+  let afterCount = beforeCount;
   const validatedRemovalEntries = new Map<string, SessionEntry>();
   const validatedRemovalRows = new Map<string, ReturnType<typeof readProjectedRemovalEntry>>();
   const validatedRemovals = projected.removals.filter((removal) => {
@@ -102,18 +107,11 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
           : `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
       );
     }
-    const shouldRemove = shouldRemoveSessionEntry(entry, removal.removal);
-    if (
-      !shouldRemove &&
-      projected.upsertedEntries.some((upsert) => upsert.sessionKey === removal.sessionKey)
-    ) {
-      throw new Error(`SQLite session entry has stale lifecycle state for ${removal.sessionKey}`);
-    }
-    if (shouldRemove && entry) {
+    if (entry) {
       validatedRemovalEntries.set(removal.sessionKey, entry);
       validatedRemovalRows.set(removal.sessionKey, selected);
     }
-    return shouldRemove;
+    return true;
   });
   const archivedTranscripts = deleteMaterializedSessionStatePlans(
     database,
@@ -133,13 +131,16 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     resetBoundary,
   } of projected.upsertedEntries) {
     const sameKeyRemoval = validatedRemovals.find((removal) => removal.sessionKey === sessionKey);
+    const retained = options.currentEntrySnapshot;
     const currentRow = sameKeyRemoval
       ? validatedRemovalRows.get(sessionKey)
-      : options.allowCanonicalRepair
-        ? readExactSessionEntryRowForCanonicalRepair(database, sessionKey, {
-            allowMalformedRowRepair: true,
-          })
-        : readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
+      : retained?.sessionKey === sessionKey && retained.row
+        ? { entry: retained.entry, row: retained.row }
+        : options.allowCanonicalRepair
+          ? readExactSessionEntryRowForCanonicalRepair(database, sessionKey, {
+              allowMalformedRowRepair: true,
+            })
+          : readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
     const currentEntry = sameKeyRemoval
       ? validatedRemovalEntries.get(sessionKey)
       : currentRow?.entry;
@@ -182,6 +183,8 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       });
     }
     writeSessionEntry(database, sessionKey, entry, {
+      // Inbound initialization observes activity even without authoritative route facts.
+      observeConversation: true,
       allowStoredAliases: options.allowCanonicalRepair === true,
       preserveNodeSuggestions: options.allowCanonicalRepair === true,
       previousEntry: expectedCurrentEntry ?? null,
@@ -197,6 +200,9 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       postimages: options.postimages,
       ...(routeContext !== undefined ? { routeContext } : {}),
     });
+    if (!currentEntry) {
+      afterCount += 1;
+    }
     const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
       const removedSessionId = removal.expectedEntry.sessionId;
       return removal.sessionKey !== sessionKey &&
@@ -216,7 +222,20 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     }
   }
   options.afterUpsertsInTransaction?.(database);
-  options.afterFreshUpsertsInTransaction?.(database);
+  if (options.creation?.preparedTranscript) {
+    const { sessionKey, sessionId, events } = options.creation.preparedTranscript;
+    appendTranscriptEventsInTransaction(
+      database,
+      { ...options.resetScope, sessionKey, sessionId },
+      events,
+    );
+  }
+  if (options.creation?.ownerAssignment) {
+    const { sessionKey, owner } = options.creation.ownerAssignment;
+    if (!replaceSessionOwnerInTransaction(database, sessionKey, owner, options.postimages)) {
+      throw new Error(`Session owner assignment lost its target: ${sessionKey}`);
+    }
+  }
   const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
   for (const removal of validatedRemovals) {
     if (upsertedKeys.has(removal.sessionKey)) {
@@ -239,10 +258,18 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
       });
     }
     removedSessionKeys.push(removal.sessionKey);
+    afterCount -= 1;
   }
   return {
     archivedTranscripts,
     beforeCount,
+    // Offline repair and native callbacks can change rows outside the ordinary lifecycle delta.
+    afterCount:
+      options.allowCanonicalRepair ||
+      projected.removals.some(({ removal }) => removal.expectedRawEntryJson !== undefined) ||
+      options.afterUpsertsInTransaction
+        ? readSessionEntryCount(database)
+        : afterCount,
     maintenancePlans: [options.applyMaintenance(database, options.postimages)],
     removedSessionKeys,
     pendingArchives,
@@ -256,7 +283,7 @@ export function commitPreparedSessionEntryLifecycleMutationInDatabase(
   removalPlans: MaterializedSessionStateDeletePlan[],
   options?: Pick<
     ProjectedLifecycleCommitOptions,
-    "resetScope" | "onResetBoundary" | "onArchived" | "postimages"
+    "resetScope" | "onResetBoundary" | "onArchived" | "postimages" | "currentEntrySnapshot"
   >,
 ): ProjectedLifecycleCommitResult {
   return commitProjectedSessionEntryLifecycleMutationInDatabase(database, {
@@ -265,6 +292,7 @@ export function commitPreparedSessionEntryLifecycleMutationInDatabase(
     resetScope: options?.resetScope ?? { agentId: database.agentId },
     onResetBoundary: options?.onResetBoundary,
     postimages: options?.postimages,
+    currentEntrySnapshot: options?.currentEntrySnapshot,
     onArchived: options?.onArchived,
     applyMaintenance: (current, postimages) => {
       const maintenance = input.maintenance;

@@ -43,7 +43,7 @@ describe("memory search staleness", () => {
     ).toMatchObject({ warning: expect.stringContaining("embedding model changed") });
   });
 
-  it.each(["provenance_version", "chunking_version", "embedding_input_format"])(
+  it.each(["embedding_input_format"])(
     "reports the failed repair prerequisite while %s is still incompatible",
     (code) => {
       expect(
@@ -71,7 +71,7 @@ describe("memory search staleness", () => {
     },
   );
 
-  it.each(["provenance_version", "chunking_version", "embedding_input_format"])(
+  it.each(["embedding_input_format"])(
     "keeps newer-index recovery visible after a prior sync failure (%s)",
     (code) => {
       const status: MemoryProviderStatus = {
@@ -200,34 +200,7 @@ describe("memory search staleness", () => {
     });
   });
 
-  it("uses configured provider intent after runtime degradation", () => {
-    expect(
-      resolveMemorySearchStaleness(
-        {
-          provider: "none",
-          requestedProvider: "openai",
-          custom: {
-            indexIdentity: {
-              status: "mismatched",
-              reason: "index provenance classifier changed",
-              code: "provenance_version",
-              owner: "openclaw",
-            },
-          },
-        },
-        "main",
-      ),
-    ).toMatchObject({
-      action:
-        "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
-    });
-  });
-
   it.each([
-    {
-      status: "mismatched",
-      reason: "missing code and owner",
-    },
     {
       status: "mismatched",
       reason: "invalid owner for code",

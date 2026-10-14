@@ -12,6 +12,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
@@ -53,6 +57,7 @@ export const makeContext = (session?: {
   agentId: string;
   row: GatewaySessionRow;
 }): GatewayRequestContext => {
+  setRuntimeConfigSnapshot(resolveAgentTestConfig());
   const projection = createAgentTestSessionRowProjection(resolveAgentTestConfig, session);
   return {
     trackExecution: trackAsyncWork,
@@ -149,7 +154,9 @@ export function mockMainSessionEntry(
     entry: sessionEntry,
     canonicalKey: "agent:main:main",
     legacyKey: undefined,
-  } satisfies ReturnType<typeof import("../session-utils.js").loadSessionEntry>);
+  } satisfies Awaited<
+    ReturnType<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
+  >);
 }
 
 export function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
@@ -550,6 +557,7 @@ export const describe0AfterEach0 = async () => {
   mocks.lifecycleGeneration = "test-generation";
   setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 };
 
 async function resetIntegrationState() {
@@ -578,6 +586,7 @@ async function resetIntegrationState() {
   mocks.lifecycleGeneration = "test-generation";
   setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 }
 
 export const describe1BeforeEach0 = () => {

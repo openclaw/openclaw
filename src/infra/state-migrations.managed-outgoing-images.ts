@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as optionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
@@ -24,6 +23,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import {
   legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
@@ -309,7 +309,7 @@ function isExpiredTransient(record: ManagedImageRecord, nowMs: number) {
   return record.messageId === null && nowMs - createdAtMs >= DEFAULT_TRANSIENT_TTL_MS;
 }
 
-function readManagedImageRow(db: DatabaseSync, attachmentId: string) {
+function readManagedImageRow(db: EngineConnection, attachmentId: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<ManagedImageRecordDatabase>(db)

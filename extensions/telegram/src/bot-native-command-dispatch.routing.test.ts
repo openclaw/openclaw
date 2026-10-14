@@ -18,7 +18,7 @@ import {
   addChannelAllowFromStoreEntry,
   createPluginStateKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { writeSkill } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -224,8 +224,8 @@ describe("registered native command routing through the message pipeline", () =>
         ...runtime,
         state: {
           ...runtime.state,
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-            const store = runtime.state.openKeyedStore<T>(options);
+          openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) => {
+            const store = runtime.state.openKeyedStoreV2<T>(options);
             if (options.namespace !== TELEGRAM_THREAD_BINDINGS_NAMESPACE) {
               return store;
             }
@@ -394,8 +394,8 @@ describe("registered native command routing through the message pipeline", () =>
           },
         },
       };
-      harness.listSkillCommandsForAgents.mockImplementation((params) => {
-        const commands = listSkillCommandsForAgents(params);
+      harness.prepareSkillCommandsForAgents.mockImplementation(async (params) => {
+        const commands = await prepareSkillCommandsForAgents(params);
         const beta = commands.find(({ skillName }) => skillName === "beta-skill");
         if (beta) {
           beta.descriptionLocalizations = { ko: "베타 스킬" };

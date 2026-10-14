@@ -1,8 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -98,11 +99,6 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        // Shared imports have no current-viewer owner; selecting All must not rewrite their authors.
-        await page
-          .locator(".sidebar-navigation-scope")
-          .getByRole("button", { name: "All", exact: true })
-          .click();
         for (const catalogId of catalogIds) {
           await page.getByText(`${catalogId} shared transcript`, { exact: true }).click();
           // Every catalog has the same transcript; wait for the clicked pane before reading it.
@@ -241,12 +237,10 @@ suite.define(() => {
         );
         const composer = () => activePane.locator(".agent-chat__composer-combobox > textarea");
         const navigate = async (agentId: string, catalog = true) => {
-          await page.evaluate(
-            ({ agentId: routeAgentId, search: routeSearch }) => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: ApplicationContext };
-              };
-              app.runtime.context.navigate("chat", {
+          await evaluateControlUiContext(
+            page,
+            (context, { agentId: routeAgentId, search: routeSearch }) => {
+              context.navigate("chat", {
                 pathname: `/chat/${routeAgentId}`,
                 search: routeSearch,
               });
@@ -262,12 +256,7 @@ suite.define(() => {
         const assertOwner = async (agentId: string) => {
           await expect
             .poll(() =>
-              page.evaluate(() => {
-                const app = document.querySelector("openclaw-app") as HTMLElement & {
-                  runtime: { context: ApplicationContext };
-                };
-                return app.runtime.context.agentSelection.state.selectedId;
-              }),
+              evaluateControlUiContext(page, (context) => context.agentSelection.state.selectedId),
             )
             .toBe(agentId);
           await expect
@@ -297,7 +286,7 @@ suite.define(() => {
         if (entrance === "sidebar") {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
-            .locator("wa-dropdown.sidebar-agent-menu")
+            .locator(".sidebar-agent-menu")
             .getByRole("menuitem", { name: "Other", exact: true })
             .click();
           await waitForControlUiRoute(page, {
@@ -348,7 +337,7 @@ suite.define(() => {
         expect(await composer().inputValue()).toBe("other retained draft");
         expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(readsBeforeReturn);
 
-        await activePane.getByRole("button", { name: "Open split view" }).click();
+        await selectChatLayoutAction(activePane, "Open split view");
         await navigate("main");
         const visiblePanes = page.locator(
           "openclaw-chat-pane.chat-pane-cache__pane--visible:not([inert])",
@@ -362,12 +351,10 @@ suite.define(() => {
         await assertOwner("main");
 
         // Ordinary Gateway publication and transport reconnect must retain each pane's owner.
-        const instanceId = await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          return app.runtime.context.gateway.snapshot.client?.instanceId;
-        });
+        const instanceId = await evaluateControlUiContext(
+          page,
+          (context) => context.gateway.snapshot.client?.instanceId,
+        );
         await gateway.emitGatewayEvent("presence", {
           presence: [{ instanceId, user: { id: "fixture-user", name: "Fixture User" } }],
         });

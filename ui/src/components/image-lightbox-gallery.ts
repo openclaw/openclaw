@@ -27,8 +27,7 @@ export class ImageLightboxGalleryController {
   private video?: HTMLVideoElement;
   private disconnectVideo?: () => void;
   private gallery: ImageLightboxGallery | undefined;
-  private generation = 0;
-  private readonly images = new Map<number, Promise<ImageLightboxItem | null>>();
+  private images = new Map<number, Promise<ImageLightboxItem | null>>();
 
   constructor(private readonly notify: () => void) {}
 
@@ -44,45 +43,42 @@ export class ImageLightboxGalleryController {
     // The opener retains and releases the initial image independently of the modal.
     const preview = { ...initial, release: undefined };
     if (initial.loadFullResolution) {
-      this.upgrade(this.index, preview, initial.loadFullResolution);
+      void this.prepare(this.index, initial.loadFullResolution, preview);
     } else {
       this.images.set(this.index, Promise.resolve(preview));
     }
     this.preloadNeighbors();
   }
 
-  private upgrade(
+  private prepare(
     index: number,
-    preview: ImageLightboxItem,
     load: () => Promise<ImageLightboxItem | null>,
+    preview?: ImageLightboxItem,
   ) {
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load() : null))
+    const pending: Promise<ImageLightboxItem | null> = Promise.resolve()
+      .then(() => (this.images.get(index) === pending ? load() : null))
       .then(decodeImage)
       .catch(() => null)
       .then((item) => {
-        if (
-          item &&
-          generation === this.generation &&
-          this.images.get(index) === pending &&
-          this.index === index
-        ) {
+        if (preview && item && this.images.get(index) === pending && this.index === index) {
           this.current = item;
           this.notify();
         }
-        return item ?? preview;
+        if (!item && !preview && this.images.get(index) === pending) {
+          this.images.delete(index);
+        }
+        return item ?? preview ?? null;
       });
     this.images.set(index, pending);
+    return pending;
   }
 
   dispose() {
     this.stopPlayer();
-    this.generation += 1;
     for (const image of this.images.values()) {
       void image.then((item) => item?.release?.());
     }
-    this.images.clear();
+    this.images = new Map();
     this.gallery = undefined;
     this.current = undefined;
     this.busy = false;
@@ -98,13 +94,13 @@ export class ImageLightboxGalleryController {
     if (this.busy || !this.canMove(delta)) {
       return false;
     }
-    const generation = this.generation;
+    const images = this.images;
     const next = this.index + delta;
     this.busy = true;
     this.failed = false;
     this.notify();
     const item = await this.load(next, true);
-    if (generation !== this.generation) {
+    if (images !== this.images) {
       return false;
     }
     this.busy = false;
@@ -176,18 +172,7 @@ export class ImageLightboxGalleryController {
     if (!load) {
       return Promise.resolve(null);
     }
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load(retryFailed) : null))
-      .then(decodeImage)
-      .catch(() => null);
-    this.images.set(index, pending);
-    void pending.then((item) => {
-      if (!item && this.images.get(index) === pending) {
-        this.images.delete(index);
-      }
-    });
-    return pending;
+    return this.prepare(index, () => load(retryFailed));
   }
 
   private preloadNeighbors() {

@@ -325,7 +325,7 @@ describe("context-engine turn outbox", () => {
       if (failure === "missing-state") {
         database.db
           .prepare(
-            "UPDATE context_engine_turn_outbox SET payload_json = '{}' WHERE advancement_key = ?",
+            "UPDATE context_engine_turn_outbox SET payload_json = '{}', payload_state = NULL WHERE advancement_key = ?",
           )
           .run(payload.boundary.admission.logicalTurnId);
       }
@@ -505,12 +505,27 @@ describe("context-engine turn outbox", () => {
       engineId: "test",
       isHeartbeat: false,
     });
+    const storedState = () =>
+      database.db
+        .prepare("SELECT payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(payload.boundary.admission.logicalTurnId)?.payload_state;
+    const sequence = () =>
+      database.db
+        .prepare(
+          "SELECT enqueue_sequence FROM context_engine_turn_outbox WHERE advancement_key = ?",
+        )
+        .get(payload.boundary.admission.logicalTurnId)?.enqueue_sequence;
+    const admittedSequence = sequence();
+    expect(admittedSequence).toBe(1);
+    expect(storedState()).toBe("admitted");
     acceptContextEngineTurnIntent({
       boundary: payload.boundary,
       database,
       engineId: "test",
       isHeartbeat: false,
     });
+    expect(storedState()).toBe("accepted");
+    expect(sequence()).toBe(admittedSequence);
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
@@ -519,6 +534,8 @@ describe("context-engine turn outbox", () => {
       sessionId: payload.boundary.admission.sessionId,
       warn,
     });
+    expect(storedState()).toBe("blocked");
+    expect(sequence()).toBe(admittedSequence);
 
     const queued = database.db
       .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
@@ -549,13 +566,16 @@ describe("context-engine turn outbox", () => {
       ...payload.boundary.admission,
       logicalTurnId: "session-a:current",
     };
+    const runWarn = vi.fn();
 
     await drainPendingContextEngineTurnsBeforeRun({
       admission: currentAdmission,
       lease,
-      warn,
+      warn: runWarn,
     });
 
+    // The terminal marker was reported when it was blocked; later runs stay quiet.
+    expect(runWarn).not.toHaveBeenCalled();
     expect(engine.commitTurn).toHaveBeenCalledOnce();
     expect(engine.commitTurn).toHaveBeenCalledWith(
       expect.objectContaining({ advancementKey: "session-a:later-ready" }),
@@ -629,6 +649,13 @@ describe("context-engine turn outbox", () => {
       "session-a:z-first",
       "session-b:1",
     ]);
+    expect(
+      database.db
+        .prepare(
+          "SELECT enqueue_sequence, attempt_count FROM context_engine_turn_outbox WHERE advancement_key = 'session-a:z-first'",
+        )
+        .get(),
+    ).toEqual({ enqueue_sequence: 1, attempt_count: 1 });
     failFirstTurn = false;
 
     await drainContextEngineTurnOutbox({
@@ -826,15 +853,24 @@ describe("context-engine turn outbox", () => {
       input: { engineId: "test", sessionId: "snapshot-session", isHeartbeat: false },
     };
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
-    const statements = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) =>
-      /^select/i.test(sql) && sql.includes("context_engine_turn_outbox") ? "outbox" : null,
-    );
+    const queries: string[] = [];
+    const statements = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) => {
+      if (!/^select/i.test(sql) || !sql.includes("context_engine_turn_outbox")) {
+        return null;
+      }
+      queries.push(sql);
+      return "outbox";
+    });
     try {
       expect(backend.execute(command)).toEqual({ warnings: [], pending: true, admitted: false });
       expect(statements.counts.outbox).toBe(1);
       backend.execute({ type: "complete", input: { advancementKey: "snapshot-turn" } });
       expect(backend.execute(command)).toEqual({ warnings: [], pending: false, admitted: false });
       expect(statements.counts.outbox).toBe(2);
+      expect(backend.execute({ type: "hasPending", input: command.input })).toBe(false);
+      expect(statements.counts.outbox).toBe(3);
+      expect(queries.some((query) => query.includes("payload_state"))).toBe(true);
+      expect(queries.every((query) => !query.includes("json_extract"))).toBe(true);
     } finally {
       statements.restore();
     }

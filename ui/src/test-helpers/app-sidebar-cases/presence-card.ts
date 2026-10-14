@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { focusSidebarPersonWithKeyboard, selectSidebarView } from "../app-sidebar-setup.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 
@@ -80,7 +80,7 @@ describe("AppSidebar person activity card", () => {
         ],
       })),
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     const trigger = sidebar.querySelector<HTMLElement>(".sidebar-online__person")!;
     focusSidebarPersonWithKeyboard(trigger);
     await vi.dynamicImportSettled();

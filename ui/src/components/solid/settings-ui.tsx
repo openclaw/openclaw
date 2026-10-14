@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { children, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -34,6 +34,7 @@ type SettingsRowProps = {
   carapace?: boolean;
   stacked?: boolean;
   stackedOnNarrow?: boolean;
+  nested?: boolean;
 };
 
 export function SettingsPage(props: {
@@ -60,31 +61,6 @@ export function DocsLink(props: { url: string; children: JSX.Element }) {
     <a href={props.url} target={EXTERNAL_LINK_TARGET} rel={buildExternalLinkRel()}>
       {props.children}
     </a>
-  );
-}
-
-export function SettingsHelpTrigger(props: {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon: "question" | "info";
-  popoverId: string;
-}) {
-  return (
-    <openclaw-tooltip prop:content={props.tooltip}>
-      <button
-        id={props.id}
-        type="button"
-        class="settings-section__help-button"
-        aria-label={props.label}
-        aria-controls={props.popoverId}
-        aria-haspopup="dialog"
-      >
-        <span aria-hidden="true">
-          <Icon name={props.icon === "info" ? "info" : "circleQuestionMark"} />
-        </span>
-      </button>
-    </openclaw-tooltip>
   );
 }
 
@@ -226,6 +202,7 @@ function SettingsRowText(
 }
 
 export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status" }) {
+  const control = children(() => props.control);
   return (
     <div
       class={[
@@ -233,6 +210,7 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         {
           "settings-row--stacked": props.stacked,
           "settings-row--stacked-on-narrow": props.stackedOnNarrow,
+          "settings-row--nested": props.nested,
           "oc-settings-row": props.carapace,
           "oc-settings-row-stacked": props.carapace && props.stacked,
         },
@@ -244,9 +222,9 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         description={props.description}
         carapace={props.carapace}
       />
-      <Show when={props.control !== undefined && props.control !== null && props.control !== false}>
+      <Show when={control() !== undefined && control() !== null && control() !== false}>
         <div class={["settings-row__control", { "oc-settings-row-control": props.carapace }]}>
-          {props.control}
+          {control()}
         </div>
       </Show>
     </div>
@@ -297,15 +275,7 @@ function ToggleControl(
 }
 
 export function SettingsToggle(props: SettingsToggleControl & { ariaLabel: string }) {
-  return (
-    <ToggleControl
-      checked={props.checked}
-      disabled={props.disabled}
-      onChange={(checked) => props.onChange(checked)}
-      onAct={(checked) => props.onAct?.(checked)}
-      label={props.ariaLabel}
-    />
-  );
+  return <ToggleControl {...props} label={props.ariaLabel} />;
 }
 
 export function SettingsToggleRow(
@@ -314,6 +284,8 @@ export function SettingsToggleRow(
     title: JSX.Element;
     ariaLabel?: JSX.Element;
     description?: JSX.Element;
+    /** Secondary actions beside the switch, such as opening related settings. */
+    actions?: JSX.Element;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -325,11 +297,9 @@ export function SettingsToggleRow(
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
       <div class="settings-row__control">
+        {props.actions}
         <ToggleControl
-          checked={props.checked}
-          disabled={props.disabled}
-          onChange={(checked) => props.onChange(checked)}
-          onAct={(checked) => props.onAct?.(checked)}
+          {...props}
           label={props.ariaLabel}
           labelledBy={props.ariaLabel == null ? titleId : undefined}
         />

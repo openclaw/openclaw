@@ -87,6 +87,8 @@ export type SandboxBrowserContext = {
 };
 
 export type SandboxContext = {
+  /** Creators release retained authority after last use; supplied contexts remain caller-owned. */
+  [Symbol.dispose]?: () => void;
   enabled: boolean;
   /** Immutable creator policy: this session may never escape to a host execution target. */
   required?: true;
@@ -96,6 +98,8 @@ export type SandboxContext = {
   workspaceCwd?: string;
   backendId: SandboxBackendId;
   sessionKey: string;
+  /** Agent admitted by sandbox policy resolution, which may differ from the requester. */
+  agentId?: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;

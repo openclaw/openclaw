@@ -2,18 +2,18 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
-import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
+import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import {
+  describeJobSchedule,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -238,17 +238,13 @@ function JobsTable(
           {(job) => <JobRow job={job()} {...props} />}
         </For>
       )}
-      <LitContent
-        render={() =>
-          renderCronJobsPagination({
-            jobsShown: props.jobs.length,
-            jobsTotal: props.jobsTotal,
-            hasMore: props.jobsHasMore,
-            loading: props.loading,
-            loadingMore: props.jobsLoadingMore,
-            onLoadMore: props.onLoadMoreJobs,
-          })
-        }
+      <CronJobsPagination
+        jobsShown={props.jobs.length}
+        jobsTotal={props.jobsTotal}
+        hasMore={props.jobsHasMore}
+        loading={props.loading}
+        loadingMore={props.jobsLoadingMore}
+        onLoadMore={props.onLoadMoreJobs}
       />
     </div>
   );
@@ -301,7 +297,7 @@ function JobRow(
       <JobCell
         class="cron-table__schedule"
         label={t("cron.jobs.schedule")}
-        value={formatCronSchedule(props.job)}
+        value={describeJobSchedule(props.job)}
       />
       <JobCell
         class="cron-table__next"

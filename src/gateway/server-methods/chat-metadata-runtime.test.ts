@@ -33,23 +33,24 @@ describe("gateway chat metadata runtime", () => {
     }
   });
 
-  test("notifies once per settlement, including same-epoch recovery, without an unavailable-read loop", async () => {
+  test("notifies once per publication, including owner recovery, without an unavailable-read loop", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
     await harness.runtime.refresh();
     expect(onChanged).toHaveBeenCalledOnce();
     onChanged.mockClear();
     harness.getPreparedOwner.mockReturnValue(undefined);
-    await expect(harness.runtime.refresh()).rejects.toThrow("owner is unavailable");
+    await harness.runtime.refresh();
     for (let read = 0; read < 3; read += 1) {
       await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
-        "owner is unavailable",
+        'prepared chat metadata is unavailable for agent "main"',
       );
     }
     expect(onChanged).toHaveBeenCalledTimes(1);
     const recovered = createChatMetadataOwner({ agents: { entries: { main: {} } } }, "recovered");
     harness.setOwner(recovered);
     harness.getPreparedOwner.mockReturnValue(recovered);
+    await harness.runtime.refresh();
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
       models: [expect.objectContaining({ id: "recovered" })],
     });

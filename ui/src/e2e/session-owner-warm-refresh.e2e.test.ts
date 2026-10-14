@@ -3,10 +3,11 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI warm owner-first refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -84,12 +85,9 @@ suite.define(() => {
       const ada = page.locator('[data-session-key="agent:main:ada"]');
       const bob = page.locator('[data-session-key="agent:main:bob"]');
       await ada.waitFor();
-      // This regression protects foreign rows in All during a warm refresh.
+      // This regression protects foreign rows during a warm refresh.
       expect(await bob.count()).toBe(0);
-      await page
-        .locator(".sidebar-navigation-scope")
-        .getByRole("button", { name: "All", exact: true })
-        .click();
+      await selectAllSidebarSessions(page);
       await bob.waitFor();
       await captureSidebar(page, "warm-before-event.png");
 
@@ -104,14 +102,12 @@ suite.define(() => {
         updatedAt: 3,
       });
       await gateway.waitForRequest("sessions.list", { after: before, match: rosterMatch });
-      const refreshProbe = await page.evaluateHandle(() => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context: ApplicationContext } }
-        >("openclaw-app");
+      const applicationHandle = await getControlUiContextHandle(page);
+      const refreshProbe = await applicationHandle.evaluateHandle((application) => {
         const sidebar = document.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
           "openclaw-app-sidebar",
         );
-        const sessions = app?.runtime?.context.sessions;
+        const sessions = application.sessions;
         const row = sidebar?.querySelector('[data-session-key="agent:main:bob"]');
         const scope = sessions?.captureConnectionScope();
         if (!sidebar || !sessions || !row || !scope) {
@@ -205,6 +201,7 @@ suite.define(() => {
       expect(await ada.count()).toBe(1);
       await captureSidebar(page, "warm-after-refresh.png");
       await refreshProbe.dispose();
+      await applicationHandle.dispose();
     } finally {
       await context.close();
     }

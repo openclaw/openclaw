@@ -61,8 +61,14 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveLegacyCompatibilityAgentId: mocks.tryResolveLegacyCompatibilityAgentId,
 }));
 
+// mock-isolation: Hook toggle fixtures own the config snapshot and write receipt without touching operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
   transformConfigFile: async ({ transform }: TransformConfigFileParams<HookStatusEntry>) => {
     const snapshot = await mocks.readConfigFileSnapshot();
     const transformed = await transform(

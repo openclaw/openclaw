@@ -508,7 +508,18 @@ describe("attachment sidebar source ownership", () => {
   it("falls back to the SVG card when a same-origin fetch stalls", async () => {
     vi.useFakeTimers();
     const intersectAttachment = stubAttachmentIntersection();
-    const fetchMock = vi.fn(async () => await new Promise<Response>(() => {}));
+    const fetchMock = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            {
+              once: true,
+            },
+          );
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const container = document.body.appendChild(document.createElement("div"));
     const onAssistantAttachmentLoaded = vi.fn();
@@ -835,6 +846,12 @@ describe("attachment sidebar source ownership", () => {
       container.querySelector(".chat-assistant-attachment-card__status-reason")?.textContent,
     ).toBe(reason);
     expect(
+      container
+        .querySelector(".chat-assistant-attachment-card__status-meta")
+        ?.textContent?.replace(/\s+/gu, " ")
+        .trim(),
+    ).toBe(`Not sent · ${reason}`);
+    expect(
       container.querySelector(
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",
       ),
@@ -883,7 +900,7 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("resolves an open local sidebar attachment with the current runtime credentials", async () => {
+  it("retains an open local sidebar attachment's message while refreshing runtime credentials", async () => {
     const source = "/tmp/openclaw/clip.mp3";
     const container = document.body.appendChild(document.createElement("div"));
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -916,6 +933,8 @@ describe("attachment sidebar source ownership", () => {
           ],
           {
             authToken: "token-A",
+            sessionKey: "agent:main:sidebar-audio",
+            messageId: "saved-audio-message",
             onRequestUpdate: transcriptUpdate,
           },
           (content) => {
@@ -944,12 +963,14 @@ describe("attachment sidebar source ownership", () => {
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
+        sessionKey: "agent:main:sidebar-audio",
       }),
     ).toEqual({ status: "pending" });
     await vi.waitFor(() =>
       expect(
         resolveSource?.(sidebarUpdate, {
           authToken: "token-B",
+          sessionKey: "agent:main:sidebar-audio",
         }),
       ).toEqual(
         expect.objectContaining({
@@ -965,6 +986,24 @@ describe("attachment sidebar source ownership", () => {
     expect(new Headers(fetchMock.mock.calls.at(-1)?.[1]?.headers).get("Authorization")).toBe(
       "Bearer token-B",
     );
+    expect(
+      fetchMock.mock.calls.map(([url]) =>
+        new URL(url instanceof Request ? url.url : url, window.location.origin).searchParams.get(
+          "messageId",
+        ),
+      ),
+    ).toEqual(["saved-audio-message", "saved-audio-message"]);
+    const refreshed = resolveSource?.(sidebarUpdate, {
+      authToken: "token-B",
+      sessionKey: "agent:main:sidebar-audio",
+    });
+    expect(refreshed?.status).toBe("ready");
+    if (refreshed?.status === "ready") {
+      const params = new URL(refreshed.src, window.location.origin).searchParams;
+      expect(params.get("messageId")).toBe("saved-audio-message");
+      expect(params.get("sessionKey")).toBe("agent:main:sidebar-audio");
+      expect(params.get("mediaTicket")).toBe("ticket-token-B");
+    }
     container.remove();
   });
 });

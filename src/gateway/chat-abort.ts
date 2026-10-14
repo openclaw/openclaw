@@ -53,6 +53,7 @@ export { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.
 
 export type RestartRecoveryCandidate = {
   runId: string;
+  sourceRunId?: string;
   lifecycleGeneration: string;
   sessionKey: string;
   sessionId: string;
@@ -186,24 +187,20 @@ export function registerChatAbortController(params: {
       }
       const persistence = entry.projectSessionTerminalPersistence;
       if (persistence) {
-        void persistence
-          .then(() => {
-            if (
-              params.chatAbortControllers.get(params.runId)?.controller === controller &&
-              entry.projectSessionTerminalPersistence === persistence
-            ) {
+        const removeAfterPersistence = (persisted: boolean) => {
+          if (
+            params.chatAbortControllers.get(params.runId)?.controller === controller &&
+            entry.projectSessionTerminalPersistence === persistence
+          ) {
+            if (persisted) {
               entry.projectSessionTerminalPersistence = undefined;
-              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
-          })
-          .catch(() => {
-            if (
-              params.chatAbortControllers.get(params.runId)?.controller === controller &&
-              entry.projectSessionTerminalPersistence === persistence
-            ) {
-              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
-            }
-          });
+            removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
+          }
+        };
+        void persistence
+          .then(() => removeAfterPersistence(true))
+          .catch(() => removeAfterPersistence(false));
         return;
       }
       removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);

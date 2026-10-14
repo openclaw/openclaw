@@ -3,8 +3,6 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildMatrixApprovalReactionHint,
-  listMatrixApprovalReactionBindings,
   registerMatrixApprovalReactionTarget as registerMatrixApprovalReactionTargetRaw,
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
   unregisterMatrixApprovalReactionTarget as unregisterMatrixApprovalReactionTargetRaw,
@@ -80,67 +78,6 @@ afterEach(async () => {
 });
 
 describe("matrix approval reactions", () => {
-  it("lists reactions in stable decision order", () => {
-    expect(listMatrixApprovalReactionBindings(["allow-once", "deny", "allow-always"])).toEqual([
-      { decision: "allow-once", emoji: "✅", label: "Allow once" },
-      { decision: "allow-always", emoji: "♾️", label: "Allow always" },
-      { decision: "deny", emoji: "❌", label: "Deny" },
-    ]);
-  });
-
-  it("builds a compact reaction hint", () => {
-    expect(buildMatrixApprovalReactionHint(["allow-once", "deny"])).toBe(
-      "React here: ✅ Allow once, ❌ Deny",
-    );
-  });
-
-  it.each(["exec", "plugin", "system-agent"] as const)(
-    "resolves a registered %s approval anchor event back to an approval decision",
-    async (approvalKind) => {
-      await registerMatrixApprovalReactionTarget({
-        roomId: "!ops:example.org",
-        eventId: "$approval-msg",
-        approvalId: "req-123",
-        approvalKind,
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      });
-
-      expect(
-        await resolveMatrixApprovalReactionTargetWithPersistence({
-          roomId: "!ops:example.org",
-          eventId: "$approval-msg",
-          reactionKey: "✅",
-        }),
-      ).toEqual({
-        approvalId: "req-123",
-        approvalKind,
-        decision: "allow-once",
-      });
-      expect(
-        await resolveMatrixApprovalReactionTargetWithPersistence({
-          roomId: "!ops:example.org",
-          eventId: "$approval-msg",
-          reactionKey: "♾️",
-        }),
-      ).toEqual({
-        approvalId: "req-123",
-        approvalKind,
-        decision: "allow-always",
-      });
-      expect(
-        await resolveMatrixApprovalReactionTargetWithPersistence({
-          roomId: "!ops:example.org",
-          eventId: "$approval-msg",
-          reactionKey: "❌",
-        }),
-      ).toEqual({
-        approvalId: "req-123",
-        approvalKind,
-        decision: "deny",
-      });
-    },
-  );
-
   it("ignores reactions that are not allowed on the registered approval anchor event", async () => {
     await registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",

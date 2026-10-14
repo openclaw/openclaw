@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   jsonResult,
   readFiniteNumberParam,

@@ -149,7 +149,7 @@ export function createCodexAppServerAgentHarness(
     },
     authBootstrap: "harness",
     resolveIsolatedCompletionRuntime,
-    // Retained only for final synchronous authority checks until the next Plugin SDK major.
+    // Final synchronous authority checks remain through the 2026-12-31 compatibility cutoff.
     resolveSessionRuntimeOwnership: (params) => {
       assertOwnershipCurrent(params);
       const identity = sessionBindingIdentity(params);
@@ -474,6 +474,12 @@ export function createCodexAppServerAgentHarness(
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
+    },
+    withDescendantCancellation: async (params, run) => {
+      const { withCodexSessionDescendantCancellation } =
+        await import("./src/app-server/session-cancellation.js");
+      params.assertCurrent();
+      return withCodexSessionDescendantCancellation(options.bindingStore, params, run);
     },
     withSessionDeletion: async (params, run) => {
       const { withCodexAppServerSessionDeletion } =

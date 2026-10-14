@@ -31,6 +31,7 @@ import * as catalogAuth from "./plugin-model-catalog-auth.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 import * as agentFacts from "./prepared-model-runtime.agent-facts.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import {
   prepareConfiguredRuntimeFactsBatch,
   prepareWorkspaceBuildGroup,
@@ -39,7 +40,6 @@ import {
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
-  prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import * as inboundRegistry from "./prepared-model-runtime.inbound-registry.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";

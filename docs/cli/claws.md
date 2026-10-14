@@ -75,6 +75,7 @@ schemaVersion: 1
 agent:
   id: incident-triage
   name: Incident triage
+categories: [operations, research]
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -87,6 +88,10 @@ cronJobs: []
 You review incoming incidents, identify severity and ownership, and leave a
 concise handoff with evidence.
 ```
+
+`categories` is optional. Declare one to three distinct lowercase slugs for
+catalog discovery; the receiving registry decides which category names it
+accepts. Categories do not change the agent's runtime behavior.
 
 OpenClaw automatically discovers the optional `profiles/openclaw.yml` file.
 No manifest pointer is required. Other harnesses may discover their own
@@ -541,7 +546,9 @@ the ordinary plugin lifecycle separately when you intend to uninstall a
 process-wide plugin.
 
 Directories containing another agent's registered database are retained, even
-when that database is closed. If removal reports that an agent database is
+when that database is closed. Removal previews read current registry rows, including
+registrations made by a completed offline operation since the last preview.
+If removal reports that an agent database is
 still open, stop the command or restart the Gateway holding it before retrying.
 Preview works offline. Persisted monitor rows remain blockers until the serving
 Gateway can verify their ownership. Actual removal requires a running Gateway

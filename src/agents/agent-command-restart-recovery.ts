@@ -7,11 +7,6 @@ import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "../config/sessions/restart-recovery-types.js";
-import {
-  bindPreparedSessionSourceAssertion,
-  prepareSessionSourceScope,
-  releaseSessionSourceAuthorities,
-} from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
@@ -20,16 +15,19 @@ import {
   createHarnessCompletionSourceAssertion,
   getOwedHarnessCompletionTask,
 } from "./agent-harness-completion-recovery.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
+  getAutomaticDeliveryEvidence,
   hasCommittedOutboundDeliveryEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleAgentPayload,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   type AgentDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
+import { hasIntentionalSilentAgentPayload } from "./embedded-agent-runner/message-visibility.js";
 import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
 
 /** Restore the exact host-owned delivery constraints before starting a recovery turn. */
@@ -150,6 +148,17 @@ export function constrainRestartRecoveryDeliveryPayloads(
 export function buildRestartRecoveryTerminalDeliveryEvidence(
   result: AgentDeliveryEvidence,
 ): RestartRecoveryTerminalDeliveryEvidenceResult {
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(result.meta?.terminalReply);
+  const silent = terminalReply
+    ? terminalReply.disposition === "silent"
+    : hasIntentionalSilentAgentPayload(result);
+  const meta: RestartRecoveryTerminalDeliveryEvidenceResult["meta"] = {
+    ...(silent ? { terminalReply: { disposition: "silent" as const } } : {}),
+    ...(result.meta?.yielded === true ? { yielded: true as const } : {}),
+    ...(result.meta?.continuationPending === true ? { continuationPending: true as const } : {}),
+    ...(result.meta?.aborted ? { aborted: true as const } : {}),
+    ...(result.meta?.error ? { error: true as const } : {}),
+  };
   const rawPayloads = Array.isArray(result.payloads) ? result.payloads : undefined;
   const payloads: RestartRecoveryTerminalDeliveryEvidenceResult["payloads"] = rawPayloads
     ?.slice(0, 64)
@@ -183,10 +192,32 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
     rawDeliveryStatus && typeof rawDeliveryStatus === "object"
       ? (rawDeliveryStatus as { payloadOutcomes?: unknown }).payloadOutcomes
       : undefined;
+  const retainedPayloadOutcomes = Array.isArray(rawPayloadOutcomes)
+    ? rawPayloadOutcomes.slice(0, 64)
+    : undefined;
+  if (
+    retainedPayloadOutcomes &&
+    Array.isArray(rawPayloadOutcomes) &&
+    rawPayloadOutcomes.length > 64 &&
+    !getAutomaticDeliveryEvidence({
+      deliveryStatus: { payloadOutcomes: retainedPayloadOutcomes },
+    }).mayHaveSent
+  ) {
+    // Truncation must not turn an omitted committed/ambiguous send into a safe non-send.
+    const sendEvidence = rawPayloadOutcomes.find(
+      (outcome, index) =>
+        index >= 64 &&
+        getAutomaticDeliveryEvidence({ deliveryStatus: { payloadOutcomes: [outcome] } })
+          .mayHaveSent,
+    );
+    if (sendEvidence !== undefined) {
+      retainedPayloadOutcomes[63] = sendEvidence;
+    }
+  }
   const payloadOutcomes: NonNullable<
     RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
-  >["payloadOutcomes"] = Array.isArray(rawPayloadOutcomes)
-    ? rawPayloadOutcomes.flatMap((record) => {
+  >["payloadOutcomes"] = retainedPayloadOutcomes
+    ? retainedPayloadOutcomes.flatMap((record) => {
         if (!isRecord(record)) {
           return [];
         }
@@ -197,10 +228,12 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
         if (!outcomeStatus || typeof record.index !== "number" || !Number.isInteger(record.index)) {
           return [];
         }
+        const reason = normalizeOptionalString(record.reason)?.slice(0, 256);
         return [
           {
             index: record.index,
             status: outcomeStatus,
+            ...(reason ? { reason } : {}),
             ...(typeof record.sentBeforeError === "boolean"
               ? { sentBeforeError: record.sentBeforeError }
               : {}),
@@ -209,6 +242,9 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
       })
     : undefined;
   const errorMessage = normalizeOptionalString(rawDeliveryStatus?.errorMessage);
+  const reason = normalizeOptionalString(
+    getAutomaticDeliveryEvidence(result).suppressionReason ?? rawDeliveryStatus?.reason,
+  )?.slice(0, 256);
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
@@ -218,6 +254,7 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
           ? { resultCount: rawDeliveryStatus.resultCount }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(reason ? { reason } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
     : undefined;
@@ -280,6 +317,10 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
       : undefined;
   return {
     captured: true,
+    ...(Object.keys(meta).length ? { meta } : {}),
+    ...(result.requesterContinuationSettled === true
+      ? { requesterContinuationSettled: true as const }
+      : {}),
     ...(payloads?.length ? { payloads } : {}),
     ...(payloadsTruncated ? { payloadsTruncated } : {}),
     ...(deliveryStatus ? { deliveryStatus } : {}),
@@ -420,7 +461,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   };
 }
 
-/** Prepare only an admitted channel completion, or the exact saved recovery claim. */
+/** Bind internal completion sources and retain an already-admitted recovery claim. */
 export function prepareCommandHarnessCompletionRecovery(params: {
   entry: SessionEntry;
   sessionId: string;
@@ -440,10 +481,14 @@ export function prepareCommandHarnessCompletionRecovery(params: {
         inputProvenance: opts.inputProvenance,
       })
     : undefined;
-  const generatedMediaSourceRunId =
-    opts.internalDeliveryMediaUrls !== undefined &&
+  const internalCompletionSourceRunId =
     opts.inputProvenance?.kind === "inter_session" &&
-    isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
+    ((opts.inputProvenance.sourceTool === "subagent_settle" &&
+      opts.inputProvenance.sourceChannel === "internal" &&
+      Boolean(opts.inputProvenance.sourceSessionKey?.trim()) &&
+      runId.startsWith("announce:requester-settle:")) ||
+      (opts.internalDeliveryMediaUrls !== undefined &&
+        isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)))
       ? runId
       : undefined;
   const claimedHarnessCompletion =
@@ -462,8 +507,8 @@ export function prepareCommandHarnessCompletionRecovery(params: {
       Boolean(current && getOwedHarnessCompletionTask(guardedHarnessCompletion, current)),
     sourceOptions: {
       sourceIngress:
-        generatedMediaSourceRunId || harnessCompletion ? ("internal" as const) : undefined,
-      sourceRunId: generatedMediaSourceRunId ?? harnessCompletion?.sourceRunId,
+        internalCompletionSourceRunId || harnessCompletion ? ("internal" as const) : undefined,
+      sourceRunId: internalCompletionSourceRunId ?? harnessCompletion?.sourceRunId,
       sourceReplyDeliveryMode:
         opts.sourceReplyDeliveryMode ?? (harnessCompletion ? ("automatic" as const) : undefined),
     },
@@ -471,13 +516,13 @@ export function prepareCommandHarnessCompletionRecovery(params: {
 }
 
 /** Called after the caller has recorded the committed entry for failure cleanup. */
-export async function bindCommandHarnessCompletionAssertion(params: {
+export function bindCommandHarnessCompletionAssertion(params: {
   claim?: HarnessCompletionRecovery;
   persisted?: SessionEntry;
   sessionKey: string;
   storePath?: string;
   opts: AgentCommandOpts;
-}): Promise<{ opts: AgentCommandOpts; source?: { release(): Promise<void> } }> {
+}): { opts: AgentCommandOpts } {
   const { claim, persisted, sessionKey, storePath, opts } = params;
   if (
     claim &&
@@ -501,26 +546,5 @@ export async function bindCommandHarnessCompletionAssertion(params: {
       { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
     ),
   };
-  // A resumed run needs its exact source prepared before the first assertion.
-  const prepared = await prepareSessionSourceScope(guarded.assertSourceCurrent);
-  if (!prepared) {
-    guarded.assertSourceCurrent();
-    return { opts: guarded };
-  }
-  const source = bindPreparedSessionSourceAssertion(guarded.assertSourceCurrent, prepared);
-  try {
-    source();
-    return {
-      opts: {
-        ...guarded,
-        assertSourceCurrent: Object.assign(source, {
-          recoveryReference: guarded.assertSourceCurrent.recoveryReference,
-        }),
-      },
-      source,
-    };
-  } catch (error) {
-    await releaseSessionSourceAuthorities([source], [error]);
-    throw error;
-  }
+  return { opts: guarded };
 }

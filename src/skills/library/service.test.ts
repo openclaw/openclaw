@@ -22,6 +22,7 @@ import {
 import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
@@ -228,7 +229,7 @@ describe("profile-owned skill publication and selection", () => {
     const { alice, options } = fixture();
     await saveSkillLibrary(alice, draft(), options);
     const pins = await seedSkillLibrarySelection(alice, options);
-    const { db } = openOpenClawStateDatabase(options);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
     db.setAuthorizer((action, table, column) =>
       action === constants.SQLITE_READ &&
       table === "skill_library_revisions" &&
@@ -893,7 +894,7 @@ describe("library admission and imports", () => {
     expect(library.defaultSelectionNotice).toContain("detach");
     expect(selected).toHaveLength(64);
     const revisionReads = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase(options).db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
       ["revisions"],
       (sql) =>
         sql.startsWith("select ") && sql.includes('from "skill_library_revisions"')

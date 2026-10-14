@@ -241,6 +241,68 @@ describe("Codex app-server binding reads", () => {
     expect(lookupMany.mock.calls.map(([keys]) => keys.length)).toEqual([10_000, 1]);
     expect(syncLookup).not.toHaveBeenCalled();
   });
+  it("keeps borrowed settlement authority through cancellation while observing parent revocation", async () => {
+    const fixture = await createOpenClawTestState({
+      prefix: "codex-settlement-authority-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    const storePath = path.join(fixture.stateDir, "sessions.json");
+    const store = createCodexAppServerBindingStore(createCodexTestBindingStateStore());
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "current",
+      sessionKey: "agent:main:settlement",
+    };
+    const scope = { agentId: identity.agentId, sessionKey: identity.sessionKey, storePath };
+    const abort = new AbortController();
+    try {
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+      });
+      await store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "native-thread", cwd: "/repo" },
+      });
+      const retained = await resolveCodexSessionBinding({
+        bindingStore: store,
+        identity,
+        storePath,
+        signal: abort.signal,
+      });
+      const settlement = retained.authority.withLiveness(() => {});
+      try {
+        const child = await resolveCodexSessionBinding({
+          bindingStore: store,
+          identity,
+          storePath,
+          authority: retained.authority,
+        });
+        child.release();
+        expect(() => child.authority.assertLegacyCurrent()).toThrow();
+        expect(() => retained.authority.assertLegacyCurrent()).not.toThrow();
+        abort.abort(new Error("foreground canceled"));
+        expect(() => retained.authority.assertLegacyCurrent()).toThrow("foreground canceled");
+        expect(() => settlement.assertLegacyCurrent()).not.toThrow();
+        await patchSessionEntry({ ...scope, update: () => ({ updatedAt: 2 }) });
+        expect(() => settlement.assertLegacyCurrent()).not.toThrow();
+        await patchSessionEntry({
+          ...scope,
+          update: () => ({ previousSessionId: "replacement-predecessor" }),
+        });
+        expect(() => settlement.assertLegacyCurrent()).toThrow(
+          "Codex session generation is no longer current",
+        );
+      } finally {
+        retained.release();
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("combines lease and mutation lineage and refuses a same-id predecessor change", async () => {
     const fixture = await createOpenClawTestState({
       prefix: "codex-combined-authority-",
@@ -267,12 +329,15 @@ describe("Codex app-server binding reads", () => {
         });
       }
       await store.mutate(identity, { kind: "set", binding });
+      using captures = new DisposableStack();
       const lease = await resolveCodexSessionBinding({ bindingStore: store, identity, storePath });
+      captures.defer(() => lease.release());
       const mutation = await resolveCodexSessionBinding({
         bindingStore: store,
         identity: source,
         storePath,
       });
+      captures.defer(() => mutation.release());
       await store.withLease(
         identity,
         async () => {
@@ -294,9 +359,9 @@ describe("Codex app-server binding reads", () => {
             storePath,
             update: () => ({ previousSessionId: "changed-without-new-session-id" }),
           });
-          // Pure caller liveness remains valid. Only the fresh composed source
-          // validation can refuse this mutation, even though its lease is current.
-          mutation.authority.assertCurrent();
+          expect(() => mutation.authority.assertCurrent()).toThrow(
+            "Codex session generation is no longer current",
+          );
           await expect(
             store.mutate(
               identity,
@@ -319,8 +384,8 @@ describe("Codex app-server binding reads", () => {
   });
 });
 
-function importBinding(fields: Record<string, unknown>) {
-  return createStoredCodexAppServerBinding({
+async function importBinding(fields: Record<string, unknown>) {
+  return await createStoredCodexAppServerBinding({
     schemaVersion: 2,
     threadId: "thread-1",
     cwd: "/repo",
@@ -328,23 +393,25 @@ function importBinding(fields: Record<string, unknown>) {
   });
 }
 
-function importPolicy(fields: Record<string, unknown>) {
-  return importBinding({
-    pluginAppPolicyContext: {
-      fingerprint: "policy",
-      apps: {
-        app: {
-          configKey: "app",
-          marketplaceName: "openai-curated",
-          pluginName: "plugin",
-          allowDestructiveActions: true,
-          mcpServerNames: [],
-          ...fields,
+async function importPolicy(fields: Record<string, unknown>) {
+  return (
+    await importBinding({
+      pluginAppPolicyContext: {
+        fingerprint: "policy",
+        apps: {
+          app: {
+            configKey: "app",
+            marketplaceName: "openai-curated",
+            pluginName: "plugin",
+            allowDestructiveActions: true,
+            mcpServerNames: [],
+            ...fields,
+          },
         },
+        pluginAppIds: {},
       },
-      pluginAppIds: {},
-    },
-  })?.binding.pluginAppPolicyContext;
+    })
+  )?.binding.pluginAppPolicyContext;
 }
 
 describe("Codex app-server binding codec", () => {
@@ -364,17 +431,17 @@ describe("Codex app-server binding codec", () => {
     });
   });
 
-  it("rejects unsafe marketplace names in imported plugin app ownership", () => {
-    expect(importPolicy({ marketplaceName: "../unsafe-marketplace" })).toBeUndefined();
+  it("rejects unsafe marketplace names in imported plugin app ownership", async () => {
+    expect(await importPolicy({ marketplaceName: "../unsafe-marketplace" })).toBeUndefined();
   });
 
-  it("normalizes legacy fingerprints without rehashing canonical values", () => {
+  it("normalizes legacy fingerprints without rehashing canonical values", async () => {
     const rawDynamicToolsFingerprint = JSON.stringify([{ name: "legacy_tool" }]);
     const rawUserMcpServersFingerprint = JSON.stringify({
       mcp_servers: { legacy: { command: "node" } },
     });
     const nativeSkillIsolationFingerprint = `sha256:${"b".repeat(64)}`;
-    const imported = importBinding({
+    const imported = await importBinding({
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: rawDynamicToolsFingerprint,
       nativeSkillIsolationFingerprint,
@@ -387,7 +454,7 @@ describe("Codex app-server binding codec", () => {
     });
 
     const existingHash = `sha256:${"a".repeat(64)}`;
-    const canonical = importBinding({
+    const canonical = await importBinding({
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: "[]",
       userMcpServersFingerprint: existingHash,
@@ -465,7 +532,7 @@ describe("Codex app-server binding codec", () => {
           state: "active",
           binding,
         });
-        const imported = importBinding({
+        const imported = await importBinding({
           ...binding,
           createdAt: "2025-12-31T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
@@ -488,7 +555,7 @@ describe("Codex app-server binding codec", () => {
   it.each([
     { destructiveApprovalMode: "ask", appId: "not-allowed" },
     { destructiveApprovalMode: "on-request" },
-  ])("drops invalid imported policy contexts: %j", (fields) => {
-    expect(importPolicy(fields)).toBeUndefined();
+  ])("drops invalid imported policy contexts: %j", async (fields) => {
+    expect(await importPolicy(fields)).toBeUndefined();
   });
 });

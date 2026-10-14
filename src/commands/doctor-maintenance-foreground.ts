@@ -17,7 +17,6 @@ export async function acquireDoctorGatewayMaintenanceOwner(
     runtime: RuntimeEnv;
     assertCurrent?: () => void;
     deadlineMs?: number;
-    relocatedMaintenanceOwner?: NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
   },
 ) {
   const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
@@ -32,7 +31,6 @@ export async function acquireDoctorGatewayMaintenanceOwner(
           lifecycleDeadlineMs: params.deadlineMs,
           assertCurrent: params.assertCurrent,
           onWait: params.runtime.log,
-          relocatedMaintenanceOwner: params.relocatedMaintenanceOwner,
         });
         if (!owner) {
           throw new Error(`Doctor could not acquire maintenance ownership for ${databasePath}`);

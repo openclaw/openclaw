@@ -8,8 +8,10 @@ import {
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
+import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
@@ -52,7 +54,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
           requesterTurnRunId.length > 0 &&
           isSameSubagentRunOwner(entry, params.expected) &&
           entry.requesterSessionKey === params.requesterSessionKey &&
-          entry.requesterAgentId === params.requesterAgentId &&
+          resolveRecordedRequester(entry) === params.requesterAgentId &&
           (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
           entry.expectsCompletionMessage === true &&
           entry.collect !== true &&
@@ -153,7 +155,7 @@ export function listUnsettledRequesterChildrenInRuns(params: {
   for (const entry of params.runs.values()) {
     if (
       entry.requesterSessionKey === requesterSessionKey &&
-      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId)
+      (!params.requesterAgentId || resolveRecordedRequester(entry) === params.requesterAgentId)
     ) {
       recordLatestSubagentRun(latestByChildSessionKey, entry.childSessionKey, entry);
     }
@@ -221,11 +223,14 @@ export function selectRequesterTurnChildren(
   requesterTurnRunId: string,
   onSuperseded?: (entry: SubagentRunRecord) => void,
 ): SubagentRunRecord[] {
-  return [...runs.values()]
+  const lookup = getSubagentSessionReadLookup(runs);
+  return lookup
+    .selectRequesterTurn(requesterTurnRunId)
+    .map((runId) => runs.get(runId)!)
     .filter(
       (entry) =>
         entry.requesterSessionKey === requesterSessionKey &&
-        (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
+        (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId) &&
         entry.requesterTurnRunId === requesterTurnRunId &&
         entry.expectsCompletionMessage === true,
     )
@@ -235,7 +240,7 @@ export function selectRequesterTurnChildren(
           entry,
           (key, matches, childAgentId) =>
             getLatestSubagentRunByChildSessionKeyFromRuns(
-              runs.values(),
+              lookup.selectChildren(new Set([key])).map((runId) => runs.get(runId)!),
               key,
               matches,
               childAgentId,

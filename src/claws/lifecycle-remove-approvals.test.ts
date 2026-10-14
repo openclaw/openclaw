@@ -10,6 +10,10 @@ import { createAgent } from "../agents/agent-create.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
@@ -57,6 +61,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabases();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   envSnapshot.restore();
 });
 
@@ -153,6 +158,7 @@ describe("Claw exec approvals removal", () => {
         },
       };
       await writeOpenClawConfig(home, config);
+      setRuntimeConfigSnapshot(config);
       const workerScope = { agentId: "worker", sessionKey: "agent:worker:main" };
       const keptScope = { agentId: "kept", sessionKey: "agent:kept:main" };
       replaceSessionEntrySync(workerScope, { sessionId: "worker-session", updatedAt: 1 });
@@ -190,6 +196,7 @@ describe("Claw exec approvals removal", () => {
         },
       };
       await writeOpenClawConfig(home, config);
+      setRuntimeConfigSnapshot(config);
       const scope = {
         agentId: "worker",
         sessionKey: "agent:worker:main",
@@ -282,6 +289,7 @@ describe("Claw exec approvals removal", () => {
       });
       config = { ...config, mcp: { servers: { docs: sourceMcpServer } } };
       await writeOpenClawConfig(home, config);
+      setRuntimeConfigSnapshot(config);
       saveExecApprovals({ version: 1, agents: { worker: { security: "deny" } } });
       const configBefore = structuredClone(config);
       const approvalsBefore = loadExecApprovals();
@@ -388,11 +396,16 @@ describe("Claw exec approvals removal", () => {
           expect(cleanup).not.toHaveBeenCalled();
           await child.close();
           const database = await deletion.runDatabaseCleanup(target, cleanup);
-          expect(database.db.isOpen).toBe(false);
+          expect(database.db.isOpen).toBe(true);
           await deletion.rollback();
+          expect(openOpenClawAgentDatabase(target)).toBe(database);
         });
       } finally {
-        await child.dispose();
+        try {
+          closeOpenClawAgentDatabaseByPath(target.path, target.agentId);
+        } finally {
+          await child.dispose();
+        }
       }
     });
   });
@@ -481,6 +494,7 @@ describe("Claw exec approvals removal", () => {
           commitConfig,
         });
         await writeOpenClawConfig(home, config);
+        setRuntimeConfigSnapshot(config);
         const sharedDir =
           kind === "workspace"
             ? addPlan.agent.workspace
@@ -537,6 +551,7 @@ describe("Claw exec approvals removal", () => {
     await withTempHomeConfig({}, async ({ home }) => {
       const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
+      setRuntimeConfigSnapshot(config);
       saveExecApprovals({
         version: 1,
         agents: {
@@ -583,6 +598,7 @@ describe("Claw exec approvals removal", () => {
     await withTempHomeConfig({}, async ({ home }) => {
       const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
+      setRuntimeConfigSnapshot(config);
       const plan = await buildClawRemovePlan("worker");
       let creationDuringCleanup: Awaited<ReturnType<typeof createAgent>> | undefined;
 
@@ -613,6 +629,7 @@ describe("Claw exec approvals removal", () => {
     await withTempHomeConfig({}, async ({ home }) => {
       const { config, env } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
+      setRuntimeConfigSnapshot(config);
       const plan = await buildClawRemovePlan("worker", { env, config });
       const state = openOpenClawStateDatabase({ env });
       state.db.exec(`

@@ -1,0 +1,152 @@
+import { createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
+import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
+import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
+import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+
+export function ComposerQueue(view: { composer: ChatComposerProps; showAbortableUi: boolean }) {
+  const canAct = () =>
+    view.composer.connected && view.composer.canSend && !view.composer.submitDisabledReason;
+  return (
+    <ChatQueue
+      queue={view.composer.queue}
+      displayQueue={view.composer.displayQueue}
+      connected={view.composer.connected}
+      offline={view.composer.offline}
+      canAbort={view.showAbortableUi}
+      canRemoveServerQueued={canAct()}
+      onQueueRetry={canAct() ? view.composer.onQueueRetry : undefined}
+      onQueueSteer={canAct() ? view.composer.onQueueSteer : undefined}
+      onQueueMove={view.composer.onQueueMove}
+      queuedEdit={view.composer.queuedEdit}
+      onQueueRemove={view.composer.onQueueRemove}
+    />
+  );
+}
+
+export function ComposerInputScope(props: {
+  state: ChatComposerState;
+  children: import("@solidjs/web").JSX.Element;
+}) {
+  const state = untrack(() => props.state);
+  onCleanup(() => {
+    state.textareaRef?.();
+    state.composerInputRef?.();
+  });
+  return untrack(() => props.children);
+}
+
+export function ComposerProgress(view: { composer: ChatComposerProps; shown: boolean }) {
+  const [revision, setRevision] = createSignal(0);
+  createRenderEffect(
+    () => view.composer.progressCardVisibility,
+    (binding) => {
+      if (!binding) {
+        return undefined;
+      }
+      const changed = () => setRevision((value) => value + 1);
+      binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);
+      return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, changed);
+    },
+  );
+  const presented = () => {
+    revision();
+    return view.composer.progressCardVisibility?.isPresented() ?? true;
+  };
+  return (
+    <Show
+      when={presented() && Boolean(view.composer.progressCard)}
+      fallback={
+        presented() && view.composer.progressCardInitialLoading ? (
+          <div
+            class="agent-chat__progress-float agent-chat__progress-float--loading"
+            hidden={!view.shown}
+            aria-hidden="true"
+          />
+        ) : undefined
+      }
+    >
+      <div class="agent-chat__progress-float" hidden={!view.shown}>
+        <SessionProgressCard
+          card={view.composer.progressCard}
+          placement="composer"
+          onDismiss={view.composer.onDismissProgressCard}
+          sessionStatus={view.composer.selectedSession?.status}
+          startedAt={view.composer.selectedSession?.startedAt}
+          endedAt={view.composer.selectedSession?.endedAt}
+          hasActiveRun={view.composer.runActive}
+          collapseComposerByDefault={view.composer.collapseTaskProgress}
+          composerDisclosureContext={{
+            presented: view.shown,
+            gatewayScope: view.composer.gatewayScope,
+            sessionIdentity: view.composer.progressCardIdentity,
+            cardLifetime: view.composer.progressCardLifetime,
+            readingHistory: view.composer.readingHistory,
+            onManipulate: view.composer.onProgressManipulate,
+          }}
+          refreshAction={
+            view.composer.connected && view.composer.canSend
+              ? view.composer.progressCardRefresh
+              : undefined
+          }
+          onClearSaved={view.composer.onClearSavedProgressCard}
+        />
+      </div>
+    </Show>
+  );
+}
+
+export function ComposerGoal(view: {
+  composer: ChatComposerProps;
+  state: ChatComposerState;
+  controller: GoalComposerController;
+  requestUpdate: () => void;
+}) {
+  const resumeRecovery = () => {
+    const recovery = view.composer.goalRecovery;
+    return recovery?.action === "resume" &&
+      !recovery.retired &&
+      recovery.goalId === view.composer.selectedSession?.goal?.id
+      ? recovery
+      : undefined;
+  };
+  return (
+    <>
+      {renderChatGoalRecoverySolid(
+        resumeRecovery() ? undefined : view.composer.goalRecovery,
+        view.composer.connected,
+      )}
+      <Show when={view.composer.selectedSession?.goal} keyed>
+        {(goal) => (
+          <div class="agent-chat__goal-float">
+            <ChatGoal
+              goal={goal}
+              resumeRecovery={resumeRecovery()}
+              connected={view.composer.connected}
+              expanded={view.state.goalExpandedId === goal.id}
+              canAct={
+                view.composer.connected &&
+                view.composer.canSend &&
+                !view.composer.submitDisabledReason &&
+                Boolean(view.composer.currentSessionId) &&
+                !view.composer.goalRecovery
+              }
+              onGoalAction={view.composer.onGoalAction}
+              onGoalEdit={
+                view.composer.onGoalSubmit
+                  ? (selected) => view.controller.begin(selected)
+                  : undefined
+              }
+              onExpandedChange={(expanded) => {
+                view.state.goalExpandedId = expanded ? goal.id : null;
+                view.requestUpdate();
+              }}
+            />
+          </div>
+        )}
+      </Show>
+    </>
+  );
+}

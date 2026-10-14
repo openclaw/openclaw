@@ -156,6 +156,7 @@ describe("Codex local tool environment placement", () => {
           },
         },
       });
+      using _ = { [Symbol.dispose]: connection.releaseBindingAuthority };
       try {
         const expected = placement === "local" ? localToolEnv : undefined;
         expect(connection.shellEnvironment).toEqual(expected);

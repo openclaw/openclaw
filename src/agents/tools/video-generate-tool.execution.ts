@@ -14,6 +14,7 @@ import type {
 } from "../../video-generation/types.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { videoGenerationTaskLifecycle } from "./media-generate-background.js";
@@ -23,6 +24,7 @@ import {
   buildMediaGenerationGeometryDetails,
   buildSavedMediaAttachment,
   type MediaGenerateToolExecutionResult,
+  type AcquireGeneratedMediaSandbox,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
@@ -52,6 +54,7 @@ export function normalizeResolution(
 }
 
 export async function loadReferenceAssets(params: {
+  workspaceReadiness?: AgentWorkspaceReadiness;
   inputs: string[];
   roles: string[];
   expectedKind: "image" | "video" | "audio";
@@ -92,6 +95,7 @@ type ExecutedVideoGeneration = MediaGenerateToolExecutionResult & {
 export async function executeVideoGenerationJob(params: {
   request: Omit<GenerateVideoParams, "authStore">;
   filename?: string;
+  sandbox?: AcquireGeneratedMediaSandbox;
   loadedReferenceImages: LoadedReferenceAsset[];
   loadedReferenceVideos: LoadedReferenceAsset[];
   taskHandle: MediaGenerationTaskHandle | null;
@@ -202,11 +206,13 @@ export async function executeVideoGenerationJob(params: {
     ),
   );
 
-  const executionResult = buildMediaGenerateToolExecutionResult({
+  const executionResult = await buildMediaGenerateToolExecutionResult({
     kind: "video",
     result,
     attachments,
     mediaUrls: allMediaUrls,
+    sandbox: params.sandbox,
+    maxBytes: mediaMaxBytes,
     messages: [duration.message],
     taskHandle: params.taskHandle,
     details: {

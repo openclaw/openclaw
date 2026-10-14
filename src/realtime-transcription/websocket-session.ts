@@ -540,16 +540,11 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     try {
       this.options.callbacks.onError?.(normalized);
     } catch (callbackError) {
-      try {
-        this.capture({
-          direction: "local",
-          kind: "error",
-          errorText: toStringifiedError(callbackError).message,
-        });
-      } catch {
-        // Error observers are diagnostic hooks; capture failures must not
-        // replace the original provider/session error.
-      }
+      this.capture({
+        direction: "local",
+        kind: "error",
+        errorText: toStringifiedError(callbackError).message,
+      });
     }
   }
 

@@ -131,20 +131,33 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const parsedPath = parseConfigSetPath(opts.path);
     const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
     const { ensureValidConfigSnapshotForCli } = await import("./config-cli-validation.js");
-    const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
+    // Plugins also extend provider model parameters within agent configuration.
+    const needsPluginSchema = ["plugins", "channels", "agents"].includes(parsedPath[0] ?? "");
+    const read = await readConfigFileSnapshotWithPluginMetadata({
+      observe: false,
+      completePluginMetadata: needsPluginSchema,
+    });
     const { snapshot, pluginMetadataSnapshot } = read;
     ensureValidConfigSnapshotForCli(snapshot, runtime, { json: opts.json });
-    if (!pluginMetadataSnapshot) {
+    if (needsPluginSchema && !pluginMetadataSnapshot) {
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
-    const { buildRuntimeConfigSchemaFromRegistry } = await import("../config/runtime-schema.js");
     const { redactConfigObject } = await import("../config/redact-snapshot.js");
-    const { schema, uiHints } = buildRuntimeConfigSchemaFromRegistry(
-      pluginMetadataSnapshot.manifestRegistry,
-      snapshot.sourceConfig,
-    );
+    const runtimeSchema =
+      needsPluginSchema && pluginMetadataSnapshot
+        ? (await import("../config/runtime-schema.js")).buildRuntimeConfigSchemaFromRegistry(
+            pluginMetadataSnapshot.manifestRegistry,
+            snapshot.sourceConfig,
+          )
+        : undefined;
+    const uiHints =
+      runtimeSchema?.uiHints ??
+      (await import("../config/schema-base.js")).computeBaseConfigUiHints();
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found || res.value === undefined) {
+      const schema =
+        runtimeSchema?.schema ??
+        (await import("../config/schema.js")).buildConfigSchemaCore().schema;
       const autoManaged = AUTO_MANAGED_CONFIG_META_PATHS.some(
         (managedPath) =>
           parsedPath.every((segment, index) => managedPath[index] === segment) ||
@@ -251,6 +264,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     const read = await readConfigFileSnapshotWithPluginMetadata({
       observe: false,
       prepareValidation: "strict",
+      completePluginMetadata: false,
     });
     const snapshot = await finishConfigValidationForCli(read);
     outputPath = snapshot.path;
@@ -423,13 +437,17 @@ export function registerConfigCli(program: Command) {
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
     .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
+      const runLocal = () => runConfigSet({ path, value, cliOptions: opts });
+      if (opts.dryRun) {
+        return runLocal();
+      }
       const { runWithLocalStateOwner } = await import("./local-state-owner.js");
       await runWithLocalStateOwner({
         method: "config set",
         params: {},
         target: path ?? "config",
         onForeignOwner: "refuse",
-        runLocal: () => runConfigSet({ path, value, cliOptions: opts }),
+        runLocal,
       });
     });
 
@@ -456,13 +474,17 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts: ConfigPatchOptions) => {
+      const runLocal = () => runConfigPatch({ cliOptions: opts });
+      if (opts.dryRun) {
+        return runLocal();
+      }
       const { runWithLocalStateOwner } = await import("./local-state-owner.js");
       await runWithLocalStateOwner({
         method: "config patch",
         params: {},
         target: "config",
         onForeignOwner: "refuse",
-        runLocal: () => runConfigPatch({ cliOptions: opts }),
+        runLocal,
       });
     });
 
@@ -474,13 +496,17 @@ export function registerConfigCli(program: Command) {
     .option("--allow-exec", "allow exec SecretRef providers during --dry-run")
     .option("--json", "print dry-run result as JSON")
     .action(async (path: string, options: ConfigUnsetOptions) => {
+      const runLocal = () => runConfigUnset({ path, cliOptions: options });
+      if (options.dryRun) {
+        return runLocal();
+      }
       const { runWithLocalStateOwner } = await import("./local-state-owner.js");
       await runWithLocalStateOwner({
         method: "config unset",
         params: {},
         target: path,
         onForeignOwner: "refuse",
-        runLocal: () => runConfigUnset({ path, cliOptions: options }),
+        runLocal,
       });
     });
 

@@ -12,11 +12,16 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+} from "../config/runtime-snapshot.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -67,7 +72,53 @@ type AgentModelRuntimePolicyResolution = ResolvedModelRuntimePolicy & {
   ambiguous?: true;
 };
 
-function hasRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
+type IndexedAgentModelPolicy = AgentModelRuntimePolicyMatch & { entryId: string };
+const agentModelPolicyIndexes = new WeakMap<
+  Record<string, AgentModelEntryConfig>,
+  {
+    publication: ReturnType<typeof getRuntimeConfigSnapshotMetadata>;
+    index: Map<string, IndexedAgentModelPolicy[]>;
+  }
+>();
+
+function readAgentModelPolicyIndex(
+  models: Record<string, AgentModelEntryConfig>,
+  config: OpenClawConfig,
+) {
+  const publication =
+    config === getRuntimeConfigSnapshot() ? getRuntimeConfigSnapshotMetadata() : null;
+  const cacheable = publication !== null || isDeeplyFrozenPlainData(models);
+  const cached = agentModelPolicyIndexes.get(models);
+  if (cacheable && cached && cached.publication === publication) {
+    return cached.index;
+  }
+  const index = new Map<string, IndexedAgentModelPolicy[]>();
+  for (const [entryId, entry] of Object.entries(models)) {
+    const policy = entry?.agentRuntime;
+    if (!hasRuntimePolicy(policy)) {
+      continue;
+    }
+    const parsed = parseModelCatalogRef(entryId.trim());
+    const match = { entryId, provider: parsed?.provider ?? "", policy };
+    for (const key of parsed ? [entryId.trim(), parsed.modelId] : [entryId.trim()]) {
+      const matches = index.get(key);
+      if (matches) {
+        matches.push(match);
+      } else {
+        index.set(key, [match]);
+      }
+    }
+  }
+  // Published revisions and immutable captures own these facts; unbound mutable callers rebuild.
+  if (cacheable) {
+    agentModelPolicyIndexes.set(models, { publication, index });
+  }
+  return index;
+}
+
+function hasRuntimePolicy(
+  value: AgentRuntimePolicyConfig | undefined,
+): value is AgentRuntimePolicyConfig {
   return Boolean(value?.id?.trim());
 }
 
@@ -176,21 +227,18 @@ function resolveAgentModelEntryRuntimePolicy(params: {
     if (!models) {
       continue;
     }
-    for (const key of Object.keys(models)) {
-      const policy = models[key]?.agentRuntime;
-      if (!policy || !hasRuntimePolicy(policy)) {
-        continue;
-      }
+    const key = params.matchKind === "provider-wildcard" ? "*" : (modelId ?? "");
+    for (const match of readAgentModelPolicyIndex(models, params.config).get(key) ?? []) {
       const matches =
         modelEntryMatchKind({
-          entryId: key,
+          entryId: match.entryId,
           provider: params.provider,
           modelId: modelId ?? "",
         }) === params.matchKind;
       if (!matches) {
         continue;
       }
-      scopeMatches.push({ provider: parseModelCatalogRef(key)?.provider ?? "", policy });
+      scopeMatches.push(match);
     }
     // Unqualified model ids can match multiple provider-qualified entries; avoid
     // choosing an arbitrary runtime when the provider is unknown.

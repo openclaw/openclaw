@@ -7,6 +7,27 @@ export function recordMemorySample(
   memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
   byteBuckets: number[],
 ): void {
+  for (const message of memory.workerMessages ?? []) {
+    const labels = { kind: message.kind, direction: message.direction };
+    store.counterValue(
+      "openclaw_worker_messages_total",
+      "Messages crossing the Gateway main-thread worker boundary.",
+      labels,
+      message.messages,
+    );
+    store.counterValue(
+      "openclaw_worker_message_payload_bytes_total",
+      "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
+      labels,
+      message.payloadBytes,
+    );
+    store.counterValue(
+      "openclaw_worker_message_unmeasured_total",
+      "Worker messages without a known payload size; these do not contribute to payload bytes.",
+      labels,
+      message.unmeasuredMessages,
+    );
+  }
   for (const worker of memory.workerLifecycle ?? []) {
     store.counterValue(
       "openclaw_worker_started_total",
@@ -67,7 +88,21 @@ export function recordMemorySample(
     string,
     { count: number; sampled: number; heapUsed: number | undefined }
   >();
+  store.clearGauges("openclaw_code_mode_worker_heap_bytes");
   for (const worker of memory.workerHeaps ?? []) {
+    if (worker.workerSlot !== undefined) {
+      for (const [kind, value] of [
+        ["used", worker.heapUsed],
+        ["limit", worker.heapSizeLimitBytes],
+      ] as const) {
+        store.gauge(
+          "openclaw_code_mode_worker_heap_bytes",
+          "Latest live Code Mode isolate heap usage and limit by reusable worker slot.",
+          { slot: String(worker.workerSlot), kind },
+          value,
+        );
+      }
+    }
     const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
     totals.count++;
     totals.sampled++;

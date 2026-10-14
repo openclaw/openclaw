@@ -1,6 +1,4 @@
 /* @vitest-environment jsdom */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings } from "../../app/settings.ts";
@@ -10,29 +8,34 @@ import {
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   resetChatHistoryProjection,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
+  createPaneTestHost,
+  getPaneTestRuntime,
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import {
+  observeChatCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { markPrewarmedChatSnapshotReady, prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import "./chat-pane.ts";
+import "./chat-pane.tsx";
 
 const sessionKey = "agent:main:warm-startup";
 const stored: ChatSessionSnapshot = {
@@ -56,7 +59,11 @@ function mountPane(
   if (!snapshotStore) {
     vi.spyOn(store, "read").mockReturnValue(read.promise);
   }
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+  // SAFETY: The fixture uses the real pane runtime and its forwarded test surface.
+  const pane = createPaneTestHost(
+    "openclaw-chat-runtime-test",
+    ChatPaneRuntime,
+  ) as unknown as TestChatPane;
   panes.push(pane);
   vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
   vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
@@ -77,7 +84,7 @@ function mountPane(
   vi.spyOn(pane.chatState, "attach").mockImplementation(() => {
     throw attached;
   });
-  expect(() => pane.connectedCallback()).toThrow(attached);
+  expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(attached);
   const state = pane.state;
   const liveResult = {
     messages: liveMessages,
@@ -85,7 +92,7 @@ function mountPane(
     sessionInfo: { key, kind: "direct", sessionId: "warm-session", updatedAt: 1 },
     hasMore: false,
     deltaCursor: "live-cursor",
-  };
+  } satisfies ChatHistoryResult;
   const request = createGatewayRequestMock(async () => liveResult);
   const client = createGatewayBrowserClientFixture({ request });
   return {
@@ -176,48 +183,158 @@ describe("first chat startup snapshot ordering", () => {
     );
     expect(h.request).not.toHaveBeenCalled();
   });
-  it("issues startup with the stored cursor before rendering the hydrated snapshot", async () => {
+  it("issues startup immediately while the local snapshot is still pending", async () => {
     const h = mountPane();
-    const order: string[] = [];
     const network = createDeferred<typeof h.liveResult>();
-    const rendered = createDeferred();
-    class SnapshotHost extends LitElement {
-      override render() {
-        if (h.state.chatMessages.length) {
-          order.push("render");
-          rendered.resolve();
-        }
-        return h.state.chatMessages;
-      }
-    }
-    customElements.define("warm-startup-snapshot-host", SnapshotHost);
-    const host = document.body.appendChild(new SnapshotHost());
-    onTestFinished(() => host.remove());
-    h.state.requestUpdate = () => host.requestUpdate();
-    h.request.mockImplementation(() => {
-      order.push("request");
-      return network.promise;
-    });
+    h.request.mockReturnValueOnce(network.promise);
     h.connect();
     const loading = h.start();
-    await host.updateComplete;
-    expect(h.request).not.toHaveBeenCalled();
-
+    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+      "chat.startup",
+      expect.not.objectContaining({ cursor: expect.anything() }),
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+    );
     h.read.resolve(stored);
-    await rendered.promise;
-    expect(order).toEqual(["request", "render"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.chatMessages).toEqual(stored.messages);
+    network.resolve(h.liveResult);
+    await loading;
+    expect(h.state.chatMessages).toEqual(liveMessages);
+  });
+
+  it.each(["cache-first", "history-first"] as const)(
+    "retains the cached rows and widget heights for identical history (%s)",
+    async (ordering) => {
+      const memory: ChatMessageCache = new Map();
+      const store = new SessionSnapshotStore(memory);
+      observeChatCache(memory, store);
+      const record = createDeferred<unknown>();
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(
+        record.promise,
+      );
+      const h = mountPane(true, sessionKey, false, store, memory);
+      const network = createDeferred<ChatHistoryResult>();
+      const snapshot = { ...stored, widgetHeights: { "inline-widget": 420 } };
+      const paints: unknown[][] = [];
+      h.state.requestUpdate = () => {
+        if (h.state.chatMessages.length) {
+          paints.push(h.state.chatMessages);
+        }
+      };
+      h.request.mockReturnValueOnce(network.promise);
+      h.connect();
+      const loading = h.start();
+      expect(h.request).toHaveBeenCalledOnce();
+      const fresh = { ...h.liveResult, messages: structuredClone(stored.messages) };
+      if (ordering === "history-first") {
+        network.resolve(fresh);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(h.state.chatMessages).toEqual([]);
+      }
+      record.resolve({
+        projectionVersion: 2,
+        savedAt: Date.now(),
+        sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
+        sessionId: snapshot.sessionId,
+        snapshot,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      if (ordering === "cache-first") {
+        network.resolve(fresh);
+      }
+      await loading;
+      expect(paints.length).toBeGreaterThan(0);
+      expect(paints.every((messages) => messages === paints[0])).toBe(true);
+      expect(h.state.chatMessages).toBe(paints[0]);
+      expect(h.state.chatMessages).toEqual(stored.messages);
+      expect(readChatSessionSnapshot(memory, h.state, { sessionKey })?.widgetHeights).toEqual(
+        snapshot.widgetHeights,
+      );
+    },
+  );
+
+  it("replaces changed bytes at the same native message identity", async () => {
+    const h = mountPane();
+    h.read.resolve(stored);
+    await vi.advanceTimersByTimeAsync(0);
+    const cachedMessage = h.state.chatMessages[0];
+    const changedMessage = nativeHistoryMessage(1, "Updated conversation");
+    h.request.mockResolvedValueOnce({ ...h.liveResult, messages: [changedMessage] });
+    h.connect();
+    await h.start();
+    expect(h.state.chatMessages).toEqual([changedMessage]);
+    expect(h.state.chatMessages[0]).not.toBe(cachedMessage);
+  });
+
+  it.each(["missing", "failed"] as const)(
+    "publishes fresh history when the local read is %s",
+    async (result) => {
+      const h = mountPane();
+      h.connect();
+      const loading = h.start();
+      expect(h.request).toHaveBeenCalledOnce();
+      if (result === "missing") {
+        h.read.resolve(null);
+      } else {
+        h.read.reject(new Error("Cache unavailable"));
+      }
+      await loading;
+      expect(h.state.chatMessages).toEqual(liveMessages);
+    },
+  );
+
+  it.each(["never settles", "settles late"] as const)(
+    "publishes history after its cache grace period when the snapshot read %s",
+    async (settlement) => {
+      const h = mountPane();
+      const network = createDeferred<typeof h.liveResult>();
+      h.request.mockReturnValueOnce(network.promise);
+      h.connect();
+      const loading = h.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.state.chatMessages).toEqual([]);
+      network.resolve(h.liveResult);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(h.state.chatMessages).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      await loading;
+      if (settlement === "settles late") {
+        h.read.resolve(stored);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.state.chatMessages).toEqual(liveMessages);
+      }
+      expect(h.request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("uses the cursor when the local read completed before startup", async () => {
+    const h = mountPane();
+    h.read.resolve(stored);
+    await vi.advanceTimersByTimeAsync(0);
+    h.connect();
+    await h.start();
     expect(h.request).toHaveBeenCalledExactlyOnceWith(
       "chat.startup",
       expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
-    expect(h.state.chatMessages).toEqual(stored.messages);
-    network.resolve(h.liveResult);
-    await loading;
   });
 
-  it.each(["unchanged", "refreshed", "deadline", "ordinary-refresh"] as const)(
-    "hydrates both splits when the sibling is %s",
+  it("shares an immediate startup between callers while the local read is pending", async () => {
+    const h = mountPane();
+    h.connect();
+    const first = h.start();
+    const joined = h.start();
+    expect(h.request).toHaveBeenCalledOnce();
+    h.read.resolve(stored);
+    await Promise.all([first, joined]);
+    expect(h.request).toHaveBeenCalledOnce();
+    expect(h.state.chatMessages).toEqual(liveMessages);
+  });
+
+  it.each(["unchanged", "refreshed"] as const)(
+    "hydrates both splits when shared history is %s",
     async (ordering) => {
       const memory: ChatMessageCache = new Map();
       const store = new SessionSnapshotStore(memory);
@@ -232,153 +349,26 @@ describe("first chat startup snapshot ordering", () => {
       second.connect();
       second.state.client = first.client;
       second.state.sessions = sessions;
-      const currentCursor = ordering === "unchanged" ? stored.deltaCursor : "live-cursor";
-      first.request.mockImplementation(async (_method, params) =>
-        asOptionalRecord(params)?.cursor === currentCursor
-          ? {
-              kind: "delta",
-              messages: [],
-              deltaCursor: currentCursor,
-              sessionInfo: first.liveResult.sessionInfo,
-            }
-          : first.liveResult,
-      );
+      const messages = ordering === "unchanged" ? structuredClone(stored.messages) : liveMessages;
+      first.request.mockImplementation(async () => ({ ...first.liveResult, messages }));
       const loading = [first.start(), second.start()];
       firstRead.resolve(stored);
       await loading[0];
-      if (ordering === "deadline") {
-        await vi.advanceTimersByTimeAsync(300);
-      } else if (ordering === "ordinary-refresh") {
-        await loadChatHistory(second.state, { deferBranches: true });
-      }
-      secondRead.resolve(ordering === "unchanged" ? stored : null);
+      secondRead.resolve(null);
       await Promise.all(loading);
-      const expectedMessages = ordering === "unchanged" ? stored.messages : liveMessages;
-      expect(first.state.chatMessages).toEqual(expectedMessages);
-      expect(second.state.chatMessages).toEqual(expectedMessages);
+      expect(first.state.chatMessages).toEqual(messages);
+      expect(second.state.chatMessages).toEqual(messages);
       expect(readChatSessionSnapshot(memory, second.state, { sessionKey })?.messages).toEqual(
-        expectedMessages,
+        messages,
       );
     },
   );
 
-  it("waits for hydration after a long offline mount and shares the cursor startup between callers", async () => {
-    const h = mountPane();
-    await vi.advanceTimersByTimeAsync(1_000);
-    h.connect();
-    await vi.advanceTimersByTimeAsync(200);
-    const first = h.start();
-    const joined = h.start();
-    await vi.advanceTimersByTimeAsync(50);
-    expect(h.request).not.toHaveBeenCalled();
-
-    h.read.resolve(stored);
-    await Promise.all([first, joined]);
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-  });
-
-  it("caps the wait at 300 ms from connection readiness and fences a late stored snapshot", async () => {
-    const h = mountPane();
-    const network = createDeferred<typeof h.liveResult>();
-    h.request.mockReturnValueOnce(network.promise);
-    await vi.advanceTimersByTimeAsync(1_000);
-    h.connect();
-    await vi.advanceTimersByTimeAsync(100);
-    const loading = h.start();
-    await vi.advanceTimersByTimeAsync(199);
-    expect(h.request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.not.objectContaining({ cursor: expect.anything() }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-    expect(h.state.chatMessages).toEqual([]);
-
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(50);
-    expect(h.state.chatMessages).toEqual([]);
-    network.resolve(h.liveResult);
-    await loading;
-    expect(h.state.chatMessages).toEqual(liveMessages);
-    const refresh = h.start();
-    expect(h.request).toHaveBeenCalledTimes(2);
-    expect(h.request).toHaveBeenLastCalledWith(
-      "chat.startup",
-      expect.objectContaining({ cursor: "live-cursor" }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-    await refresh;
-  });
-
-  it("continues as soon as a pending read reports no stored snapshot", async () => {
-    const h = mountPane();
-    h.connect();
-    const loading = h.start();
-    expect(h.request).not.toHaveBeenCalled();
-    h.read.resolve(null);
-    await loading;
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.not.objectContaining({ cursor: expect.anything() }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-  });
-
-  it("observes startup at actual issuance after an ordinary history refresh during the wait", async () => {
-    const h = mountPane();
-    const during = {
-      ...h.liveResult,
-      sessionInfo: { ...h.liveResult.sessionInfo, label: "During hydration wait" },
-    };
-    const after = {
-      ...h.liveResult,
-      sessionInfo: { ...h.liveResult.sessionInfo, label: "After hydration wait" },
-    };
-    const { sessions } = connectSessionOwner(h, during, after);
-    const historyMethods = () =>
-      h.request.mock.calls
-        .map(([method]) => method)
-        .filter((method) => method === "chat.history" || method === "chat.startup");
-    const startup = refreshPageChat(h.state, {
-      historyLoad: h.start(),
-      awaitHistory: true,
-      scheduleScroll: false,
-    });
-    await refreshPageChat(h.state, {
-      historyLoad: loadChatHistory(h.state, { deferBranches: true }),
-      awaitHistory: true,
-      scheduleScroll: false,
-    });
-    expect(h.request).toHaveBeenCalledExactlyOnceWith("chat.history", expect.anything(), {
-      signal: expect.any(AbortSignal),
-      timeoutMs: 30_000,
-    });
-    expect(sessions.state.result?.sessions[0]?.label).toBe(during.sessionInfo.label);
-    await vi.advanceTimersByTimeAsync(299);
-    expect(historyMethods()).toEqual(["chat.history"]);
-    await vi.advanceTimersByTimeAsync(1);
-    await startup;
-    expect(historyMethods()).toEqual(["chat.history", "chat.startup"]);
-    expect(h.request).toHaveBeenLastCalledWith(
-      "chat.startup",
-      expect.objectContaining({ cursor: "live-cursor" }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-    expect(sessions.state.result?.sessions[0]?.label).toBe(after.sessionInfo.label);
-    expect(h.state.chatMessages).toEqual(liveMessages);
-    h.read.resolve(stored);
-  });
-
-  it("retires the prior session owner while the shared hydration wait is pending", async () => {
+  it("retires the prior session capability while its response waits for cache", async () => {
     const h = mountPane();
     const { gateway, sessions } = connectSessionOwner(h);
     const retired = h.start();
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(0);
     const replacement = createTestSessionCapability(gateway);
     onTestFinished(() => replacement.dispose());
     h.state.sessions = replacement;
@@ -387,51 +377,15 @@ describe("first chat startup snapshot ordering", () => {
       awaitHistory: true,
       scheduleScroll: false,
     });
-    await vi.advanceTimersByTimeAsync(199);
-    expect(h.request.mock.calls.filter(([method]) => method === "chat.startup")).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(1);
+    h.read.resolve(stored);
     await expect(retired).resolves.toBeUndefined();
     await current;
-    expect(h.request.mock.calls.filter(([method]) => method === "chat.startup")).toEqual([
-      ["chat.startup", expect.anything(), { signal: expect.any(AbortSignal), timeoutMs: 30_000 }],
-    ]);
     expect(sessions.state.result).toBeNull();
     expect(replacement.state.result?.sessions[0]).toMatchObject(h.liveResult.sessionInfo);
     expect(h.state.chatMessages).toEqual(liveMessages);
-    h.read.resolve(stored);
   });
 
-  it.each([["main", "agent:main:main"]])(
-    "retains startup when %s becomes its canonical key %s during hydration",
-    async (alias, canonical) => {
-      const h = mountPane(true, canonical);
-      h.state.sessionKey = alias;
-      h.connect();
-      const loading = h.start();
-      h.state.sessionKey = canonical;
-      h.read.resolve(stored);
-      await loading;
-      expect(h.request).toHaveBeenCalledExactlyOnceWith(
-        "chat.startup",
-        expect.objectContaining({ sessionKey: canonical, cursor: "stored-cursor" }),
-        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-      );
-      expect(h.state.chatMessages).toEqual(liveMessages);
-    },
-  );
-
-  it("does not defer startup for a stored read begun after connection readiness", async () => {
-    const h = mountPane(true, sessionKey, true);
-    h.connect();
-    const loading = h.start();
-    expect(h.request).toHaveBeenCalledOnce();
-    await loading;
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.state.chatMessages).toEqual(liveMessages);
-  });
-
-  it("waits for a boot prewarm consumed by a pane mounted after readiness", async () => {
+  it("hydrates a boot prewarm consumed by a pane mounted after readiness", async () => {
     const record = createDeferred<unknown>();
     vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
     prewarmChatSnapshot(
@@ -440,94 +394,43 @@ describe("first chat startup snapshot ordering", () => {
         { sessionKey },
       ),
     );
-    markPrewarmedChatSnapshotReady();
     const h = mountPane(true, sessionKey, true, new SessionSnapshotStore());
     h.connect();
-    const loading = h.start();
-    expect(h.request).not.toHaveBeenCalled();
-    record.resolve({
-      projectionVersion: 2,
-      savedAt: Date.now(),
-      sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
-      sessionId: stored.sessionId,
-      snapshot: stored,
-    });
-    await loading;
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-  });
-
-  it("keeps the prewarm deadline anchored to hello when the pane mounts later", async () => {
-    const record = createDeferred<unknown>();
-    vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
-    prewarmChatSnapshot(
-      resolveChatSnapshotKey(
-        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
-        { sessionKey },
-      ),
-    );
-    await vi.advanceTimersByTimeAsync(50);
-    markPrewarmedChatSnapshotReady();
-    await vi.advanceTimersByTimeAsync(100);
-    markPrewarmedChatSnapshotReady();
-    const h = mountPane(true, sessionKey, true, new SessionSnapshotStore());
-    h.connect();
-    const loading = h.start();
-    await vi.advanceTimersByTimeAsync(199);
-    expect(h.request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
-      "chat.startup",
-      expect.not.objectContaining({ cursor: expect.anything() }),
-      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-    );
-    await loading;
-    record.resolve({
-      projectionVersion: 2,
-      savedAt: Date.now(),
-      sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
-      sessionId: stored.sessionId,
-      snapshot: stored,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.state.chatMessages).toEqual(liveMessages);
-  });
-
-  it("starts immediately if the connection budget expired before startup was requested", async () => {
-    const h = mountPane();
-    h.connect();
-    await vi.advanceTimersByTimeAsync(300);
     const loading = h.start();
     expect(h.request).toHaveBeenCalledOnce();
+    record.resolve({
+      projectionVersion: 2,
+      savedAt: Date.now(),
+      sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
+      sessionId: stored.sessionId,
+      snapshot: stored,
+    });
     await loading;
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(0);
     expect(h.state.chatMessages).toEqual(liveMessages);
   });
 
-  it.each(["disconnect", "reset"])(
-    "retires the first wait on %s without delaying the next startup",
+  it.each(["disconnect", "reset", "session-switch"] as const)(
+    "retires cache and history publication on %s",
     async (transition) => {
       const h = mountPane();
       h.connect();
       const loading = h.start();
+      await vi.advanceTimersByTimeAsync(0);
       if (transition === "disconnect") {
         h.state.connected = false;
         synchronizeInitialChatSnapshotConnection(h.state);
+      } else if (transition === "reset") {
+        resetChatHistoryProjection(h.state);
       } else {
+        h.state.sessionKey = "agent:main:another-session";
         resetChatHistoryProjection(h.state);
       }
-      await loading;
-      expect(h.request).not.toHaveBeenCalled();
-      h.connect();
-      const retry = h.start();
-      expect(h.request).toHaveBeenCalledOnce();
-      await retry;
+      await expect(loading).resolves.toBeUndefined();
       h.read.resolve(stored);
       await vi.advanceTimersByTimeAsync(0);
+      expect(h.state.chatMessages).toEqual([]);
+      h.connect();
+      await h.start();
       expect(h.state.chatMessages).toEqual(liveMessages);
     },
   );

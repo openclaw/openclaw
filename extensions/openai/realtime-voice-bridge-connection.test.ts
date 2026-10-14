@@ -41,8 +41,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Connection tests own credential outcomes and must not consult host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
@@ -169,11 +171,13 @@ describe("OpenAI realtime voice bridge connection", () => {
       const cfg = {} as never;
 
       expect(
-        readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
-          cfg,
-          providerConfig: { apiKey: "test-api-key-platform" },
-          model: "gpt-realtime-2.1",
-        }),
+        await readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilitiesAsync(
+          {
+            cfg,
+            providerConfig: { apiKey: "test-api-key-platform" },
+            model: "gpt-realtime-2.1",
+          },
+        ),
       ).toMatchObject({ supportsGatewayControl: true });
       await expect(
         provider.createBrowserSession?.({

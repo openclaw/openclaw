@@ -20,6 +20,7 @@ import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -88,6 +89,7 @@ export type CanvasWidgetViewProps = {
   messageTimestamp?: number;
   title: string;
   preferredHeight?: number;
+  onHeightChange?: (height: number) => void;
   connectionGeneration: number;
   presentationActive: boolean;
   allowScripts: boolean;
@@ -401,7 +403,7 @@ class CanvasWidgetController {
     }
     postWidgetTheme(frame, this.sandboxOrigin);
     frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
-    // Saved widget documents already use this bridge for unconsumed wheel/touch input.
+    // Saved widget documents use this bridge for unconsumed wheel input.
     frame.contentWindow?.postMessage(
       { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
       this.sandboxOrigin,
@@ -498,6 +500,7 @@ class CanvasWidgetController {
       data.height > 0
     ) {
       this.contentHeight = Math.min(8000, Math.max(48, Math.trunc(data.height)));
+      this.props.onHeightChange?.(this.contentHeight);
       this.notify();
     }
     if (data?.type === "openclaw:widget-bridge-ready") {
@@ -541,9 +544,10 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
   "openclaw-canvas-widget-view",
   (props, host) => {
     host.style.display = "contents";
+    host.style.minHeight = "";
     const context = useApplication();
+    const gateway = projectGateway(context.gateway);
     const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const [gatewayRevision, setGatewayRevision] = createSignal(0, { ownedWrite: true });
     const controller = new CanvasWidgetController(host, host, context, () =>
       setRevision((n) => n + 1),
     );
@@ -567,7 +571,6 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
       configurable: true,
       get: () => controller.documentHtml,
     });
-    const unsubscribe = context?.gateway.subscribe(() => setGatewayRevision((n) => n + 1));
     createRenderEffect(
       () => [
         props.docId,
@@ -575,7 +578,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
         props.connectionGeneration,
         props.allowScripts,
         props.presentationActive,
-        gatewayRevision(),
+        gateway.read(),
       ],
       () => {
         controller.reconcile();
@@ -589,7 +592,6 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
     onSettled(() => controller.connect());
     onCleanup(() => {
       Object.defineProperty(host, "allowScripts", scriptProperty);
-      unsubscribe?.();
       controller.dispose();
     });
     const retry = () => {
@@ -618,7 +620,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
         return { error: formatUiError(error) };
       }
     });
-    const height = () => read().contentHeight ?? props.preferredHeight;
+    const height = () => read().contentHeight ?? props.preferredHeight ?? 420;
     return (
       <Show
         when={!read().error}
@@ -637,18 +639,18 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
             <Show
               when={read().pending}
               fallback={
+                // Preserve the empty reserved box across the lazy element's upgrade.
                 <div
-                  class="skeleton"
                   role="status"
                   aria-label={t("common.loading")}
-                  style={{ "min-height": `${props.preferredHeight ?? 420}px` }}
+                  style={{ "min-height": `${height()}px` }}
                 />
               }
             >
               <div
                 class="board-widget__notice"
                 role="status"
-                style={{ "min-height": `${props.preferredHeight ?? 420}px` }}
+                style={{ "min-height": `${height()}px` }}
               >
                 {t("board.widget.waitingForConnection")}
               </div>
@@ -704,6 +706,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
       messageTimestamp: { default: undefined, type: Number },
       title: { default: "" },
       preferredHeight: { default: undefined, type: Number },
+      onHeightChange: { default: undefined, attribute: false },
       connectionGeneration: { default: 0 },
       presentationActive: { default: true },
       allowScripts: { default: true },

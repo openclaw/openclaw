@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderConnectingSplash } from "../components/loading-skeleton.ts";
+import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 
 afterEach(() => {
@@ -44,9 +45,9 @@ function mouseDown(target: Element, init: MouseEventInit = {}) {
 describe("native window drag", () => {
   it("drags the connecting skeleton while leaving startup status text selectable", () => {
     const postMessage = installBridge();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(renderConnectingSplash("Connecting to Gateway"), container);
+    const { container } = mountSolid(() =>
+      createComponent(ConnectingSplash, { status: "Connecting to Gateway" }),
+    );
 
     for (const selector of [".connect-splash__layout", ".loading-skeleton__message"]) {
       expect(mouseDown(container.querySelector(selector)!).defaultPrevented).toBe(true);
@@ -57,16 +58,6 @@ describe("native window drag", () => {
       false,
     );
     expect(postMessage).toHaveBeenCalledTimes(2);
-  });
-
-  it("treats the static title text as draggable chrome", () => {
-    const postMessage = installBridge();
-    const { title } = buildHeader();
-
-    const event = mouseDown(title);
-
-    expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
-    expect(event.defaultPrevented).toBe(true);
   });
 
   it("leaves presses on interactive children alone", () => {

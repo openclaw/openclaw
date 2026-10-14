@@ -11,20 +11,27 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
+import {
+  readSessionActorTransactionState,
+  writableSessionActorMap,
+} from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
+import {
+  isFinalInputCompletion,
+  parseSessionPendingInputMessage,
+} from "./session-pending-input-value.js";
 import type {
-  SessionPendingInput,
   SessionPendingInputRow,
-  SessionPendingInputOwner,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
   SessionPendingInputAppend,
@@ -37,7 +44,6 @@ export type {
   SessionPendingInput,
   SessionPendingInputPage,
   SessionPendingInputRow,
-  SessionPendingInputOwner,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
   SessionPendingInputAppend,
@@ -241,8 +247,11 @@ export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingIn
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
-  assertPendingInputOwnerCurrent(owner);
-  return owners.current.run(owner, run);
+  const enter = () => {
+    assertPendingInputOwnerCurrent(owner);
+    return owners.current.run(owner, run);
+  };
+  return owner.sessionActor ? runWithSessionActorStorage(owner.sessionActor, enter) : enter();
 }
 
 /** Persistence alone may mirror a closed turn; the append owner proves exact committed bytes. */
@@ -250,7 +259,8 @@ export function runWithSessionPendingInputPersistence<T>(
   owner: SessionPendingInputOwner,
   persist: () => T,
 ): T {
-  return owners.current.run(owner, persist);
+  const enter = () => owners.current.run(owner, persist);
+  return owner.sessionActor ? runWithSessionActorStorage(owner.sessionActor, enter) : enter();
 }
 
 /** A transcript rewrite may move only the exact current user owned by the live admitted turn. */
@@ -288,22 +298,6 @@ export function hasRegisteredSessionPendingInputOwner(
     owner.sessionKey === row.session_key &&
     owner.lifecycleGeneration === row.lifecycle_generation &&
     (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration))
-  );
-}
-
-export function parseSessionPendingInputMessage(messageJson: string): PersistedUserTurnMessage {
-  const value: unknown = JSON.parse(messageJson);
-  if (asOptionalRecord(value)?.role !== "user") {
-    throw new Error("Pending input has an invalid persisted user message");
-  }
-  // SAFETY: only typed admission writes this JSON; parsing preserves its canonical message shape.
-  return value as PersistedUserTurnMessage;
-}
-
-export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {
-  return (
-    outcome.reason === "completed" ||
-    (outcome.reason === "cancelled" && outcome.stopReason !== "restart")
   );
 }
 
@@ -384,6 +378,7 @@ export function writeSessionInputCompletion(
   );
   const actor = readSessionActorTransactionState(database, scope);
   if (actor && (!retained || retained.succeeded === 0)) {
+    actor.completions = writableSessionActorMap(actor.completions);
     actor.completions.set(scope.idempotencyKey, {
       session_key: scope.sessionKey,
       session_id: scope.sessionId,
@@ -416,23 +411,13 @@ export function writeSessionInputCompletion(
       pending.request_hash === scope.requestHash &&
       pending.lifecycle_generation === scope.lifecycleGeneration
     ) {
-      actor?.pendingInputs.delete(scope.idempotencyKey);
+      if (actor) {
+        actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
+        actor.pendingInputs.delete(scope.idempotencyKey);
+      }
     }
   }
   return outcome;
-}
-
-export function projectSessionPendingInput(row: SessionPendingInputRow): SessionPendingInput {
-  if (row.state !== "queued" && row.state !== "interrupted" && row.state !== "cancelled") {
-    throw new Error("Pending input has an invalid disposition");
-  }
-  return {
-    id: row.input_id,
-    runId: row.run_id,
-    message: parseSessionPendingInputMessage(row.message_json),
-    acceptedAt: row.accepted_at,
-    state: row.state,
-  };
 }
 
 /** Capture the exact host owner before reading; claim it once in the consuming frame. */
@@ -558,7 +543,7 @@ export function resolveSessionPendingInputAppend(
           const hadPrevious = staged?.has(owner) ?? false;
           const previous = staged?.get(owner);
           if (
-            !stageSqliteTransactionState(database.db, {
+            !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
               stage: () => {
                 staged ??= new Map();
                 owners.transactionRelocations.set(database.db, staged);
@@ -706,6 +691,7 @@ export function consumeSessionPendingInput(
       if (!inputIds.has(row.input_id)) {
         continue;
       }
+      actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
       if (pending.sourceInputIds) {
         actor.pendingInputs.set(key, { ...row, consumed_event_id: pending.inputId });
       } else {
@@ -718,7 +704,7 @@ export function consumeSessionPendingInput(
   const newlyConsumed = consumedOwners.filter(
     (candidate) => !worker?.consumed.has(candidate.inputId),
   );
-  stageSqliteTransactionState(database.db, {
+  stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
     stage: () => {
       for (const consumedOwner of newlyConsumed) {
         worker?.consumed.add(consumedOwner.inputId);

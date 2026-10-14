@@ -35,7 +35,12 @@ export type PromptCacheRequestObservation = {
   providerPrefix?: string;
   dropCause?: string;
   promptTokens?: number;
+  responseId?: string;
   changes: PromptCacheChange[] | null;
+  requests?: {
+    previous?: NonNullable<ProviderPromptState["lastAttempt"]>["wire"];
+    current?: NonNullable<ProviderPromptState["lastAttempt"]>["wire"];
+  };
 };
 
 /** Pairs foreground request inputs with completion usage before billing aggregation. */
@@ -103,7 +108,6 @@ export function createPromptCacheRequestObserver(
                   ? "unattributed:bounded-prefix"
                   : `provider-input-change:${providerPrefix}`;
       const hasCacheTelemetry = usage?.cacheTelemetry?.state !== "unavailable";
-      // Keep completion identity private; cache diagnostics need only aggregate usage.
       contextUsage =
         usage?.contextUsage?.state === "available"
           ? {
@@ -122,8 +126,10 @@ export function createPromptCacheRequestObserver(
         requestGapMs: request.requestGapMs,
         providerPrefix,
         dropCause,
+        requests: cacheBreak?.requests,
         promptTokens:
           usage?.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
+        responseId: identity?.responseId,
         input: usage?.input,
         cacheRead: hasCacheTelemetry ? usage?.cacheRead : undefined,
         cacheWrite: hasCacheTelemetry ? usage?.cacheWrite : undefined,
