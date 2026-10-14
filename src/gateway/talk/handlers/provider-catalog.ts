@@ -3,10 +3,20 @@ import { canonicalizeRealtimeTranscriptionProviderId } from "../../../realtime-t
 import { getVoiceProviderConfig } from "../../../tts/voice-models.js";
 import {
   buildTalkTranscriptionConfig,
-  configuredOrFalseAsync,
   listTalkTranscriptionProviders,
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "../session-config.js";
+
+/** A failed row must not release single-flight custody of its still-running siblings. */
+export async function settleTalkCatalogTasks<const T extends readonly Promise<unknown>[]>(
+  tasks: T,
+) {
+  try {
+    return await Promise.all(tasks);
+  } finally {
+    await Promise.allSettled(tasks);
+  }
+}
 
 export async function resolveCatalogProviderSelection<T extends { provider: { id: string } }>(
   configuredProvider: string | undefined,
@@ -60,7 +70,7 @@ export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agen
           transports: ["gateway-relay"],
           brains: ["none"],
         }))
-      : await Promise.all(
+      : await settleTalkCatalogTasks(
           listTalkTranscriptionProviders(config, [
             transcriptionConfig.provider,
             ...Object.keys(transcriptionConfig.providers),
@@ -83,12 +93,9 @@ export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agen
               const providerConfig =
                 provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
                 rawConfigWithModel;
-              configured = await configuredOrFalseAsync(
-                () =>
-                  provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
-                  provider.isConfigured?.({ cfg: config, providerConfig }) ??
-                  false,
-              );
+              configured = await (provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
+                provider.isConfigured?.({ cfg: config, providerConfig }) ??
+                false);
             }
             const entry: Record<string, unknown> = {
               id: provider.id,

@@ -1,12 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
 } from "../../../plugins/types.js";
-import { callGatewayHandler } from "../../server-methods/skills.test-helpers.js";
+import { callGatewayHandler as callGatewayHandlerOnce } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
 
 const registry = vi.hoisted(() => ({
@@ -40,6 +40,25 @@ vi.mock("../../../realtime-transcription/provider-registry.js", async (importOri
   getRealtimeTranscriptionProvider: (id: string | undefined) =>
     registry.transcription.find((provider) => provider.id === id),
 }));
+
+// Existing catalog contract cases consume the documented warming retry before inspecting rows.
+async function callGatewayHandler(...args: Parameters<typeof callGatewayHandlerOnce>) {
+  for (let attempt = 0; ; attempt++) {
+    const result = await callGatewayHandlerOnce(...args);
+    if (
+      asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !==
+        "talk-catalog-warming" ||
+      attempt === 99
+    ) {
+      return result;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
+}
+
+afterEach(() => vi.useRealTimers());
 
 beforeEach(() => {
   registry.providers = [];
@@ -219,4 +238,179 @@ it("reuses selected transcription readiness and refreshes it on the next catalog
     ok: true,
     response: { transcription: { ready: false, providers: [{ configured: false }] } },
   });
+});
+
+it("serves the last catalog during one slow refresh and retains it after the deadline", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const cfg: OpenClawConfig = { plugins: { enabled: false } };
+  const context = { getRuntimeConfig: () => cfg, logGateway: { warn: vi.fn() } };
+  let finish: ((value: boolean) => void) | undefined;
+  const readiness = vi.fn(async () => true);
+  registry.providers = [
+    {
+      id: "slow",
+      label: "Slow fixture",
+      isConfigured: () => false,
+      isConfiguredAsync: readiness,
+      synthesize: async () => {
+        throw new Error("must not synthesize");
+      },
+    },
+  ];
+  const read = () =>
+    callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: context as never });
+  expect(await read()).toMatchObject({
+    ok: false,
+    error: { retryable: true, details: { reason: "talk-catalog-warming" } },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const first = await read();
+  expect(first).toMatchObject({
+    ok: true,
+    response: { speech: { providers: [{ configured: true }] } },
+  });
+  readiness.mockImplementation(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await vi.advanceTimersByTimeAsync(30_000);
+  const burst = await Promise.all(Array.from({ length: 20 }, read));
+  expect(burst.every((result) => result.response === first.response)).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(readiness).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(35_000);
+  expect((await read()).response).toBe(first.response);
+  expect(readiness).toHaveBeenCalledTimes(2);
+  expect(context.logGateway.warn).toHaveBeenCalledTimes(1);
+  expect(context.logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("waiting=speech"));
+  finish?.(false);
+  await vi.advanceTimersByTimeAsync(0);
+  readiness.mockResolvedValue(false);
+  expect((await read()).response).toBe(first.response);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: { speech: { providers: [{ configured: false }] } },
+  });
+});
+
+it("isolates catalog owners and model overrides while a cold provider is pending", async () => {
+  const cfg: OpenClawConfig = { plugins: { enabled: false } };
+  const context = { getRuntimeConfig: () => cfg };
+  let finish: (() => void) | undefined;
+  const readiness = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finish = () => resolve(true);
+      }),
+  );
+  registry.providers = [
+    {
+      id: "slow",
+      label: "Slow",
+      isConfigured: () => false,
+      isConfiguredAsync: readiness,
+      synthesize: async () => {
+        throw new Error("must not synthesize");
+      },
+    },
+  ];
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+  const results = await Promise.all(Array.from({ length: 20 }, read));
+  expect(results.every((result) => result.ok === false)).toBe(true);
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(readiness).toHaveBeenCalledTimes(1);
+  finish?.();
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect((await read()).ok).toBe(true);
+  const otherOwner = { getRuntimeConfig: () => cfg };
+  readiness.mockResolvedValue(true);
+  expect(
+    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: otherOwner }),
+  ).toMatchObject({ ok: false });
+  expect(
+    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", { model: "other" }, { context }),
+  ).toMatchObject({ ok: false });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+});
+
+it("retains successful readiness after a provider failure and refreshes on config publication", async () => {
+  let cfg: OpenClawConfig = { plugins: { enabled: false } };
+  const context = { getRuntimeConfig: () => cfg };
+  const readiness = vi.fn(async () => true);
+  registry.providers = [
+    {
+      id: "sample",
+      label: "Sample",
+      isConfigured: () => false,
+      isConfiguredAsync: readiness,
+      synthesize: async () => {
+        throw new Error("must not synthesize");
+      },
+    },
+  ];
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+  await read();
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  const first = await read();
+  expect(first.ok).toBe(true);
+  readiness.mockRejectedValue(new Error("synthetic provider unavailable"));
+  cfg = { ...cfg };
+  expect((await read()).response).toBe(first.response);
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect((await read()).response).toBe(first.response);
+  readiness.mockResolvedValue(false);
+  cfg = { ...cfg };
+  expect((await read()).response).toBe(first.response);
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: { speech: { providers: [{ configured: false }] } },
+  });
+});
+
+it("retries a failed cold refresh before the client's warming window expires", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const cfg: OpenClawConfig = { plugins: { enabled: false } };
+  const context = { getRuntimeConfig: () => cfg };
+  const readiness = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("temporary failure"))
+    .mockResolvedValue(true);
+  registry.providers = [
+    {
+      id: "sample",
+      label: "Sample",
+      isConfigured: () => false,
+      isConfiguredAsync: readiness,
+      synthesize: async () => {
+        throw new Error("must not synthesize");
+      },
+    },
+  ];
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+  expect((await read()).ok).toBe(false);
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect((await read()).ok).toBe(false);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: { speech: { providers: [{ configured: true }] } },
+  });
+  expect(readiness).toHaveBeenCalledTimes(2);
 });
