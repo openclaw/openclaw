@@ -104,28 +104,11 @@ export async function runCoreContributionHealth(
   reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings, note);
 }
 
-function formatHealthFindings(findings: readonly HealthFinding[]): string {
-  return findings
-    .map((finding) =>
-      [
-        `- ${finding.message}`,
-        finding.path && `  path: ${finding.path}`,
-        finding.requirement && `  issue: ${finding.requirement}`,
-        finding.fixHint && `  fix: ${finding.fixHint}`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    )
-    .join("\n");
-}
-
 export async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
 ): Promise<void> {
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-
   const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
   if (!check) {
     return;
@@ -141,13 +124,15 @@ export async function runCoreHealthFindingNote(
     return;
   }
   recordDoctorHealthWarnings(ctx, findings);
-  const information = findings.filter((finding) => finding.severity === "info");
-  const warnings = findings.filter((finding) => finding.severity !== "info");
-  if (information.length > 0) {
-    note(formatHealthFindings(information), "Doctor information");
-  }
-  if (warnings.length > 0) {
+  renderStructuredHealthFindings(ctx, findings);
+  if (
+    findings.some(
+      (finding) =>
+        finding.severity !== "info" &&
+        finding.category !== "recommended" &&
+        finding.category !== "historical",
+    )
+  ) {
     ctx.healthOk = false;
-    note(formatHealthFindings(warnings), "Doctor warnings");
   }
 }

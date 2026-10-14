@@ -11,6 +11,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
@@ -243,12 +244,22 @@ describe("Doctor schema bumps under an updating parent", () => {
     async ({ driver, deferred }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const captureSessionId = `doctor-readiness-${driver}`;
+        mocks.packageRoot.mockReturnValue(process.cwd());
         vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
         vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", captureSessionId);
         vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
         vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
         const shared = openOpenClawStateDatabase({ env: state.env }).path;
-        const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
+        const updater = readUpdateRunDriver();
+        if (!updater) {
+          throw new Error("The schema publication fixture requires its actual updater identity.");
+        }
+        const run = createUpdateRun({
+          trigger: "cli",
+          before: { version: driver },
+          origin: { driver: updater },
+        });
+        vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
         await closeOpenClawStateDatabaseAsync();
         setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
         mocks.runContributions.mockImplementation(async () => {

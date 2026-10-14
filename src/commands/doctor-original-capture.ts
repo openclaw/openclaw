@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../config/paths.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
@@ -20,7 +21,11 @@ export async function preserveDoctorOriginalState(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
   writeAuthority?: UpdateDoctorWriteAuthority;
-}): Promise<void> {
+}): Promise<{ findings: readonly HealthFinding[]; warnings: readonly string[] }> {
+  const findings: HealthFinding[] = [];
+  const warnings: string[] = [];
+  const docsUrl =
+    "https://docs.openclaw.ai/cli/doctor/state-migrations#plugin-migration-recovery-coverage";
   const original = params.writeAuthority?.originalRecoveryCapture;
   const runId = original?.runId ?? params.env[UPDATE_RUN_ID_ENV]?.trim();
   const updateInProgress = original !== undefined || params.env.OPENCLAW_UPDATE_IN_PROGRESS === "1";
@@ -32,9 +37,9 @@ export async function preserveDoctorOriginalState(params: {
   assertCallerCurrent();
   if (updateInProgress && !runId) {
     params.runtime.log(
-      "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
+      "Original update recovery copy is unavailable. Doctor will continue without creating another copy or replacing retained originals.",
     );
-    return;
+    return { findings, warnings };
   }
   let admission: ReturnType<typeof resolveDoctorUpdateAdmission> | undefined;
   const assertCurrent = () => {
@@ -43,9 +48,10 @@ export async function preserveDoctorOriginalState(params: {
   };
   try {
     // Older drivers may lack capture lineage; repair keeps its live maintenance and write authority.
-    admission = updateInProgress
-      ? resolveDoctorUpdateAdmission(params.env, original?.runId)
-      : undefined;
+    admission =
+      updateInProgress && runId
+        ? resolveDoctorUpdateAdmission(params.env, original?.runId)
+        : undefined;
     if (admission && runId) {
       const { readUpdateRecoveryBaselineIdentity } =
         await import("../infra/update-recovery-backup-reader.js");
@@ -60,10 +66,10 @@ export async function preserveDoctorOriginalState(params: {
       assertCurrent();
       params.runtime.log(
         retained
-          ? `Original update capture retained at ${retained.ref.manifestPath}.`
-          : "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
+          ? `Original update recovery copy retained. For manual recovery: ${retained.ref.manifestPath}.`
+          : "Original update recovery copy is unavailable. Doctor will continue without creating another copy or replacing retained originals.",
       );
-      return;
+      return { findings, warnings };
     }
     const installRoot = params.root;
     if (!installRoot) {
@@ -87,8 +93,25 @@ export async function preserveDoctorOriginalState(params: {
       acquisition: { mode: "maintenance-owner" },
     });
     assertCurrent();
+    warnings.push(...captured.warnings.map((warning) => warning.message));
+    findings.push(
+      ...captured.warnings.map((warning): HealthFinding => ({
+        checkId: "core/doctor/migration-recovery",
+        severity: "warning",
+        category: "recommended",
+        message:
+          warning.kind === "undeclared-migration-resources"
+            ? `${warning.pluginId} migration recovery coverage is unknown because no backup inventory was declared.`
+            : warning.message,
+        target: warning.pluginId,
+        errorCode: warning.kind,
+        fixHint:
+          "Update the plugin to a version with migration backup support. Until then, keep a separate backup of its configured data before relying on rollback; ask its maintainer to add backup support.",
+        docsUrl,
+      })),
+    );
     params.runtime.log(
-      `Pre-repair state retained for manual recovery at ${captured.ref.manifestPath}.`,
+      `Recovery copy saved before repair. No action needed. For manual recovery: ${captured.ref.manifestPath}.`,
     );
     try {
       const retirement = await retireExpiredStandaloneDoctorCaptures({
@@ -101,20 +124,43 @@ export async function preserveDoctorOriginalState(params: {
           `Retired standalone Doctor capture older than 30 days: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
         );
       }
-      for (const warning of retirement.warnings) {
-        params.runtime.log(warning);
-      }
-    } catch (error) {
-      params.runtime.log(
-        `Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`,
+      warnings.push(...retirement.warnings);
+      findings.push(
+        ...retirement.warnings.map((message): HealthFinding => ({
+          checkId: "core/doctor/recovery-retirement",
+          severity: "warning",
+          category: "historical",
+          message,
+          docsUrl,
+          fixHint:
+            "Keep the retained recovery data. Inspect the named directory and its permissions; save a verified long-term backup if you need that recovery copy.",
+        })),
       );
+    } catch (error) {
+      const message = `Older Doctor recovery copies could not be retired: ${formatErrorMessage(error)}`;
+      warnings.push(message);
+      findings.push({
+        checkId: "core/doctor/recovery-retirement",
+        severity: "warning",
+        category: "historical",
+        message,
+        fixHint:
+          "Keep the recovery copies and inspect their directory permissions. This does not prevent the current repair.",
+        docsUrl,
+      });
     }
-    for (const warning of captured.warnings) {
-      params.runtime.log(warning.message);
-    }
-    for (const warning of captured.diagnostics.databaseWarnings) {
-      params.runtime.log(warning);
-    }
+    warnings.push(...captured.diagnostics.databaseWarnings);
+    findings.push(
+      ...captured.diagnostics.databaseWarnings.map((message): HealthFinding => ({
+        checkId: "core/doctor/recovery-database-verification",
+        severity: "warning",
+        category: "recommended",
+        message,
+        docsUrl: "https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures",
+        fixHint:
+          "Keep the saved recovery copy. Check disk space and stop other OpenClaw processes before creating another verified backup; inspect the named database snapshot before manual restoration.",
+      })),
+    );
   } catch (error) {
     assertCurrent();
     if (hasCommandProcessCleanupError(error)) {
@@ -124,13 +170,23 @@ export async function preserveDoctorOriginalState(params: {
       // An admitted baseline is part of this repair's contract, not optional
       // diagnostics. Never replace lost evidence with a capture of changed state.
       throw new DoctorMaintenanceRefusalError(
-        `Doctor cannot verify its admitted original update capture: ${formatErrorMessage(error)}. State repair has not started. Inspect retained evidence with openclaw update status --json before retrying Doctor.`,
+        `Doctor could not verify its admitted original recovery copy: ${formatErrorMessage(error)}. State repair has not started. Keep the original recovery copy, check the named paths and disk space, then inspect openclaw update status --json before retrying Doctor.`,
         { kind: "data-at-risk", reason: "unreadable-state" },
         { cause: error },
       );
     }
-    params.runtime.log(
-      `Original state capture was unavailable: ${formatErrorMessage(error)}. Doctor will continue; inspect retained evidence manually before restoring state.`,
-    );
+    const message = `Pre-repair recovery copy was unavailable: ${formatErrorMessage(error)}.`;
+    const fixHint =
+      "Save a verified backup of your OpenClaw state and configured plugin data before further repairs. Check installation access and disk space, then rerun openclaw doctor --fix; inspect retained evidence before restoring state.";
+    warnings.push(`${message} ${fixHint}`);
+    findings.push({
+      checkId: "core/doctor/recovery-capture",
+      severity: "warning",
+      category: "fix-now",
+      message,
+      fixHint,
+      docsUrl,
+    });
   }
+  return { findings, warnings };
 }

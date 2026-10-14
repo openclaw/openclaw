@@ -42,6 +42,8 @@ export async function collectStaleRuntimeBuildFindings(
     {
       checkId: STALE_RUNTIME_BUILD_CHECK_ID,
       severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/install/updating",
       message: `Running build came from commit ${builtCommit.slice(0, 7)}, but the checkout is at ${checkoutCommit.slice(0, 7)}; the loaded runtime is older than its source.`,
       path: root,
       fixHint:

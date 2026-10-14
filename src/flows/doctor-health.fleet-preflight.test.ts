@@ -313,7 +313,11 @@ it("reuses the admitted original capture and refuses changed evidence before Doc
                 },
               ),
               fault,
-            ).rejects.toThrow(/admitted original update capture/i);
+            ).rejects.toMatchObject({
+              name: "DoctorMaintenanceRefusalError",
+              refusal: { kind: "data-at-risk", reason: "unreadable-state" },
+              message: expect.stringContaining("admitted original recovery copy"),
+            });
             expect(repair, fault).not.toHaveBeenCalled();
             expect(mocks.runContributions, fault).toHaveBeenCalledTimes(2);
             expect(fs.readFileSync(state.configPath), fault).toEqual(current);
@@ -338,7 +342,8 @@ it("reuses the admitted original capture and refuses changed evidence before Doc
         expect(
           runtime.log.mock.calls.filter(
             ([message]) =>
-              message === `Original update capture retained at ${baseline.ref.manifestPath}.`,
+              message ===
+              `Original update recovery copy retained. For manual recovery: ${baseline.ref.manifestPath}.`,
           ),
           runtime.log.mock.calls.flat().join("\n"),
         ).toHaveLength(2);

@@ -36,8 +36,20 @@ import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
+import {
+  createDoctorHealthFindingBuffer,
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+  showDoctorHealthSummary,
+} from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
-import { exitDoctorHealthFlow, showDoctorIntro, showDoctorOutro } from "./doctor-health-startup.js";
+import {
+  exitDoctorHealthFlow,
+  showDoctorIntro,
+  runDoctorInstallationChecks,
+  showDoctorOutro,
+  showDoctorConfigWriteRefusal,
+} from "./doctor-health-startup.js";
 import { publishDoctorUpdateResult } from "./doctor-health-update-result.js";
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
@@ -134,31 +146,17 @@ async function runDoctorHealthFlowWithResult(
   let sqliteReclamationAgents: readonly AgentDatabaseMigrationTarget[] | undefined;
   let exitCode: number | undefined;
   let healthContext: DoctorHealthFlowContext | undefined;
+  const { buffer: startupFindings, reportFindings } =
+    createDoctorHealthFindingBuffer(effectiveRuntime);
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
-    if (!ctx.configWriteRefusal) {
+    const refusal = showDoctorConfigWriteRefusal(ctx);
+    if (!refusal) {
       return false;
     }
-    // Config fixes were computed but refused by the writer; the warning above
-    // already lists the manual work. This failure outranks a recoverable
-    // post-install advisory because the run did not converge.
-    showDoctorOutro(
-      ctx.configResultWriteCommitted === true
-        ? "Doctor finished, but some config fixes were not applied."
-        : "Doctor finished, but config fixes were not applied.",
-    );
     exitCode = 1;
-    doctorResult = {
-      status: "error",
-      failureFacts: [
-        createUpdateFailureFact({
-          check: "config-write",
-          code: ctx.configWriteRefusal,
-          message: "Doctor config fixes were not applied.",
-        }),
-      ],
-    };
+    doctorResult = refusal;
     return true;
   };
   const repairMode = resolveDoctorRepairMode(options);
@@ -211,6 +209,7 @@ async function runDoctorHealthFlowWithResult(
           writeAuthority,
           rehearsalRoot: preCaptureRehearsalRoot,
           json: options.json,
+          reportFindings,
         }),
       }),
     );
@@ -358,17 +357,7 @@ async function runDoctorHealthFlowWithResult(
         doctorRuntime.log(message);
       }
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
-      const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
-      const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
-      const { noteBunCliLauncherIssues } = await import("../commands/doctor-bun-cli-launcher.js");
-      const { noteStalePluginRuntimeSymlinks } =
-        await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
-      const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
-      await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
-      await noteSourceInstallIssues(root);
-      await noteBunCliLauncherIssues({ root, prompter });
-      await noteStalePluginRuntimeSymlinks(root);
-      noteStartupOptimizationHints();
+      await runDoctorInstallationChecks(root, prompter, doctorRuntime);
 
       const discovery = schemas.agentDatabaseMigrationDiscovery;
       if (discovery && discovery.stateDir === preparedArchiveDiscovery?.stateDir) {
@@ -384,6 +373,7 @@ async function runDoctorHealthFlowWithResult(
           confirm: (p) => prompter.confirm(p),
           runtime: doctorRuntime,
           prompter,
+          reportFindings,
         }),
       );
       resources.use(configResult);
@@ -413,6 +403,7 @@ async function runDoctorHealthFlowWithResult(
       const { CONFIG_PATH } = await import("../config/config.js");
       const ctx: DoctorHealthFlowContext = {
         runtime: doctorRuntime,
+        healthFindings: startupFindings.healthFindings,
         options,
         prompter,
         configResult,
@@ -423,7 +414,10 @@ async function runDoctorHealthFlowWithResult(
         stateDirExistedAtStart,
         gatewayMaintenanceActive: maintenance !== undefined,
         agentDatabaseRefusals,
-        updateWarnings: deletionJournal.warnings,
+        updateWarnings: normalizeUpdatePostInstallDoctorWarnings([
+          ...(startupFindings.updateWarnings ?? []),
+          ...deletionJournal.warnings,
+        ]),
         preparedAgentCount: Math.max(
           admissionSchemas.agentDatabaseMigrationDiscovery?.configuredAgentDatabaseTargets.length ??
             0,
@@ -517,18 +511,22 @@ async function runDoctorHealthFlowWithResult(
         );
       }
     }
-    if (!ctx || recordConfigWriteRefusal(ctx)) {
+    if (!ctx) {
+      showDoctorHealthSummary(healthContext ?? startupFindings);
+      return;
+    }
+    if (recordConfigWriteRefusal(ctx)) {
       return;
     }
     const pluginWarnings: string[] = [];
     if (diagnostics.length > 0) {
       const { collectPluginLoadHealthFindings } =
         await import("../commands/doctor-workspace-status.js");
-      const { renderStructuredHealthFindings } = await import("./doctor-health-contribution.js");
       const findings = collectPluginLoadHealthFindings(diagnostics);
       renderStructuredHealthFindings(ctx, findings);
       pluginWarnings.push(...findings.map((finding) => `${finding.checkId}: ${finding.message}`));
     }
+    showDoctorHealthSummary(ctx);
     const warnings = normalizeUpdatePostInstallDoctorWarnings([
       ...pluginWarnings,
       ...(ctx.configResult.warnings ?? []),
@@ -572,6 +570,7 @@ async function runDoctorHealthFlowWithResult(
       error.refusal.kind === "deferred" &&
       isDoctorUpdateRepairMode(resolveDoctorRepairMode(options))
     ) {
+      showDoctorHealthSummary(healthContext ?? startupFindings);
       writeAuthority?.assertCurrent();
       // Admission restored its service before refusing; no migration work has started.
       const { recordUpdateDoctorRefusal } = await import("../commands/doctor-update-refusal.js");
@@ -605,7 +604,6 @@ async function runDoctorHealthFlowWithResult(
         ? error.failureFacts.map(formatUpdateFailureFact)
         : [];
     if (healthContext && refusalWarnings.length > 0) {
-      const { recordDoctorHealthWarnings } = await import("./doctor-health-contribution.js");
       recordDoctorHealthWarnings(healthContext, [], refusalWarnings, { prepend: true });
     }
     if (error instanceof DoctorStateMigrationRefusalError) {
@@ -617,6 +615,7 @@ async function runDoctorHealthFlowWithResult(
         recordUpdateDoctorRefusal(error.message);
       }
     }
+    showDoctorHealthSummary(healthContext ?? startupFindings);
     const causes = collectNestedErrorCandidates(error);
     const { classifyDoctorMaintenanceRefusal } =
       await import("../commands/doctor-maintenance-inspection.js");
@@ -670,7 +669,13 @@ async function runDoctorHealthFlowWithResult(
       );
     } finally {
       if (updateResult) {
-        await publishDoctorUpdateResult({ updateResult, doctorResult, healthContext, maintenance });
+        await publishDoctorUpdateResult({
+          updateResult,
+          doctorResult,
+          healthContext,
+          maintenance,
+          startupWarnings: startupFindings.updateWarnings,
+        });
       }
     }
     // The default runtime exits synchronously; finish native recovery and release

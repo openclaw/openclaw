@@ -16,7 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { AgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import type { DoctorUpdateBudget, DoctorUpdateWork } from "./doctor-update-budget.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheckContext } from "./health-checks.js";
+import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
@@ -94,6 +94,8 @@ export type DoctorHealthFlowContext = {
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
   updateWarnings?: string[];
+  /** Findings awaiting the final current-state summary; effects and prompts remain streamed. */
+  healthFindings?: HealthFinding[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
 };

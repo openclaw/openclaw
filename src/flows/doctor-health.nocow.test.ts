@@ -60,7 +60,7 @@ it.skipIf(process.platform !== "linux")(
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
         mocks.config.mockReturnValue(cfg);
-        mocks.packageRoot.mockReturnValue(undefined);
+        mocks.packageRoot.mockReturnValue(process.cwd());
         const seeded = [
           openOpenClawStateDatabase(),
           openOpenClawAgentDatabase({ agentId: "main" }),

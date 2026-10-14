@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runStructuredHealthRepairs } from "./doctor-health-contribution-core.js";
+import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 import { createDoctorHealthFlowContext } from "./doctor-health-contributions.test-support.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
 
@@ -32,7 +33,9 @@ it("retains unavailable-plugin repair guidance in Doctor output and update warni
   await runStructuredHealthRepairs(ctx, async () => []);
 
   expect(ctx.updateWarnings).toEqual(["earlier warning", `${checkId}: ${message}`]);
-  expect(ctx.runtime.log).toHaveBeenCalledWith(`[warning] ${checkId} - ${message}`);
+  showDoctorHealthSummary(ctx);
+  expect(ctx.runtime.log).toHaveBeenCalledWith("Fix now:");
+  expect(ctx.runtime.log).toHaveBeenCalledWith(`- ${message}`);
   expect(ctx.runtime.error).not.toHaveBeenCalled();
   expect(ctx.runtime.exit).not.toHaveBeenCalled();
 });

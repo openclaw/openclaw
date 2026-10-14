@@ -114,6 +114,8 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
       changes: [],
       migratedProfileIds: new Set<string>(),
       blockedProfileIds: new Set<string>(),
+      findings: [],
+      aliasFindings: [],
       warnings: [],
     });
     expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
@@ -156,6 +158,8 @@ describe("canonical SQLite migration for historical API-key aliases", () => {
       changes: [],
       migratedProfileIds: new Set<string>(),
       blockedProfileIds: new Set<string>(),
+      findings: [],
+      aliasFindings: [],
       warnings: [],
     });
     expect(fs.readFileSync(authPath)).toEqual(original);

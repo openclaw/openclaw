@@ -22,15 +22,18 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
 } from "./doctor-health-contributions.test-support.js";
 
+// mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (config: OpenClawConfig) => ({
     config,
     retiredProfileCleanupPlans: [],
+    findings: [],
   })),
 }));
 
@@ -38,11 +41,12 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
   maybeMigrateModelCatalogCredentials: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Auth migration fixtures isolate live credential stores and OAuth refresh while proving migration and persistence ordering.
 vi.mock("../commands/doctor-auth.js", () => ({
-  noteAuthProfileHealth: vi.fn(async () => undefined),
-  noteCopilotAmbientToken: vi.fn(),
-  noteLegacyCodexProviderOverride: vi.fn(() => undefined),
-  noteSharedAuthStoreStatus: vi.fn(() => undefined),
+  inspectAuthProfileHealth: vi.fn(async () => []),
+  collectCopilotAmbientTokenFindings: vi.fn(() => []),
+  collectLegacyCodexProviderOverrideFindings: vi.fn(() => []),
+  collectSharedAuthStoreFindings: vi.fn(() => []),
 }));
 
 const states: OpenClawTestState[] = [];
@@ -197,6 +201,11 @@ describe("interactive Doctor auth migration", () => {
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
       await authProfileMigrationContribution().run(ctx);
+      showDoctorHealthSummary(ctx);
+      const summary = vi
+        .mocked(ctx.runtime.log)
+        .mock.calls.map(([message]) => message)
+        .join("\n");
 
       const output = stripVTControlCharacters(
         stdout.mock.calls.map(([chunk]) => String(chunk)).join(""),
@@ -205,11 +214,17 @@ describe("interactive Doctor auth migration", () => {
         .replace(/\s+/g, " ");
       stdout.mockRestore();
       if (outcome === "failed") {
-        expect(output).toContain("Doctor warnings");
+        expect(output).not.toContain("Doctor warnings");
+        expect(summary).toContain("Historical recovery notices");
         expect(
-          output.match(/Could not finalize an interrupted auth profile archive/g),
+          summary.match(/Could not finalize an interrupted auth profile archive/g),
         ).toHaveLength(1);
-        expect(output).toContain("invalid pending auth profile migration receipt");
+        expect(summary).toContain("invalid pending auth profile migration receipt");
+        expect(summary).toContain("Next step: Keep the retained sources and archives");
+        expect(summary).toContain("/cli/doctor/running#auth-migration-recovery");
+        expect(ctx.updateWarnings).toEqual([
+          expect.stringContaining("Could not finalize an interrupted auth profile archive"),
+        ]);
         expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
         expect(fs.existsSync(receipt.archivePath)).toBe(false);
       } else {
@@ -255,6 +270,7 @@ describe("interactive Doctor auth migration", () => {
       usageStats: { "openai:chatgpt-bravo": { lastUsed: 123 } },
     });
     expect(ctx.cfg.auth?.profiles).toHaveProperty("openai:chatgpt-bravo");
+    expect(ctx.healthFindings ?? []).toEqual([]);
     expect(ctx.cfg.auth?.profiles).not.toHaveProperty("openai-codex:bravo");
     expect(ctx.cfg.auth?.order?.openai).toEqual(["openai:chatgpt-bravo"]);
   });

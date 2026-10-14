@@ -134,6 +134,8 @@ export function staleManagedNpmInstallGenerationToHealthFinding(
   return {
     checkId: PLUGIN_REGISTRY_CHECK_ID,
     severity: "warning",
+    category: "recommended",
+    docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
     message: `Managed npm plugin ${issue.pluginId}${issue.version ? `@${issue.version}` : ""} is a stale non-authoritative generation.`,
     path: issue.packageDir,
     target: issue.pluginId,

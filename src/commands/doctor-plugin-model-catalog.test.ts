@@ -194,7 +194,7 @@ describe("doctor generated plugin model catalog migration", () => {
       `);
 
     const params = migrationParams([agentDir]);
-    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
+    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toMatchObject({
       detected: 1,
       migrated: 0,
       repaired: 0,
@@ -266,7 +266,7 @@ describe("doctor generated plugin model catalog migration", () => {
 
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 1, migrated: 1, repaired: 1, warnings: [] });
+    ).resolves.toEqual({ detected: 1, migrated: 1, repaired: 1, warnings: [], findings: [] });
 
     const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
     expect(JSON.parse(persisted[0]!.contents).providers.zai).toEqual({
@@ -301,7 +301,7 @@ describe("doctor generated plugin model catalog migration", () => {
       } satisfies OpenClawConfig,
     };
 
-    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
+    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toMatchObject({
       detected: 2,
       migrated: 2,
       repaired: 0,
@@ -330,12 +330,19 @@ describe("doctor generated plugin model catalog migration", () => {
       expect(fs.statSync(path.dirname(sourcePath)).mode & 0o777).toBe(0o755);
     }
     expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       detected: 1,
       migrated: 0,
       repaired: 0,
       warnings: [],
     });
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        category: "fix-now",
+        fixHint: expect.stringContaining("openclaw doctor --fix"),
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/running#auth-migration-recovery",
+      }),
+    ]);
   });
 
   it("migrates readable providers when another legacy catalog is unreadable", async () => {
@@ -350,7 +357,7 @@ describe("doctor generated plugin model catalog migration", () => {
 
     try {
       const params = migrationParams([agentDir]);
-      await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
+      await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toMatchObject({
         detected: 1,
         migrated: 1,
         repaired: 0,

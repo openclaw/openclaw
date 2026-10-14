@@ -472,7 +472,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     chmodSync(pluginDir, 0o000);
 
     try {
-      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
         detected: 0,
         migrated: 0,
         warnings: [expect.stringContaining("Could not inspect legacy provider catalogs")],
@@ -583,7 +583,7 @@ describe("SQLite-backed plugin model catalogs", () => {
         agentDir,
         expectedContents: new Map([["zai", released]]),
       }),
-    ).toEqual({ detected: 1, migrated: 1, warnings: [] });
+    ).toEqual({ detected: 1, migrated: 1, warnings: [], issues: [] });
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "anthropic", contents: unrelated },
       { pluginId: "zai", contents: released },
@@ -621,12 +621,12 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
-    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
       detected: 1,
       migrated: 1,
       warnings: [],
     });
-    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
       detected: 0,
       migrated: 0,
       warnings: [],
@@ -651,7 +651,7 @@ describe("SQLite-backed plugin model catalogs", () => {
         agentDir,
         expectedContents: new Map([["zai", contents]]),
       }),
-    ).toEqual({ detected: 0, migrated: 0, warnings: [] });
+    ).toEqual({ detected: 0, migrated: 0, warnings: [], issues: [] });
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents },
     ]);
@@ -670,10 +670,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     chmodSync(pluginDir, 0o500);
 
     try {
-      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
         detected: 1,
         migrated: 0,
         warnings: [expect.stringContaining("Could not remove migrated legacy provider catalog")],
+        issues: [expect.objectContaining({ kind: "cleanup-failed", pathname: sourcePath })],
       });
       expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
         { pluginId: "zai", contents },
@@ -710,10 +711,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     chmodSync(pluginDir, 0o500);
 
     try {
-      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
         detected: 1,
         migrated: 0,
         warnings: [expect.stringContaining("Could not remove migrated legacy provider catalog")],
+        issues: [expect.objectContaining({ kind: "cleanup-failed", pathname: sourcePath })],
       });
       await replacePersistedPluginModelCatalogs({
         agentDir,
@@ -725,7 +727,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       chmodSync(pluginDir, 0o700);
     }
 
-    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
       detected: 1,
       migrated: 0,
       warnings: [expect.stringContaining("Left superseded legacy provider catalog in place")],
@@ -743,6 +745,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const refreshed = catalogContents("zai", "concurrently-refreshed-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
+    const warning = `Left changed legacy provider catalog in place: ${sourcePath}`;
     writeFileSync(sourcePath, original, "utf8");
 
     expect(
@@ -755,7 +758,14 @@ describe("SQLite-backed plugin model catalogs", () => {
     ).toEqual({
       detected: 1,
       migrated: 0,
-      warnings: [expect.stringContaining("Left changed legacy provider catalog in place")],
+      warnings: [warning],
+      issues: [
+        {
+          kind: "source-changed",
+          pathname: sourcePath,
+          message: warning,
+        },
+      ],
     });
     expect(readFileSync(sourcePath, "utf8")).toBe(refreshed);
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
@@ -771,6 +781,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const original = catalogContents("zai", "stale-released-provider-test-key");
     const refreshed = catalogContents("zai", "current-regenerated-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
+    const warning = `Legacy provider catalog was claimed before its migration was committed: ${sourcePath}`;
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, original, "utf8");
     await replacePersistedPluginModelCatalogs({
@@ -800,10 +811,13 @@ describe("SQLite-backed plugin model catalogs", () => {
     ).toEqual({
       detected: 1,
       migrated: 0,
-      warnings: [
-        expect.stringContaining(
-          "Legacy provider catalog was claimed before its migration was committed",
-        ),
+      warnings: [warning],
+      issues: [
+        {
+          kind: "claim-uncommitted",
+          pathname: sourcePath,
+          message: warning,
+        },
       ],
     });
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
@@ -816,6 +830,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const contents = catalogContents("zai", "in-flight-released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     const claimPath = `${sourcePath}.doctor-importing-concurrent-process`;
+    const warning = `Legacy provider catalog was claimed before its migration was committed: ${sourcePath}`;
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
@@ -829,10 +844,13 @@ describe("SQLite-backed plugin model catalogs", () => {
     ).toEqual({
       detected: 1,
       migrated: 0,
-      warnings: [
-        expect.stringContaining(
-          "Legacy provider catalog was claimed before its migration was committed",
-        ),
+      warnings: [warning],
+      issues: [
+        {
+          kind: "claim-uncommitted",
+          pathname: sourcePath,
+          message: warning,
+        },
       ],
     });
     expect(existsSync(claimPath)).toBe(true);
@@ -861,7 +879,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     chmodSync(claimPath, 0o000);
 
     try {
-      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
         detected: 0,
         migrated: 0,
         warnings: [expect.stringContaining("Could not read legacy provider catalog")],
@@ -906,7 +924,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     writeFileSync(claimPath, retained, "utf8");
     writeFileSync(sourcePath, refreshed, "utf8");
 
-    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
       detected: 2,
       migrated: 2,
       warnings: [],
@@ -927,10 +945,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     writeFileSync(olderPath, catalogContents("zai", "older-provider-test-key"), "utf8");
     writeFileSync(newerPath, catalogContents("zai", "newer-provider-test-key"), "utf8");
 
-    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
       detected: 0,
       migrated: 0,
       warnings: [expect.stringContaining("Conflicting retained legacy provider catalogs")],
+      issues: [expect.objectContaining({ kind: "conflicting-sources", pathname: pluginDir })],
     });
     expect(existsSync(olderPath)).toBe(true);
     expect(existsSync(newerPath)).toBe(true);
@@ -956,7 +975,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     chmodSync(sourcePath, 0o000);
 
     try {
-      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      expect(migrateLegacyPluginModelCatalogs({ agentDir })).toMatchObject({
         detected: 0,
         migrated: 0,
         warnings: [expect.stringContaining("Could not read legacy provider catalog")],

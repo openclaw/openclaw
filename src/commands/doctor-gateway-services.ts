@@ -4,7 +4,6 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -40,6 +39,7 @@ import {
 } from "../daemon/service-types.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUnitActive } from "../daemon/systemd.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -77,6 +77,9 @@ import {
   isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
   reportServiceDefinitionDrift,
+  reportGatewayServiceFailure,
+  reportUnresolvedGatewayServiceFindings,
+  noteDeclinedGatewayServiceRepair,
 } from "./doctor-service-audit.js";
 import {
   confirmDoctorServiceRepair,
@@ -89,6 +92,7 @@ import {
 export { maybeResolveDuelingSystemdGatewayScopes } from "./doctor-gateway-dueling.js";
 
 type GatewayServiceConfigRepairOptions = {
+  onFinding?: (finding: HealthFinding) => void;
   allowExecSecretRefs?: boolean;
   /** Resolves with the persisted candidate; refusal must reject before service mutation. */
   writeConfig: (nextConfig: OpenClawConfig) => Promise<OpenClawConfig>;
@@ -535,6 +539,7 @@ export async function maybeRepairGatewayServiceConfig(
       currentLayout: serviceLayout,
       plannedLayout: runtimeLayout,
       missingSystemNode: needsNodeRuntime && !systemNodePath,
+      runtimeIssues: audit.issues,
       definitionDrift: audit.definitionDrift,
     });
   note(preview, "Gateway service repair preview");
@@ -551,18 +556,7 @@ export async function maybeRepairGatewayServiceConfig(
         !(definitionRepair && isServiceDefinitionOnlyRepair(audit))),
   });
   if (!repair) {
-    if (needsConfigWrite) {
-      note(
-        "Skipped Gateway token preservation and service repair. Rerun `openclaw doctor --fix` in an interactive terminal to approve saving a store SecretRef in gateway.auth.token.",
-        "Gateway service config",
-      );
-    }
-    if (sourceCheckoutWarningToShow === null) {
-      note(
-        `Run \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the gateway service definition.`,
-        "Gateway service config",
-      );
-    }
+    noteDeclinedGatewayServiceRepair(needsConfigWrite, sourceCheckoutWarningToShow);
     return cfg;
   }
   try {
@@ -580,7 +574,11 @@ export async function maybeRepairGatewayServiceConfig(
       }
     }
   } catch (err) {
-    runtime.error(`Gateway service repair blocked: ${String(err)}`);
+    reportGatewayServiceFailure(
+      `Gateway service repair blocked: ${String(err)}`,
+      runtime,
+      options.onFinding,
+    );
     return cfg;
   }
   let cfgForServiceInstall = cfg;
@@ -614,7 +612,11 @@ export async function maybeRepairGatewayServiceConfig(
       if (err instanceof ConfigWritePostCommitError) {
         throw err;
       }
-      runtime.error(`Failed to persist gateway.auth.token before service repair: ${String(err)}`);
+      reportGatewayServiceFailure(
+        `Failed to persist gateway.auth.token before service repair: ${String(err)}`,
+        runtime,
+        options.onFinding,
+      );
       return cfg;
     }
   }
@@ -629,6 +631,7 @@ export async function maybeRepairGatewayServiceConfig(
     pinnedRuntimePath: pinSnapshot.pin?.path,
   });
   await installDoctorGatewayService({
+    onFinding: options.onFinding,
     service,
     command,
     maintenance: options.serviceMaintenance,
@@ -655,7 +658,7 @@ export async function maybeRepairGatewayServiceConfig(
     },
   });
   if (unresolvedRepairFindings.length > 0) {
-    note(unresolvedRepairFindings.join("\n"), "Gateway service findings still unresolved");
+    reportUnresolvedGatewayServiceFindings(unresolvedRepairFindings, options.onFinding);
   }
   return cfgForServiceInstall;
 }

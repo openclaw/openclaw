@@ -6,6 +6,7 @@ import {
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { HealthFinding } from "../../flows/health-checks.js";
 import { assertNoRetiredStateFiles } from "../../infra/state-migrations.retired-files.js";
 import {
   hasDeferredUpdateModelRetirement,
@@ -76,6 +77,7 @@ export async function runDoctorRepairSequence(params: {
   pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  reportFindings?: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
 }): Promise<{
   state: DoctorConfigMutationState;
   /** Notes for repairs already committed to durable state (SQLite/filesystem). */
@@ -83,6 +85,8 @@ export async function runDoctorRepairSequence(params: {
   /** Notes for candidate-config mutations that are durable only after the config write. */
   configChangeNotes: string[];
   warningNotes: string[];
+  displayWarningNotes: string[];
+  findings: readonly HealthFinding[];
   authProfilesRepaired: boolean;
   modelRetirementRepairRan: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
@@ -192,7 +196,9 @@ export async function runDoctorRepairSequence(params: {
     env,
     profileIdMap: new Map(),
   });
+  const authFieldWarningsStart = warningNotes.length;
   appendRepairNotes(authFieldRepair);
+  const authFieldWarningsEnd = warningNotes.length;
   const codexRouteRepair = runWithCurrentPluginMetadata(() =>
     maybeRepairCodexRoutes({
       cfg: state.candidate,
@@ -356,7 +362,12 @@ export async function runDoctorRepairSequence(params: {
   });
   appendNotes(changeNotes, authRepair.storeChanges);
   openAICodexAuthProfileIdMap = authRepair.profileIdMap;
+  params.reportFindings?.(authRepair.findings, [
+    ...new Set([...authFieldRepair.warnings, ...authRepair.warnings]),
+  ]);
+  const authWarningsStart = warningNotes.length;
   applyMutation(authRepair);
+  const authWarningsEnd = warningNotes.length;
   const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
     cfg: state.candidate,
     env,
@@ -387,6 +398,12 @@ export async function runDoctorRepairSequence(params: {
     changeNotes,
     configChangeNotes,
     warningNotes,
+    displayWarningNotes: [
+      ...warningNotes.slice(0, authFieldWarningsStart),
+      ...warningNotes.slice(authFieldWarningsEnd, authWarningsStart),
+      ...warningNotes.slice(authWarningsEnd),
+    ],
+    findings: authRepair.findings,
     authProfilesRepaired,
     modelRetirementRepairRan,
     installedPluginIdRecovery: installedPluginRecovery.recovery,

@@ -5,7 +5,7 @@ import {
   resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
-import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
+import { collectBrowserReadinessFindings } from "./doctor-browser.js";
 
 vi.mock("./browser/chrome.executables.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/chrome.executables.js")>()),
@@ -40,7 +40,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-type BrowserConfig = NonNullable<Parameters<typeof noteChromeMcpBrowserReadiness>[0]["browser"]>;
+type BrowserConfig = NonNullable<Parameters<typeof collectBrowserReadinessFindings>[0]["browser"]>;
 type DoctorHost = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -74,24 +74,28 @@ async function diagnose(browser: BrowserConfig, overrides: DoctorHost = {}) {
   vi.mocked(readBrowserVersion)
     .mockReset()
     .mockImplementation(host.readVersion ?? (() => null));
-  const noteFn = vi.fn();
-  await noteChromeMcpBrowserReadiness(
-    { browser: { extensionRelay: { allowLegacyAuth: false }, ...browser } },
-    { noteFn },
-  );
-  const notes = noteFn.mock.calls.map(([message]) => String(message));
-  return { noteFn, text: notes.join("\n") };
+  const findings = await collectBrowserReadinessFindings({
+    browser: { extensionRelay: { allowLegacyAuth: false }, ...browser },
+  });
+  return {
+    findings,
+    text: findings.map((finding) => `${finding.message}\n${finding.fixHint}`).join("\n"),
+  };
 }
 
 describe("browser doctor readiness", () => {
   it("warns while legacy Browser Relay Authentication remains enabled", async () => {
-    const { noteFn } = await diagnose({
+    const { findings } = await diagnose({
       extensionRelay: { allowLegacyAuth: true },
       profiles: { openclaw: { cdpPort: 18800 } },
     });
-    expect(noteFn).toHaveBeenCalledWith(
-      expect.stringContaining("browser.extensionRelay.allowLegacyAuth=true"),
-      "Browser relay authentication",
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "recommended",
+          message: expect.stringContaining("browser.extensionRelay.allowLegacyAuth=true"),
+        }),
+      ]),
     );
   });
 
@@ -102,8 +106,8 @@ describe("browser doctor readiness", () => {
     );
     expect(text).toContain("Google Chrome was not found");
     expect(text).toContain("brave://inspect/#remote-debugging");
-    expect(text).toContain("System browser profile cookie import is enabled");
-    expect(text).toContain("System browser profile discovery skipped");
+    expect(text).not.toContain("System browser profile cookie import");
+    expect(text).not.toContain("System browser profile discovery skipped");
   });
 
   it.each<[string, BrowserConfig, boolean, boolean]>([
@@ -267,7 +271,8 @@ describe("browser doctor readiness", () => {
     expect(
       resolveManagedExecutable.mock.calls.map(([resolved]) => resolved.executablePath),
     ).toEqual(["/custom/chrome", "/global/missing-chrome"]);
-    expect(text).toContain("No Chromium-based browser executable");
+    expect(text).toContain("A configured browser executable could not be used");
+    expect(text).toContain("Correct browser.executablePath");
     expect(text).toContain("profile(s) are configured: fallback.");
     expect(text).not.toContain("custom");
     expect(text).not.toContain("shared");
@@ -283,7 +288,7 @@ describe("browser doctor readiness", () => {
   ] as const)(
     "reports Chrome MCP compatibility for $version",
     async ({ version, platform, expected }) => {
-      const { noteFn, text } = await diagnose(
+      const { findings, text } = await diagnose(
         { profiles: { chromeLive: { driver: "existing-session", color: "#00AA00" } } },
         {
           platform,
@@ -291,7 +296,9 @@ describe("browser doctor readiness", () => {
           readVersion: () => `Google Chrome ${version}`,
         },
       );
-      expect(noteFn).toHaveBeenCalledTimes(1);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.category).toBe(version.startsWith("143") ? "fix-now" : "recommended");
+      expect(findings[0]?.severity).toBe(version.startsWith("143") ? "warning" : "info");
       expect(text).toContain(expected);
       if (version.startsWith("143")) {
         expect(text).toContain("Chrome 144+");
@@ -300,7 +307,7 @@ describe("browser doctor readiness", () => {
   );
 
   it("skips Chrome auto-detection when profiles use explicit userDataDir", async () => {
-    const { noteFn, text } = await diagnose(
+    const { findings, text } = await diagnose(
       {
         profiles: {
           braveLive: {
@@ -316,7 +323,9 @@ describe("browser doctor readiness", () => {
         },
       },
     );
-    expect(noteFn).toHaveBeenCalled();
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.category).toBe("recommended");
+    expect(findings[0]?.severity).toBe("info");
     expect(text).toContain("explicit Chromium user data directory");
     expect(text).toContain("brave://inspect/#remote-debugging");
   });

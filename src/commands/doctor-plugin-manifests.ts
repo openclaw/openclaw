@@ -139,6 +139,8 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   return {
     checkId: LEGACY_PLUGIN_MANIFESTS_CHECK_ID,
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
     message: `Plugin manifest ${migration.pluginId} uses legacy top-level capability keys.`,
     path: migration.manifestPath,
     target: migration.pluginId,

@@ -72,6 +72,7 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
 
 import { runSessionTranscriptsHealth } from "../flows/doctor-health-contribution-runners.state.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
+import { showDoctorHealthSummary } from "../flows/doctor-health-contribution.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite-types.js";
@@ -380,26 +381,26 @@ describe("doctor session transcript repair", () => {
       ),
       "Session SQLite",
     );
+    showDoctorHealthSummary(ctx);
+    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
     for (const warning of warnings.slice(0, 5)) {
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(`${storePath}: [${code}] ${warning}`),
-        "Session SQLite",
-      );
+      expect(output).toContain(warning);
     }
     expect(issues).toEqual(originalIssues);
     expect(ctx.updateWarnings).toContain(
       `${storePath}: [transcript_missing] Active session transcript is missing.`,
     );
-    const output = note.mock.calls.find(([, title]) => title === "Session SQLite")![0];
     expect(output).toContain("Active session transcript is missing.");
     expect(ctx.updateWarnings).toHaveLength(7);
-    expect(output).toContain(`${count} historical transcript claim(s)`);
+    expect(output).toContain(`${count} historical recovery notice(s)`);
     expect(output).toContain(`${count - 5} omitted`);
-    expect(output).toContain("originals and migration manifests remain protected");
+    expect(output).toContain("Recovery evidence remains retained");
+    expect(output).toContain("No action needed if expected conversations are visible");
     expect(output).toContain(
       "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json",
     );
     expect(output).not.toContain("history-5:");
+    expect(output.indexOf("Fix now:")).toBeLessThan(output.indexOf("Historical recovery notices:"));
     expect(output.split("\n").length).toBeLessThan(20);
   });
 
