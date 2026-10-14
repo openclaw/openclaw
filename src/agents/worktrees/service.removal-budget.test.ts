@@ -225,7 +225,7 @@ it.each(["promised", "promised-retry", "unpromised", "checksum"] as const)(
         (await fs.readdir(directory)).find((name) => name.endsWith(".pack"))!,
       );
       const bytes = await fs.readFile(pack);
-      bytes[bytes.length - 1] ^= 1;
+      bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 1, bytes.length - 1);
       await fs.chmod(pack, 0o600);
       await fs.writeFile(pack, bytes);
     } else if (damage === "unpromised") {
