@@ -129,7 +129,9 @@ export async function gateWorkerTurnInput({
   const message = buildAgentRunBlockedUserMessage(turn.runId, block);
   await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, async () => {
     if (recorder) {
-      const persisted = await recorder.persistBlocked(message);
+      const persisted = await recorder.persistBlocked(message, {
+        storageTarget: transcriptTarget,
+      });
       assertCurrent();
       if (persisted) {
         turn.onUserMessagePersisted?.(persisted.message);

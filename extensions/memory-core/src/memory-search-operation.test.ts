@@ -48,7 +48,7 @@ it("makes routed CLI recalls available to dreaming in the requested agent worksp
   // A live Gateway initializes state inside its plugin instance, never the library fallback.
   resetMemoryCoreDreamingStateForTests();
   const runtime = registry.registry.memoryCapabilities[0]?.capability.runtime;
-  assert(runtime?.searchForCli);
+  assert(typeof runtime?.searchForCli === "function");
   const hit = {
     path: "memory/2026-10-10.md",
     startLine: 1,

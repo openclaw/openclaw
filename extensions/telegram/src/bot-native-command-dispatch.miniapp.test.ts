@@ -4,16 +4,13 @@ import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { expect, it, vi } from "vitest";
 import {
-  enqueueTelegramMenuSync,
-  resolveTelegramMenuRemoteOwner,
-} from "./bot-native-command-menu-state.js";
-import {
   apiCalls,
   commandMessage,
   createBot,
   from,
   harness,
   publishTelegramTestConfig,
+  settleMenuSyncs,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { registerTelegramMiniAppCommand } from "./miniapp/command.js";
 import { createTelegramMiniAppLaunchTickets } from "./miniapp/launch-ticket.js";
@@ -49,13 +46,7 @@ it("registers and dispatches session /dashboard separately from owner-only /cont
   );
 
   const bot = await createBot(true, true, cfg);
-  await new Promise<void>((resolve, reject) => {
-    enqueueTelegramMenuSync({
-      ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
-      sync: async () => resolve(),
-      onError: reject,
-    });
-  });
+  await settleMenuSyncs();
   const menu = apiCalls.mock.calls
     .filter(([method]) => method === "setMyCommands")
     .map(([, payload]) => payload as { commands: BotCommand[]; language_code?: string })

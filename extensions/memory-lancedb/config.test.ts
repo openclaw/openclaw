@@ -1,9 +1,10 @@
 import fs from "node:fs";
+import path from "node:path";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { memoryConfigSchema } from "./config.js";
 
 const manifest = JSON.parse(
@@ -23,18 +24,24 @@ function configWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("memory-lancedb config", () => {
-  it("keeps config presentation metadata manifest-owned", () => {
-    expect(memoryConfigSchema).not.toHaveProperty("uiHints");
-    expect(manifest.uiHints?.["embedding.apiKey"]).toMatchObject({
-      label: "Embedding API Key",
-      sensitive: true,
-    });
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
-  it("accepts dreaming in the manifest schema and preserves it in runtime parsing", () => {
-    const config = configWith({ dreaming: { enabled: true } });
-    expect(validateManifest(config).ok).toBe(true);
-    expect(memoryConfigSchema.parse(config).dreaming).toEqual({ enabled: true });
+  it("resolves the default database path from the state directory at parse time", () => {
+    const stateDir = path.resolve("/tmp/openclaw-state-after-import");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    expect(memoryConfigSchema.parse(configWith()).dbPath).toBe(
+      path.join(stateDir, "memory", "lancedb"),
+    );
+  });
+
+  it("preserves an explicit database path under a custom state directory", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/openclaw-custom-state");
+    const dbPath = "~/shared-memory/lancedb";
+
+    expect(memoryConfigSchema.parse(configWith({ dbPath })).dbPath).toBe(dbPath);
   });
 
   it("accepts provider-backed embedding config without a plugin apiKey", () => {
@@ -94,13 +101,19 @@ describe("memory-lancedb config", () => {
   });
 
   it("accepts custom trigger literals in the manifest schema and runtime parser", () => {
-    expect(validateManifest(configWith({ customTriggers: ["记住", "important project"] })).ok).toBe(
-      true,
-    );
     expect(
-      memoryConfigSchema.parse(configWith({ customTriggers: ["  记住  ", "important project"] }))
-        .customTriggers,
-    ).toEqual(["记住", "important project"]);
+      validateManifest(
+        configWith({ customTriggers: ["记住", "important project"], dreaming: { enabled: true } }),
+      ).ok,
+    ).toBe(true);
+    const parsed = memoryConfigSchema.parse(
+      configWith({
+        customTriggers: ["  记住  ", "important project"],
+        dreaming: { enabled: true },
+      }),
+    );
+    expect(parsed.customTriggers).toEqual(["记住", "important project"]);
+    expect(parsed.dreaming).toEqual({ enabled: true });
   });
 
   it("rejects unsafe custom trigger config values", () => {

@@ -1,34 +1,25 @@
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   deleteConfigMachineState,
   importConfigMachineState,
   writeConfigMachineState,
 } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { shouldAttemptTtsPayload, shouldCleanTtsDirectiveText } from "./tts-config.js";
 import { prepareTtsPreferences } from "./tts-preferences.js";
-import {
-  buildTtsSystemPromptHint,
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-  setTtsMachinePrefsPathResolver,
-} from "./tts-settings.js";
+import { buildTtsSystemPromptHint, buildTtsSystemPromptHintAsync } from "./tts-settings.js";
+import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsPrefsPathAsync } from "./tts.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 
 afterEach(() => {
   vi.restoreAllMocks();
-  setTtsMachinePrefsPathResolver();
   vi.unstubAllEnvs();
 });
 
@@ -48,12 +39,19 @@ it("carries the worker-read path through delivery and prompt rendering without c
       Date.now(),
     );
   });
-  setTtsMachinePrefsPathResolver(() => readConfigMachineState<string>("tts.prefsPath"));
   const cfg = { tts: { auto: "off" as const } };
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   const sql = observeMainThreadSql();
   sql.calibrate();
   try {
+    // Deprecated synchronous calls never open SQLite to discover an unprepared path.
+    expect(resolveTtsPrefsPath(resolveTtsConfig(cfg))).toBe(
+      path.join(root, "settings", "tts.json"),
+    );
+    sql.expectIdle();
+    expect(await buildTtsSystemPromptHintAsync(cfg, "main", { messageToolOnly: true })).toContain(
+      "Use message(action=send) with voiceText",
+    );
     const preparedTtsPreferences = await prepareTtsPreferences();
     expect(await prepareTtsPreferences()).toEqual(preparedTtsPreferences);
     expect(reads).toHaveBeenCalledTimes(1);
@@ -61,6 +59,8 @@ it("carries the worker-read path through delivery and prompt rendering without c
     expect(shouldAttemptTtsPayload(input)).toBe(true);
     expect(shouldCleanTtsDirectiveText(input)).toBe(true);
     expect(resolveTtsPrefsPath(resolveTtsConfig(cfg), preparedTtsPreferences)).toBe(firstPath);
+    expect(resolveTtsPrefsPath(resolveTtsConfig(cfg))).toBe(firstPath);
+    expect(await resolveTtsPrefsPathAsync(resolveTtsConfig(cfg))).toBe(firstPath);
     expect(buildTtsSystemPromptHint(cfg, "main", { preparedTtsPreferences })).toContain(
       "Keep spoken text ≤321 chars",
     );
@@ -72,8 +72,10 @@ it("carries the worker-read path through delivery and prompt rendering without c
     // A later turn observes the writer; callbacks of this turn retain its selected path.
     writeConfigMachineState("tts.prefsPath", nextPath);
     sql.clear();
+    expect(resolveTtsPrefsPath(resolveTtsConfig(cfg))).toBe(nextPath);
     expect(shouldAttemptTtsPayload(input)).toBe(true);
     const next = await prepareTtsPreferences();
+    expect(await buildTtsSystemPromptHintAsync(cfg, "main")).toBeUndefined();
     expect(reads).toHaveBeenCalledTimes(1);
     expect(shouldAttemptTtsPayload({ cfg, preparedTtsPreferences: next })).toBe(false);
     expect(buildTtsSystemPromptHint(cfg, "main", { preparedTtsPreferences: next })).toBeUndefined();
@@ -107,51 +109,32 @@ it("carries missing machine state without creating a store or falling back to a 
   const root = tempDirs.make("openclaw-tts-prepared-absent-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_TTS_PREFS", "");
-  setTtsMachinePrefsPathResolver(() => {
-    throw new Error("prepared absence must not invoke the synchronous SDK resolver");
-  });
   const preparedTtsPreferences = await prepareTtsPreferences();
-  expect(resolveTtsPrefsPath(resolveTtsConfig({}), preparedTtsPreferences)).toBeTruthy();
+  expect(await buildTtsSystemPromptHintAsync({})).toBeUndefined();
+  expect(resolveTtsPrefsPath(resolveTtsConfig({}))).toBe(path.join(root, "settings", "tts.json"));
+  expect(await resolveTtsPrefsPathAsync(resolveTtsConfig({}))).toBeTruthy();
   expect(shouldAttemptTtsPayload({ cfg: {}, preparedTtsPreferences })).toBe(false);
   expect(existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
 });
 
-it("shares concurrent cold reads and refuses their result after the database owner retires", async () => {
-  const root = tempDirs.make("openclaw-tts-retired-");
+it("keeps legacy hints synchronous and warns once while explicit awaited hints skip machine state", async () => {
+  const root = tempDirs.make("openclaw-tts-hint-compat-");
+  const prefsPath = path.join(root, "prefs.json");
+  writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "always", maxLength: 123 } }));
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  runOpenClawStateWriteTransaction(({ db }) => {
-    db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-      "tts.prefsPath",
-      JSON.stringify("retired.json"),
-      Date.now(),
-    );
+  vi.stubEnv("OPENCLAW_TTS_PREFS", prefsPath);
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  await withPluginRuntimePluginScope({ pluginId: "tts-hint-compat-consumer" }, async () => {
+    expect(await buildTtsSystemPromptHintAsync({})).toContain("Keep spoken text ≤123 chars");
+    expect(warning).not.toHaveBeenCalled();
+    expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
+    expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
   });
-  const completed = createDeferred();
-  const release = createDeferred();
-  const execute = stateReads.executeExistingOpenClawStateRead;
-  const reads = vi
-    .spyOn(stateReads, "executeExistingOpenClawStateRead")
-    .mockImplementationOnce(async (...args) => {
-      const reply = await execute(...args);
-      completed.resolve();
-      await release.promise;
-      return reply;
-    });
-  const first = prepareTtsPreferences();
-  const second = prepareTtsPreferences();
-  const pending = Promise.allSettled([first, second]);
-  const refused = Promise.all([
-    expect(first).rejects.toThrow(/admission|closed|retired/iu),
-    expect(second).rejects.toThrow(/admission|closed|retired/iu),
-  ]);
-  try {
-    await awaitGateBeforeSettlement(completed.promise, pending, "TTS path read did not finish");
-    expect(reads).toHaveBeenCalledTimes(1);
-    await closeOpenClawStateDatabaseAsync();
-  } finally {
-    release.resolve();
-  }
-  await refused;
-  writeConfigMachineState("tts.prefsPath", "current.json");
-  expect(await prepareTtsPreferences()).toEqual({ machinePrefsPath: "current.json" });
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("buildTtsSystemPromptHintAsync"),
+    { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+  );
+  expect(existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
+  expect(reads).not.toHaveBeenCalled();
 });

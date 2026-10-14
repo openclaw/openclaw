@@ -4,32 +4,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { createUpdateErrorFact } from "./update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-} from "./update-freebsd-pkg-ownership.js";
 import { pkgQueryResult as result } from "./update-freebsd-pkg-ownership.test-support.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "./update-system-package-ownership.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-describe("FreeBSD pkg ownership", () => {
-  it("does not inspect pkg on other platforms", async () => {
-    const query = vi.spyOn(exec, "runCommandBuffered");
-    await withMockedPlatform("linux", () =>
-      createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw"),
-    );
-    expect(query).not.toHaveBeenCalled();
-  });
-
+describe("system package ownership", () => {
   it("uses one non-bootstrap, alias-pinned inventory for a planning snapshot", async () => {
     await withTestDir({ prefix: "openclaw-pkg-inventory-" }, async (base) => {
       const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(result());
       await withMockedPlatform("freebsd", async () => {
-        const inspection = createFreeBsdPkgOwnershipInspection(321);
+        const inspection = createSystemPackageOwnershipInspection(321);
         await inspection.assertUnowned(path.join(base, "first"));
         await inspection.assertUnowned(path.join(base, "second"));
       });
@@ -42,56 +34,59 @@ describe("FreeBSD pkg ownership", () => {
   });
 
   it.each([
-    { name: "missing owner or unavailable database", value: result("", { code: 1 }) },
     { name: "timeout", value: result("", { code: null, termination: "timeout" }) },
-    { name: "truncated inventory", value: result("", { code: null, termination: "output-limit" }) },
     {
-      name: "nonfatal configuration error",
-      value: result("", { stderr: Buffer.from("configuration error") }),
+      name: "launch failure",
+      value: result("", {
+        code: null,
+        termination: "error",
+        error: Object.assign(new Error("private database detail"), { code: "EACCES" }),
+      }),
     },
-    { name: "invalid UTF-8", value: result("", { stdout: Buffer.from([0xff, 0x0a]) }) },
-    { name: "partial final record", value: result("/fixture/entry") },
-    { name: "relative entry", value: result("relative/entry\n") },
-  ])("preserves unknown ownership for $name", async ({ value }) => {
-    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(value);
-    await withMockedPlatform("freebsd", async () => {
-      const failed = createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw");
-      await expect(failed).rejects.toMatchObject({
-        reason: "pkg-ownership-unavailable",
-        message: expect.stringMatching(
-          value.termination === "timeout"
-            ? /^FreeBSD pkg inspection exhausted its shared 100 ms budget during pkg query\./u
-            : /^FreeBSD pkg inspection failed during pkg query\./u,
-        ),
+  ])("warns once and continues after $name without consulting the host", async ({ value }) => {
+    const host = vi.spyOn(exec, "runCommandBuffered");
+    for (const platform of ["linux", "freebsd"] as const) {
+      const onWarning = vi.fn();
+      const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(value);
+      await withMockedPlatform(platform, async () => {
+        const inspection = createSystemPackageOwnershipInspection(100, { runCommand, onWarning });
+        await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
+        await expect(inspection.assertEntryUnowned("/fixture/launcher")).resolves.toBeUndefined();
       });
-      await expect(failed).rejects.not.toThrow(/configuration error|\/fixture/u);
-      await expect(failed).rejects.not.toHaveProperty("cause");
-    });
+      expect(runCommand).toHaveBeenCalledOnce();
+      expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Continuing without verified system-package ownership"),
+      );
+      expect(onWarning.mock.calls[0]?.[0]).not.toMatch(
+        /private database|private configuration|\/fixture/u,
+      );
+    }
+    expect(host).not.toHaveBeenCalled();
   });
 
-  it("preserves launch failure as unknown without exposing subprocess details", async () => {
-    const cause = Object.assign(new Error("private database detail"), { code: "EACCES" });
-    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-      result("", { code: null, termination: "error", error: cause }),
-    );
-    await withMockedPlatform("freebsd", async () => {
-      const failed = createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw");
-      await expect(failed).rejects.toMatchObject({
-        reason: "pkg-ownership-unavailable",
-        message: expect.stringMatching(
-          /^FreeBSD pkg inspection failed during pkg query \(EACCES\)\./u,
-        ),
+  it.each(["linux"] as const)(
+    "retains the pre-mutation error contract for a positive %s owner",
+    async (platform) => {
+      const onWarning = vi.fn();
+      const runCommand = vi
+        .fn<typeof exec.runCommandBuffered>()
+        .mockResolvedValue(result("/fixture/openclaw/package.json\n"));
+      await withMockedPlatform(platform, async () => {
+        const failure = createSystemPackageOwnershipInspection(100, {
+          runCommand,
+          onWarning,
+        }).assertUnowned("/fixture/openclaw");
+        await expect(failure).rejects.toBeInstanceOf(UpdatePreMutationError);
+        await expect(failure).rejects.toBeInstanceOf(SystemPackageOwnershipError);
+        await expect(failure).rejects.toMatchObject({
+          name: "UpdatePreMutationError",
+          reason: "pacman-owned-install",
+          owned: true,
+        });
       });
-      await expect(failed).rejects.not.toHaveProperty("cause");
-      const fact = createUpdateErrorFact(
-        "installation-inspection",
-        await failed.catch((error: unknown) => error),
-      );
-      expect(fact.message).toContain("pkg query (EACCES)");
-      expect(JSON.stringify(fact)).not.toContain("private database detail");
-      await expect(failed).rejects.not.toThrow("private database detail");
-    });
-  });
+      expect(onWarning).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["invoking alias", "registered alias"])(
     "detects a custom-prefix package through %s",
@@ -109,7 +104,7 @@ describe("FreeBSD pkg ownership", () => {
         );
         await withMockedPlatform("freebsd", async () => {
           await expect(
-            createFreeBsdPkgOwnershipInspection(1000).assertUnowned(
+            createSystemPackageOwnershipInspection(1000).assertUnowned(
               kind === "invoking alias"
                 ? path.join(alias, "lib", "node_modules", "openclaw")
                 : root,
@@ -129,7 +124,7 @@ describe("FreeBSD pkg ownership", () => {
       await fs.symlink(path.join(root, "openclaw.mjs"), launcher);
       vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(result(`${launcher}\n`));
       await withMockedPlatform("freebsd", () =>
-        createFreeBsdPkgOwnershipInspection(1000).assertUnowned(root),
+        createSystemPackageOwnershipInspection(1000).assertUnowned(root),
       );
     });
   });
@@ -145,7 +140,7 @@ describe("FreeBSD pkg ownership", () => {
       vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(result(`${prefix}/openclaw\n`));
       await withMockedPlatform("freebsd", async () => {
         await expect(
-          createFreeBsdPkgOwnershipInspection(1000).assertUnowned(
+          createSystemPackageOwnershipInspection(1000).assertUnowned(
             path.join(base, "alias", "openclaw"),
           ),
         ).rejects.toMatchObject({ reason: "pkg-owned-install" });
@@ -163,7 +158,7 @@ describe("FreeBSD pkg ownership", () => {
       .mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));
     await withMockedPlatform("freebsd", async () => {
       await expect(
-        createFreeBsdPkgOwnershipInspection(100).assertUnowned(root),
+        createSystemPackageOwnershipInspection(100).assertUnowned(root),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
     });
     expect(canonical).not.toHaveBeenCalled();
@@ -171,53 +166,32 @@ describe("FreeBSD pkg ownership", () => {
 
   it.each([
     { operation: "lstat", code: "EACCES" },
-    { operation: "realpath", code: "ENOENT" },
     { operation: "realpath", code: "PRIVATE_CUSTOM_CODE" },
   ] as const)(
-    "retains the actual $operation failure ($code) without private details",
+    "warns after $operation failure ($code) without private details",
     async ({ operation, code }) => {
       await withTestDir({ prefix: "openclaw-pkg-denied-" }, async (base) => {
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(result(`${base}/registered/file\n`));
-        const cause = Object.assign(
-          new Error("denied /private/fixture/database token=fixture-secret"),
-          { code },
+        const runCommand = vi
+          .fn<typeof exec.runCommandBuffered>()
+          .mockResolvedValue(result(`${base}/registered/file\n`));
+        const onWarning = vi.fn();
+        vi.spyOn(fs, operation).mockRejectedValue(
+          Object.assign(new Error("private path token=fixture-secret"), { code }),
         );
-        vi.spyOn(fs, operation).mockRejectedValue(cause);
         await withMockedPlatform("freebsd", async () => {
-          const failed = createFreeBsdPkgOwnershipInspection(100).assertUnowned(
-            path.join(base, "openclaw"),
-          );
-          await expect(failed).rejects.toThrow("registered package directories");
-          const error = await failed.catch((caught: unknown) => caught);
-          expect(error).toBeInstanceOf(FreeBsdPkgOwnershipError);
-          if (!(error instanceof FreeBsdPkgOwnershipError)) {
-            throw new Error("Expected pkg inspection refusal");
-          }
-          expect(error.cause).toBeUndefined();
-          expect(error.reason).toBe("pkg-ownership-unavailable");
-          const suffix = code === "PRIVATE_CUSTOM_CODE" ? "" : ` (${code})`;
-          expect(
-            error.message.startsWith(
-              `FreeBSD pkg inspection failed during ${operation}${suffix}. `,
+          await expect(
+            createSystemPackageOwnershipInspection(100, { runCommand, onWarning }).assertUnowned(
+              path.join(base, "openclaw"),
             ),
-          ).toBe(true);
-          expect(error.message).not.toMatch(/private|fixture-secret|PRIVATE_CUSTOM_CODE/u);
-          expect(error).not.toHaveProperty("code");
+          ).resolves.toBeUndefined();
         });
+        expect(onWarning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(operation));
+        expect(onWarning.mock.calls[0]?.[0]).not.toMatch(
+          /private path|fixture-secret|PRIVATE_CUSTOM_CODE/u,
+        );
       });
     },
   );
-
-  it("preserves an inner domain refusal through nested path resolution", async () => {
-    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(result());
-    const error = new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
-    vi.spyOn(fs, "lstat").mockRejectedValue(error);
-    await withMockedPlatform("freebsd", async () => {
-      await expect(
-        createFreeBsdPkgOwnershipInspection(100).assertUnowned("/fixture/openclaw"),
-      ).rejects.toBe(error);
-    });
-  });
 
   it("does not continue an ancestor walk or reset the snapshot after a late ENOENT", async () => {
     const query = vi
@@ -233,22 +207,18 @@ describe("FreeBSD pkg ownership", () => {
     const canonical = vi.spyOn(fs, "realpath");
     vi.useFakeTimers();
     await withMockedPlatform("freebsd", async () => {
-      const inspection = createFreeBsdPkgOwnershipInspection(100);
+      const onWarning = vi.fn();
+      const inspection = createSystemPackageOwnershipInspection(100, { onWarning });
       const pending = expect(
         inspection.assertUnowned("/fixture/missing/openclaw"),
-      ).rejects.toMatchObject({
-        reason: "pkg-ownership-unavailable",
-        message: expect.stringContaining("exhausted its shared 100 ms budget"),
-      });
+      ).resolves.toBeUndefined();
       await Promise.all([pending, vi.advanceTimersByTimeAsync(100)]);
       rejectLookup?.(Object.assign(new Error("missing"), { code: "ENOENT" }));
       await vi.advanceTimersByTimeAsync(0);
-      await expect(inspection.assertUnowned("/another/root")).rejects.toMatchObject({
-        reason: "pkg-ownership-unavailable",
-        message: expect.stringContaining(
-          "exhausted its shared 100 ms budget during path inspection",
-        ),
-      });
+      await expect(inspection.assertUnowned("/another/root")).resolves.toBeUndefined();
+      expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("exhausted its shared 100 ms budget"),
+      );
     });
     expect(query).toHaveBeenCalledTimes(1);
     expect(lookup).toHaveBeenCalledTimes(1);
@@ -256,7 +226,7 @@ describe("FreeBSD pkg ownership", () => {
   });
 
   it.each(["query", "path"] as const)(
-    "observes rejection when %s work synchronously consumes the deadline",
+    "warns when %s work synchronously consumes the deadline",
     async (stage) => {
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -272,17 +242,13 @@ describe("FreeBSD pkg ownership", () => {
       });
       const canonical = vi.spyOn(fs, "realpath");
       await withMockedPlatform("freebsd", async () => {
-        const inspection = createFreeBsdPkgOwnershipInspection(100);
-        await expect(inspection.assertUnowned("/fixture/openclaw")).rejects.toMatchObject({
-          reason: "pkg-ownership-unavailable",
-          message: expect.stringContaining("exhausted its shared 100 ms budget"),
-        });
-        await expect(inspection.assertUnowned("/another/root")).rejects.toMatchObject({
-          reason: "pkg-ownership-unavailable",
-          message: expect.stringContaining(
-            "exhausted its shared 100 ms budget during path inspection",
-          ),
-        });
+        const onWarning = vi.fn();
+        const inspection = createSystemPackageOwnershipInspection(100, { onWarning });
+        await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
+        await expect(inspection.assertUnowned("/another/root")).resolves.toBeUndefined();
+        expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("exhausted its shared 100 ms budget"),
+        );
         // Let the test runner observe any rejection orphaned by deadline admission.
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
@@ -300,13 +266,16 @@ describe("FreeBSD pkg ownership", () => {
       .mockImplementation(() => new Promise<never>(() => {}));
     vi.useFakeTimers();
     await withMockedPlatform("freebsd", async () => {
+      const onWarning = vi.fn();
       const pending = expect(
-        createFreeBsdPkgOwnershipInspection(20 * 60_000).assertUnowned("/fixture/openclaw"),
-      ).rejects.toMatchObject({
-        reason: "pkg-ownership-unavailable",
-        message: expect.stringContaining("exhausted its shared 30000 ms budget during pkg query"),
-      });
+        createSystemPackageOwnershipInspection(20 * 60_000, { onWarning }).assertUnowned(
+          "/fixture/openclaw",
+        ),
+      ).resolves.toBeUndefined();
       await Promise.all([pending, vi.advanceTimersByTimeAsync(30_000)]);
+      expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("exhausted its shared 30000 ms budget during pkg query"),
+      );
     });
     expect(query).toHaveBeenCalledWith(
       expect.any(Array),

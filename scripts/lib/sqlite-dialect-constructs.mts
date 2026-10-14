@@ -1,5 +1,11 @@
 export const DIALECT_GROUPS = ["mechanical", "design", "engine-maintenance"] as const;
 export type DialectGroup = (typeof DIALECT_GROUPS)[number];
+export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
+  // Canonical owner of SQLite FK/sequence primitives that ports and migrations call instead of raw sites.
+  "src/infra/sqlite-strict.ts",
+  // Canonical owner of SQLite user_version read/write.
+  "src/infra/sqlite-user-version.ts",
+];
 export type DialectMatch = {
   construct: string;
   group: DialectGroup;
@@ -17,7 +23,7 @@ const constructs: readonly Construct[] = [
     /\b(?:insert\s+or\s+(?:replace|ignore|abort|fail|rollback)|replace\s+into)\b/giu,
   ],
   ["json-string-set", "mechanical", /\bjson_(?:each|tree)\s*\(/giu],
-  ["transaction-mode", "mechanical", /\b(?:begin\s+(?:immediate|deferred)|savepoint)\b/giu],
+  ["transaction-mode", "mechanical", /\bbegin\s+(?:immediate|deferred|exclusive)\b/giu],
   ["last-insert-rowid", "mechanical", /\blast_insert_rowid\s*\(/giu],
   ["without-rowid", "mechanical", /\bwithout\s+rowid\b/giu],
   ["randomblob", "mechanical", /\brandomblob\s*\(/giu],
@@ -26,7 +32,8 @@ const constructs: readonly Construct[] = [
   [
     "json-projection",
     "design",
-    /\b(?:json_(?:extract|set|insert|replace|remove|patch|object|array|group_\w+|type|valid)|jsonb_\w+)\s*\(|->>?/giu,
+    // PostgreSQL-only JSONB constructors and aggregates are not SQLite projection debt.
+    /\b(?:json_(?:extract|set|insert|replace|remove|patch|object|array|group_\w+|type|valid)|jsonb_(?!(?:build_object|build_array|agg|object_agg)\b)\w+)\s*\(|->>?/giu,
   ],
   ["temp-schema", "design", /\b(?:create\s+(?:temp|temporary)\b|temp\s*\.)/giu],
   ["rowid", "design", /\b(?:rowid|_rowid_)\b/giu],
@@ -76,12 +83,18 @@ export function matchDialect(text: string, owner = false, sqlFile = false): Dial
   );
   return constructs
     .flatMap(([construct, group, pattern]) =>
-      [...masked.matchAll(pattern)].map((match) => ({
-        construct,
-        group,
-        index: match.index,
-        owner: owner && construct === "json-string-set",
-      })),
+      [...masked.matchAll(pattern)]
+        .filter(
+          (match) =>
+            construct !== "custom-function" ||
+            !/\b(?:table|exists|into|references|on)\s+$/iu.test(masked.slice(0, match.index)),
+        )
+        .map((match) => ({
+          construct,
+          group,
+          index: match.index,
+          owner: owner && construct === "json-string-set",
+        })),
     )
     .toSorted(
       (left, right) =>

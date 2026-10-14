@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { sanitizeAssistantVisibleText } from "../../../shared/text/assistant-visible-text.js";
 import { trimTextPreservingCode } from "../../../shared/text/text-projection.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
@@ -34,6 +35,7 @@ import {
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
 import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
+import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -44,10 +46,10 @@ import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import {
   hasCompletedMessagingToolDeliveryEvidence,
@@ -55,6 +57,7 @@ import {
 } from "../delivery-evidence.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
@@ -73,6 +76,7 @@ export function buildEmbeddedRunPayloads(params: {
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
+  sandboxRuntime?: EmbeddedRunAttemptResult["sandboxRuntime"];
   isCronTrigger?: boolean;
   isHeartbeatTrigger?: boolean;
   sessionKey: string;
@@ -87,6 +91,7 @@ export function buildEmbeddedRunPayloads(params: {
   toolResultFormat?: ToolResultFormat;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -98,14 +103,17 @@ export function buildEmbeddedRunPayloads(params: {
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
+  const sourceReplyPending = params.sourceReplyDeliveryState === "pending";
+  const heartbeatToolResponse = sourceReplyPending ? undefined : params.heartbeatToolResponse;
   const heartbeatTerminalToolFailure =
+    !sourceReplyPending &&
     params.isHeartbeatTrigger === true &&
     params.lastToolError &&
     params.lastToolError.mutatingAction === true
       ? { toolName: params.lastToolError.toolName }
       : undefined;
-  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
-    return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
+  if (heartbeatToolResponse && !heartbeatTerminalToolFailure) {
+    return [createHeartbeatToolResponsePayload(heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. A committed
   // tool-authored batch replaces the model answer in either delivery mode.
@@ -121,28 +129,16 @@ export function buildEmbeddedRunPayloads(params: {
   );
   const replyItems = ordinarySourceReplies.replyItems;
   const pendingAuthoredReplies = new Set(sourceReplies.filter((payload) => payload.toolAuthored));
-  const { deliveredSourceReplyViaMessageTool, completedSourceReplyViaMessageTool } =
-    ordinarySourceReplies;
-  if (params.heartbeatToolResponse) {
-    const heartbeatPayload = createHeartbeatToolResponsePayload(params.heartbeatToolResponse);
+  if (heartbeatToolResponse) {
+    const heartbeatPayload = createHeartbeatToolResponsePayload(heartbeatToolResponse);
     replyItems.push({
       text: heartbeatPayload.text ?? "",
       ...(heartbeatPayload.channelData ? { channelData: heartbeatPayload.channelData } : {}),
     });
   }
   const useMarkdown = params.toolResultFormat === "markdown";
-  const suppressAssistantArtifacts =
-    params.heartbeatToolResponse !== undefined ||
-    params.didSendDeterministicApprovalPrompt === true ||
-    (params.sourceReplyDeliveryMode === "message_tool_only" &&
-      ordinarySourceReplies.hasSourceReplyPayload) ||
-    deliveredSourceReplyViaMessageTool;
-  const suppressFailureArtifacts =
-    params.didSendDeterministicApprovalPrompt === true ||
-    (params.sourceReplyDeliveryMode === "message_tool_only" &&
-      ordinarySourceReplies.completedSourceReplyViaMessageTool);
-  let hasUserFacingReply =
-    completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
+  let suppressFailureArtifacts = false;
+  let hasUserFacingReply = false;
   let hasIntentionalSilentFinal = false;
   const appendSegmentAnswer = ({
     assistantTexts,
@@ -150,15 +146,40 @@ export function buildEmbeddedRunPayloads(params: {
     currentAssistant,
     assistantMessageIndex: terminalMessageIndex,
     keptAnswer,
+    sourceReplyDeliveryState,
   }: Pick<
     typeof params,
-    "assistantTexts" | "lastAssistant" | "currentAssistant" | "assistantMessageIndex" | "keptAnswer"
+    | "assistantTexts"
+    | "lastAssistant"
+    | "currentAssistant"
+    | "assistantMessageIndex"
+    | "keptAnswer"
+    | "sourceReplyDeliveryState"
   >) => {
+    // Delivery receipts span the attempt; canonical completion belongs to one input.
+    const completedSourceReplyViaMessageTool =
+      sourceReplyDeliveryState !== undefined
+        ? sourceReplyDeliveryState === "delivered"
+        : ordinarySourceReplies.completedSourceReplyViaMessageTool;
+    const deliveredSourceReplyViaMessageTool =
+      sourceReplyDeliveryState !== undefined
+        ? completedSourceReplyViaMessageTool
+        : ordinarySourceReplies.deliveredSourceReplyViaMessageTool;
+    const suppressAssistantArtifacts =
+      heartbeatToolResponse !== undefined ||
+      params.didSendDeterministicApprovalPrompt === true ||
+      (params.sourceReplyDeliveryMode === "message_tool_only" &&
+        ordinarySourceReplies.hasSourceReplyPayload) ||
+      (deliveredSourceReplyViaMessageTool &&
+        (params.sourceReplyDeliveryMode === "message_tool_only" ||
+          completedSourceReplyViaMessageTool));
+    suppressFailureArtifacts =
+      params.didSendDeterministicApprovalPrompt === true || completedSourceReplyViaMessageTool;
     // Silence belongs to this input's answer. An earlier steered input must not
     // hide a later input that actually failed without producing an answer.
     hasIntentionalSilentFinal = false;
     hasUserFacingReply =
-      completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
+      completedSourceReplyViaMessageTool || heartbeatToolResponse?.notify === true;
     const authoredReplies = [...pendingAuthoredReplies].filter((payload) =>
       isToolAuthoredSourceReplyForAssistant(payload, currentAssistant ?? lastAssistant),
     );
@@ -170,8 +191,14 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply = true;
       return;
     }
+    // Unresolved delivery retains custody; it cannot authorize a replacement answer or error.
+    if (sourceReplyDeliveryState === "pending") {
+      return;
+    }
     const nonEmptyAssistantTexts = assistantTexts
-      .map((text) => sanitizeAssistantVisibleStreamText(text))
+      .map((text) =>
+        sanitizeUserFacingText(sanitizeAssistantVisibleText(text), { errorContext: false }),
+      )
       .filter((text) => text.trim().length > 0);
     const terminalAssistant =
       currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : lastAssistant);
@@ -205,6 +232,7 @@ export function buildEmbeddedRunPayloads(params: {
       providerOwner: params.providerOwner,
       model: params.model,
       authMode: params.authMode,
+      sandboxRuntime: params.sandboxRuntime,
     };
     const errorText =
       assistantForPayload && lastAssistantNeedsErrorSurface
@@ -299,10 +327,11 @@ export function buildEmbeddedRunPayloads(params: {
             fallbackAnswerDirectiveState.mediaUrls?.length)) ||
         storedDelivery?.tts?.text?.trim(),
       );
+      // An empty canonical terminal is still authoritative; accumulated text may precede tools.
       const answerDirectives =
         shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText
           ? [fallbackAnswerDirectiveState ?? parseReplyDirectives(fallbackAnswerSourceText)]
-          : nonEmptyAssistantTexts.length > 0
+          : !assistantForPayload && nonEmptyAssistantTexts.length > 0
             ? nonEmptyAssistantTexts.map((text) => parseReplyDirectives(text))
             : fallbackAnswerDirectiveState
               ? [fallbackAnswerDirectiveState]
@@ -358,6 +387,7 @@ export function buildEmbeddedRunPayloads(params: {
       currentAssistant: segment.lastAssistant,
       assistantMessageIndex: segment.messageEnd,
       keptAnswer: segment.keptAnswer,
+      sourceReplyDeliveryState: segment.sourceReplyDeliveryState,
     });
     for (const reply of replyItems.slice(replyStart)) {
       setReplyPayloadMetadata(reply, { precedingInputAnswer: true });
@@ -380,7 +410,7 @@ export function buildEmbeddedRunPayloads(params: {
         hasCompletedMessagingToolDeliveryEvidence(params))) &&
     !params.isHeartbeatTrigger &&
     !params.runAborted;
-  if (params.lastToolError && !respectIntentionalSilence) {
+  if (params.lastToolError && !respectIntentionalSilence && !sourceReplyPending) {
     // A restart intentionally aborts the active tool while the Gateway takes over.
     // Report the lifecycle status instead of a tool failure.
     const isRestartStatus = params.runStopReason === "restart";

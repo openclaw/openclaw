@@ -1,3 +1,4 @@
+import { logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import {
@@ -24,6 +25,7 @@ import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
+import { prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -61,9 +63,21 @@ import {
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
+import { resolveCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type { ToolSearchToolContext } from "./tool-search-types.js";
+import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
+
+// Catalog registration/restriction publishes a new entries array. Keep only
+// metadata here; bridge execution still resolves the current catalog authority.
+const preparedCatalogs = new WeakMap<
+  ToolSearchCatalogEntry[],
+  {
+    namespaceRuntime: CodeModeNamespaceRuntime;
+    catalogProjection: CodeModeCatalogProjection;
+    workerCatalogs: ReturnType<typeof prepareCodeModeNodeCatalog>[];
+  }
+>();
 
 export async function runCodeModeExec(params: {
   toolCallId: string;
@@ -92,16 +106,31 @@ export async function runCodeModeExec(params: {
     callIdScope: codeModeReplayId.replace(/^cm_replay_/, ""),
   });
   params.onRuntime?.(runtime);
-  const bridgeDispatch = { started: false };
+  const bridgeDispatch: CodeModeBridgeDispatchState = { started: false };
   const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
-  const namespaceCatalog = runtime.namespaceEntries();
-  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
-  const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
-  const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
-    reservedNames: namespaceRuntime.descriptors.map((descriptor) => descriptor.globalName),
-    mcpIds: namespaceRuntime.mcpBindings.keys(),
-  });
-  const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
+  const entries = resolveCatalog(params.ctx).entries;
+  let prepared = preparedCatalogs.get(entries);
+  if (!prepared) {
+    const namespaceRuntime = createCodeModeNamespaceRuntime(runtime.namespaceEntries());
+    prepared = {
+      namespaceRuntime,
+      catalogProjection: createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
+        reservedNames: namespaceRuntime.descriptors.map((descriptor) => descriptor.globalName),
+        mcpIds: namespaceRuntime.mcpBindings.keys(),
+      }),
+      workerCatalogs: [],
+    };
+    preparedCatalogs.set(entries, prepared);
+  }
+  const { namespaceRuntime, catalogProjection } = prepared;
+  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, entries);
+  const workerCatalog = (prepared.workerCatalogs[Number(swarmEnabled)] ??=
+    prepareCodeModeNodeCatalog({
+      catalog: catalogProjection.guestBindings,
+      namespaces: namespaceRuntime.descriptors,
+      apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
+      swarmEnabled,
+    }));
   const owner = createCodeModeRunOwner(
     params.ctx,
     config,
@@ -145,10 +174,7 @@ export async function runCodeModeExec(params: {
           retainFinalValue: !params.restartSafe,
           source: params.code,
           config: { ...config, timeoutMs: remainingMs },
-          catalog: catalogProjection.guestBindings,
-          apiFiles,
-          namespaces: namespaceRuntime.descriptors,
-          swarmEnabled,
+          ...workerCatalog,
         },
         {
           timeoutMs: remainingMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
@@ -167,6 +193,7 @@ export async function runCodeModeExec(params: {
       result,
     });
   } catch (error) {
+    inlineHost.onFailure?.(error, bridgeDispatch.started ? "bridge" : "host");
     const code = signal.aborted ? ("aborted" as const) : codeModeFailureCode(error);
     return output.takeResult(
       {
@@ -230,7 +257,6 @@ function dispatchCodeModeRequests(
   }
   pending.push(
     ...createPendingBridgeStates(newPendingRequests, {
-      config: params.config,
       inbox: params.owner.inbox,
       results: params.owner.results,
       sessionStore: params.owner.sessionStore,
@@ -257,6 +283,20 @@ function createInlineHost(
   onInputConsumed?: () => void,
 ): CodeModeExecutorInlineHost {
   return {
+    onWorkerAssigned: (workerId) => {
+      params.bridgeDispatch.workerId = workerId;
+    },
+    onFailure: (error, failurePhase, workerId = params.bridgeDispatch.workerId) =>
+      logCodeModeFailure(error, {
+        sessionId: params.ctx.sessionId,
+        sessionKey: params.ctx.sessionKey,
+        runId: params.ctx.runId,
+        toolCallId: params.parentToolCallId,
+        codeModeRunId: params.owner.runId,
+        workerId,
+        failurePhase,
+        bridgeDispatchStarted: params.bridgeDispatch.started,
+      }),
     onInputConsumed,
     onNetworkContent: () => params.runtime.observeNetworkContent(params.parentToolCallId),
     onBoundary: async (boundary, context) => {
@@ -670,6 +710,16 @@ export async function runWait(params: {
     });
   } catch (error) {
     const aborted = signal.aborted;
+    logCodeModeFailure(error, {
+      sessionId: state.ctx.sessionId,
+      sessionKey: state.ctx.sessionKey,
+      runId: state.ctx.runId,
+      toolCallId: params.toolCallId,
+      codeModeRunId: state.runId,
+      workerId: state.bridgeDispatch.workerId,
+      failurePhase: "bridge",
+      bridgeDispatchStarted: state.bridgeDispatch.started,
+    });
     await state.owner.close();
     cancelPendingBridgeStates(state.pending);
     return state.output.takeResult(

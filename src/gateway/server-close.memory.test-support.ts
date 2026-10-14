@@ -14,21 +14,23 @@ import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
-export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
-  const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-    createMemoryRuntime: (host: {
-      runInBackgroundContext: <T>(run: () => T) => T;
-    }) => MemoryPluginRuntime;
-    configureMemoryCoreDreamingState: (
-      open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-    ) => void;
-  }>(
-    resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "memory-core",
-      artifactBasename: "runtime-api.js",
-    }),
-  );
+// Load the real plugin fixture during collection, outside individual test deadlines.
+const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+  configureMemoryCoreDreamingState: (
+    open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
+}>(
+  resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "memory-core",
+    artifactBasename: "runtime-api.js",
+  }),
+);
+
+export function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
   const env = { ...process.env };
   const registry = (close: () => Promise<void>, beforeEmbedBatch?: () => Promise<void>) => {
     const builder = createPluginRegistry({

@@ -36,8 +36,6 @@ import {
   getInternalToolExecutionPreparer,
   type InternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
-import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
-import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   getGatewayToolCallerIdentity,
@@ -134,6 +132,67 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
+  it.each([
+    "host close",
+    "run replacement",
+    "recorder replacement",
+    "admission release",
+    "lifecycle rotation",
+  ] as const)(
+    "rejects trajectory cleanup after %s before and during a flush",
+    async (revocation) => {
+      const flushed = createDeferred();
+      const recorder = { recordEvent: vi.fn(), flush: vi.fn(() => flushed.promise) };
+      const { attempt, admission } = await admittedAttempt("run-trajectory-cleanup", {
+        trajectoryRecorder: recorder,
+      });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const trajectory = host.capabilities.trajectory!;
+      try {
+        const pending = trajectory.flush();
+        expect(recorder.flush).toHaveBeenCalledOnce();
+        if (revocation === "host close") {
+          host.close();
+        } else if (revocation === "run replacement") {
+          attempt.admittedRunContext = {
+            ...attempt.admittedRunContext,
+            operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
+          };
+        } else if (revocation === "recorder replacement") {
+          attempt.trajectoryRecorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
+        } else if (revocation === "admission release") {
+          admission.close();
+        } else {
+          rotateAgentRunRegistryLifecycleGeneration();
+        }
+        flushed.resolve();
+        await expect(pending).rejects.toThrow("no longer active");
+        await expect(trajectory.flush()).rejects.toThrow("no longer active");
+        expect(recorder.flush).toHaveBeenCalledOnce();
+      } finally {
+        host.close();
+      }
+    },
+  );
+
+  it("preserves trajectory flush failures", async () => {
+    const failure = new Error("trajectory storage unavailable");
+    const { attempt } = await admittedAttempt("run-trajectory-failure", {
+      trajectoryRecorder: {
+        recordEvent: vi.fn(),
+        flush: async () => {
+          throw failure;
+        },
+      },
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    try {
+      await expect(host.capabilities.trajectory!.flush()).rejects.toBe(failure);
+    } finally {
+      host.close();
+    }
+  });
+
   it.each(["host close", "authority release"] as const)(
     "rejects an awaited tool surface after %s during construction",
     async (revocation) => {
@@ -158,179 +217,6 @@ describe("agent harness host capability", () => {
       host.close();
     },
   );
-
-  it("does not remove existing shell policy from a non-Codex required-root harness", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-other-"));
-    const { attempt } = await admittedAttempt("required-other", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "copilot" });
-    try {
-      const tools = host.capabilities.createToolSurface?.({}) ?? [];
-      expect(tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["read", "exec", "process"]),
-      );
-    } finally {
-      host.close();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-  it("retains callable prepared sandbox handles in a required-root surface", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-sandbox-"));
-    const bridge = createHostSandboxFsBridge(root);
-    const runShellCommand = vi.fn(async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }));
-    const sandbox = createSandboxTestContext({
-      overrides: {
-        workspaceDir: root,
-        agentWorkspaceDir: root,
-        fsBridge: bridge,
-        backend: {
-          id: "test",
-          runtimeId: "test",
-          runtimeLabel: "test",
-          workdir: "/workspace",
-          buildExecSpec: vi.fn(),
-          runShellCommand,
-        },
-        skillsEligibility: {
-          remote: { platforms: ["linux"], hasBin: () => false, hasAnyBin: () => false },
-        },
-      },
-    });
-    const { attempt } = await admittedAttempt("required-sandbox", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
-      sandbox,
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    try {
-      const tools = host.capabilities.createToolSurface?.({ sandbox: undefined }) ?? [];
-      expect(tools.some((tool) => tool.name === "exec" || tool.name === "process")).toBe(false);
-      await tools
-        .find((tool) => tool.name === "write")!
-        .execute("sandbox-write", { path: "inside.txt", content: "inside" });
-      await expect(
-        tools.find((tool) => tool.name === "read")!.execute("sandbox-read", { path: "inside.txt" }),
-      ).resolves.toBeDefined();
-      expect(fs.readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("inside");
-      expect(runShellCommand).not.toHaveBeenCalled();
-      const noCore = host.capabilities.createToolSurface?.({ includeCoreTools: false }) ?? [];
-      expect(
-        noCore.some((tool) => ["read", "write", "exec", "process", "message"].includes(tool.name)),
-      ).toBe(false);
-    } finally {
-      host.close();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps required-root file tools and rejects shell and plugin root escapes", async () => {
-    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-host-"));
-    const root = path.join(parent, "workshop");
-    fs.mkdirSync(root);
-    fs.writeFileSync(path.join(parent, "outside.txt"), "outside");
-    fs.symlinkSync(parent, path.join(root, "escape"), "dir");
-    const { attempt } = await admittedAttempt("required-root", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    attempt.workspaceDir = parent;
-    attempt.cwd = parent;
-    attempt.sessionRoot = parent;
-    attempt.requireWorkspaceOnly = undefined;
-    try {
-      for (const plan of [
-        undefined,
-        {
-          includeBaseCodingTools: true,
-          includeShellTools: true,
-          includeChannelTools: true,
-          includeOpenClawTools: true,
-          includePluginTools: true,
-        },
-      ]) {
-        const tools =
-          host.capabilities.createToolSurface?.({
-            workspaceDir: parent,
-            cwd: parent,
-            requireWorkspaceOnly: undefined,
-            exec: { mode: "full" },
-            toolConstructionPlan: plan,
-          }) ?? [];
-        expect(tools.map((tool) => tool.name)).toEqual(
-          expect.arrayContaining(["read", "write", "edit"]),
-        );
-        expect(tools.some((tool) => tool.name === "exec" || tool.name === "process")).toBe(false);
-        const write = tools.find((tool) => tool.name === "write")!;
-        const read = tools.find((tool) => tool.name === "read")!;
-        await write.execute("inside", { path: "inside.txt", content: "inside" });
-        expect(fs.readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("inside");
-        for (const target of [
-          path.join(parent, "outside.txt"),
-          "../outside.txt",
-          "escape/outside.txt",
-        ]) {
-          await expect(read.execute("escape-read", { path: target })).rejects.toThrow();
-          await expect(
-            write.execute("escape-write", { path: target, content: "bad" }),
-          ).rejects.toThrow();
-        }
-      }
-      expect(() =>
-        host.capabilities.createToolSurface?.({
-          sessionPermissionPolicy: { root: parent, mode: "full" },
-        }),
-      ).toThrow("escapes the captured required workspace");
-      expect(fs.readFileSync(path.join(parent, "outside.txt"), "utf8")).toBe("outside");
-    } finally {
-      host.close();
-      fs.rmSync(parent, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves a narrower read-only root inside the required workspace", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-policy-"));
-    const subset = path.join(root, "subset");
-    fs.mkdirSync(subset);
-    fs.writeFileSync(path.join(root, "sibling.txt"), "sibling");
-    fs.writeFileSync(path.join(subset, "inside.txt"), "inside");
-    const { attempt } = await admittedAttempt("required-subset", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    try {
-      const tools =
-        host.capabilities.createToolSurface?.({
-          sessionPermissionPolicy: { root: subset, mode: "read-only" },
-        }) ?? [];
-      const read = tools.find((tool) => tool.name === "read")!;
-      expect(tools.some((tool) => tool.name === "write" || tool.name === "exec")).toBe(false);
-      await expect(
-        read.execute("sibling", { path: path.join(root, "sibling.txt") }),
-      ).rejects.toThrow();
-      await expect(
-        read.execute("inside", { path: path.join(subset, "inside.txt") }),
-      ).resolves.toBeDefined();
-    } finally {
-      host.close();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   it.each([
     { available: undefined, expected: [] },

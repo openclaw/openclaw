@@ -22,23 +22,7 @@ import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manage
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
-let matrixCliExitScheduled = false;
 const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
-
-function scheduleMatrixCliExit(): void {
-  if (matrixCliExitScheduled || process.env.VITEST) {
-    return;
-  }
-  matrixCliExitScheduled = true;
-  // matrix-js-sdk rust crypto can leave background async work alive after command completion.
-  setTimeout(() => {
-    process.stdout.write("", () => {
-      process.stderr.write("", () => {
-        process.exit(process.exitCode ?? 0);
-      });
-    });
-  }, 0);
-}
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
   const bytes = await readByteStreamWithLimit(process.stdin, {
@@ -311,8 +295,6 @@ export async function runMatrixCliCommand<TResult>(
       config.onTextError?.(message);
     }
     process.exitCode = 1;
-  } finally {
-    scheduleMatrixCliExit();
   }
 }
 

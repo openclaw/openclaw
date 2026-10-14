@@ -14,14 +14,12 @@ import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-sto
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import * as support from "./service.test-support.js";
 
-const SETUP_ENV = "OPENCLAW_TEST_REPLAY_SETUP";
 const CLASSLESS_PROFILE = {
   binary: "/mock/crabbox",
   provider: "machine0",
   ttl: "24h",
   idleTimeout: "60m",
   setup: "true",
-  setupEnv: [SETUP_ENV],
 };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard" };
 
@@ -38,7 +36,7 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
 }
 
 describe("Crabbox runtime preflight cleanup", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
   const pluginServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   let scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
   async function registerProvider(): Promise<WorkerProvider> {
@@ -71,7 +69,6 @@ describe("Crabbox runtime preflight cleanup", () => {
   beforeEach(() => {
     scheduler = createTestPluginServiceScheduler();
     vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
-    vi.stubEnv(SETUP_ENV, "fixture");
   });
   afterEach(async () => {
     scheduler.beginClose();
@@ -91,14 +88,11 @@ describe("Crabbox runtime preflight cleanup", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["spawn", "config", "setup-env"])(
+  it.each(["spawn", "config"])(
     "settles fresh %s preflight failure without inventing a provider cleanup obligation",
     async (failure) => {
       support.getDevelopmentProfile().provider = "crabbox";
       support.getDevelopmentProfile().settings = { ...PROFILE, provider: "aws" };
-      if (failure === "setup-env") {
-        vi.stubEnv(SETUP_ENV, undefined);
-      }
       const runCommand = vi
         .spyOn(processRuntime, "runCommandWithTimeout")
         .mockImplementation(async (argv) => {
@@ -139,7 +133,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       expect(runCommand.mock.calls.map(([argv]) => argv.slice(1))).toEqual([
         ["--version"],
         ["providers", "--json"],
-        ...(failure === "setup-env" ? [] : [["config", "show", "--json"]]),
+        ["config", "show", "--json"],
       ]);
     },
   );
@@ -295,7 +289,6 @@ describe("Crabbox runtime preflight cleanup", () => {
 
   // Synthetic CLI diagnostics exercise the real error producer, not captured native output.
   it.each([
-    { kind: "setup-env", name: "missing setup environment" },
     { kind: "config", name: "config command failure", result: commandResult({ code: 2 }) },
     { kind: "config", name: "invalid config JSON", result: commandResult({ stdout: "{" }) },
     { kind: "config", name: "removed coordinator", result: commandResult({ stdout: "{}" }) },
@@ -404,9 +397,6 @@ describe("Crabbox runtime preflight cleanup", () => {
 
     await support.reopenWorkerEnvironmentStore();
     changed = true;
-    if (scenario.kind === "setup-env") {
-      vi.stubEnv(SETUP_ENV, undefined);
-    }
     const replayProvider = await makeProvider();
     const resolveAllocation = vi.spyOn(replayProvider, "resolveAllocation");
     service = support.createService(replayProvider, { prepareNodeEnrollment });
@@ -456,21 +446,29 @@ describe("Crabbox runtime preflight cleanup", () => {
 
   it.each([
     {
+      name: "unrepaired plaintext setup environment",
+      settings: { ...PROFILE, setupEnv: ["LEGACY_SETUP_TOKEN"] },
+      message: "openclaw doctor --fix",
+      commands: [],
+      intentRecorded: false,
+    },
+    {
       name: "invalid duration",
       settings: { ...PROFILE, ttl: "invalid" },
       message: "positive Go duration",
       commands: [],
+      intentRecorded: false,
     },
     {
       name: "warm image without effective class",
       settings: { ...CLASSLESS_PROFILE, warmImage: true },
       message: "warmImage requires a configured class or a placement machine class",
       commands: [["--version"], ["providers", "--json"]],
+      intentRecorded: true,
     },
   ])(
-    "keeps $name permanent even with missing runtime input",
-    async ({ settings, message, commands }) => {
-      vi.stubEnv(SETUP_ENV, undefined);
+    "keeps $name permanent before allocating a worker",
+    async ({ settings, message, commands, intentRecorded }) => {
       support.getDevelopmentProfile().provider = "crabbox";
       support.getDevelopmentProfile().settings = settings;
       const runCommand = vi
@@ -494,7 +492,11 @@ describe("Crabbox runtime preflight cleanup", () => {
         code: "invalid_profile",
         message: expect.stringContaining(message),
       });
-      expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
+      const records = support.testState.store.list();
+      expect(records).toHaveLength(intentRecorded ? 1 : 0);
+      if (intentRecorded) {
+        expect(records[0]).toMatchObject({ state: "failed", leaseId: null });
+      }
       await support.waitForFast(() =>
         expect(runCommand.mock.calls.map(([argv]) => argv.slice(1))).toEqual(commands),
       );

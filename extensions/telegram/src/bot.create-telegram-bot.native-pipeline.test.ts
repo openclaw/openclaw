@@ -1,4 +1,5 @@
 import { webhookCallback } from "grammy";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as configMutation from "openclaw/plugin-sdk/config-mutation";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -510,6 +511,7 @@ describe("createTelegramBot typed command pipeline", () => {
         modelCatalog: [{ provider, id: model, name: model, reasoning: false }],
       });
       const bot = await createBot(false, true, config);
+      await loadAuthProfileStoreWithoutExternalProfilesAsync(harness.state.agentDir());
       await bot.handleUpdate({
         update_id: 2600,
         callback_query: {

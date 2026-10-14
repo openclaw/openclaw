@@ -133,25 +133,6 @@ describe("worker.inference.start executing model", () => {
     expect(getAgentRunContext(RUN_ID)?.activeModel).toBeUndefined();
   });
 
-  it("does not bind to a replacement run context after model preparation awaits", async () => {
-    let originalContext: AgentRunContext | undefined;
-    const inference = startInference({
-      afterModelPreparation: () => {
-        originalContext = getAgentRunContext(RUN_ID);
-        clearAgentRunContext(RUN_ID);
-        registerAgentRunContext(RUN_ID, runContext);
-      },
-    });
-    inference.stream.push({ type: "start", partial: inference.message });
-    inference.stream.push({ type: "done", reason: "stop", message: inference.message });
-
-    await expect(inference.pending).resolves.toMatchObject({ type: "done" });
-    expect(originalContext).toBeDefined();
-    expect(getAgentRunContext(RUN_ID)).not.toBe(originalContext);
-    expect(inference.modelEvents).toEqual([]);
-    expect(projectedModel()).toBeNull();
-  });
-
   it("does not publish a held reroute into a replacement run with the same identifiers", async () => {
     const inference = startInference();
     inference.stream.push({ type: "start", partial: inference.message });

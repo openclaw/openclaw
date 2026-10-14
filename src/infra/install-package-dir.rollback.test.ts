@@ -17,6 +17,7 @@ import {
   createExistingInstallFixture,
   listMatchingDirs,
   normalizeComparablePath,
+  updateOptions,
 } from "./install-package-dir.test-support.js";
 
 describe("installPackageDir rollback", () => {
@@ -34,18 +35,6 @@ describe("installPackageDir rollback", () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make(name);
     return { fixtureRoot, ...(await createExistingInstallFixture(fixtureRoot)) };
-  }
-
-  function updateOptions(sourceDir: string, targetDir: string) {
-    return {
-      sourceDir,
-      targetDir,
-      mode: "update" as const,
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "",
-    };
   }
 
   async function installRetainedUpdate(
@@ -75,6 +64,67 @@ describe("installPackageDir rollback", () => {
     }
     return { backupDir, transaction };
   }
+
+  it.each(["commit", "rollback"] as const)(
+    "rejects %s under a successor lease after the original install owner retires",
+    async (action) => {
+      const { fixtureRoot, sourceDir, targetDir } = await createFixture(
+        `retired-settlement-${action}`,
+      );
+      const leaseOptions = {
+        path: path.join(fixtureRoot, "leases.sqlite"),
+        leaseMs: 300_000,
+        waitMs: 0,
+      };
+      const original = await withPluginLifecycleLease(leaseOptions, async (lease) => ({
+        ...(await installRetainedUpdate(sourceDir, targetDir, {}, lease.assertOwned.bind(lease))),
+        assertOwned: lease.assertOwned.bind(lease),
+      }));
+      expect(original.assertOwned).toThrow();
+      const installedIdentity = await fs.lstat(targetDir, { bigint: true });
+      const backupIdentity = await fs.lstat(original.backupDir, { bigint: true });
+
+      await withPluginLifecycleLease(leaseOptions, async (lease) => {
+        await expect(original.transaction[action](lease.assertOwned.bind(lease))).rejects.toThrow();
+        lease.assertOwned();
+        await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
+        await expect(
+          fs.readFile(path.join(original.backupDir, "marker.txt"), "utf8"),
+        ).resolves.toBe("old");
+        await expect(fs.lstat(targetDir, { bigint: true })).resolves.toMatchObject({
+          dev: installedIdentity.dev,
+          ino: installedIdentity.ino,
+        });
+        await expect(fs.lstat(original.backupDir, { bigint: true })).resolves.toMatchObject({
+          dev: backupIdentity.dev,
+          ino: backupIdentity.ino,
+        });
+      });
+    },
+  );
+
+  it("reports incomplete recovery when a deferred backup cannot be restored", async () => {
+    const { sourceDir, targetDir } = await createFixture("deferred-restore-blocked");
+    const result = await installPackageDir(
+      requestDeferredPackageDirInstall({
+        ...updateOptions(sourceDir, targetDir),
+        afterBackup: async () => {
+          await fs.mkdir(targetDir, { recursive: true });
+          await fs.writeFile(path.join(targetDir, "successor.txt"), "successor");
+          return { ok: false as const, error: "backup rejected" };
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      recoveryIncomplete: true,
+      error: expect.stringContaining("backup retained"),
+    });
+    await expect(fs.readFile(path.join(targetDir, "successor.txt"), "utf8")).resolves.toBe(
+      "successor",
+    );
+  });
 
   it("preserves the Windows EPERM backup copy fallback", async () => {
     const { sourceDir, targetDir } = await createFixture("windows-backup-eperm");

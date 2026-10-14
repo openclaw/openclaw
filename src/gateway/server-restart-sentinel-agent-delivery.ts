@@ -56,7 +56,7 @@ import {
 } from "./managed-image-attachments.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
@@ -339,7 +339,15 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   };
   const readRequester = async (): Promise<SessionEntry | undefined> => {
     if (!binding) {
-      return loadSessionEntry(entry.sessionKey).entry;
+      return (
+        await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: params.resolveGatewayContext?.()?.getRuntimeConfig() ?? getRuntimeConfig(),
+          key: entry.sessionKey,
+          env: params.queueContext.environment,
+          assertActive: params.queueContext.admission.assertCurrent,
+          excludeInternalEffects: true,
+        })
+      ).entry;
     }
     try {
       return await withSessionEntryReadOnlyInWorker(
@@ -666,7 +674,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       response && typeof response === "object"
         ? (response as { status?: unknown }).status
         : undefined;
-    const latestEntry = binding ? await readRequester() : loadSessionEntry(entry.sessionKey).entry;
+    const latestEntry = await readRequester();
     if (responseStatus === "accepted") {
       accepted = true;
     }

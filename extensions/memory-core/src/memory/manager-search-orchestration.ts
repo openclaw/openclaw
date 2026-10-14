@@ -35,7 +35,6 @@ import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
-import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -135,15 +134,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       sourceFilterList[0] === "sessions";
     const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
     const database = this.publishedDatabase;
-    const databasePath = resolveUserPath(this.settings.store.databasePath);
-    const fileIdentity = fuseRecallMetadata ? readMemoryShadowIdentity(databasePath) : undefined;
     const assertReadOwner = () => {
       opts?.signal?.throwIfAborted();
-      if (database.closed || !database.db.isOpen || this.publishedDatabase !== database) {
+      if (!database.isOpen || this.publishedDatabase !== database) {
         throw new Error("Memory retrieval changed its captured database owner");
-      }
-      if (fileIdentity) {
-        assertMemoryShadowIdentity(databasePath, fileIdentity);
       }
     };
     let preparedKeyword: MemoryKeywordWorkerResult | undefined;
@@ -158,7 +152,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       releaseGeneration ??= await acquireMemoryIndexReadGeneration(
         this.settings.store.databasePath,
         opts?.signal,
-        fuseRecallMetadata,
       );
       assertReadOwner();
       preparedKeyword = undefined;
@@ -357,7 +350,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         searchSyncEnabled &&
         !capacitySyncInFlight &&
         !formatUpgradePendingKeywordOnly(repairedIndexIdentity) &&
-        (this.dirty || this.sessionsDirty)
+        this.dirty
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
@@ -534,17 +527,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const vectorResults = vector.results;
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
+        const eligible = applyRetrievalRanking(vectorResults, activeProjects).filter(
+          (entry) => entry.score >= minScore,
+        );
         const decayed = await applyTemporalDecayToHybridResults({
-          results: vectorResults,
+          results: eligible,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
-        // Decay and importance can reverse the order returned by vector retrieval.
-        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
-        return applyRetrievalRanking(decayed, activeProjects)
-          .filter((entry) => entry.score >= minScore)
+        // Recency reorders eligible hits without changing their membership.
+        return decayed
           .toSorted(
             (left, right) =>
               right.score - left.score ||

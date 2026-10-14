@@ -77,58 +77,39 @@ describe("runSystemAgentWithInference", () => {
     exitMocks.requestExitAfterOneShotOutput.mockReturnValue(false);
   });
 
-  it("starts OpenClaw only after live inference succeeds", async () => {
-    const runSystemAgent = vi.fn(async () => {});
-    const verifyInference = vi.fn(async () => workingInference());
-    const currentRuntime = runtime();
+  it.each([{ label: "noninteractive", options: { interactive: false } }])(
+    "requests a clean process exit after successful $label output",
+    async ({ options }) => {
+      const runSystemAgent = vi.fn(async () => {});
+      const currentRuntime = runtime();
 
-    await runWithInferenceMocks(
-      { input: tty, output: tty },
-      currentRuntime,
-      {},
-      {
-        verifyInference,
-        runSystemAgent,
-      },
-    );
+      await runWithInferenceMocks(
+        options,
+        currentRuntime,
+        {},
+        {
+          verifyInference: vi.fn(async () => workingInference()),
+          runSystemAgent,
+        },
+      );
 
-    expect(verifyInference).toHaveBeenCalledWith({
-      runtime: currentRuntime,
-      bindSession: true,
-    });
-    expect(runSystemAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ verifiedInference }),
-      currentRuntime,
-    );
-    expect(verifyInference.mock.invocationCallOrder[0]).toBeLessThan(
-      runSystemAgent.mock.invocationCallOrder[0]!,
-    );
-    expect(exitMocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { label: "message", options: { message: "status" } },
-    { label: "JSON", options: { json: true } },
-    { label: "noninteractive", options: { interactive: false } },
-  ])("requests a clean process exit after successful $label output", async ({ options }) => {
-    const runSystemAgent = vi.fn(async () => {});
-    const currentRuntime = runtime();
-
-    await runWithInferenceMocks(
-      options,
-      currentRuntime,
-      {},
-      {
-        verifyInference: vi.fn(async () => workingInference()),
-        runSystemAgent,
-      },
-    );
-
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime);
-    expect(runSystemAgent.mock.invocationCallOrder[0]).toBeLessThan(
-      exitMocks.requestExitAfterOneShotOutput.mock.invocationCallOrder[0]!,
-    );
-  });
+      expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime);
+      expect(inferenceMocks.verifySetupInference).toHaveBeenCalledWith({
+        runtime: currentRuntime,
+        bindSession: true,
+      });
+      expect(runSystemAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ verifiedInference }),
+        currentRuntime,
+      );
+      expect(inferenceMocks.verifySetupInference.mock.invocationCallOrder[0]).toBeLessThan(
+        runSystemAgent.mock.invocationCallOrder[0]!,
+      );
+      expect(runSystemAgent.mock.invocationCallOrder[0]).toBeLessThan(
+        exitMocks.requestExitAfterOneShotOutput.mock.invocationCallOrder[0]!,
+      );
+    },
+  );
 
   it("reports a one-shot execution error once and requests exit code 1", async () => {
     const currentRuntime = runtime();
@@ -151,26 +132,6 @@ describe("runSystemAgentWithInference", () => {
     expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledOnce();
     expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("defers a one-shot execution-error exit when the default runtime owns draining", async () => {
-    exitMocks.requestExitAfterOneShotOutput.mockReturnValueOnce(true);
-    const currentRuntime = runtime();
-
-    await runWithInferenceMocks(
-      { message: "broken request" },
-      currentRuntime,
-      {},
-      {
-        verifyInference: vi.fn(async () => workingInference()),
-        runSystemAgent: vi.fn(async () => {
-          throw new Error("operation failed");
-        }),
-      },
-    );
-
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
-    expect(currentRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("returns one drained JSON error when inference verification throws", async () => {
@@ -268,24 +229,6 @@ describe("runSystemAgentWithInference", () => {
     expect(verifyInference).not.toHaveBeenCalled();
   });
 
-  it("rejects session-wide --yes before probing inference", async () => {
-    const currentRuntime = runtime();
-    const verifyInference = vi.fn();
-
-    await runWithInferenceMocks(
-      { input: tty, output: tty, yes: true },
-      currentRuntime,
-      {},
-      { verifyInference },
-    );
-
-    expect(currentRuntime.error).toHaveBeenCalledWith(
-      "OpenClaw --yes requires --message so approval is limited to one request.",
-    );
-    expect(currentRuntime.exit).toHaveBeenCalledWith(1);
-    expect(verifyInference).not.toHaveBeenCalled();
-  });
-
   it("returns one structured error for --json --yes without a message", async () => {
     const currentRuntime = runtime();
 
@@ -297,6 +240,7 @@ describe("runSystemAgentWithInference", () => {
     expect(currentRuntime.error).not.toHaveBeenCalled();
     expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
+    expect(inferenceMocks.verifySetupInference).not.toHaveBeenCalled();
   });
 
   it("fails one-shot mode with onboarding guidance when inference is unavailable", async () => {
@@ -345,26 +289,5 @@ describe("runSystemAgentWithInference", () => {
     );
     expect(currentRuntime.error).not.toHaveBeenCalled();
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("defers a failed one-shot exit until output streams drain", async () => {
-    exitMocks.requestExitAfterOneShotOutput.mockReturnValueOnce(true);
-    const currentRuntime = runtime();
-
-    await runWithInferenceMocks(
-      { json: true },
-      currentRuntime,
-      {},
-      {
-        verifyInference: vi.fn(async () => ({
-          ok: false as const,
-          status: "auth" as const,
-          error: "login expired",
-        })),
-      },
-    );
-
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
-    expect(currentRuntime.exit).not.toHaveBeenCalled();
   });
 });

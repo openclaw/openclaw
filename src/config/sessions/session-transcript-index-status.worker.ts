@@ -8,7 +8,11 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseSiblingWriteRevision,
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -160,7 +164,9 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
     db,
     temporary.selectFrom("openclaw_transcript_index_status").selectAll().where("id", "=", 1),
   )!;
-  if (state.sibling_write_revision === -1 || state.schema_version !== schema.schemaVersion) {
+  // An unknown sibling revision only blocks the clean receipt; resetting here would rescan
+  // the first batch forever and never reach later dirty sessions.
+  if (state.schema_version !== schema.schemaVersion) {
     executeSqliteQuerySync(db, temporary.deleteFrom("openclaw_transcript_index_pending"));
     state.complete = 0;
     state.after_session = null;
@@ -227,12 +233,14 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
         // Empty cleanup must not publish a write receipt that invalidates clean search hits.
         if (selected.length > 0) {
           const removed =
-            executeSqliteQuerySync(
-              db,
-              kysely.deleteFrom(table).where(
-                "rowid",
-                "in",
-                selected.map((row) => row.rowId),
+            withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+              executeSqliteQuerySync(
+                db,
+                kysely.deleteFrom(table).where(
+                  "rowid",
+                  "in",
+                  selected.map((row) => row.rowId),
+                ),
               ),
             ).numAffectedRows ?? 0n;
           remainingRows[index]! -= Number(removed);

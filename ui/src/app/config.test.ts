@@ -38,6 +38,24 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("keeps the bubble lab off until bootstrap enables it and publishes disablement", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ chatBubblesEnabled: true }))
+        .mockResolvedValueOnce(Response.json({ chatBubblesEnabled: false })),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const listener = vi.fn();
+    config.subscribe(listener);
+    expect(config.current.chatBubblesEnabled).toBe(false);
+    await config.refresh();
+    expect(config.current.chatBubblesEnabled).toBe(true);
+    await config.refresh();
+    expect(config.current.chatBubblesEnabled).toBe(false);
+    expect(listener.mock.calls.map(([value]) => value.chatBubblesEnabled)).toEqual([true, false]);
+  });
   it("publishes upload policy changes and keeps the default enabled", async () => {
     const fetchMock = vi
       .fn()
@@ -55,18 +73,6 @@ describe("createApplicationConfigCapability", () => {
     expect(listener.mock.calls.map(([value]) => value.uploadsEnabled)).toEqual([false, true]);
   });
 
-  it.each([undefined, "configured", "last-used"] as const)(
-    "loads fresh-session model defaults %s",
-    async (policy) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(Response.json({ newSessionModelDefaults: policy })),
-      );
-      const config = createApplicationConfigCapability({ resourceBasePath: "" });
-      await config.refresh();
-      expect(config.current.newSessionModelDefaults).toBe(policy ?? "last-used");
-    },
-  );
   it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
       gatewayUrl: "ws://gateway.example/mount",
@@ -104,24 +110,7 @@ describe("createApplicationConfigCapability", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps invitations hidden until bootstrap enables them and accepts later opt-outs", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(bootstrapResponse("test"))
-      .mockResolvedValueOnce(bootstrapResponse("test", false, undefined, false));
-    vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ resourceBasePath: "" });
-    const listener = vi.fn();
-    const unsubscribe = config.subscribe(listener);
-
-    expect(config.current.communityInvite).toBe(false);
-    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: true });
-    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: false });
-    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ communityInvite: false }));
-    unsubscribe();
-  });
-
-  it.each([undefined, true, false])(
+  it.each([undefined, false])(
     "requires native asset grants unless bootstrap explicitly disables auth: %s",
     async (pluginAssetsRequireAuth) => {
       vi.stubGlobal(
@@ -148,7 +137,7 @@ describe("createApplicationConfigCapability", () => {
     expect(config.current.automaticallyFetchFavicons).toBe(true);
   });
 
-  it.each([null, { pluginFrameGrants: {} }])(
+  it.each([{ pluginFrameGrants: {} }])(
     "returns an unavailable result for invalid bootstrap data: %j",
     async (payload) => {
       vi.stubGlobal(
@@ -169,6 +158,7 @@ describe("createApplicationConfigCapability", () => {
       assistantAvatar: "🔭",
       assistantAgentId: "main",
       terminalEnabled: false,
+      preferences: { profileId: "synthetic-viewer", entries: { "ui.themeMode": "light" } },
       pluginFrameGrants: [{ pluginId: "fixture", path: "/panel", match: "exact" }],
     };
     document.documentElement.setAttribute(
@@ -180,6 +170,7 @@ describe("createApplicationConfigCapability", () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     expect(config.current.assistantIdentity).toMatchObject({ name: "Observatory", avatar: "🔭" });
     expect(config.current.pluginFrameGrants).toEqual(payload.pluginFrameGrants);
+    expect(config.preferences).toEqual(payload.preferences);
     await config.refresh({ ifNeeded: true });
     expect(fetchMock).not.toHaveBeenCalled();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60 * 1_000);
@@ -195,6 +186,7 @@ describe("createApplicationConfigCapability", () => {
       CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
       JSON.stringify({
         basePath: "",
+        preferences: { profileId: "browser-profile", entries: { "ui.themeMode": "light" } },
         assistantName: "Browser identity",
         assistantAvatar: "B",
         pluginFrameGrants: [{ pluginId: "browser-only", path: "/browser", match: "prefix" }],
@@ -207,6 +199,7 @@ describe("createApplicationConfigCapability", () => {
       getAuth: () => ({ settings: { token: "test-other-identity" } }),
     });
     expect(config.current.assistantIdentity.name).toBe("Browser identity");
+    expect(config.preferences).toBeUndefined();
     const result = await config.refresh({ ifNeeded: true });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ serverVersion: "bearer", pluginFrameGrants: [] });
@@ -275,7 +268,7 @@ describe("createApplicationConfigCapability", () => {
     expect(config.current.serverVersion).toBe("cookie");
   });
 
-  it.each(["", "replacement-fixture-token"])(
+  it.each(["replacement-fixture-token"])(
     "rejects an authenticated response when live credentials change without another refresh: %s",
     async (nextToken) => {
       const response = createDeferred<Response>();

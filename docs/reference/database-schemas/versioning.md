@@ -9,12 +9,37 @@ title: "Versioning contract"
 
 ## Versioning contract
 
+An admitted empty shared-state database is created directly at the current
+version in the migration owner's transaction. It does not replay historical
+row transforms or validate and repair the canonical schema it just installed.
+Database-open admission still applies. Existing and native-bootstrap databases
+retain the versioned migration and validation path; creation preserves the same
+catalog SQL and first-use table policy.
+
 Each database records its published schema in two places:
 
 - `PRAGMA user_version` is the SQLite schema version.
 - The primary `schema_meta` row records `role`, `agent_id`, `schema_version`, and `app_version`. `app_version` is the OpenClaw build that last wrote the schema metadata.
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. [`openclaw update`](/cli/update) also refuses a package or source target whose declared schema support is older than an on-disk database. Known stable releases published before schema metadata was added are checked against their shipped schema-1 contract. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
+
+Native clients make a narrow exception for their local `device_identities` and
+`device_auth_tokens` tables. Connecting to a remote Gateway must not depend on
+unrelated local backend migrations. A newer shared-state schema is admitted for
+these stores only when its global metadata matches `user_version` and the
+credential table and index definitions still match the complete native contract,
+with no additional indexes or triggers. Missing or incompatible tables remain
+errors; the native client never repairs them or changes either schema-version
+marker. Existing identity keys and gateway-scoped tokens remain in the same
+database, without a migration or a second source of truth.
+
+These table names, definitions, and credential row meanings are a stable native
+storage contract. Future incompatible credential semantics must change the
+table name or definition so existing clients refuse access; bumping only the
+backend version is not a credential compatibility fence. Config, execution
+approvals, port-guardian state, Gateway startup, and updater admission retain
+their backend schema-version checks. Apps predating this exception still need
+an app update when their local backend advances beyond their supported schema.
 
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `openclaw doctor --fix`; run `openclaw doctor --fix` from the compatible install if further migration is required, then restart through the service or deployment owner.
 
@@ -23,12 +48,46 @@ cannot parse its catalog. A known legacy index defect must not replace that
 refusal with advice to repair the database using the older build. Doctor checks
 compatibility before stopping the Gateway service.
 
+Shared-state [schema 22](/reference/database-schemas/state-schema-history#state-schema-22)
+adds portable ACP resume columns and explicit cursor identities. Builds supporting
+only schema 21 or earlier refuse it. Existing cursor values are preserved; binary
+rollback requires the verified pre-upgrade backup and its matching build.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports
 all incompatibilities without modifying the source files.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
+
+Session-window preview caching adds bare nullable `row_transcript_json TEXT` and
+`row_transcript_updated_at INTEGER` columns without a numeric version bump.
+Admission adds the columns to existing stores; each row fills lazily through the
+agent writer. Older builds ignore them. A cache is reusable only when its source
+transcript timestamp and indexed sequence still match: older normal writes advance
+the timestamp, while older imports can preserve mtime but advance the index. A
+missing or invalid cache triggers bounded backfill; canonical transcript bytes,
+retention, and rollback semantics are unchanged.
+
+Agent deletion adds a nullable `phase TEXT` column to its existing journal on
+first deletion or Doctor reconstruction. `draining` closes ingress while existing
+runs abort and settle before database retirement. Admitted usage refreshes retain
+their database executions until writes settle, then release their process-local
+refresh reservations. The history
+resource owner drains their work and cleanup for the selected agent and captured
+database paths before native writers retire; unrelated stores keep running. A
+retired native execution cannot admit new refresh writes. Cleanup failures remain
+visible and retain drainage custody; intervening reads cannot replace that retired
+resource before cleanup settles, so deletion retries drain the same owner. The deletion owner then records
+`retiring` and completes cleanup. Recovery resumes the recorded phase after a
+restart; retries never move retirement back to draining. Journals without the
+column, or with a null phase, retain their previous retirement meaning without
+rewriting their paths or completion state. Older readers continue treating every
+journal row as a deletion fence and may require an explicit cleanup retry. The
+numeric schema version, journal retention, and rollback backup policy are unchanged.
+Retirement-only callers leave the phase null. Automatic Gateway recovery leaves
+those journals with retained Claw ownership to the existing Claw removal owner;
+its selective package and workspace cleanup still requires a removal-plan retry.
 
 Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
 companion table. Its launch-bound `linux-subreaper` certificate records kernel
@@ -226,17 +285,37 @@ Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
 
-Subagent runs record the known owning agent for raw child keys such as `global`
-in the optional `childAgentId` field inside `subagent_runs.payload_json`.
-Agent-qualified child keys do not record this field. This is a payload-only
-addition: no DDL, new column, or schema-version bump is required. The session
-store is derived from the agent and current configuration, just as it is for
-agent-qualified keys. Legacy rows without that binding continue to resolve their
-agent through the current configuration, without migration or backfill.
-Cancellation clears queues only for the resolved agent. Downgraded writers retain
-the field in `payload_json` because
-`normalizeSubagentRunState` mutates the parsed record in place rather than
-rebuilding it from known fields.
+New subagent runs record their selected logical owning agent in `childAgentId`
+inside `subagent_runs.payload_json`, for both raw and agent-qualified keys.
+Historical valid qualified keys remain ownership evidence when the property is
+absent; conflicting or malformed ownership stays unresolved. No DDL, new column,
+schema-version bump, or automatic backfill accompanies this runtime repair.
+Current configuration locates a known owner's store; it does not identify the
+original owner. Unknown-owner records remain unchanged and ineligible for ordinary
+cleanup. Historical records with resolvable child and requester owners but no
+original session identity or lifecycle revision are legacy-unverified. Requester
+settlement, delivery, bookkeeping, and authorized resume or exact-task Stop remain
+available, while child-session mutations are suppressed. Conflicting recorded identities remain
+mismatches; missing identity is not backfilled.
+
+Same-version rollback is not a guarantee that older writers preserve this
+contract. A codec round trip does not prove existing-row replacement or writable
+reopen. The exact baseline `930bd387bbaa` is a candidate for certification, not a
+certified target or permission to use any schema-20 build. Before same-database
+rollback, completely drain queued launches, running and paused work, cancellation
+reconciliation, requester wakes, delivery, ordinary and collector cleanup, and
+private parent-completion obligations. Unresolved ownership, unbound raw watch
+cursors, and outstanding raw-resource cleanup make that drain incomplete; never
+delete evidence to satisfy it.
+
+Take coordinated WAL-aware backups of shared and relevant agent databases, then
+preflight the exact target against copies, including writable reopen, existing-row
+replacement, ordinary updates, close/reopen, and re-upgrade. Do not run affected
+raw-key workflows on an older target while expecting the repaired isolation
+guarantees; use a compatible backport instead. `d64730851269` is excluded because
+its replacement writer drops the owner. An unverified older build requires its
+matching pre-upgrade backup in a separate state directory. Existing newer-schema
+refusals and private parent-completion downgrade restrictions remain in force.
 
 Cron standing-grant definition generations use three bare nullable projections on
 `cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and
@@ -462,6 +541,12 @@ validity expires; later Goal writes prune expired rows. They retain the
 original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
+
+The mutable JSON predicate projections require
+[agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns).
+Older writers must be fenced because they update canonical JSON without maintaining
+the promoted columns. The forward migration backfills every retained row once;
+NULL-only repair on reopen cannot make a downgrade and re-upgrade safe.
 
 ### Schema bumps and older updaters
 

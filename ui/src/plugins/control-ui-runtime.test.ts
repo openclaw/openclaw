@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { PluginsControlUiCatalog } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -110,6 +112,94 @@ it.each(["document", "published", "listener"] as const)(
       vi.unstubAllGlobals();
     }
     expect(links()).toEqual([]);
+  },
+);
+
+it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
+  "publishes registry completion only after the %s catalog settles",
+  async (outcome) => {
+    let catalog = createDeferred<PluginsControlUiCatalog>();
+    const activationStarted = createDeferred();
+    const activation = createDeferred();
+    const completed = createDeferred();
+    const context = {
+      resourceBasePath: "",
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: {
+            gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
+            request: (method: string) =>
+              method === "plugins.controlUi.list" ? catalog.promise : Promise.resolve({ ok: true }),
+          },
+          hello: { features: { methods: ["plugins.controlUi.list"] } },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+      config: {
+        ...createApplicationConfigCapability({ resourceBasePath: "" }),
+        refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }),
+      },
+    } as unknown as ApplicationContext;
+    vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
+      activationStarted.resolve();
+      await activation.promise;
+      if (outcome === "activation-failed") {
+        throw new Error("Plugin activation failed");
+      }
+      return Object.assign(owner, { host: createControlUiPluginHost(getContext, runtime, owner) });
+    });
+    const runtime = new ControlUiPluginRuntime(() => context);
+    runtime.subscribe(() => {
+      if (runtime.registryStatus !== "pending") {
+        completed.resolve();
+      }
+    });
+    try {
+      expect(runtime.registryStatus).toBe("pending");
+      runtime.start();
+      expect(runtime.registryStatus).toBe("pending");
+      if (outcome === "catalog-failed") {
+        catalog.reject(new Error("Catalog unavailable"));
+      } else {
+        catalog.resolve({
+          revision: "one",
+          diagnostics: [],
+          plugins:
+            outcome === "empty"
+              ? []
+              : [
+                  {
+                    pluginId: "review",
+                    name: "Review",
+                    revision: "one",
+                    entryUrl: "/review.js",
+                    styles: [],
+                  },
+                ],
+        });
+      }
+      if (outcome === "activated" || outcome === "activation-failed") {
+        await activationStarted.promise;
+        expect(runtime.registryStatus).toBe("pending");
+        activation.resolve();
+      }
+      await completed.promise;
+      expect(runtime.registryStatus).toBe(outcome === "catalog-failed" ? "failed" : "complete");
+      if (outcome === "catalog-failed") {
+        catalog = createDeferred<PluginsControlUiCatalog>();
+        const retry = runtime.refresh();
+        expect(runtime.registryStatus).toBe("pending");
+        catalog.resolve({ revision: "recovered", diagnostics: [], plugins: [] });
+        await retry;
+        expect(runtime.registryStatus).toBe("complete");
+      }
+    } finally {
+      activation.resolve();
+      runtime.dispose();
+      vi.mocked(initializeControlUiPlugin).mockReset();
+    }
   },
 );
 
@@ -257,6 +347,7 @@ describe("native plugin asset admission", () => {
         expect(initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
         expect(runtime.registrations("pages")).toEqual([]);
         expect(runtime.isLoading("review")).toBe(false);
+        expect(runtime.registryStatus).toBe(catalogError ? "failed" : "complete");
       } finally {
         runtime.dispose();
         vi.unstubAllGlobals();

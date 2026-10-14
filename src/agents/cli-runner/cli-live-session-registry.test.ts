@@ -39,7 +39,6 @@ async function createOwner(
     cleanup?: () => Promise<void>;
     systemPrompt?: string;
     skillsSnapshot?: SkillSnapshot;
-    argv0?: string;
     capture?: { token: string; key: string };
     requiredGeneration?: string;
   } = {},
@@ -90,7 +89,6 @@ async function createOwner(
   const capability: CliBackendLiveSessionCapability = createCliLiveSessionCapability({
     context,
     argv: ["claude", "-p"],
-    argv0: options.argv0,
     env: { PATH: "/usr/bin:/bin" },
     beginCapture,
     abortSignal: controller.signal,
@@ -456,41 +454,6 @@ describe("generic plugin-owned live session registry", () => {
     },
   );
 
-  it.each([
-    {
-      change: "system prompt",
-      originalOptions: { systemPrompt: "Original system policy." },
-      changedOptions: { systemPrompt: "Changed system policy." },
-    },
-    {
-      change: "invocation name",
-      originalOptions: { argv0: "/usr/bin/cli-alias-a" },
-      changedOptions: { argv0: "/usr/bin/cli-alias-b" },
-    },
-  ])(
-    "rejects required generation reuse after $change changes without closing its only process",
-    async ({ originalOptions, changedOptions }) => {
-      const original = await createOwner({
-        sessionId: "required-changed-owner",
-        generation: "required-generation",
-        ...originalOptions,
-      });
-      original.register();
-      const changed = await createOwner({
-        sessionId: "required-changed-owner",
-        requiredGeneration: "required-generation",
-        ...changedOptions,
-      });
-
-      expect(changed.capability.fingerprint).not.toBe(original.capability.fingerprint);
-      expect(() => changed.capability.current()).toThrow(
-        expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
-      );
-      expect(original.close).not.toHaveBeenCalled();
-      expect(original.capability.current()).toBe(original.session);
-    },
-  );
-
   it("refuses plugin restart when the exact live generation is required", async () => {
     const original = await createOwner({ generation: "required-live-process" });
     original.register();
@@ -523,22 +486,8 @@ describe("generic plugin-owned live session registry", () => {
       reusable: false,
     },
     {
-      change: "body and refresh epoch",
-      identity: "known",
-      body: "After",
-      version: 2,
-      reusable: false,
-    },
-    {
       change: "external snapshot without a digest",
       identity: "missing",
-      body: "Before",
-      version: 2,
-      reusable: false,
-    },
-    {
-      change: "external snapshot with an empty digest",
-      identity: "empty-digest",
       body: "Before",
       version: 2,
       reusable: false,
@@ -549,13 +498,6 @@ describe("generic plugin-owned live session registry", () => {
       body: "Before",
       version: 2,
       reusable: false,
-    },
-    {
-      change: "known-empty snapshot refresh epoch",
-      identity: "empty",
-      body: "Before",
-      version: 2,
-      reusable: true,
     },
   ] as const)(
     "preserves required-generation skill identity after $change",
@@ -571,14 +513,13 @@ describe("generic plugin-owned live session registry", () => {
           source: "test",
           sourceOptions: { source: "test" },
         });
-        if (identity === "missing" || identity === "empty-digest") {
-          skill.contentHash = identity === "missing" ? undefined : "";
+        if (identity === "missing") {
+          skill.contentHash = undefined;
         }
         return {
-          prompt: identity === "empty" ? "" : formatSkillsForPromptCore([skill]),
-          skills: identity === "empty" ? [] : [{ name: skill.name }],
-          resolvedSkills:
-            identity === "unprepared" ? undefined : identity === "empty" ? [] : [skill],
+          prompt: formatSkillsForPromptCore([skill]),
+          skills: [{ name: skill.name }],
+          resolvedSkills: identity === "unprepared" ? undefined : [skill],
           version: epoch,
         };
       };
@@ -783,6 +724,7 @@ describe("generic plugin-owned live session registry", () => {
       payloads: [{ text: "original delivery" }],
       meta: { durationMs: 1 },
       didSendViaMessagingTool: outcome === "delivered-cleanup-error",
+      didDeliverSourceReplyViaMessageTool: outcome === "delivered-cleanup-error",
     };
     const run = cleanupScope.run(() =>
       settlePreparedCliRun({

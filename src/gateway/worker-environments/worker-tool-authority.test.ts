@@ -140,7 +140,7 @@ describe("resolveWorkerToolAuthority", () => {
     expect(profile.policy.delegatedToolPolicy).toBeDefined();
     // Storage/lineage resolution is covered separately; exercise the actual worker
     // admission owner with that resolved profile, not a spawn-only adapter.
-    vi.spyOn(conversationPolicy, "resolveConversationCapabilityProfile").mockReturnValue(profile);
+    vi.spyOn(conversationPolicy, "prepareConversationCapabilityProfile").mockResolvedValue(profile);
     await expect(resolvedAuthority({ config, sessionKey })).rejects.toThrow(
       "Worker execution cannot enforce a delegated tool grant",
     );
@@ -179,6 +179,7 @@ describe("resolveWorkerToolAuthority", () => {
     });
     expect((await read.execute("read", { name: skill.name })).details).toEqual({
       name: skill.name,
+      location: skill.filePath,
       content: skill.readContent,
     });
     current = false;

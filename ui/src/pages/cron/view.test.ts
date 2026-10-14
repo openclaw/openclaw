@@ -2,11 +2,13 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createCronViewJob as createJob,
   findToggleByLabel,
   getButtonByText,
   getElement,
+  openCronMenu,
   selectSegmented,
   renderCronView as renderView,
 } from "./view.test-support.ts";
@@ -45,7 +47,7 @@ describe("cron view list pane", () => {
       onListTabChange,
     });
 
-    const labels = Array.from(container.querySelectorAll(".cron-list-hub-tabs wa-tab"), (tab) =>
+    const labels = Array.from(container.querySelectorAll(".cron-list-hub-tabs .hub-tab"), (tab) =>
       tab.textContent?.trim(),
     );
     expect(labels).toEqual(["All", "Active", "Paused", "Run history"]);
@@ -253,9 +255,7 @@ describe("cron view selects", () => {
     const activity = renderView({ listTab: "activity", runsSortDir: "asc" });
     const sort = getElement(activity, ".cron-run-sort", HTMLButtonElement);
     expect(sort.textContent).toContain("Oldest first");
-    expect(
-      activity.querySelector('wa-dropdown-item[value="asc"]')?.getAttribute("aria-current"),
-    ).toBe("true");
+    expect(activity.querySelector('[data-value="asc"]')?.getAttribute("aria-current")).toBe("true");
     const tasks = renderView({ jobsLastStatusFilter: "error" });
     const lastStatus = getElement(
       tasks,
@@ -277,6 +277,7 @@ describe("cron view editor", () => {
       form: {
         ...DEFAULT_CRON_FORM,
         scheduleKind: "cron",
+        deliveryMode: "announce",
         deliveryChannel: "telegram",
         failureAlertMode: "custom",
         failureAlertDeliveryMode: "webhook",
@@ -293,6 +294,7 @@ describe("cron view editor", () => {
     for (const field of ["name", "sessionKey", "deliveryAccountId", "payloadModel"] as const) {
       const id = `cron-${field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
       const input = getElement(container, `#${id}`, HTMLInputElement);
+      expect(input.disabled).toBe(false);
       if (field === "sessionKey" || field === "deliveryAccountId") {
         expect(input.placeholder).toBe(field === "sessionKey" ? "agent:main:main" : "default");
       }
@@ -567,7 +569,7 @@ describe("cron view editor", () => {
     );
   });
 
-  it("renders system-owned jobs as view-and-run only", () => {
+  it("renders system-owned jobs as view-and-run only", async () => {
     const { declarationKey, payload } = {
       declarationKey: "heartbeat:test",
       payload: { kind: "heartbeat" as const },
@@ -583,10 +585,10 @@ describe("cron view editor", () => {
     getElement(list, `[data-test-id="cron-row-run-${job.id}"]`, HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledWith(job, "force");
     expect(list.querySelector(`[data-test-id="cron-row-toggle-${job.id}"]`)).toBeNull();
-    const listMenu = getElement(list, "wa-dropdown.cron-job-menu", HTMLElement);
-    expect(listMenu.querySelector('wa-dropdown-item[value="run-if-due"]')).not.toBeNull();
-    expect(listMenu.querySelector('wa-dropdown-item[value="clone"]')).toBeNull();
-    expect(listMenu.querySelector('wa-dropdown-item[value="remove"]')).toBeNull();
+    const listMenu = getElement(list, ".cron-job-menu", HTMLElement);
+    expect(listMenu.querySelector('[data-value="run-if-due"]')).not.toBeNull();
+    expect(listMenu.querySelector('[data-value="clone"]')).toBeNull();
+    expect(listMenu.querySelector('[data-value="remove"]')).toBeNull();
 
     const detail = renderView({
       editingJob: job,
@@ -606,14 +608,12 @@ describe("cron view editor", () => {
     expect(detail.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
     getElement(detail, '[data-test-id="cron-run-now"]', HTMLButtonElement).click();
     expect(onRun).toHaveBeenLastCalledWith(job, "force");
-    const detailMenu = getElement(detail, "wa-dropdown.cron-job-menu", HTMLElement);
-    const runIfDue = getElement(detailMenu, 'wa-dropdown-item[value="run-if-due"]', HTMLElement);
-    detailMenu.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }),
-    );
-    expect(onRun).toHaveBeenLastCalledWith(job, "due");
-    expect(detailMenu.querySelector('wa-dropdown-item[value="clone"]')).toBeNull();
-    expect(detailMenu.querySelector('wa-dropdown-item[value="remove"]')).toBeNull();
+    const detailMenu = getElement(detail, ".cron-job-menu", HTMLElement);
+    await openCronMenu(detail, ".cron-job-menu");
+    getElement(detailMenu, '[data-value="run-if-due"]', HTMLButtonElement).click();
+    await waitForSolid(() => expect(onRun).toHaveBeenLastCalledWith(job, "due"));
+    expect(detailMenu.querySelector('[data-value="clone"]')).toBeNull();
+    expect(detailMenu.querySelector('[data-value="remove"]')).toBeNull();
     expect(onToggle).not.toHaveBeenCalled();
     expect(onClone).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();

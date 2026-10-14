@@ -9,7 +9,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   createGatewaySchedulerClock,
@@ -20,7 +19,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
-import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
@@ -29,7 +27,10 @@ import {
 } from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
-import { createDevGitStatus } from "./update-startup-git.test-support.js";
+import {
+  createDevGitStatus,
+  writeDevGitInstallReceipt,
+} from "./update-startup-git.test-support.js";
 
 const {
   cancelManagedServiceUpdateHandoffMock,
@@ -641,7 +642,6 @@ describe("update-startup", () => {
   it("announces and applies a dev git campaign without consulting npm", async () => {
     mockDevGitStatus({
       branch: "HEAD",
-      upstreamSource: "tracking",
       repositoryUrl: "https://github.com/example/openclaw",
     });
     const longSubject = "x".repeat(140);
@@ -781,25 +781,13 @@ describe("update-startup", () => {
     expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
   });
 
-  it("continues automatic dev campaigns from a failed handoff receipt", async () => {
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeUpdateInstallReceiptRowSync(db, {
-        kind: "update",
-        status: "error",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "git",
-          reason: "managed-service-handoff-failed",
-          root: "/opt/openclaw",
-          after: {
-            sha: "current-sha",
-            version: "1.0.0",
-            upstreamRef: "origin/main",
-          },
-        },
-      });
+  it("continues automatic dev campaigns despite a failed handoff receipt", async () => {
+    writeDevGitInstallReceipt({
+      status: "error",
+      ts: Date.now() - 60_000,
+      reason: "managed-service-handoff-failed",
     });
-    mockDevGitStatus({ branch: "HEAD", upstreamSource: "receipt" });
+    mockDevGitStatus({ branch: "HEAD" });
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
     await runGatewayUpdateCheck({
@@ -814,7 +802,11 @@ describe("update-startup", () => {
       fetchGit: true,
       includeRegistry: false,
       useDetachedDevUpstream: true,
-      gitUpstreamFallback: { currentSha: "current-sha", upstreamRef: "origin/main" },
+      gitSourceHint: expect.objectContaining({
+        root: "/opt/openclaw",
+        sha: "current-sha",
+        upstreamRef: "origin/main",
+      }),
     });
     expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
     await clock.advanceBy(60_000);
@@ -832,18 +824,7 @@ describe("update-startup", () => {
   it("reports current checkout metadata from its matching receipt", async () => {
     const installedAtMs = Date.now() - 60 * 60 * 1000;
     const commitAtMs = installedAtMs - 24 * 60 * 60 * 1000;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      writeUpdateInstallReceiptRowSync(db, {
-        kind: "update",
-        status: "ok",
-        ts: installedAtMs,
-        stats: {
-          mode: "git",
-          root: "/opt/openclaw",
-          after: { sha: "current-sha", version: "1.0.0", upstreamRef: "origin/main" },
-        },
-      });
-    });
+    writeDevGitInstallReceipt({ status: "ok", ts: installedAtMs });
     mockDevGitStatus({ behind: 0, commitAtMs });
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "dev" } },
@@ -877,11 +858,10 @@ describe("update-startup", () => {
       expected: { status: "unavailable", reason: "no-upstream" },
     },
     {
-      name: "missing receipt-backed upstream ref",
+      name: "missing configured upstream ref",
       git: {
         branch: "HEAD",
         upstream: "origin/missing",
-        upstreamSource: "receipt" as const,
         upstreamSha: null,
         ahead: null,
         behind: null,
@@ -1034,7 +1014,7 @@ describe("update-startup", () => {
       cfg: { update: { channel: "dev" } },
     });
     const initializing = check.initialize().catch((error: unknown) => error);
-    const refreshing = refreshGatewayUpdateStatus({ update: { channel: "dev" } }).catch(
+    const refreshing = refreshGatewayUpdateStatus(() => ({ update: { channel: "dev" } })).catch(
       (error: unknown) => error,
     );
     let stopped = false;
@@ -1084,8 +1064,8 @@ describe("update-startup", () => {
       isNixMode: false,
     };
     createTestUpdateCheck(params);
-    const oldRefresh = refreshGatewayUpdateStatus(params.cfg);
-    expect(refreshGatewayUpdateStatus(params.cfg)).toBe(oldRefresh);
+    const oldRefresh = refreshGatewayUpdateStatus(() => params.cfg);
+    expect(refreshGatewayUpdateStatus(() => params.cfg)).toBe(oldRefresh);
     const refreshing = oldRefresh.catch((error: unknown) => error);
     let initializing: Promise<unknown> | undefined;
     let newRefreshing: Promise<unknown> | undefined;
@@ -1095,9 +1075,9 @@ describe("update-startup", () => {
       const oldSignal = vi.mocked(checkUpdateStatus).mock.calls[0]?.[0].signal;
       const replacement = createTestUpdateCheck(params);
       initializing = replacement.initialize().catch((error: unknown) => error);
-      const newRefresh = refreshGatewayUpdateStatus(params.cfg);
+      const newRefresh = refreshGatewayUpdateStatus(() => params.cfg);
       expect(newRefresh).not.toBe(oldRefresh);
-      expect(refreshGatewayUpdateStatus(params.cfg)).toBe(newRefresh);
+      expect(refreshGatewayUpdateStatus(() => params.cfg)).toBe(newRefresh);
       newRefreshing = newRefresh.catch((error: unknown) => error);
       let stopped = false;
       stopping = replacement.stop().then(() => {
@@ -1355,75 +1335,6 @@ describe("update-startup", () => {
     } finally {
       oldFetch.resolve(oldGitStatus);
       await Promise.all([checking, replacementChecking, stopOld(), stopReplacement?.()]);
-    }
-  });
-
-  it("refreshes the inferred Dev channel for a configless Git installation", async () => {
-    mockDevGitStatus({ behind: 2 });
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
-    const announcement = getUpdateAvailable();
-    const schedule = getUpdateSchedule();
-    expect(schedule?.campaign?.state).toBe("countdown");
-    mockDevGitStatus({
-      behind: 3,
-      upstreamSha: "new-upstream-sha",
-      repositoryUrl: "https://github.com/example/openclaw",
-    });
-
-    await refreshGatewayUpdateStatus({});
-
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-    });
-    expect(getUpdateSchedule()).toEqual({
-      ...schedule,
-      install: {
-        kind: "git",
-        git: {
-          status: "behind",
-          currentSha: "current-sha",
-          upstreamSha: "new-upstream-sha",
-          repositoryUrl: "https://github.com/example/openclaw",
-          commitsBehind: 3,
-        },
-      },
-    });
-    expect(getUpdateAvailable()).toBe(announcement);
-  });
-
-  it("does not publish an old Dev refresh over a replacement channel", async ({ signal }) => {
-    const oldGitStatus = mockDevGitStatus();
-    const entered = createDeferred();
-    const discovery = createDeferred<UpdateCheckResult>();
-    vi.mocked(checkUpdateStatus).mockImplementationOnce(() => {
-      entered.resolve();
-      return discovery.promise;
-    });
-    const refresh = refreshGatewayUpdateStatus({ update: { channel: "dev" } });
-    try {
-      await withinTest(entered.promise, signal);
-
-      await runGatewayUpdateCheck({
-        cfg: { update: { channel: "beta", checkOnStart: false } },
-      });
-      const replacementSchedule = getUpdateSchedule();
-      discovery.resolve(oldGitStatus);
-      await refresh;
-
-      expect(getUpdateSchedule()).toEqual(replacementSchedule);
-    } finally {
-      discovery.resolve(oldGitStatus);
-      await refresh;
     }
   });
 

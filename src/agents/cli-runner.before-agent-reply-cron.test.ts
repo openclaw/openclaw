@@ -200,7 +200,7 @@ beforeEach(() => {
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
   authSuccessMock.mockReset().mockResolvedValue(undefined);
-  vi.spyOn(authProfiles, "loadAuthProfileStoreForRuntime").mockImplementation(authStoreMock);
+  vi.spyOn(authProfiles, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(authStoreMock);
   vi.spyOn(authProfiles, "markAuthProfileFailure").mockImplementation(authFailureMock);
   vi.spyOn(authProfiles, "markAuthProfileSuccess").mockImplementation(authSuccessMock);
 });
@@ -212,7 +212,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
-  vi.mocked(authProfiles.loadAuthProfileStoreForRuntime).mockRestore();
+  vi.mocked(authProfiles.loadAuthProfileStoreForRuntimeAsync).mockRestore();
   vi.mocked(authProfiles.markAuthProfileFailure).mockRestore();
   vi.mocked(authProfiles.markAuthProfileSuccess).mockRestore();
   cliBackendsTesting.resetDepsForTest();
@@ -295,7 +295,7 @@ describe("runCliAgent before_agent_reply seam", () => {
           expect(effect).toHaveBeenCalledOnce();
           if (scenario === "current root") {
             expect(heldRequest).toThrow("no longer active");
-            expect(heldClaim).toThrow("generation is unavailable");
+            expect(heldClaim).toThrow("no longer active");
           }
         }
         expect(prepareMock).not.toHaveBeenCalled();
@@ -381,7 +381,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       version: 1,
       profiles: { [profileId]: { type: "oauth", provider } },
     };
-    authStoreMock.mockReturnValue(store);
+    authStoreMock.mockResolvedValue(store);
     prepareMock.mockRejectedValueOnce(
       new CliAuthProfilePreparationError({
         message: "selected profile needs login",
@@ -648,6 +648,20 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executeMock).not.toHaveBeenCalled();
   });
 
+  it("marks a hook-claimed turn as never reaching a provider so capture skips its silence", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    replyMock.mockResolvedValue({ handled: true });
+
+    const result = await runCliAgent({ ...runParams, trigger: "cron" });
+
+    expect(result.meta).toMatchObject({
+      finalAssistantRawText: "NO_REPLY",
+      providerStarted: false,
+    });
+    const { resolveDiagnosticModelResponse } = await import("./diagnostic-model-response.js");
+    expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
+  });
+
   it("dispatches a declining hook once when model fallback re-enters the CLI runner", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     replyMock.mockResolvedValue(undefined);
@@ -758,7 +772,11 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("preserves delivery after failed MCP retirement", async () => {
-    executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+    executeMock.mockResolvedValue({
+      text: "",
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
     retireMock.mockImplementation(async ({ onError }: { onError?: (error: unknown) => void }) => {
       onError?.(new Error("session mcp retire failed"));
       return false;

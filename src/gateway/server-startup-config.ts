@@ -1,6 +1,7 @@
 // Gateway startup config loads, repairs, validates, and activates runtime config
 // plus secrets snapshots before the server exposes user-facing surfaces.
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
@@ -26,6 +27,7 @@ import {
   resolvePreparedSecretsStateScope,
   type SecretsStateScope,
 } from "../secrets/runtime-provider-auth-scope.js";
+import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -33,7 +35,6 @@ import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
-  hasSameSecretReloadContract,
   hasCurrentAuthStoreCredentialsRevision,
   registerProviderAuthRuntimeSnapshotActivationOwner,
 } from "../secrets/runtime-state.js";
@@ -397,6 +398,7 @@ export function createRuntimeSecretsActivator(params: {
           activationParams.env ?? process.env,
         );
         activationSourceConfig = sourceConfig;
+        await prepareSharedAuthStoreOwnership(activationParams.env);
         const startupPreflight =
           activationParams.reason === "startup" || activationParams.reason === "restart-check";
         if (
@@ -440,7 +442,8 @@ export function createRuntimeSecretsActivator(params: {
           }
         }
         const loadAuthStore = startupPreflight
-          ? (await import("../agents/auth-profiles.js")).loadAuthProfileStoreWithoutExternalProfiles
+          ? (await import("../agents/auth-profiles.js"))
+              .loadAuthProfileStoreWithoutExternalProfilesAsync
           : undefined;
         const secretsRuntime =
           params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot

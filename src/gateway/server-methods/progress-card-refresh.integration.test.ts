@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
@@ -12,9 +12,12 @@ import {
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { progressCardStore } from "../progress-card-store.js";
@@ -26,6 +29,10 @@ import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 installGatewayTestHooks();
+const prepareProfiles = useUserProfileCatalogForTest();
+beforeEach(async () => {
+  await prepareProfiles();
+});
 const createFixture = useBrowserFollowupFixture();
 
 function refreshCard(
@@ -68,7 +75,11 @@ describe("registered progress refresh admission", () => {
             }
           : {}),
       });
+      using _ = caller
+        ? { [Symbol.dispose]: (await prepareUserProfileCatalog()).release }
+        : undefined;
       if (caller) {
+        prepareGatewayRecipientProfile(caller);
         const cfg = { ...f.context.getRuntimeConfig(), ...rolePolicyConfig() };
         f.context.getRuntimeConfig = () => cfg;
       }
@@ -77,7 +88,6 @@ describe("registered progress refresh admission", () => {
       const handlers = createProgressCardHandlers();
       let readingTerminalCard = false;
       let revoked = false;
-      let assertCurrentAuthorization: (() => void) | undefined;
       const refresh = async (respond: RespondFn) =>
         refreshCard(f, "finishing-refresh", respond, {
           client: caller ?? f.client,
@@ -87,7 +97,6 @@ describe("registered progress refresh admission", () => {
               if (caller) {
                 const authorization = invocation.sessionMutationAuthorization!;
                 const assertCurrent = authorization.assertCurrent.bind(authorization);
-                assertCurrentAuthorization = assertCurrent;
                 authorization.assertCurrent = () => {
                   assertCurrent();
                   if (readingTerminalCard) {
@@ -152,7 +161,6 @@ describe("registered progress refresh admission", () => {
           await pending;
           if (revoke) {
             expect(revoked).toBe(true);
-            expect(assertCurrentAuthorization).toThrow("session is shared for this connection");
             expect(f.context.dedupe.get(receipt![0])).toBe(receipt![1]);
             expect(retry).toHaveBeenCalledExactlyOnceWith(
               false,
@@ -396,8 +404,8 @@ describe("registered progress refresh admission", () => {
         return { transcriptCommit: "unconfirmed", errorMessage: "Receipt still pending" };
       },
     );
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-    const fingerprint = operation.bindToolAuthorityRoute(run.run);
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+    const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",

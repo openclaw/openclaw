@@ -1,44 +1,27 @@
-import type {
-  SqliteWorkerBackend,
-  SqliteWorkerCommand,
+import {
+  runEngineWorkerWrite,
+  type DatabaseEngineInput,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  requestSqliteWorkerOperationAdmission,
+  type SqliteWorkerBackend,
+  type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type {
   WorkboardSqliteOperations,
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { encodeWorkboardSqliteFailure } from "./sqlite-store-errors.js";
-import { createWorkboardSqliteKernel, type WorkboardSqliteKernel } from "./sqlite-store-kernel.js";
-type Connection = { kernel?: WorkboardSqliteKernel; close: () => void };
-type ConnectionCommand = Exclude<
-  SqliteWorkerCommand<WorkboardSqliteOperations>,
-  { type: "connection.open" }
->;
+import { createWorkboardSqliteKernel } from "./sqlite-store-kernel.js";
 
 export function createSqliteWorkerBackend(
-  _input: undefined,
+  input: DatabaseEngineInput,
   context: { databasePath: string },
 ): SqliteWorkerBackend<WorkboardSqliteWorkerOperations> {
-  const initial = createWorkboardSqliteKernel(context.databasePath);
-  const connections = new Map<number, Connection>();
-  // Broker admission opens the native database; the first logical lease adopts it.
-  connections.set(0, { kernel: initial, close: initial.close });
-  let nextConnection = 0;
+  const kernel = createWorkboardSqliteKernel(context.databasePath, undefined, input);
   function execute(
-    command: ConnectionCommand,
+    command: SqliteWorkerCommand<WorkboardSqliteOperations>,
   ): WorkboardSqliteOperations[keyof WorkboardSqliteOperations]["output"] {
-    const connection = connections.get(command.input.connection);
-    if (!connection) {
-      throw new Error("Workboard SQLite connection is closed.");
-    }
-    if (command.type === "connection.close") {
-      connection.close();
-      connections.delete(command.input.connection);
-      return;
-    }
-    const kernel = connection.kernel;
-    if (!kernel) {
-      throw new Error("Workboard SQLite connection initialization failed.");
-    }
     switch (command.type) {
       case "cards.register":
         return kernel.cards.register(...command.input.args);
@@ -102,53 +85,43 @@ export function createSqliteWorkerBackend(
   }
   return {
     execute(command) {
-      if (command.type === "connection.open") {
-        const connection = ++nextConnection;
-        try {
-          const unclaimed = connections.get(0);
-          connections.delete(0);
-          const kernel =
-            unclaimed?.kernel ??
-            createWorkboardSqliteKernel(context.databasePath, (close) => {
-              connections.set(connection, { close });
-            });
-          connections.set(connection, { kernel, close: kernel.close });
-          return { ok: true, value: { connection } };
-        } catch (error) {
-          const owned = connections.get(connection);
-          if (owned) {
-            try {
-              owned.close();
-              connections.delete(connection);
-            } catch {
-              return {
-                ok: false,
-                failure: { ...encodeWorkboardSqliteFailure(error), cleanupConnection: connection },
-              };
-            }
-          }
-          return { ok: false, failure: encodeWorkboardSqliteFailure(error) };
-        }
-      }
       try {
-        return { ok: true, value: execute(command) };
+        const readOnly = [
+          "cards.lookup",
+          "cards.entries",
+          "cards.listCardStatuses",
+          "cards.listBoardAggregates",
+          "cards.listStatsAggregates",
+          "cards.hasCards",
+          "boards.lookup",
+          "boards.entries",
+          "sessionsBoard.get",
+          "sessionsBoard.listPlacements",
+          "subscriptions.lookup",
+          "subscriptions.entries",
+          "attachments.lookup",
+          "attachments.entries",
+        ].includes(command.type);
+        const value = !readOnly
+          ? runEngineWorkerWrite(
+              input,
+              () => execute(command),
+              (operation) => {
+                requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+                return kernel.withWriteTransaction(operation, {
+                  withCommit(commit) {
+                    requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+                    commit();
+                  },
+                });
+              },
+            )
+          : execute(command);
+        return { ok: true, value };
       } catch (error) {
         return { ok: false, failure: encodeWorkboardSqliteFailure(error) };
       }
     },
-    close() {
-      const failures: unknown[] = [];
-      for (const [id, kernel] of connections) {
-        try {
-          kernel.close();
-          connections.delete(id);
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "Workboard SQLite cleanup failed");
-      }
-    },
+    close: kernel.close,
   };
 }

@@ -207,8 +207,8 @@ describe("thread binding creation and ACP startup reconciliation", () => {
       targetSessionKey: "plugin-binding:owner:dm",
       metadata: { pluginBindingOwner: "plugin", pluginId: "owner" },
     });
-    hoisted.readAcpSessionEntry.mockImplementation(
-      ({ sessionKey: key }: { sessionKey: string }) => {
+    hoisted.readAcpSessionEntryAsync.mockImplementation(
+      async ({ sessionKey: key }: { sessionKey: string }) => {
         const entry = session(key);
         return key === sessionKey("healthy")
           ? { ...entry, acp: { ...entry.acp, state: "error" } }
@@ -239,7 +239,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
   it("keeps bindings when their session store cannot be read", async () => {
     const manager = await createTestThreadBindingManager();
     await bindAcp(manager, "uncertain");
-    hoisted.readAcpSessionEntry.mockReturnValue({
+    hoisted.readAcpSessionEntryAsync.mockResolvedValue({
       ...session(sessionKey("uncertain")),
       acp: undefined,
       storeReadFailed: true,
@@ -256,7 +256,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
     const manager = await createTestThreadBindingManager();
     await bindAcp(manager, "refused");
     const error = new IncognitoSessionEndedError();
-    hoisted.readAcpSessionEntry.mockImplementation(() => {
+    hoisted.readAcpSessionEntryAsync.mockImplementation(async () => {
       throw error;
     });
 
@@ -267,7 +267,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
   it("removes a running binding after an explicit stale health verdict", async () => {
     const manager = await createTestThreadBindingManager();
     await bindAcp(manager, "running");
-    hoisted.readAcpSessionEntry.mockReturnValue(session(sessionKey("running")));
+    hoisted.readAcpSessionEntryAsync.mockResolvedValue(session(sessionKey("running")));
     expect(
       await reconcileAcpThreadBindingsOnStartup({
         ...reconcileOptions,
@@ -280,7 +280,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
   it("propagates a nested health-probe refusal and keeps the binding", async () => {
     const manager = await createTestThreadBindingManager();
     await bindAcp(manager, "probe-refused");
-    hoisted.readAcpSessionEntry.mockReturnValue(session(sessionKey("probe-refused")));
+    hoisted.readAcpSessionEntryAsync.mockResolvedValue(session(sessionKey("probe-refused")));
     const error = new AggregateError([new IncognitoSessionEndedError()], "ACP probe failed");
     await expect(
       reconcileAcpThreadBindingsOnStartup({
@@ -301,7 +301,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
       const manager = await createTestThreadBindingManager({ persist: true });
       await bindAcp(manager, "prepared");
       const runtime = getDiscordRuntime();
-      const open = runtime.state.openKeyedStore.bind(runtime.state);
+      const open = runtime.state.openKeyedStoreV2.bind(runtime.state);
       const persisted = open<ThreadBindingRecord>({
         namespace: "thread-bindings",
         maxEntries: 10_000,
@@ -321,7 +321,7 @@ describe("thread binding creation and ACP startup reconciliation", () => {
       const error = new IncognitoSessionEndedError();
       let current = true;
       const opened = vi
-        .spyOn(runtime.state, "openKeyedStore")
+        .spyOn(runtime.state, "openKeyedStoreV2")
         .mockImplementation(<T>(options: Parameters<typeof open>[0]) => {
           const store = open<T>(options);
           const remove = store.delete.bind(store);

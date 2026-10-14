@@ -10,7 +10,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { resolveTwitchToken } from "./token.js";
 import type {
@@ -297,9 +296,8 @@ export class TwitchClientManager {
       const handler = this.messageHandlers.get(key)?.handler;
       if (handler) {
         const from = `twitch:${msg.userInfo.userName}`;
-        const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
         this.logger.debug?.(
-          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length} preview="${preview}"`,
+          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length}`,
         );
 
         handler({

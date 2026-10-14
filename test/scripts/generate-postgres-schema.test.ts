@@ -3,7 +3,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { generatePostgresSchemas } from "../../scripts/generate-postgres-schema.mts";
+import {
+  generatePostgresSchemas,
+  generateWorkboardPostgresSchema,
+  pendingPromotion,
+} from "../../scripts/generate-postgres-schema.mts";
+import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
+import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -29,20 +35,173 @@ function verifiedFixture(sql: string, verify: (db: DatabaseSync) => void) {
 }
 
 describe("PostgreSQL schema generation", () => {
+  it("preserves all agent relational objects and declares search separately", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    const agent = report.catalogs.agent!;
+    for (const kind of ["table", "column", "default", "check", "index", "foreignKey", "trigger"]) {
+      expect(
+        agent.objects.filter(
+          (item) =>
+            item.kind === kind &&
+            item.sql === null &&
+            item.table !== "sqlite_sequence" &&
+            item.pendingCapability !== "search",
+        ),
+        kind,
+      ).toEqual([]);
+    }
+    expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(10);
+    expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(4);
+    expect(agent.objects.filter((item) => item.kind === "check" && item.sql)).toHaveLength(66);
+    expect(
+      report.pendingCapabilities.filter(
+        (item) => item.database === "agent" && item.kind === "trigger",
+      ),
+    ).toHaveLength(4);
+    expect(
+      report.pendingCapabilities.filter(
+        (item) => item.database === "agent" && item.kind === "virtualTable",
+      ),
+    ).toHaveLength(2);
+    expect(JSON.parse(files["manifest.json"]!).pendingCapabilities).toEqual(
+      report.pendingCapabilities,
+    );
+    expect(files["agent.postgres.sql"]).toContain(
+      "NEW.session_key IS DISTINCT FROM OLD.session_key",
+    );
+    expect(files["agent.postgres.sql"]).toContain(
+      "NEW.route_context_json IS NOT DISTINCT FROM OLD.route_context_json",
+    );
+    expect(files["portability-report.md"]).toContain(
+      "Duplicate-key JSON is unreachable from writers",
+    );
+  });
+
+  it("refuses unsupported agent objects and trigger bodies", async () => {
+    const directory = fixture("");
+    const file = path.join(directory, "src/state/openclaw-agent-schema.sql");
+    fs.writeFileSync(file, "CREATE TABLE unsupported (id INTEGER DEFAULT (abs(-1))) STRICT;");
+    await expect(generatePostgresSchemas(directory)).rejects.toThrow(
+      /Unsupported agent default.*abs/,
+    );
+    fs.writeFileSync(
+      file,
+      fs
+        .readFileSync(path.join(root, "src/state/openclaw-agent-schema.sql"), "utf8")
+        .replace("snapshot_revision + 1", "snapshot_revision + 2"),
+    );
+    await expect(generatePostgresSchemas(directory)).rejects.toThrow(/Unsupported trigger update/);
+  });
+
+  it("keeps the complete workboard artifact current and uses the admitted search path", async () => {
+    const { sql, catalog, portMetadata } = await generateWorkboardPostgresSchema();
+    expect(sql).toBe(
+      fs.readFileSync(
+        path.join(root, "extensions/workboard/src/workboard-schema.postgres.sql"),
+        "utf8",
+      ),
+    );
+    expect(catalog.objects.filter((item) => item.sql === null)).toEqual([]);
+    expect(sql).toContain('CREATE TABLE "workboard_cards" (');
+    expect(sql).toContain('"content" bytea NOT NULL');
+    expect(sql).toContain("CHECK ((\"source\" IN ('state', 'model', 'operator')))");
+    expect(sql).toContain(
+      'REFERENCES "workboard_cards" ("id") ON UPDATE NO ACTION ON DELETE CASCADE',
+    );
+    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
+    expect(sql).toMatch(/[^\n]\n$/);
+    expect(portMetadata).toEqual(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(root, "src/infra/database-engine/workboard-port.generated.json"),
+          "utf8",
+        ),
+      ),
+    );
+    const preData = sql.slice(portMetadata.preData[0], portMetadata.preData[1]);
+    const postData = sql.slice(portMetadata.postData[0], portMetadata.postData[1]);
+    expect(preData + postData).toBe(sql);
+    expect(preData).toContain('CREATE TABLE "workboard_cards"');
+    expect(preData).not.toMatch(/CREATE (?:UNIQUE )?INDEX|ALTER TABLE/);
+    expect(postData).not.toContain("CREATE TABLE");
+    expect(postData).toContain('CREATE INDEX "workboard_cards_board_status_idx"');
+    expect(postData).toContain('ALTER TABLE "workboard_card_labels" ADD FOREIGN KEY');
+  });
+
+  it("derives identity allocation semantics and composite keys from canonical SQLite", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE allocated (id INTEGER PRIMARY KEY AUTOINCREMENT) STRICT;
+        CREATE TABLE reused (id INTEGER PRIMARY KEY, note TEXT DEFAULT 'AUTOINCREMENT') STRICT;
+        CREATE TABLE paired (left_id TEXT, right_id INTEGER, PRIMARY KEY(left_id, right_id)) STRICT;
+      `);
+      const tables = portTables(readCatalog(db, ""));
+      expect(tables.map(({ name, pk, identities }) => ({ name, pk, identities }))).toEqual([
+        { name: "allocated", pk: ["id"], identities: [{ column: "id", autoIncrement: true }] },
+        { name: "paired", pk: ["left_id", "right_id"], identities: [] },
+        { name: "reused", pk: ["id"], identities: [{ column: "id", autoIncrement: false }] },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renders eager and lazy state DDL inside the connection owner's namespace and transaction", async () => {
+    const { files, report } = await generatePostgresSchemas(root);
+    for (const file of [
+      "state.postgres.sql",
+      "agent.postgres.sql",
+      ...report.fragments.map((item) => item.file),
+    ]) {
+      expect(files[file], file).not.toMatch(/^(?:BEGIN;|COMMIT;|SET |CREATE SCHEMA )/m);
+      expect(files[file], file).not.toContain('"openclaw_state".');
+      expect(files[file], file).not.toContain('"openclaw_agent".');
+    }
+    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "schema_meta" (');
+    const backgrounds = report.fragments.find((item) =>
+      item.tables.includes("user_background_images"),
+    )!;
+    expect(files[backgrounds.file]).toContain('CREATE TABLE "user_background_images" (');
+    expect(files[backgrounds.file]).toContain('REFERENCES "user_profiles"');
+    expect(files["state.postgres.sql"]).not.toContain('CREATE TABLE "user_background_images"');
+  });
+
   it("accounts for every canonical SQLite object and generates identical bytes twice", async () => {
     const generated = await generatePostgresSchemas(root);
     expect((await generatePostgresSchemas(root)).files).toEqual(generated.files);
-    expect(Object.keys(generated.files).toSorted()).toEqual([
-      "agent.postgres.sql",
-      "portability-report.json",
-      "portability-report.md",
-      "state.postgres.sql",
-    ]);
-    expect(JSON.parse(generated.files["portability-report.json"]!)).toEqual(generated.report);
+    expect(Object.keys(generated.files).toSorted()).toEqual(
+      [
+        "agent.postgres.sql",
+        ...generated.report.fragments.map((fragment) => fragment.file),
+        "manifest.json",
+        "portability-report.md",
+        "state.postgres.sql",
+      ].toSorted(),
+    );
+    expect(
+      generated.report.catalogs
+        .state!.objects.filter((item) => item.sql === null && item.kind === "index")
+        .map((item) => item.name)
+        .toSorted(),
+    ).toEqual(pendingPromotion.map((item) => item.name).toSorted());
+    for (const fragment of generated.report.fragments) {
+      for (const table of fragment.tables) {
+        expect(generated.files["state.postgres.sql"]).not.toContain(`CREATE TABLE "${table}"`);
+        expect(generated.files[fragment.file]).toContain(`CREATE TABLE "${table}"`);
+      }
+    }
+    const exported = await generatePostgresSchemas(root, "openclaw", { includeJsonReport: true });
+    expect(JSON.parse(exported.files["portability-report.json"]!)).toEqual(generated.report);
     for (const name of ["state", "agent"]) {
       const db = new DatabaseSync(":memory:");
       try {
         db.exec(fs.readFileSync(path.join(root, `src/state/openclaw-${name}-schema.sql`), "utf8"));
+        if (name === "state") {
+          for (const fragment of listOpenClawStateFeatureSchemas()) {
+            db.exec(fragment.sql());
+          }
+        }
         const expected: string[] = [];
         const add = (kind: string, table: unknown, item: unknown) =>
           expected.push(JSON.stringify([kind, table, item]));
@@ -114,7 +273,7 @@ describe("PostgreSQL schema generation", () => {
             );
           } else {
             expect(
-              generated.files[`${name}.postgres.sql`],
+              Object.values(generated.files).join("\n"),
               `${item.kind} ${item.table}.${item.name}`,
             ).toContain(item.sql);
           }
@@ -141,7 +300,8 @@ describe("PostgreSQL schema generation", () => {
     `);
     const { files, report } = await generatePostgresSchemas(directory, 'proof"scope');
     const sql = files["state.postgres.sql"]!;
-    expect(sql).toContain('CREATE SCHEMA "proof""scope_state";');
+    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
+    expect(files["agent.postgres.sql"]).not.toMatch(/^(?:BEGIN|COMMIT|CREATE SCHEMA)\b/m);
     expect(sql).toContain('"id" bigint GENERATED BY DEFAULT AS IDENTITY');
     expect(sql).toContain('PRIMARY KEY ("position", "alias")');
     expect(sql).toContain('UNIQUE ("parent_id", "label")');
@@ -153,11 +313,9 @@ describe("PostgreSQL schema generation", () => {
     expect(sql).toContain('("position") ASC NULLS FIRST');
     expect(sql).toContain('WHERE "parent_id" IS NOT NULL');
     expect(sql).toContain(
-      'REFERENCES "proof""scope_state"."parent" ("id") ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED',
+      'REFERENCES "parent" ("id") ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED',
     );
-    expect(sql.indexOf('CREATE TABLE "proof""scope_state"."parent"')).toBeLessThan(
-      sql.indexOf("ADD FOREIGN KEY"),
-    );
+    expect(sql.indexOf('CREATE TABLE "parent"')).toBeLessThan(sql.indexOf("ADD FOREIGN KEY"));
     expect(sql).not.toMatch(/\bSTRICT\b|WITHOUT ROWID|AUTOINCREMENT/);
     expect(
       report.catalogs.state!.tables.find((table) => table.name === "parent")?.columns[0],
@@ -176,16 +334,25 @@ describe("PostgreSQL schema generation", () => {
       ["value == 1 OR value <> 2", '"value" = 1'],
       ["value IN (-1, 0, 1)", '"value" IN (-1, 0, 1)'],
       ["value NOT IN (3, 4)", '"value" NOT IN (3, 4)'],
-      ["optional IS NULL OR length(optional) > 0", 'length("optional")'],
+      ["optional IS NULL OR length(optional) > 0", 'char_length("optional")'],
       ["value BETWEEN 0 AND 9", '"value" BETWEEN 0 AND 9'],
       ["NOT (value = 3)", "NOT ("],
       ["json_valid(document)", '"document" IS JSON'],
-      ["length(payload) <= 32", 'length("payload")'],
+      ["length(payload) <= 32", 'octet_length("payload")'],
+      ["length(CAST(name AS BLOB)) <= 32", "octet_length(convert_to("],
+      ["name IS optional", '"name" IS NOT DISTINCT FROM "optional"'],
+      ["name IS NOT optional", '"name" IS DISTINCT FROM "optional"'],
+      ["trim(name) = name", 'btrim("name")'],
+      ["substr(name, 1, 2) = 'aa'", 'substr("name", 1, 2)'],
+      ["coalesce(optional, name) = name", 'coalesce("optional", "name")'],
+      ["ifnull(optional, '') = name", "coalesce(\"optional\", '')"],
+      ["octet_length(name) <= 32", 'octet_length("name")'],
+      ["name NOT LIKE '%/%' AND name NOT LIKE '%\\%'", "strpos(\"name\", '/') = 0"],
+      ["typeof(value) = 'integer'", "ELSE 'integer' END"],
       ["name GLOB 'run-?.*'", String.raw`\Arun-.\..*\Z`],
       ["name NOT GLOB '*[^A-Za-z0-9_-]*'", String.raw`!~ '\A.*[^A-Za-z0-9_-].*\Z'`],
     ];
     const refused = [
-      "typeof(value) = 'integer'",
       "json_extract(document, '$.kind') = 'x'",
       "name COLLATE NOCASE = 'x'",
       "value",
@@ -200,10 +367,15 @@ describe("PostgreSQL schema generation", () => {
       ) STRICT;
       CREATE INDEX record_length ON records(length(name)) WHERE value >= 0;
       CREATE UNIQUE INDEX refused_expression ON records(json_extract(document, '$.kind'));
-      CREATE UNIQUE INDEX refused_predicate ON records(name) WHERE typeof(value) = 'integer';
+      CREATE UNIQUE INDEX refused_predicate ON records(name) WHERE abs(value) = 1;
       CREATE INDEX refused_collation ON records(name COLLATE NOCASE);
     `);
-    const { files, report } = await generatePostgresSchemas(directory);
+    await expect(generatePostgresSchemas(directory)).rejects.toThrow(
+      /Unsupported shared-state default records.unsupported_default.*abs/,
+    );
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     const objects = report.catalogs.state!.objects;
     const checks = objects.filter((item) => item.kind === "check");
     expect(checks).toHaveLength(accepted.length + refused.length);
@@ -215,7 +387,7 @@ describe("PostgreSQL schema generation", () => {
       expect(item.sql, item.source).toBeNull();
       expect(item.reason).toBeTruthy();
     }
-    expect(files["state.postgres.sql"]).toContain('(length("name")) ASC NULLS FIRST');
+    expect(files["state.postgres.sql"]).toContain('(char_length("name")) ASC NULLS FIRST');
     for (const name of [
       "unsupported_default",
       "refused_expression",
@@ -238,7 +410,9 @@ describe("PostgreSQL schema generation", () => {
       CREATE TABLE dependent (id INTEGER PRIMARY KEY, target TEXT REFERENCES mixed(id)) STRICT;
       CREATE VIEW projection AS SELECT id FROM mixed;
     `);
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     const objects = report.catalogs.state!.objects;
     expect(objects.find((item) => item.kind === "table" && item.name === "mixed")).toMatchObject({
       sql: null,
@@ -254,7 +428,7 @@ describe("PostgreSQL schema generation", () => {
       sql: null,
       reason: expect.any(String),
     });
-    expect(files["state.postgres.sql"]).not.toContain('REFERENCES "openclaw_state"."mixed"');
+    expect(files["state.postgres.sql"]).not.toContain('REFERENCES "mixed"');
     expect(report.catalogs.state!.tables.map((table) => table.name)).toEqual(["dependent"]);
   });
 
@@ -296,14 +470,16 @@ describe("PostgreSQL schema generation", () => {
         expect(() => db.exec("INSERT INTO child VALUES (2)")).toThrow(/FOREIGN KEY/);
       },
     );
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     const catalog = report.catalogs.state!;
     const foreignKey = catalog.objects.find((item) => item.kind === "foreignKey");
     expect(foreignKey).toMatchObject({ sql: null });
     expect(foreignKey?.reason).toBeTruthy();
     expect(catalog.tables.map((table) => table.name).toSorted()).toEqual(["child", "parent"]);
-    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "openclaw_state"."parent"');
-    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "openclaw_state"."child"');
+    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "parent"');
+    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "child"');
     expect(files["state.postgres.sql"]).not.toContain("ADD FOREIGN KEY");
   });
 
@@ -319,7 +495,7 @@ describe("PostgreSQL schema generation", () => {
           expect(db.prepare("SELECT COUNT(*) AS count FROM records").get()?.count).toBe(1);
         },
       );
-      const { report } = await generatePostgresSchemas(directory);
+      const { report } = await generatePostgresSchemas(directory, "openclaw", { reportOnly: true });
       const objects = report.catalogs.state!.objects;
       expect(
         objects.some(
@@ -344,14 +520,14 @@ describe("PostgreSQL schema generation", () => {
         db.prepare("SELECT COUNT(*) AS count FROM nullable_key WHERE id IS NULL").get()?.count,
       ).toBe(2);
     });
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     expect(report.catalogs.state!.objects.find((item) => item.kind === "table")).toMatchObject({
       sql: null,
       reason: expect.stringMatching(/nullable.*primary|primary.*nullable/i),
     });
-    expect(files["state.postgres.sql"]).not.toContain(
-      'CREATE TABLE "openclaw_state"."nullable_key"',
-    );
+    expect(files["state.postgres.sql"]).not.toContain('CREATE TABLE "nullable_key"');
   });
 
   it("reports a translated boolean default that is incompatible with its bigint column", async () => {
@@ -365,7 +541,9 @@ describe("PostgreSQL schema generation", () => {
         });
       },
     );
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     expect(report.catalogs.state!.objects.find((item) => item.kind === "default")).toMatchObject({
       sql: null,
       reason: expect.stringMatching(/type|bigint|boolean/i),

@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { TranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
@@ -28,7 +28,7 @@ import {
 } from "./store-sqlite.js";
 
 function* iterateArtifact(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Extract<TranscriptExportCommand, { format: "artifact" }>["session"],
 ): Generator<string, void> {
   const head = executeSqliteQueryTakeFirstSync(

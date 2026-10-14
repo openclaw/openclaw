@@ -42,6 +42,22 @@ function configWithPath(path: string, leaf: unknown = 1): Record<string, unknown
 }
 
 describe("retired runtime config migrations", () => {
+  it.each<[string, unknown]>([
+    ["channels.discord", { voice: { realtime: { voice: null } } }],
+    [
+      "channels.discord",
+      { accounts: { work: { voice: { realtime: { voice: false } } }, malformed: 42 } },
+    ],
+    ["tools.media", { models: [null, { deepgram: false }] }],
+    ["tools.media", { audio: { deepgram: null } }],
+    ["tools.media", { video: { models: [42, { deepgram: null }] } }],
+  ])("reports malformed-but-present legacy media settings in %s: %j", (path, value) => {
+    const raw = configWithPath(path, value);
+    const original = structuredClone(raw);
+    expect(findLegacyConfigIssues(raw)).toContainEqual(expect.objectContaining({ path }));
+    expect(raw).toEqual(original);
+  });
+
   it("detects and removes an explicitly false tool-error preference", () => {
     const raw = { messages: { suppressToolErrors: false, ackReaction: "👀" } };
     expect(findLegacyConfigIssues(raw)).toContainEqual(

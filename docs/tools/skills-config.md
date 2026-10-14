@@ -65,8 +65,11 @@ Most skills configuration lives under `skills` in
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
-  Watch skill folders and refresh the skills snapshot when `SKILL.md` files
-  change. Covers nested files under grouped skill roots.
+  Enable passive automatic skill discovery. One background worker checks local
+  skill roots about once per minute, including nested files under grouped roots.
+  Set to `false` to disable passive rescans. Explicit OpenClaw skill changes,
+  relevant configuration changes, and Gateway startup still request an immediate
+  rescan. Existing sessions use changed snapshots on their next agent turn.
 </ParamField>
 
 ## Install (`skills.install`)
@@ -124,7 +127,7 @@ skills, skill dependency installers, and plugin install/update sources.
 
 <ParamField path="security.installPolicy.enabled" type="boolean" default="false">
   Enables operator-owned install policy. When enabled without a valid `exec`
-  command, installs fail closed.
+  command, installs are blocked.
 </ParamField>
 
 <ParamField path="security.installPolicy.targets" type='("skill" | "plugin")[]'>
@@ -146,8 +149,7 @@ skills, skill dependency installers, and plugin install/update sources.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.noOutputTimeoutMs" type="number" default="timeoutMs">
-  Maximum time without stdout or stderr output before the policy fails
-  closed.
+  Maximum time without stdout or stderr output before the policy blocks the install.
 </ParamField>
 
 <ParamField path="security.installPolicy.exec.maxOutputBytes" type="number" default="1048576">
@@ -184,11 +186,11 @@ Malformed finding entries are ignored, and
 invalid optional fields are omitted. A non-array `findings` value is treated as
 absent. Operator-facing reason and finding text are limited to 1,000 characters.
 OpenClaw retains at most 100 normalized findings for display. Only a `warn`
-response with more than 100 valid findings fails closed and cannot be
+response with more than 100 valid findings blocks installation and cannot be
 acknowledged; `allow` and `block` retain the first 100. A warning stops the
 install before commit. A `warn` review whose fully rendered notice, including
 its title, target, sanitized reason and findings, and recovery guidance, exceeds
-the 4,000-character aggregate display limit fails closed without presenting a
+the 4,000-character aggregate display limit blocks installation without presenting a
 partial review. An over-budget `block` remains terminal with a
 bounded denial, while over-budget findings on `allow` are summarized in bounded
 diagnostic output. Interactive CLI
@@ -207,10 +209,10 @@ change `security.installPolicy` to return `allow` for the reviewed request,
 then retry the managed flow. `--force` does not approve policy warnings. A `block`,
 non-zero exit, timeout, invalid JSON, non-object response, missing or invalid
 protocol version or decision, or missing or empty `warn`/`block` reason always
-fails closed.
+blocks installation.
 
 OpenClaw does not execute install policy during normal Gateway startup.
-Installs and updates fail closed when policy is enabled but unavailable.
+Installs and updates are blocked when policy is enabled but unavailable.
 `openclaw doctor` performs static validation; `openclaw doctor --deep`
 executes a synthetic install check against the configured command.
 
@@ -293,7 +295,7 @@ Keys under `entries` match the skill `name` by default. If a skill defines
 
 <ParamField path="skills.entries.<key>.enabled" type="boolean">
   `false` disables the skill even when bundled or installed. The
-  `coding-agent` bundled skill is opt-in — set it to `true` and ensure one of
+  `coding-agent` bundled skill is opt-in — set it to `true` and check that one of
   `claude`, `codex`, `opencode`, or another supported CLI is installed and
   authenticated.
 </ParamField>
@@ -366,10 +368,17 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "auto"' default='"auto"'>
   `auto` lets agents save and update Workshop skills: a background review runs
   after substantial work, and learned skills unused for 30 days are archived.
-  Review changes are announced in the conversation, and every change can be
-  undone. `off` disables the background review and unused-skill cleanup.
+  Review changes appear as a **Learned** row in the Control UI chat, and every
+  change can be undone. `off` disables the background review and unused-skill cleanup.
   User-prompted skill creation, `/learn`, and manual learning sessions work in
   both modes.
+</ParamField>
+
+<ParamField path="skills.workshop.autonomous.channelNotices" type="boolean" default="false">
+  When `true`, background review notices are posted to channel conversations
+  (except Slack) with an **Undo** button; the Control UI shows that message as
+  plain text. When `false`, they appear only as the **Learned** row in the
+  Control UI chat. Saying "undo" works either way.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

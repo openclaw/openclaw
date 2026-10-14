@@ -13,24 +13,26 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import "../../plugins/control-ui-view.runtime.ts";
+import "../../plugins/control-ui-view.solid.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 
 class PluginQuestionChatHost extends LitElement {
   props = createChatProps();
+  application?: ApplicationContext;
 
   override createRenderRoot() {
     return this;
   }
 
   override render() {
-    return renderChat(this.props);
+    return renderChat(this.props, this.application);
   }
 }
 customElements.define("plugin-question-chat-test-host", PluginQuestionChatHost);
@@ -73,6 +75,7 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">) {
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
   const host = document.createElement("plugin-question-chat-test-host") as PluginQuestionChatHost;
+  host.application = context;
   return { provider, host, reportError };
 }
 

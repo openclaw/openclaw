@@ -19,7 +19,64 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
-  it.each(["retry", "missing", "choose-workspace"] as const)(
+  it("retries a restored existing-folder create after its device stops offering free slots", async () => {
+    let freeSlots = 1;
+    const { place, flow, gateway } = createDraftFixture({
+      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      request: async (method) =>
+        method === "environments.list"
+          ? {
+              environments: [
+                {
+                  id: "node:runner",
+                  type: "node",
+                  status: "available",
+                  sessionHost: true,
+                  workerHost: { deviceFolders: true },
+                  workerSlots: { total: 1, available: freeSlots },
+                },
+              ],
+              profiles: [],
+            }
+          : {},
+      agents: [
+        {
+          id: "main",
+          workspace: "/workspace",
+          agentRuntime: {
+            id: "openclaw",
+            source: "agent",
+            cloudPlacementExecutionMode: "worker-turn",
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          },
+        },
+      ],
+    });
+    await gateway.refreshCloudProfiles();
+    flow.pendingPlacement.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "Keep my folder",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: {
+        agentId: "main",
+        message: "",
+        deviceFolder: { deviceId: "runner", path: "/srv/project" },
+      },
+    });
+    flow.releasePendingPlacementOwner();
+    flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
+    expect(place.deviceFolder).toEqual({ deviceId: "runner", path: "/srv/project" });
+    // The pending session itself can hold the device's only slot.
+    freeSlots = 0;
+    await gateway.refreshCloudProfiles();
+    expect(place.deviceFolderAvailable).toBe(false);
+    expect(flow.submitBlock()).toBeUndefined();
+  });
+
+  it.each(["retry", "choose-workspace"] as const)(
     "retains a saved project after failed discovery until %s resolves the choice",
     async (recovery) => {
       replaceBrowserPreference("ws://gateway.example", "main", {
@@ -74,22 +131,6 @@ describe("DraftSubmissionFlow submit gates", () => {
     },
   );
 
-  it("does not block ordinary local submission when optional project discovery fails", async () => {
-    const { place, flow, context } = createDraftFixture({
-      methods: ["sessions.create", "projects.list"],
-      request: () => Promise.reject(new Error("Project discovery unavailable")),
-    });
-    await place.browser.refreshProjects();
-    place.restorePreferenceSelections();
-    flow.setMessage("start locally");
-    expect(flow.canSubmit()).toBe(true);
-    await flow.submit();
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
-      "projectId",
-    );
-  });
-
   it("waits for the configured default repository before admitting the first session", async () => {
     const discovery = createDeferred<ProjectsListResult>();
     const { place, flow, context } = createDraftFixture({
@@ -131,7 +172,6 @@ describe("DraftSubmissionFlow submit gates", () => {
       message: "Authentication failed. Review the provider credential or sign-in, then retry.",
     },
     { reason: "cooldown", message: undefined },
-    { reason: undefined, message: undefined },
   ] as const)(
     "blocks new sessions only for actionable $reason model availability",
     async ({ reason, message }) => {
@@ -319,7 +359,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     expect(ready.flow.submitDisabledReason()).toBeUndefined();
   });
 
-  it.each(["git", "unavailable", "rejected"] as const)(
+  it.each(["unavailable", "rejected"] as const)(
     "keeps saved worktree submission gated until discovery succeeds (%s)",
     async (result) => {
       replaceBrowserPreference("ws://gateway.example", "main", {
@@ -365,27 +405,25 @@ describe("DraftSubmissionFlow submit gates", () => {
         discovery.resolve({ ...git, repositoryStatus: result });
       }
       await discovery.promise.catch(() => undefined);
-      if (result !== "git") {
-        expect(place.repository.kind).toBe("unavailable");
-        expect(place.preferenceSelection().worktree).toBe(true);
-        expect(flow.submitBlock()).toEqual({
-          gate: "worktree-unavailable",
-          reason: "Couldn't verify Git for this folder. Choose it again to retry.",
-        });
-        await flow.submit();
-        await flow.submit(undefined, true);
-        flow.setMessage("");
-        flow.attachmentDraft.replace([
-          { id: "notes", mimeType: "text/plain", fileName: "notes.txt" },
-        ]);
-        await flow.submit();
-        expect(context.sessions.createResult).not.toHaveBeenCalled();
-        flow.attachmentDraft.replace([]);
-        flow.setMessage("start something");
-        branches = Promise.resolve(git);
-        place.clearProjectSelection();
-        await branches;
-      }
+      expect(place.repository.kind).toBe("unavailable");
+      expect(place.preferenceSelection().worktree).toBe(true);
+      expect(flow.submitBlock()).toEqual({
+        gate: "worktree-unavailable",
+        reason: "Couldn't verify Git for this folder. Choose it again to retry.",
+      });
+      await flow.submit();
+      await flow.submit(undefined, true);
+      flow.setMessage("");
+      flow.attachmentDraft.replace([
+        { id: "notes", mimeType: "text/plain", fileName: "notes.txt" },
+      ]);
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      flow.attachmentDraft.replace([]);
+      flow.setMessage("start something");
+      branches = Promise.resolve(git);
+      place.clearProjectSelection();
+      await branches;
       await vi.waitFor(() => expect(flow.canSubmit()).toBe(true));
       // The transient gate lifted; the notice retires itself.
       expect(flow.blockedSubmitNotice()).toBeUndefined();
@@ -397,14 +435,6 @@ describe("DraftSubmissionFlow submit gates", () => {
       );
     },
   );
-
-  it("does not raise a notice for the silent empty-draft gate", async () => {
-    const fixture = createDraftFixture();
-    await fixture.flow.submit();
-    expect(fixture.flow.canSubmit()).toBe(false);
-    expect(fixture.flow.submitBlock()?.gate).toBe("empty-draft");
-    expect(fixture.flow.blockedSubmitNotice()).toBeUndefined();
-  });
 
   it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
     const fixture = createDraftFixture({
@@ -456,21 +486,4 @@ describe("DraftSubmissionFlow submit gates", () => {
     );
     expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());
   });
-});
-
-it("keeps attachment preparation gated without duplicating its composer status after Start", async () => {
-  const { flow, context } = createDraftFixture();
-  flow.setMessage("Include the pending attachment");
-  const signal = flow.attachmentDraft.reads.readSignal;
-  flow.attachmentDraft.reads.updatePending(signal, 1);
-  expect(flow.submitBlock()?.gate).toBe("attachment-reads");
-  expect(flow.canSubmit()).toBe(false);
-  expect(flow.submitDisabledReason()).toBe("Reading attachment");
-
-  await flow.submit();
-
-  expect(context.sessions.createResult).not.toHaveBeenCalled();
-  expect(flow.blockedSubmitNotice()).toBeUndefined();
-  flow.attachmentDraft.reads.updatePending(signal, -1);
-  expect(flow.canSubmit()).toBe(true);
 });

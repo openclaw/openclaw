@@ -14,9 +14,9 @@ import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-p
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { resolveMainSessionKeyFromConfig } from "../config/sessions/main-session.runtime.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
-import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
+import { peekSystemEventEntries } from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   connectWebchatClient,
@@ -44,7 +44,6 @@ const fixtureLifetime = createFixtureLifetime();
 
 afterEach(async () => {
   await fixtureLifetime.cleanup();
-  drainSystemEvents(resolveMainSessionKeyFromConfig());
   vi.restoreAllMocks();
 });
 

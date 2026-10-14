@@ -11,8 +11,8 @@ import type {
   DevicePairingReadCommand,
 } from "./device-pairing-read.types.js";
 
-async function readPairing(
-  command: DevicePairingReadCommand,
+async function readPairing<Command extends DevicePairingReadCommand>(
+  command: Command,
   baseDir?: string,
   current = false,
   prepareNodes = false,
@@ -30,13 +30,11 @@ async function readPairing(
     }
     let reply;
     try {
-      reply = await executeExistingOpenClawStateRead(
-        selected,
+      const selectedCommand: Command =
         command.type === "devicePairing.list" && !snapshot
           ? { ...command, publishedRevision: publication.completeRevision() }
-          : command,
-        { current },
-      );
+          : command;
+      reply = await executeExistingOpenClawStateRead(selected, selectedCommand, { current });
     } catch (error) {
       if (!snapshot) {
         publication.fail();
@@ -50,13 +48,13 @@ async function readPairing(
     if (!publication.isCurrent()) {
       return undefined;
     }
-    if (reply?.ok && "bindings" in reply) {
+    if (reply && "bindings" in reply) {
       publication.publish(reply.revision, reply.bindings, reply.type === "devicePairing.list");
     } else if (!reply) {
       publication.publish("missing", [], true);
     }
     const preparedNodes =
-      prepareNodes && (!reply || (reply.ok && reply.type === "devicePairing.list"))
+      prepareNodes && (!reply || "list" in reply)
         ? publication.prepareNodes(reply?.revision ?? "missing", reply?.list.paired ?? [])
         : undefined;
     return { reply, nodes: preparedNodes };
@@ -101,9 +99,6 @@ export async function listDevicePairingStoreRecordsReadOnly(baseDir?: string, cu
   if (!reply) {
     return { pending: [], paired: [] };
   }
-  if (!reply.ok || reply.type !== "devicePairing.list") {
-    throw new Error("Unexpected pairing list reply");
-  }
   return reply.list;
 }
 
@@ -118,9 +113,6 @@ export async function loadPairedDevicePairingStoreRecordReadOnly(
   );
   if (!reply) {
     return null;
-  }
-  if (!reply.ok || reply.type !== "devicePairing.lookup") {
-    throw new Error("Unexpected pairing lookup reply");
   }
   return reply.device;
 }
@@ -137,9 +129,6 @@ export async function loadPendingDevicePairingStoreRecordReadOnly(
   if (!reply) {
     return null;
   }
-  if (!reply.ok || reply.type !== "devicePairing.pending") {
-    throw new Error("Unexpected pending pairing reply");
-  }
   return reply.pending;
 }
 
@@ -154,9 +143,6 @@ export async function loadBoundDeviceBootstrapContextReadOnly(
   );
   if (!reply) {
     return null;
-  }
-  if (!reply.ok || reply.type !== "devicePairing.bootstrapContext") {
-    throw new Error("Unexpected bootstrap context reply");
   }
   return reply.context;
 }

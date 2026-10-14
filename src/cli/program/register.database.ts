@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-state-db-contract.js";
@@ -93,8 +93,52 @@ async function runDatabaseOwnership(
 export function registerDatabaseCommand(program: Command): void {
   const database = program
     .command("database")
-    .description("Inspect database schema compatibility and shared-state write ownership")
+    .description("Inspect database compatibility, manage ownership, and port workboard stores")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
+
+  database
+    .command("port")
+    .description("Port all existing workboard stores offline between SQLite and PostgreSQL")
+    .addOption(
+      new Option("--to <postgres|sqlite>", "destination engine").choices(["postgres", "sqlite"]),
+    )
+    .option("--dry-run", "inspect prerequisites without creating port artifacts", false)
+    .option("--json", "emit machine-readable JSON", false)
+    .addOption(
+      new Option("--resume <manifest>", "resume an interrupted port").conflicts([
+        "rollback",
+        "to",
+        "dryRun",
+      ]),
+    )
+    .addOption(
+      new Option(
+        "--rollback <manifest>",
+        "restore an interrupted port's complete original set",
+      ).conflicts(["to", "dryRun"]),
+    )
+    .hook("preAction", (command) => {
+      const { to, resume, rollback } = command.opts();
+      if (!to && !resume && !rollback) {
+        command.error("Specify --to postgres|sqlite, --resume, or --rollback.");
+      }
+    })
+    .action(async (options) => {
+      try {
+        const { doctorDatabasePort } = await import("../../commands/doctor-database-port.js");
+        const result = await doctorDatabasePort(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Database port: ${result.phase} (${result.engine}${"to" in result ? ` → ${result.to}` : ""}); ${result.stores.length} workboard stores.\n${"remainingSqlite" in result ? `${result.remainingSqlite.length} other stores remain on SQLite.\n` : ""}${"backup" in result ? `Original backup: ${result.backup}\n${result.restart}\n` : ""}${"verification" in result ? `${result.verification}\n` : ""}`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
 
   database
     .command("preflight")
@@ -107,7 +151,7 @@ export function registerDatabaseCommand(program: Command): void {
     .command("preflight-agent")
     .description("Compare one copied agent SQLite file with this release's agent schema and owner")
     .argument("<path>", "explicit copied agent SQLite database path")
-    .requiredOption("--agent-id <id>", "exact canonical agent owner ID")
+    .requiredOption("--agent-id <id>", "exact agent owner ID")
     .option("--json", "emit machine-readable JSON", false)
     .action(runDatabasePreflight);
 

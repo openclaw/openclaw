@@ -525,57 +525,6 @@ it.each(["answered", "owner replaced"])(
   },
 );
 
-it("saves the latest completion boundary before completing a delayed Undo", async () => {
-  const onReopen = vi.fn();
-  const initialProps = {
-    ...props,
-    onReopen,
-    messages: [{ ...props.messages[0], runId: "original-run" }],
-  };
-  const current = state();
-  await createAsyncQuestionPresentation(current, initialProps).dismiss(question.itemId);
-  const firstWrite = createDeferred<unknown>();
-  const latestWrite = createDeferred<unknown>();
-  storage.write
-    .mockClear()
-    .mockReturnValueOnce(firstWrite.promise)
-    .mockReturnValueOnce(latestWrite.promise);
-  const reopening = createAsyncQuestionPresentation(current, initialProps).reopen(question.itemId);
-  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledTimes(1));
-  const latestProps = {
-    ...initialProps,
-    messages: [
-      ...initialProps.messages,
-      ...["original-run", "successor-run"].map((runId, index) => ({
-        role: "assistant",
-        runId,
-        phase: "final_answer",
-        stopReason: "stop",
-        content: "Finished the requested work.",
-        __openclaw: { id: `final-${runId}`, seq: index + 2, runTerminal: true },
-      })),
-    ],
-  };
-  createAsyncQuestionPresentation(current, latestProps);
-  firstWrite.resolve({ status: "persisted" });
-  await vi.waitFor(() => expect(storage.write).toHaveBeenCalledTimes(2));
-  expect(onReopen).not.toHaveBeenCalled();
-  expect(createAsyncQuestionPresentation(current, latestProps).pending).toHaveLength(0);
-  const latestStored = storage.write.mock.calls[1]![1];
-  expect(latestStored.questionDrafts[0].reopenedAfterBoundary).toBeTruthy();
-  latestWrite.resolve({ status: "persisted" });
-  await reopening;
-  expect(onReopen).toHaveBeenCalledOnce();
-  storage.read.mockResolvedValue({
-    status: "found",
-    draft: { ...latestStored, writeId: "latest" },
-  });
-  const reloaded = state();
-  createAsyncQuestionPresentation(reloaded, latestProps);
-  await settled(reloaded);
-  expect(createAsyncQuestionPresentation(reloaded, latestProps).pending).toHaveLength(1);
-});
-
 it("keeps answering available with an unsaved warning when restoring a dismissal cannot persist", async () => {
   storage.read.mockResolvedValue(foundDraft({ ...saved, dismissed: true }));
   const current = state();

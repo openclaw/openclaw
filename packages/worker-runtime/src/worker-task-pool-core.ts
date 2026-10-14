@@ -437,7 +437,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       host: this.host,
       bootstrapError: this.bootstrap.error,
       runInContext: runInWorkerPoolContext,
-      unavailableError: (message) => new WorkerTaskError(message, "unavailable"),
+      unavailableError: (message, cause) => new WorkerTaskError(message, "unavailable", { cause }),
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;

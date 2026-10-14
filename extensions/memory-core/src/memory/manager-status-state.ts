@@ -5,6 +5,35 @@ import type {
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "openclaw/plugin-sdk/sqlite-runtime";
+import { buildMemorySourceFilter } from "./source-filter.js";
+
+export type MemoryStatusQuery = {
+  sources: MemorySource[];
+  cacheEnabled: boolean;
+  includeStorage: boolean;
+};
+
+export function collectMemoryStatusSnapshot(
+  db: DatabaseSync | undefined,
+  databasePath: string,
+  query: MemoryStatusQuery,
+) {
+  const filter = buildMemorySourceFilter(undefined, query.sources);
+  const aggregate = collectMemoryStatusAggregate({
+    db,
+    sources: query.sources,
+    sourceFilterSql: filter.sql,
+    sourceFilterParams: filter.params,
+    includeChunkBytes: query.includeStorage,
+  });
+  const storage = query.includeStorage ? collectMemoryStorageStatus(db, databasePath) : undefined;
+  const cacheEntries =
+    storage?.embeddingCacheEntries ??
+    (db && query.cacheEnabled
+      ? Number(db.prepare("SELECT COUNT(*) as c FROM memory_embedding_cache").get()?.c ?? 0)
+      : 0);
+  return { aggregate, storage, cacheEntries };
+}
 
 type StatusProvider = {
   id: string;
@@ -19,7 +48,7 @@ type StatusAggregateRow = {
 };
 
 /** Read only for explicit diagnostics: retained cache payloads can be large even when disabled. */
-export function collectMemoryStorageStatus(
+function collectMemoryStorageStatus(
   db: DatabaseSync | undefined,
   databasePath: string,
 ): NonNullable<MemoryProviderStatus["storage"]> {
@@ -76,7 +105,7 @@ export function resolveStatusProviderInfo(params: {
   };
 }
 
-export function collectMemoryStatusAggregate(params: {
+function collectMemoryStatusAggregate(params: {
   db: Pick<DatabaseSync, "prepare"> | undefined;
   sources: Iterable<MemorySource>;
   sourceFilterSql?: string;

@@ -341,8 +341,16 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 vi.mock("../../logging/diagnostic.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/diagnostic.js")>();
   return {
+    ...actual,
     diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
-    logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
+    logMessageDispatchCompleted: (
+      params: Parameters<typeof actual.logMessageDispatchCompleted>[0],
+    ) => {
+      diagnosticMocks.logMessageDispatchCompleted(params);
+      if (diagnosticMocks.forwardToRealPipeline) {
+        actual.logMessageDispatchCompleted(params);
+      }
+    },
     logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
     logMessageQueued: diagnosticMocks.logMessageQueued,
     logMessageProcessed: (params: Parameters<typeof actual.logMessageProcessed>[0]) => {
@@ -379,6 +387,18 @@ vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
   resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
 }));
+// mock-isolation: Durable fixtures use fake rows; explicitly bound memory actors run real commands.
+vi.mock("../../config/sessions/session-actor-scope.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-actor-scope.js")>();
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
+  return {
+    ...actual,
+    withSessionActor: async (...args: Parameters<typeof actual.withSessionActor>) =>
+      getSessionActorStorageBinding(args[0]) ? actual.withSessionActor(...args) : undefined,
+  };
+});
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker: async (
@@ -396,19 +416,31 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOrig
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
-  const { reduceSessionEntryPatch } =
+  const { projectSessionEntryPatch } =
     await import("../../config/sessions/session-entry-patch-operation.js");
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
   return {
     ...actual,
     applySessionEntryOperation: async (
       ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
     ) => {
+      if (getSessionActorStorageBinding(scope)) {
+        return actual.applySessionEntryOperation(scope, operation, options);
+      }
       let wrote = false;
       const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
         const currentEntry = { sessionId: "", updatedAt: 0, ...entry };
-        const patch = reduceSessionEntryPatch(operation, currentEntry, currentEntry);
-        wrote = patch !== null;
-        return patch;
+        const next = projectSessionEntryPatch({
+          existing: currentEntry,
+          writeBase: currentEntry,
+          sessionKey: scope.sessionKey,
+          operation,
+          replaceEntry: options?.replaceEntry,
+          preserveActivity: options?.preserveActivity,
+        });
+        wrote = next !== undefined;
+        return next ? { ...next } : null;
       });
       const entry = result ? { sessionId: "", updatedAt: 0, ...result } : null;
       if (wrote && entry) {

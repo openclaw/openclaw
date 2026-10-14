@@ -15,8 +15,7 @@ type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
-  /** Exact operational drain generation; recovery may retire only this owner. */
-  drainOwner?: { rescheduleRequested: boolean };
+  rescheduleRequested?: boolean;
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
@@ -301,7 +300,7 @@ export function refreshQueuedFollowupSession(params: {
           catalog: params.nextThinking.catalog,
           agentRuntime: params.nextThinking.agentRuntime,
           level: explicitLevel,
-        }).level;
+        }).requestedLevel;
       }
     }
   };

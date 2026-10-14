@@ -1,6 +1,7 @@
 import type { LitElement } from "lit";
 import { expect, it } from "vitest";
 import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
@@ -167,7 +168,7 @@ suite.define(() => {
           };
         });
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
+        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
         await page.evaluate(() => {
           const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
             host: {
@@ -227,7 +228,7 @@ suite.define(() => {
           .locator(".chat-bubble")
           .getByText("Split seed completed.", { exact: true })
           .waitFor();
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         const left = panes.nth(0);
@@ -362,7 +363,7 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
+        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
         const legacyKey = `openclaw.control.chatComposer.v2:${encodeURIComponent("ws://recovery-fence.test")}`;
         const legacyValue = JSON.stringify({
           version: 2,

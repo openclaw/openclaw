@@ -16,7 +16,6 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import type {
   AgentSessionConfig,
@@ -47,7 +46,7 @@ import {
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
-import { createSessionToolResultPreparer } from "./session-tool-result-redaction.js";
+import { createSessionToolResultPreparer } from "./session-tool-result-preparation.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
 import type { BuildSystemPromptOptions } from "./system-prompt-metadata.js";
@@ -316,7 +315,7 @@ export abstract class AgentSessionBase {
       await this.runWithSessionWriteSettlement(
         async () => await this.handleAgentEventUnlocked(event, prepareToolResult),
       );
-      // Supported callbacks can change the current result or register another secret.
+      // Supported callbacks can replace the current result.
       prepareToolResult();
       return;
     }
@@ -329,6 +328,7 @@ export abstract class AgentSessionBase {
   ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
+      this.turnIndex = 0;
     }
 
     // Retire the exact queued display entry before publishing message_start.
@@ -337,13 +337,15 @@ export abstract class AgentSessionBase {
       retireQueuedUserMessage(event.message);
     }
 
-    const sourceSlots =
-      event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     let messageChanged = false;
-    if (event.type !== "message_update" || this.currentExtensionRunner.hasHandlers(event.type)) {
+    if (this.currentExtensionRunner.hasHandlers(event.type)) {
       messageChanged = await this.emitExtensionEvent(event);
     }
-    // Extensions can replace the final result. Protect listeners before publishing it.
+    // Turn numbering belongs to the session, including turns with no extension listeners.
+    if (event.type === "turn_end") {
+      this.turnIndex++;
+    }
+    // Extensions can replace the final result. Apply the size cap before publishing it.
     messageChanged = prepareToolResult() || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
@@ -367,6 +369,7 @@ export abstract class AgentSessionBase {
           message.content,
           message.display,
           message.details,
+          message.timestamp,
         );
       } else if (
         event.message.role === "user" ||
@@ -389,11 +392,11 @@ export abstract class AgentSessionBase {
               retainedSteeringContext.content,
               retainedSteeringContext.display,
               retainedSteeringContext.details,
+              retainedSteeringContext.timestamp,
             );
           }
           const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
-            sourceAppend: sourceSlots,
           });
           if (event.message.role === "assistant") {
             this.lastAssistantEntryId = entryId;
@@ -452,12 +455,7 @@ export abstract class AgentSessionBase {
   }
 
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
-    if (event.type === "agent_start") {
-      this.turnIndex = 0;
-      await this.currentExtensionRunner.emit({ type: "agent_start" });
-    } else if (event.type === "agent_end") {
-      await this.currentExtensionRunner.emit({ type: "agent_end", messages: event.messages });
-    } else if (event.type === "turn_start") {
+    if (event.type === "turn_start") {
       await this.currentExtensionRunner.emit({
         type: "turn_start",
         turnIndex: this.turnIndex,
@@ -469,18 +467,6 @@ export abstract class AgentSessionBase {
         turnIndex: this.turnIndex,
         message: event.message,
         toolResults: event.toolResults,
-      });
-      this.turnIndex++;
-    } else if (event.type === "message_start") {
-      await this.currentExtensionRunner.emit({
-        type: "message_start",
-        message: event.message,
-      });
-    } else if (event.type === "message_update") {
-      await this.currentExtensionRunner.emit({
-        type: "message_update",
-        message: event.message,
-        assistantMessageEvent: event.assistantMessageEvent,
       });
     } else if (event.type === "message_end") {
       const replacement = await this.currentExtensionRunner.emitMessageEnd({
@@ -514,6 +500,8 @@ export abstract class AgentSessionBase {
         result: event.result,
         isError: event.isError,
       });
+    } else {
+      await this.currentExtensionRunner.emit({ ...event });
     }
     return false;
   }

@@ -14,8 +14,8 @@ import {
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.sqlite-pending-input-receipts.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "../../config/sessions/session-pending-input-receipts.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -212,13 +212,15 @@ describe("queued chat input withdrawal", () => {
           } else {
             expect(page.items[0]?.message).toMatchObject({ content: fixture.approvedContent });
           }
-          expect(listSessionPendingInputReceipts(fixture.scope, { runIds: [runId] })).toEqual([
-            {
-              runId,
-              state: "pending",
-              ...(disposition === "cancelled" ? { cancelled: true } : {}),
-            },
-          ]);
+          expect(await listSessionPendingInputReceipts(fixture.scope, { runIds: [runId] })).toEqual(
+            [
+              {
+                runId,
+                state: "pending",
+                ...(disposition === "cancelled" ? { cancelled: true } : {}),
+              },
+            ],
+          );
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
         } else {
           expect(JSON.stringify(loadTranscriptEventsSync(fixture.scope))).toContain(

@@ -33,7 +33,6 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
-import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import type {
@@ -270,10 +269,7 @@ export function createModelAuthAvailabilityResolver(
   };
   // Refresh authority follows exact profiles marked by the external-auth
   // lifecycle. Provider-wide authority could bless an unrelated stale profile.
-  const externalCliRefreshProfileIds = new Set([
-    ...external.map((profile) => profile.profileId),
-    ...getRuntimeExternalCliProfileIds(runtimeStore ?? store),
-  ]);
+  const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
   const readOnlyAuthConfig = params.cfg;
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider);
@@ -473,18 +469,14 @@ export function createModelAuthAvailabilityResolver(
   const hasProfileEvidence = (provider: string) => {
     const normalized = normalizeProvider(provider);
     const configuredOrder = findNormalizedProviderValue(params.cfg.auth?.order, normalized);
-    if (configuredOrder !== undefined) {
-      return true;
-    }
-    if (
+    return (
+      configuredOrder !== undefined ||
       Object.values(params.cfg.auth?.profiles ?? {}).some(
         (profile) => normalizeProvider(profile.provider) === normalized,
+      ) ||
+      Object.keys(store.profiles).some((profileId) =>
+        hasMatchingProfileEvidence(normalized, profileId),
       )
-    ) {
-      return true;
-    }
-    return Object.keys(store.profiles).some((profileId) =>
-      hasMatchingProfileEvidence(normalized, profileId),
     );
   };
   const firstProfileEvidenceId = (provider: string): string | undefined => {
@@ -697,6 +689,17 @@ export function createModelAuthAvailabilityResolver(
           target,
         )
       : { availability: false, unavailableReason: "auth-failed" };
+  const rejectedProfileEvaluation = (
+    decision: Extract<ReturnType<typeof selectProviderModelAuthSources>, { kind: "rejected" }>,
+    plan: ProviderModelAuthSourcePlan,
+    target: AuthTarget,
+  ): AuthSourceEvaluation => ({
+    ...rejectedSourceEvaluation(decision.reason, plan, target),
+    ...(decision.source
+      ? { selectedProfileId: decision.source.profileId, selectedAuthMode: decision.source.mode }
+      : {}),
+    evidence: "profile",
+  });
   const sourceEvaluation = (
     selection: ProviderModelAuthSourceSelection,
     provider: string,
@@ -836,16 +839,7 @@ export function createModelAuthAvailabilityResolver(
     const plan = sourcePlanForTarget(provider, ref, policy, orderResolution, () => target);
     const decision = selectProviderModelAuthSources({ provider, plan });
     return decision.kind === "rejected"
-      ? {
-          ...rejectedSourceEvaluation(decision.reason, plan, target),
-          evidence: "profile",
-          ...(decision.source
-            ? {
-                selectedAuthMode: decision.source.mode,
-                selectedProfileId: decision.source.profileId,
-              }
-            : {}),
-        }
+      ? rejectedProfileEvaluation(decision, plan, target)
       : undefined;
   };
   const resolveProviderEvaluation = (
@@ -871,16 +865,7 @@ export function createModelAuthAvailabilityResolver(
     });
     const decision = selectProviderModelAuthSources({ provider, plan: sourcePlan });
     if (decision.kind === "rejected") {
-      return {
-        ...rejectedSourceEvaluation(decision.reason, sourcePlan, target),
-        ...(decision.source
-          ? {
-              selectedProfileId: decision.source.profileId,
-              selectedAuthMode: decision.source.mode,
-            }
-          : {}),
-        evidence: "profile",
-      };
+      return rejectedProfileEvaluation(decision, sourcePlan, target);
     }
     return sourceEvaluation(decision.selection, provider, target, policy.evaluation);
   };

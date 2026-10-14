@@ -39,12 +39,12 @@ import type {
   SessionEventSource,
   SessionEventTarget,
 } from "./session-event-contract.js";
+import { narrowSessionEventSettings } from "./session-event-policy.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
-  narrowSessionEventSettings,
   prepareSessionEventTargetForHost,
   readSessionEventTargetEnvironment,
   resolveSessionEventKey,

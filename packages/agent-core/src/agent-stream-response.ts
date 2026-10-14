@@ -72,7 +72,11 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
   if (message.stopReason === "toolUse") {
     return message;
   }
-  const content = message.content.filter((item) => item.type !== "toolCall" || item.async);
+  const failed = message.stopReason === "aborted" || message.stopReason === "error";
+  // Executed async calls already own earlier fragments; a failed tail cannot admit another call.
+  const content = message.content.filter(
+    (item) => item.type !== "toolCall" || (!failed && item.async),
+  );
   return content.length === message.content.length
     ? message
     : replaceCompactionReplayOwnerContent(message, content);
@@ -352,9 +356,14 @@ export async function streamAgentResponse(
                 ) {
                   const prefix = prepareAssistantMessage(
                     ensureToolTurnIdentity({
-                      ...replaceCompactionReplayOwnerContent(
-                        message,
-                        message.content.slice(committedContentCount, event.contentIndex + 1),
+                      // Persistence takes ownership and freezes nested values. Detach the
+                      // completed prefix from the provider's still-mutable stream, after
+                      // replay checkpoints have been reindexed using original block identity.
+                      ...structuredClone(
+                        replaceCompactionReplayOwnerContent(
+                          message,
+                          message.content.slice(committedContentCount, event.contentIndex + 1),
+                        ),
                       ),
                       ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
                       stopReason: "toolUse",

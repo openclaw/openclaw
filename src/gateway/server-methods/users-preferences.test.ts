@@ -3,6 +3,7 @@ import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -11,8 +12,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import * as preferences from "../../state/user-preferences.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
@@ -225,9 +228,13 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
       layout: "state-only",
       prefix: "users-self-read-",
     });
+    setRuntimeConfigSnapshot({});
+    let releaseProfiles: (() => void) | undefined;
     try {
+      setRuntimeConfigSnapshot({});
       const owner = ensureProfileForEmail("self-reader@example.test");
       const replacement = ensureProfileForEmail("other-reader@example.test");
+      releaseProfiles = (await prepareUserProfileCatalog()).release;
       const client = createOperatorWsClient({
         connId: "self-reader",
         scopes: [change === "staff" ? "operator.read" : "operator.sessions.read"],
@@ -312,6 +319,7 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
         }
       }
     } finally {
+      releaseProfiles?.();
       await state.cleanup();
     }
   },
@@ -322,8 +330,12 @@ test("users.prefs.get retains its original scope across the preference read", as
     layout: "state-only",
     prefix: "users-prefs-read-",
   });
+  setRuntimeConfigSnapshot({});
+  let releaseProfiles: (() => void) | undefined;
   try {
+    setRuntimeConfigSnapshot({});
     const owner = ensureProfileForEmail("retained-preferences@example.test");
+    releaseProfiles = (await prepareUserProfileCatalog()).release;
     await invokePreferenceMethod("users.prefs.set", { entries: { "ui.theme": "dark" } }, owner.id);
     const client = createOperatorWsClient({
       connId: "preference-reader",
@@ -377,6 +389,7 @@ test("users.prefs.get retains its original scope across the preference read", as
     );
     expect(await original(owner.id)).toMatchObject({ entries: { "ui.theme": "dark" } });
   } finally {
+    releaseProfiles?.();
     await state.cleanup();
   }
 });
@@ -441,11 +454,12 @@ test("users.prefs returns a typed result without a durable identity", async () =
   expect(context.broadcastToConnIds).not.toHaveBeenCalled();
 });
 
-test("users.prefs.set notifies only connections belonging to the same merged profile", async () => {
+test("users.prefs.set notifies only the current merged profile without main-thread profile reads", async () => {
   const state = await createOpenClawTestState({
     layout: "state-only",
     prefix: "users-prefs-events-",
   });
+  let releaseProfiles: (() => void) | undefined;
   try {
     const retired = ensureProfileForEmail("retired@example.test");
     const owner = ensureProfileForEmail("owner@example.test");
@@ -454,6 +468,7 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
     for (const profile of [retired, owner, other]) {
       expect(setAvatar(profile.id, avatar, "image/png").ok).toBe(true);
     }
+    releaseProfiles = (await prepareUserProfileCatalog()).release;
     linkEmail("retired@example.test", owner.id);
 
     const peers = [
@@ -490,7 +505,7 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
 
     // Measure recipient selection on this handle; the preference worker has its own connection.
     const reads = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase().db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
       ["profiles"],
       (sql) =>
         /^select\b/i.test(sql) && /\bfrom "user_profiles"(?:\s|$)/i.test(sql) ? "profiles" : null,
@@ -521,12 +536,13 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
           expect(peer.frames).toEqual([]);
         }
       }
-      expect(reads.rowCounts.profiles).toBeGreaterThan(0);
+      expect(reads.counts.profiles).toBe(0);
       expect.soft(reads.blobBytes.profiles).toBe(0);
     } finally {
       reads.restore();
     }
   } finally {
+    releaseProfiles?.();
     await state.cleanup();
   }
 });
@@ -573,9 +589,11 @@ test("users.prefs.set compares canonical preferences atomically and publishes on
     layout: "state-only",
     prefix: "users-prefs-conditional-",
   });
+  let releaseProfiles: (() => void) | undefined;
   try {
     const retired = ensureProfileForEmail("conditional-retired@example.test");
     const owner = ensureProfileForEmail("conditional-owner@example.test");
+    releaseProfiles = (await prepareUserProfileCatalog()).release;
     const original = {
       selection: { folder: "/new", model: "new", nested: [1, { a: 2, b: 3 }] },
       removed: true,
@@ -632,6 +650,7 @@ test("users.prefs.set compares canonical preferences atomically and publishes on
       payload: { status: "ok", entries: { selection: original.selection, inserted: true } },
     });
   } finally {
+    releaseProfiles?.();
     await state.cleanup();
   }
 });

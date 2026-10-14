@@ -134,7 +134,7 @@ sessions do not passively receive session content
   for each recipient, including in hello snapshots and `system-presence` replies.
 - Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
-- Unknown broadcast event families are scope-gated by default (fail-closed)
+- Unknown broadcast event families are blocked unless the caller has the required scope
   unless a registered handler explicitly relaxes them.
 
 Each client connection keeps its own per-client sequence number, so broadcasts

@@ -19,9 +19,11 @@ import {
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyExpectation } from "../../agents/reply-completion.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
@@ -122,6 +124,10 @@ export async function handleAgentExecutionError(params: {
     if (!reason) {
       return undefined;
     }
+    if (reason === "restart") {
+      // Backend-owned drain aborts must retain reply recovery custody through cleanup.
+      turn.replyOperation?.abortForRestart();
+    }
     if (isCliPartialOutputRejected(abortError)) {
       turn.replyOperation?.fail("run_failed", abortError);
     }
@@ -146,6 +152,18 @@ export async function handleAgentExecutionError(params: {
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
+  }
+  if (isChannelRunAuthorizationError(err)) {
+    if (isChannelRunAuthorizationError(err, "unavailable")) {
+      return settleFailure({
+        text: "⚠️ OpenClaw could not verify current channel access. Please try your request again.",
+      });
+    }
+    takePendingLifecycleTerminal().emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    defaultRuntime.log("Channel request dropped: source authorization is no longer current.");
+    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
   }
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {

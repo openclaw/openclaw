@@ -26,7 +26,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { stop } from "./ops-lifecycle.js";
-import { runMissedJobs } from "./timer-catchup.js";
+import { runMissedJobs } from "./timer.test-support.js";
 
 function stallCronHostCallbacks() {
   const submitted = createDeferred();
@@ -36,11 +36,11 @@ function stallCronHostCallbacks() {
   const restores: Array<() => void> = [];
   let stalling = true;
   const mutationTypes = new Set([
-    "cron.planStartup",
-    "cron.reserveRuns",
-    "cron.activateRun",
+    "cron.schedulerStart",
+    "cron.requestRuns",
+    "cron.drainQueue",
     "cron.finalizeRuns",
-    "cron.releaseReservations",
+    "cron.cancelRequests",
   ]);
   const createWorker = workerCpu.createCpuTrackedWorker;
   const workers = vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {

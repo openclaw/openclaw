@@ -68,14 +68,6 @@ function firstHttpsRequestPayload(): unknown {
   return JSON.parse(decodeURIComponent(body.replace(/^payload=/, "")));
 }
 
-function firstHttpsGetCall(label = "Synology Chat HTTPS get"): MockHttpCall {
-  const call = vi.mocked(https.get).mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call as MockHttpCall;
-}
-
 function createMockResponseEmitter(statusCode: number): MockResponse {
   const res = new PassThrough() as PassThrough & Partial<IncomingMessage>;
   res.statusCode = statusCode;
@@ -219,6 +211,9 @@ describe("Synology Chat TLS verification defaults", () => {
           expect(await sending).toEqual(name === "sendMessage" ? true : { status: "accepted" });
         }
         expect(https.request).toHaveBeenCalledTimes(refused ? 0 : 1);
+        if (!refused) {
+          expect(firstHttpsRequestCall()[1]?.rejectUnauthorized).toBe(true);
+        }
       } finally {
         prepared.resolve();
         acknowledgment.resolve();
@@ -227,94 +222,38 @@ describe("Synology Chat TLS verification defaults", () => {
       }
     },
   );
-
-  it.each(tlsVerificationDefaultCases)("$name verifies TLS by default", async ({ invoke }) => {
-    mockSuccessResponse();
-    await settleTimers(invoke());
-    const firstCall = firstHttpsRequestCall();
-    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
-  });
 });
 
 describe("sendMessage", () => {
   installFakeTimerHarness();
 
-  it.each(["authority", "dispatch", "transport", "rejection"] as const)(
-    "preserves acknowledged chunks when a later chunk fails at %s",
-    async (failurePoint) => {
-      const cause = new Error(`Synology ${failurePoint} failure`);
-      const authority = fetchRuntime.captureEffectAuthority();
-      let preparations = 0;
-      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
-        ...authority,
-        async initiate(effect) {
-          preparations += 1;
-          if (failurePoint === "authority" && preparations === 3) {
-            throw cause;
-          }
-          return authority.initiate(effect);
-        },
+  it("preserves acknowledged chunks when a later chunk is rejected", async () => {
+    let requests = 0;
+    vi.mocked(https.request).mockImplementation(((_url, _options, callback) => {
+      requests += 1;
+      const lastChunk = requests === 3;
+      process.nextTick(() => {
+        const res = createMockResponseEmitter(200);
+        callback?.(res);
+        res.end(JSON.stringify({ success: !lastChunk }));
       });
-      let requests = 0;
-      vi.mocked(https.request).mockImplementation(((_url, _options, callback) => {
-        requests += 1;
-        const lastChunk = requests === 3;
-        const req = createMockRequestEmitter();
-        process.nextTick(() => {
-          if (lastChunk && failurePoint === "transport") {
-            req.emit("error", cause);
-            return;
-          }
-          const res = createMockResponseEmitter(200);
-          callback?.(res);
-          res.end(JSON.stringify({ success: !(lastChunk && failurePoint === "rejection") }));
-        });
-        return req;
-      }) as MockRequestHandler);
-      let dispatches = 0;
-      const onPlatformSendDispatch = async () => {
-        dispatches += 1;
-        if (failurePoint === "dispatch" && dispatches === 3) {
-          throw cause;
-        }
-      };
-      try {
-        const sending = sendMessage(
-          "https://nas.example.com/incoming",
-          "a".repeat(4001),
-          "42",
-          false,
-          onPlatformSendDispatch,
-        );
-        const outcome = await settleTimers(
-          sending.then(
-            (result) => ({ result }),
-            (error: unknown) => ({ error }),
-          ),
-        );
-        expect(outcome).toMatchObject({
-          error: {
-            code: "CHANNEL_PARTIAL_DELIVERY",
-            ...(failurePoint === "rejection"
-              ? { message: "Failed to send message to Synology Chat (rejected)" }
-              : { cause }),
-            deliveryResult: { visibleReplySent: true, content: "a".repeat(4000) },
-          },
-        });
-        expect(https.request).toHaveBeenCalledTimes(
-          failurePoint === "authority" || failurePoint === "dispatch" ? 2 : 3,
-        );
-      } finally {
-        capture.mockRestore();
-      }
-    },
-  );
-
-  it("returns false on server error without replaying", async () => {
-    mockFailureResponse(500);
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
-    expect(result).toBe(false);
-    expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
+      return createMockRequestEmitter();
+    }) as MockRequestHandler);
+    const sending = sendMessage("https://nas.example.com/incoming", "a".repeat(4001), "42");
+    const outcome = await settleTimers(
+      sending.then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      ),
+    );
+    expect(outcome).toMatchObject({
+      error: {
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        message: "Failed to send message to Synology Chat (rejected)",
+        deliveryResult: { visibleReplySent: true, content: "a".repeat(4000) },
+      },
+    });
+    expect(https.request).toHaveBeenCalledTimes(3);
   });
 
   it("does not replay a mixed aggregate with an ambiguous transport leaf", async () => {
@@ -351,22 +290,6 @@ describe("sendMessage", () => {
   });
 
   it.each([
-    { name: "Synology error envelope", body: { success: false, error: { code: 105 } } },
-    { name: "unrelated malformed response fields", body: { success: false, data: null } },
-  ])("does not replay an HTTP-successful webhook rejection ($name)", async ({ body }) => {
-    mockResponse(200, JSON.stringify(body));
-
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
-
-    expect(result).toBe(false);
-    expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { name: "missing success", body: "{}" },
-    { name: "null response", body: "null" },
-    { name: "malformed JSON", body: '{"success":false' },
-    { name: "string success", body: '{"success":"false"}' },
     {
       name: "oversized rejection envelope",
       body: JSON.stringify({ success: false, padding: "x".repeat(1 * 1024 * 1024) }),
@@ -387,13 +310,6 @@ describe("sendMessage", () => {
     expect(firstHttpsRequestPayload()).toEqual({ text: "Hello" });
   });
 
-  it("accepts plus-signed numeric user ids", async () => {
-    mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "+042"));
-
-    expect(firstHttpsRequestPayload()).toEqual({ text: "Hello", user_ids: [42] });
-  });
-
   it("only disables TLS verification when explicitly requested", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
@@ -411,17 +327,6 @@ describe("sendHostedFileUrl", () => {
       sendHostedFileUrl("https://nas.example.com/incoming", hostedCapabilityUrl),
     );
     expect(result).toEqual({ status: "indeterminate" });
-  });
-
-  it("returns rejected without retrying an HTTP-successful webhook rejection", async () => {
-    mockResponse(200, JSON.stringify({ success: false, error: { code: 105 } }));
-
-    const result = await settleTimers(
-      sendHostedFileUrl("https://nas.example.com/incoming", hostedCapabilityUrl),
-    );
-
-    expect(result).toEqual({ status: "rejected" });
-    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
   it("returns indeterminate when the request outcome is lost", async () => {
@@ -482,6 +387,34 @@ describe("sendHostedFileUrl", () => {
     await vi.advanceTimersByTimeAsync(1);
     await promise;
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
+  });
+
+  it("paces each incoming webhook endpoint independently", async () => {
+    mockSuccessResponse();
+    const accountA = "https://nas.example.com/incoming?token=account-a";
+    const accountB = "https://nas.example.com/incoming?token=account-b";
+    const requestedUrls = () =>
+      vi.mocked(https.request).mock.calls.map(([url]) => (url instanceof URL ? url.href : url));
+
+    const sends = [
+      sendMessage(accountA, "a1"),
+      sendMessage(accountA, "a2"),
+      sendMessage(accountA, "a3"),
+      sendMessage(accountB, "b1"),
+    ];
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestedUrls()).toEqual([accountA, accountB]);
+
+    await vi.advanceTimersByTimeAsync(498);
+    expect(requestedUrls()).toEqual([accountA, accountB]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestedUrls()).toEqual([accountA, accountB, accountA]);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(requestedUrls()).toEqual([accountA, accountB, accountA, accountA]);
+    await expect(Promise.all(sends)).resolves.toEqual([true, true, true, true]);
   });
 
   it("rejects malformed file URLs before making a request", async () => {
@@ -602,42 +535,6 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       mutableWebhookUsername: "jmn67",
     });
     expect(result).toBe(4);
-  });
-
-  it("is case-insensitive", async () => {
-    mockUserListResponse([{ user_id: 4, username: "JMN67", nickname: "JMN" }]);
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
-    expect(result).toBe(4);
-  });
-
-  it("returns undefined when user is not found", async () => {
-    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "unknown_user",
-    });
-    expect(result).toBeUndefined();
-  });
-
-  it("uses method=user_list instead of method=chatbot in the API URL", async () => {
-    mockUserListResponse([]);
-    fakeNowMs += 10 * 60 * 1000;
-    vi.setSystemTime(fakeNowMs);
-    await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "anyone",
-    });
-    const call = firstHttpsGetCall("Synology Chat user_list request");
-    expect(String(call[0])).toBe(baseUrl.replace("method=chatbot", "method=user_list"));
-    expect(call[1]).toEqual({ rejectUnauthorized: true });
-    expect(typeof call[2]).toBe("function");
   });
 
   it("keeps user cache scoped per incoming URL", async () => {

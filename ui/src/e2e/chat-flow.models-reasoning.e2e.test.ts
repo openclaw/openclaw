@@ -822,6 +822,7 @@ suite.define(() => {
     const sessionKey = "agent:main:session-a";
     const session = {
       key: sessionKey,
+      sessionId: `session:${sessionKey}`,
       kind: "direct",
       label: "Session A",
       model: "gpt-5.6-sol",
@@ -868,16 +869,21 @@ suite.define(() => {
       }
       await expectRequestCountStable(gateway, "sessions.patch", 0);
 
-      await gateway.setMethodResponse(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
-      );
+      await gateway.deferNext("sessions.patch");
       await thinkingSlider.evaluate((input) => {
         input.dispatchEvent(new Event("change", { bubbles: true }));
       });
       const thinkingPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(thinkingPatch.params)).toMatchObject({
         key: sessionKey,
+        thinkingLevel: "ultra",
+      });
+      await gateway.setSessionsListResponse(
+        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
+      );
+      await gateway.resolveDeferred("sessions.patch");
+      expect(await gateway.getSessionRow(sessionKey)).toMatchObject({
+        sessionId: session.sessionId,
         thinkingLevel: "ultra",
       });
       await expect.poll(() => effortPicker.getAttribute("data-chat-thinking-value")).toBe("ultra");

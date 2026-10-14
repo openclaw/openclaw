@@ -32,6 +32,7 @@ export function resolveGatewayWsBrowserOrigin(
     requestHost: params.requestHost,
     origin: params.origin,
     isLocalClient: params.isLocalClient,
+    remoteControlUiIngress: params.remoteControlUiIngress,
   };
 }
 

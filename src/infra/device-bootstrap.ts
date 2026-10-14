@@ -7,6 +7,8 @@ import {
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
 import type {
   CloudWorkerSetupMutationAdmission,
@@ -16,8 +18,10 @@ import { loadBoundDeviceBootstrapContextReadOnly } from "./device-pairing-store-
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
+  onDevicePairSetupChange,
 } from "./device-pairing-worker.js";
 import type { DeviceBootstrapTokenRecord, PairedDevice } from "./device-pairing.types.js";
+import type { GatewaySchedulerScope } from "./gateway-scheduler.js";
 import { createAsyncLock } from "./pairing-files.js";
 
 const withLock = createAsyncLock();
@@ -239,16 +243,114 @@ export async function verifyDeviceBootstrapToken(
   });
 }
 
+let setupExpiryObservation:
+  | {
+      path: string;
+      dirty: boolean;
+      result: DeviceBootstrapOperations["bootstrap.prune"]["output"];
+    }
+  | undefined;
+registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind !== "opened") {
+    setupExpiryObservation = undefined;
+  }
+});
+onDevicePairSetupChange((path) => {
+  if (setupExpiryObservation?.path === path) {
+    setupExpiryObservation.dirty = true;
+  }
+});
+
 /** Remove retained setup outcomes independently of status requests or later pairings. */
-export async function pruneExpiredDevicePairSetupCompletions(
+async function pruneExpiredDevicePairSetupCompletions(
   params: { nowMs?: number; baseDir?: string } = {},
 ): Promise<number> {
-  return await withLock(() =>
-    executeDevicePairingMutation(
-      { type: "bootstrap.prune", input: { nowMs: params.nowMs ?? Date.now() } },
-      { baseDir: params.baseDir },
-    ),
+  return await withLock(async () => {
+    const nowMs = params.nowMs ?? Date.now();
+    const context = captureOpenClawStateWorkerContext(
+      params.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.baseDir } } : {},
+    );
+    const path = context.admission.databasePath;
+    const retained = setupExpiryObservation?.path === path ? setupExpiryObservation : undefined;
+    if (
+      retained &&
+      !retained.dirty &&
+      (retained.result.nextExpiryAtMs === null || nowMs < retained.result.nextExpiryAtMs)
+    ) {
+      return 0;
+    }
+    const observation: NonNullable<typeof setupExpiryObservation> = {
+      path,
+      dirty: false,
+      result: { removed: 0, nextExpiryAtMs: null },
+    };
+    setupExpiryObservation = observation;
+    try {
+      const result = await executeDevicePairingMutation(
+        { type: "bootstrap.prune", input: { nowMs } },
+        { context },
+      );
+      // A receipt received during the read remains dirty for the next pass.
+      observation.result = result;
+      return result.removed;
+    } catch (error) {
+      observation.dirty = true;
+      throw error;
+    }
+  });
+}
+
+/** Rebuild retained deadlines at startup, then wake only for setup writes or expiry. */
+export function startDevicePairSetupMaintenance(params: {
+  scheduler: GatewaySchedulerScope;
+  onError: (error: unknown) => void;
+}): void {
+  const { scheduler } = params;
+  if (scheduler.signal.aborted) {
+    return;
+  }
+  setupExpiryObservation = undefined;
+  let running = false;
+  const schedule = (atMs: number) => {
+    if (!scheduler.signal.aborted) {
+      scheduler.schedule({ id: "maintenance:device-pair-setup", atMs, mode: "earliest", run });
+    }
+  };
+  const run = async () => {
+    if (running) {
+      return;
+    }
+    running = true;
+    try {
+      await pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() });
+      const observation = setupExpiryObservation;
+      if (!observation || observation.dirty) {
+        schedule(scheduler.now());
+      } else if (observation.result.nextExpiryAtMs !== null) {
+        schedule(observation.result.nextExpiryAtMs);
+      }
+    } catch (error) {
+      params.onError(error);
+      schedule(scheduler.now() + 60_000);
+    } finally {
+      running = false;
+    }
+  };
+  const unsubscribe = onDevicePairSetupChange(() => schedule(scheduler.now()));
+  const unsubscribeLifecycle = registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind !== "opened") {
+      schedule(scheduler.now());
+    }
+  });
+  scheduler.signal.addEventListener(
+    "abort",
+    () => {
+      unsubscribe();
+      unsubscribeLifecycle();
+    },
+    { once: true },
   );
+  schedule(scheduler.now());
 }
 
 /** Read already-bound context only after verifying the same credential and identity. */

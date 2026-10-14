@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -21,14 +20,13 @@ import type {
   GatewayRestartHandoffSource,
   GatewayRestartHandoffSupervisorMode,
 } from "./restart-lifecycle.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
-import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
 
 export type { GatewayRestartHandoff } from "./restart-lifecycle.types.js";
-export { prepareOpenClawStateWorkerRuntime as prepareGatewayRestartHandoffRuntime } from "../state/openclaw-state-worker-store.js";
 
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
@@ -227,7 +225,7 @@ function normalizeGatewayRestartHandoffRow(
 }
 
 function selectGatewayRestartHandoffRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): GatewayRestartHandoffRow | undefined {
   const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
   return executeSqliteQueryTakeFirstSync(
@@ -278,7 +276,6 @@ export async function writeGatewayRestartHandoff(
     restartTrace?: GatewayRestartHandoff["restartTrace"];
     ttlMs?: number;
     createdAt?: number;
-    runtimePreparation?: SqliteWorkerRuntimePreparation;
   },
   assertCurrent?: () => void,
 ): Promise<GatewayRestartHandoff | null> {
@@ -320,7 +317,6 @@ export async function writeGatewayRestartHandoff(
       context,
       (scope) => scope.execute({ type: "restartLifecycle.writeHandoff", input: payload }),
       {
-        runtimePreparation: opts.runtimePreparation,
         assertCurrent: check,
         createAdmission: () => {
           admission = createSqliteWorkerOperationAdmission((_request, grant) => {

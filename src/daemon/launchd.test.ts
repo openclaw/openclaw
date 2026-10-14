@@ -550,9 +550,9 @@ describe("launchd bootstrap repair", () => {
     ]
   >([
     [
-      "already running",
-      "Service already loaded",
-      130,
+      "operation already in progress with loaded job",
+      "Bootstrap failed: 37: Operation already in progress",
+      37,
       "exit",
       true,
       "",
@@ -600,9 +600,9 @@ describe("launchd bootstrap repair", () => {
       },
     ],
     [
-      "failed kickstart",
-      "Service already loaded",
-      130,
+      "failed kickstart after operation already in progress",
+      "Bootstrap failed: 37: Operation already in progress",
+      37,
       "exit",
       false,
       "launchctl kickstart failed: permission denied",

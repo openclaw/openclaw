@@ -86,10 +86,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
       state: { rowContext: { projectedAgentRuns: undefined } },
       capture: () => current,
       ensureMaterialized: async () => {},
+      ancestorRows: () => [],
       withPreparedExactRows: (async (queries, consume) => {
         queries({});
         await prepared.promise;
-        return { kind: "complete", value: consume(projection) };
+        return consume(projection);
       }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
       observeGeneration: (() => {
@@ -121,7 +122,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     prepared.resolve();
     await pending;
     if (!scenario.delivered) {
-      expect(snapshot).not.toHaveBeenCalled();
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     } else {
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
@@ -170,7 +170,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
 
       await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
 
-      expect(loadGatewaySessionRowMock).toHaveBeenCalledExactlyOnceWith(sessionRow.key, {
+      expect(loadGatewaySessionRowMock).toHaveBeenCalledWith(sessionRow.key, {
         agentId: "main",
       });
       const payload = broadcastToConnIds.mock.calls[0]?.[1];

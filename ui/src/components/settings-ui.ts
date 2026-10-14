@@ -6,8 +6,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { live } from "lit/directives/live.js";
 import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
-import { t } from "../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import {
   nextSettingsRadioName,
@@ -21,17 +19,6 @@ import {
   type SettingsSegmentedProps,
   type SettingsToggleControl,
 } from "./settings-controls.ts";
-import "./tooltip.ts";
-
-type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
-
-const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
-  accent: "oc-status-info",
-  danger: "oc-status-error",
-  muted: "",
-  ok: "oc-status-success",
-  warn: "oc-status-warning",
-};
 
 type SettingsRowControl = TemplateResult | typeof nothing;
 
@@ -39,15 +26,13 @@ type SettingsRowProps = {
   title: unknown;
   description?: unknown;
   control?: SettingsRowControl;
-  /** Opts this row into the shared Carapace settings contract. */
-  carapace?: boolean;
   /** Full-width control below the text (textareas, segmented sets that wrap). */
   stacked?: boolean;
   /** Full-width control below the text through the narrow-layout breakpoint. */
   stackedOnNarrow?: boolean;
 };
 
-export type SettingsSectionProps = {
+type SettingsSectionProps = {
   title?: unknown;
   description?: unknown;
   /** Right-aligned inline actions next to the heading (e.g. an Add button). */
@@ -56,19 +41,9 @@ export type SettingsSectionProps = {
   notice?: TemplateResult | typeof nothing;
   count?: number;
   danger?: boolean;
-  /** Opts this section into the shared Carapace settings contract. */
-  carapace?: boolean;
 };
 
-type SettingsHelpTriggerProps = {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon: "question" | "info";
-  popoverId: string;
-};
-
-export type SettingsPageHeaderProps = {
+type SettingsPageHeaderProps = {
   title: unknown;
   subtitle?: unknown;
   actions?: TemplateResult | typeof nothing;
@@ -76,55 +51,15 @@ export type SettingsPageHeaderProps = {
 
 export function renderSettingsPage(
   children: unknown,
-  options: { wide?: boolean; carapace?: boolean } = {},
+  options: { wide?: boolean } = {},
 ): TemplateResult {
-  const className = [
-    "settings-page",
-    options.wide ? "settings-page--wide" : "",
-    options.carapace ? "oc-app-surface" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const className = options.wide ? "settings-page settings-page--wide" : "settings-page";
   return html`<div
     class=${className}
     ${shellLayoutTraits({ settingsPage: true, settingsWide: options.wide })}
   >
     ${children}
   </div>`;
-}
-
-export function renderDocsLink(url: string, label: unknown): TemplateResult {
-  return html`<a href=${url} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
-    >${label}</a
-  >`;
-}
-
-export function renderSettingsHelpTrigger(props: SettingsHelpTriggerProps): TemplateResult {
-  const helpIcon = props.icon === "info" ? icons.info : icons.circleQuestionMark;
-  return html`
-    <openclaw-tooltip .content=${props.tooltip}>
-      <button
-        id=${props.id}
-        type="button"
-        class="settings-section__help-button"
-        aria-label=${props.label}
-        aria-controls=${props.popoverId}
-        aria-haspopup="dialog"
-      >
-        <span aria-hidden="true">${helpIcon}</span>
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
-export function renderLearnMoreLink(url: string): TemplateResult {
-  return html`<a
-    class="learn-more-link"
-    href=${url}
-    target=${EXTERNAL_LINK_TARGET}
-    rel=${buildExternalLinkRel()}
-    >${t("common.learnMore")}</a
-  >`;
 }
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
@@ -153,17 +88,11 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
   const copy =
     props.title || props.description
       ? html`
-          <div
-            class="settings-section__copy ${props.carapace ? "oc-settings-section-heading" : ""}"
-          >
+          <div class="settings-section__copy">
             ${
               props.title
                 ? html`
-                    <h2
-                      class="settings-section__heading ${
-                        props.carapace ? "oc-settings-section-title" : ""
-                      }"
-                    >
+                    <h2 class="settings-section__heading">
                       ${props.title}${
                         props.count !== undefined
                           ? html` <span class="settings-count">${props.count}</span>`
@@ -180,9 +109,7 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
   const header =
     copy || props.actions
       ? html`
-          <div
-            class="settings-section__header ${props.carapace ? "oc-settings-section-header" : ""}"
-          >
+          <div class="settings-section__header">
             ${copy}
             ${
               props.actions
@@ -193,49 +120,23 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
         `
       : nothing;
   return html`
-    <section class="settings-section ${props.carapace ? "oc-settings-section" : ""}">
+    <section class="settings-section">
       ${header} ${props.notice ?? nothing} ${renderSettingsGroup(rows, props)}
     </section>
   `;
 }
 
-export function renderSettingsSummary(items: ReadonlyArray<{ label: string; value: number }>) {
-  return html`<dl class="settings-summary">
-    ${items.map(
-      (item) => html`<div class="settings-group settings-summary__tile">
-        <dt>${item.label}</dt>
-        <dd>${item.value}</dd>
-      </div>`,
-    )}
-  </dl>`;
-}
-
 /** A bare group surface without a section heading (rare; prefer sections). */
-export function renderSettingsGroup(
-  rows: unknown,
-  options: { danger?: boolean; carapace?: boolean } = {},
-) {
-  const groupClass = [
-    "settings-group",
-    options.danger ? "settings-group--danger" : "",
-    options.carapace ? "oc-settings-group" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+function renderSettingsGroup(rows: unknown, options: { danger?: boolean } = {}) {
+  const groupClass = options.danger ? "settings-group settings-group--danger" : "settings-group";
   return html`<div class=${groupClass}>${rows}</div>`;
 }
 
-function renderSettingsRowText(title: unknown, description: unknown, carapace = false) {
+function renderSettingsRowText(title: unknown, description: unknown) {
   return html`
-    <div class="settings-row__text ${carapace ? "oc-settings-row-content" : ""}">
-      <span class="settings-row__title ${carapace ? "oc-settings-row-title" : ""}">${title}</span>
-      ${
-        description
-          ? html`<span class="settings-row__desc ${carapace ? "oc-settings-row-description" : ""}"
-              >${description}</span
-            >`
-          : nothing
-      }
+    <div class="settings-row__text">
+      <span class="settings-row__title">${title}</span>
+      ${description ? html`<span class="settings-row__desc">${description}</span>` : nothing}
     </div>
   `;
 }
@@ -247,20 +148,15 @@ export function renderSettingsRow(
     "settings-row",
     props.stacked ? "settings-row--stacked" : "",
     props.stackedOnNarrow ? "settings-row--stacked-on-narrow" : "",
-    props.carapace ? `oc-settings-row${props.stacked ? " oc-settings-row-stacked" : ""}` : "",
   ]
     .filter(Boolean)
     .join(" ");
   return html`
     <div class=${className} role=${props.role ?? nothing}>
-      ${renderSettingsRowText(props.title, props.description, props.carapace)}
+      ${renderSettingsRowText(props.title, props.description)}
       ${
         props.control !== undefined && props.control !== nothing
-          ? html`<div
-              class="settings-row__control ${props.carapace ? "oc-settings-row-control" : ""}"
-            >
-              ${props.control}
-            </div>`
+          ? html`<div class="settings-row__control">${props.control}</div>`
           : nothing
       }
     </div>
@@ -329,11 +225,6 @@ export function renderSettingsToggleRow(
   `;
 }
 
-// Controls already show inherited values; reserve default references for overrides.
-export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
-}
-
 class SettingsRadioGroupDirective extends Directive {
   // Renaming a checked radio can uncheck a sibling before Lit updates its value.
   private readonly name = nextSettingsRadioName();
@@ -348,7 +239,7 @@ function renderSettingsRadioGroup<T extends string>(
   name: string,
 ) {
   return html`<div
-    class="settings-segmented ${props.className ?? ""}"
+    class="settings-segmented ${props.class ?? ""}"
     role="radiogroup"
     aria-label=${props.ariaLabel ?? nothing}
     aria-describedby=${props.descriptionId ?? nothing}
@@ -387,7 +278,7 @@ export function renderSettingsSegmented<T extends string>(
 ): TemplateResult<1> {
   if (props.mode === "buttons") {
     return html`<div
-      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.className ?? ""}"
+      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.class ?? ""}"
       role=${props.ariaLabel ? "group" : nothing}
       aria-label=${props.ariaLabel ?? nothing}
     >
@@ -421,31 +312,6 @@ export function renderSettingsSegmented<T extends string>(
   return html`${settingsRadioGroup((name) => renderSettingsRadioGroup(props, name))}`;
 }
 
-export function renderSettingsStatus(props: {
-  kind: SettingsStatusKind;
-  label: unknown;
-  dot?: boolean;
-  carapace?: boolean;
-}): TemplateResult {
-  const modifier = props.kind === "muted" ? "" : ` settings-status--${props.kind}`;
-  return html`
-    <span
-      class="settings-status${modifier}${
-        props.carapace ? ` oc-status ${CARAPACE_STATUS_CLASS[props.kind]}` : ""
-      }"
-    >
-      ${
-        props.dot === false
-          ? nothing
-          : html`<span
-              class="settings-status__dot ${props.carapace ? "oc-status-indicator" : ""}"
-            ></span>`
-      }
-      <span class=${props.carapace ? "oc-status-label" : ""}>${props.label}</span>
-    </span>
-  `;
-}
-
 export function renderSettingsValue(value: unknown, options: { mono?: boolean } = {}) {
   const className = options.mono
     ? "settings-row__value settings-row__value--mono"
@@ -453,103 +319,6 @@ export function renderSettingsValue(value: unknown, options: { mono?: boolean } 
   return html`<span class=${className}>${value}</span>`;
 }
 
-export function renderSettingsEmpty(
-  message: unknown,
-  options: { carapace?: boolean } = {},
-): TemplateResult {
-  return options.carapace
-    ? html`<div class="settings-empty oc-empty">
-        <div class="oc-empty-content"><p class="oc-empty-description">${message}</p></div>
-      </div>`
-    : html`<div class="settings-empty">${message}</div>`;
-}
-
-export function renderSettingsLoadingSkeleton(
-  options: { label?: unknown; rows?: number; carapace?: boolean } = {},
-): TemplateResult {
-  const rowCount = Math.max(1, options.rows ?? 3);
-  return html`
-    <div
-      class="settings-loading-skeleton"
-      role="status"
-      aria-busy="true"
-      aria-label=${options.label ?? t("common.loading")}
-    >
-      <div class="settings-loading-skeleton__rows" aria-hidden="true">
-        ${Array.from(
-          { length: rowCount },
-          (_, index) => html`
-            <div
-              class="settings-row settings-loading-skeleton__row ${
-                options.carapace ? "oc-settings-row" : ""
-              }"
-            >
-              <div class="settings-row__text ${options.carapace ? "oc-settings-row-content" : ""}">
-                <span
-                  class="skeleton settings-loading-skeleton__title ${
-                    options.carapace ? "oc-skeleton-line oc-skeleton-line-short" : ""
-                  }"
-                ></span>
-                <span
-                  class="skeleton settings-loading-skeleton__description ${
-                    options.carapace ? "oc-skeleton-line" : ""
-                  }"
-                ></span>
-              </div>
-              <div class="settings-row__control">
-                <span
-                  class="skeleton settings-loading-skeleton__control ${
-                    index % 2 === 0 ? "settings-loading-skeleton__control--wide" : ""
-                  }"
-                ></span>
-              </div>
-            </div>
-          `,
-        )}
-      </div>
-    </div>
-  `;
-}
-
-/** Secret text input with an inset reveal toggle — one field, no trailing
- * button, so secret rows line up with plain input rows in the same group. */
-export function renderSettingsSecretInput(props: {
-  ariaLabel: string;
-  value: string;
-  placeholder?: string;
-  visible: boolean;
-  disabled?: boolean;
-  showLabel: string;
-  hideLabel: string;
-  toggleLabel: string;
-  onInput: (next: string) => void;
-  onToggle: () => void;
-}): TemplateResult {
-  return html`
-    <span class="settings-secret">
-      <input
-        class="settings-input"
-        type=${props.visible ? "text" : "password"}
-        aria-label=${props.ariaLabel}
-        autocomplete="off"
-        spellcheck="false"
-        .value=${props.value}
-        placeholder=${props.placeholder ?? ""}
-        ?disabled=${props.disabled ?? false}
-        @input=${(e: Event) => props.onInput((e.target as HTMLInputElement).value)}
-      />
-      <openclaw-tooltip .content=${props.visible ? props.hideLabel : props.showLabel}>
-        <button
-          type="button"
-          class="settings-secret__toggle"
-          aria-label=${props.toggleLabel}
-          aria-pressed=${props.visible}
-          ?disabled=${props.disabled ?? false}
-          @click=${props.onToggle}
-        >
-          ${props.visible ? icons.eye : icons.eyeOff}
-        </button>
-      </openclaw-tooltip>
-    </span>
-  `;
+export function renderSettingsEmpty(message: unknown): TemplateResult {
+  return html`<div class="settings-empty">${message}</div>`;
 }

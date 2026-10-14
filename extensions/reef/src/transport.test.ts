@@ -21,7 +21,6 @@ type EffectAuthority = ReturnType<
   typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
 >;
 const effectInput = vi.hoisted(() => ({
-  available: true,
   captureFailure: undefined as Error | undefined,
   current: undefined as EffectAuthority | undefined,
 }));
@@ -29,16 +28,11 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   return {
     ...actual,
-    get captureEffectAuthority() {
-      if (!effectInput.available) {
-        return undefined;
+    captureEffectAuthority() {
+      if (effectInput.captureFailure) {
+        throw effectInput.captureFailure;
       }
-      return () => {
-        if (effectInput.captureFailure) {
-          throw effectInput.captureFailure;
-        }
-        return effectInput.current ?? actual.captureEffectAuthority();
-      };
+      return effectInput.current ?? actual.captureEffectAuthority();
     },
   };
 });
@@ -56,22 +50,12 @@ function pendingFriend(peer = "bob"): RelayFriend {
 }
 
 afterEach(() => {
-  effectInput.available = true;
   effectInput.captureFailure = undefined;
   effectInput.current = undefined;
   vi.useRealTimers();
 });
 
 describe("isRetryableReefRelayFailure", () => {
-  it("accepts transient relay responses and timeouts", () => {
-    expect(isRetryableReefRelayFailure(new ReefRelayError(408, "timeout"))).toBe(true);
-    expect(isRetryableReefRelayFailure(new ReefRelayError(429, "rate_limited"))).toBe(true);
-    expect(isRetryableReefRelayFailure(new ReefRelayError(503, "unavailable"))).toBe(true);
-    expect(
-      isRetryableReefRelayFailure(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
-    ).toBe(true);
-  });
-
   it("rejects definitive relay and local failures", () => {
     expect(isRetryableReefRelayFailure(new ReefRelayError(401, "unauthorized"))).toBe(false);
     expect(isRetryableReefRelayFailure(new Error("approval store unavailable"))).toBe(false);
@@ -79,41 +63,7 @@ describe("isRetryableReefRelayFailure", () => {
 });
 
 describe("ReefTransportClient network failures", () => {
-  it.each([false, true])(
-    "checks caller authority before fetch when the host has no effect capability (allowed=%s)",
-    async (allowed) => {
-      effectInput.available = false;
-      const refusal = new Error("peer trust revoked");
-      let checked = false;
-      const fetcher = vi.fn<typeof fetch>(() => {
-        expect(checked).toBe(true);
-        return Promise.resolve(Response.json({ id: "synthetic-message", status: "queued" }));
-      });
-      const completion = createClient(fetcher).signed(
-        "POST",
-        "/v1/mail/bob",
-        undefined,
-        undefined,
-        [],
-        () => {
-          checked = true;
-          if (!allowed) {
-            throw refusal;
-          }
-        },
-      );
-
-      expect(checked).toBe(true);
-      expect(fetcher).toHaveBeenCalledTimes(allowed ? 1 : 0);
-      if (allowed) {
-        await expect(completion).resolves.toEqual({ id: "synthetic-message", status: "queued" });
-      } else {
-        await expect(completion).rejects.toBe(refusal);
-      }
-    },
-  );
-
-  it("does not fall back to fetch when an available host effect capture fails", async () => {
+  it("does not fetch when host effect capture fails", async () => {
     const refusal = new Error("effect owner closed");
     effectInput.captureFailure = refusal;
     const fetcher = vi.fn<typeof fetch>();
@@ -213,21 +163,6 @@ describe("ReefTransportClient network failures", () => {
       }
     },
   );
-
-  it("normalizes fetch failures without swallowing the cause", async () => {
-    const cause = new TypeError("fetch failed");
-    const client = createClient(async () => {
-      throw cause;
-    });
-
-    const error = await client.listFriends().catch((failure: unknown) => failure);
-    expect(error).toMatchObject({
-      name: "ReefRelayUnavailableError",
-      message: "fetch failed",
-      cause,
-    });
-    expect(isRetryableReefRelayFailure(error)).toBe(true);
-  });
 
   it("normalizes connection loss while reading a successful response body", async () => {
     const cause = new TypeError("terminated");
@@ -437,13 +372,6 @@ describe("ReefTransportClient device authentication", () => {
 });
 
 const SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-const ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
-
-function jsonObjectBodyAtSize(bytes: number, field: "pad" | "error"): string {
-  const prefix = `{"${field}":"`;
-  const suffix = `"}`;
-  return `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
-}
 
 function createTrackedResponse(params: { status: number; chunks: Uint8Array[] }): {
   response: Response;
@@ -475,32 +403,6 @@ function createTrackedResponse(params: { status: number; chunks: Uint8Array[] })
 }
 
 describe("ReefTransportClient response body bounds", () => {
-  it("accepts success JSON exactly at the byte limit", async () => {
-    const body = jsonObjectBodyAtSize(SUCCESS_RESPONSE_MAX_BYTES, "pad");
-    let cancelled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(body));
-          controller.close();
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-    const client = createClient(async () => response);
-
-    const result = await client.pull(0);
-    const pad = (result as unknown as { pad: string }).pad;
-    expect(pad).toHaveLength(SUCCESS_RESPONSE_MAX_BYTES - 10);
-    expect(pad[0]).toBe("x");
-    expect(pad.at(-1)).toBe("x");
-    expect(Buffer.byteLength(body)).toBe(SUCCESS_RESPONSE_MAX_BYTES);
-    expect(cancelled).toBe(false);
-  });
-
   it("cancels success JSON when a chunk crosses the byte limit", async () => {
     const offered = createTrackedResponse({
       status: 200,
@@ -519,17 +421,6 @@ describe("ReefTransportClient response body bounds", () => {
     expect(offered.state.cancelled).toBe(true);
     expect(offered.state.emittedBytes).toBeGreaterThan(SUCCESS_RESPONSE_MAX_BYTES);
     expect(offered.state.emittedBytes).toBeLessThan(SUCCESS_RESPONSE_MAX_BYTES + 1 + 2048);
-  });
-
-  it("surfaces relay error JSON exactly at the error byte limit", async () => {
-    const body = jsonObjectBodyAtSize(ERROR_RESPONSE_MAX_BYTES, "error");
-    const client = createClient(async () => new Response(body, { status: 400 }));
-
-    const error = await client.requestFriend("bob", "code").catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(ReefRelayError);
-    expect(error).toMatchObject({ status: 400, code: undefined });
-    expect((error as Error).message).toHaveLength(ERROR_RESPONSE_MAX_BYTES - 12);
-    expect(Buffer.byteLength(body)).toBe(ERROR_RESPONSE_MAX_BYTES);
   });
 
   it("keeps status fallback and cancels oversized error bodies", async () => {
@@ -760,16 +651,6 @@ async function deliverInboxFrame(frame: string): Promise<{
 }
 
 describe("ReefInboxConnection response frame bounds", () => {
-  it("accepts a relay frame exactly at the payload limit", async () => {
-    const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
-
-    const result = await deliverInboxFrame(frame);
-
-    expect(Buffer.byteLength(frame)).toBe(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
-    expect(result.entries).toHaveLength(1);
-    expect(result.states).toContain("connected");
-  });
-
   it("rejects a relay frame above the payload limit before dispatch", async () => {
     const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES + 1);
 

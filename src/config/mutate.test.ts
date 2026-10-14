@@ -1148,10 +1148,10 @@ describe("config mutate helpers", () => {
     expect(commentWarnings).toEqual([
       `Config write will strip JSON5 comments from ${pluginsPath}.`,
     ]);
-    expect(validationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledWith(nextConfig, {
-      pluginValidation: "skip",
-      deferredPluginMigrations: [],
-    });
+    expect(validationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledWith(
+      nextConfig,
+      expect.objectContaining({ pluginValidation: "skip" }),
+    );
     expect(ioMocks.createConfigIO).toHaveBeenCalledWith({
       configPath,
       pluginValidation: "skip",

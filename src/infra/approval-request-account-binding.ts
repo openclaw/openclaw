@@ -2,9 +2,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -63,18 +65,29 @@ function resolveApprovalForwardAccountIds(params: {
   });
 }
 
+type ApprovalRequestSessionParams = {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  sessionDelivery?: ApprovalRequestSessionDelivery | null;
+};
+
+export type ApprovalRequestSessionDelivery = Pick<
+  SessionEntry,
+  "sessionId" | "updatedAt" | "delivery"
+>;
+
 /** Classifies whether native delivery has named channel-account owners. */
-export function classifyApprovalRequestChannelRoute(params: {
+export async function classifyApprovalRequestChannelRouteAsync(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
   channel: string;
   defaultAccountId?: string | null;
-}): ApprovalRequestChannelRouteClass {
+}): Promise<ApprovalRequestChannelRouteClass> {
   const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
     return "unbound";
   }
-  if (resolveApprovalRequestChannelAccountId(params)) {
+  if (await resolveApprovalRequestChannelAccountIdAsync(params)) {
     return "bound-or-explicit";
   }
   if (resolveApprovalForwardTargets(params).length > 0) {
@@ -83,8 +96,8 @@ export function classifyApprovalRequestChannelRoute(params: {
   return "unbound";
 }
 
-/** Reads only the current session facts consumed by synchronous approval routing. */
-export function resolveApprovalRequestSessionDelivery(params: {
+/** Compatibility reader retained only by the deprecated synchronous Plugin SDK. */
+function resolveLegacyApprovalRequestSessionDelivery(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
 }): Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery"> | null {
@@ -95,11 +108,18 @@ export function resolveApprovalRequestSessionDelivery(params: {
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-  const binding = captureIncognitoSessionBinding({ storePath, sessionKey });
-  if (binding) {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
-    return binding.actor.sessions.readDelivery(sessionKey) ?? null;
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId, storePath },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (memory) {
+    const entry =
+      memory.binding?.actor.target.sessionKey === sessionKey
+        ? memory.binding.actor.snapshot(memory.authority)?.entry
+        : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
+    return entry
+      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+      : null;
   }
   const entry = loadSessionEntryReadOnly({
     storePath,
@@ -112,11 +132,9 @@ export function resolveApprovalRequestSessionDelivery(params: {
   return { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery };
 }
 
-function resolvePersistedApprovalRequestSessionBinding(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-}) {
-  const entry = resolveApprovalRequestSessionDelivery(params);
+function resolvePersistedApprovalRequestSessionBinding(
+  entry: ApprovalRequestSessionDelivery | null,
+) {
   if (!entry) {
     return null;
   }
@@ -128,11 +146,14 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
 }
 
 // A missing binding can match any account; a conflicting channel cannot.
-function resolveApprovalRequestAccountBinding(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel?: string | null;
-}): { accountId: string | null } | null {
+function resolveApprovalRequestAccountBinding(
+  params: {
+    cfg: OpenClawConfig;
+    request: ApprovalRequestLike;
+    channel?: string | null;
+  },
+  sessionDelivery: ApprovalRequestSessionDelivery | null,
+): { accountId: string | null } | null {
   const expectedChannel = normalizeMessageChannel(params.channel);
   const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
   if (expectedChannel && turnSourceChannel && turnSourceChannel !== expectedChannel) {
@@ -146,7 +167,7 @@ function resolveApprovalRequestAccountBinding(params: {
     return { accountId: turnSourceAccountId };
   }
 
-  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
+  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(sessionDelivery);
   const sessionChannel = sessionBinding?.channel;
   if (expectedChannel && sessionChannel && sessionChannel !== expectedChannel) {
     return null;
@@ -156,48 +177,57 @@ function resolveApprovalRequestAccountBinding(params: {
 }
 
 /** Resolves the account id an approval request belongs to for an optional channel filter. */
-export function resolveApprovalRequestAccountId(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel?: string | null;
-}): string | null {
-  return resolveApprovalRequestAccountBinding(params)?.accountId ?? null;
+function resolveApprovalRequestAccountIdFromDelivery(
+  params: {
+    cfg: OpenClawConfig;
+    request: ApprovalRequestLike;
+    channel?: string | null;
+  },
+  sessionDelivery: ApprovalRequestSessionDelivery | null,
+): string | null {
+  return resolveApprovalRequestAccountBinding(params, sessionDelivery)?.accountId ?? null;
 }
 
 /** Resolves an approval request account only when the request can be routed to a channel. */
-export function resolveApprovalRequestChannelAccountId(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel: string;
-}): string | null {
+function resolveApprovalRequestChannelAccountIdFromDelivery(
+  params: {
+    cfg: OpenClawConfig;
+    request: ApprovalRequestLike;
+    channel: string;
+  },
+  sessionDelivery: ApprovalRequestSessionDelivery | null,
+): string | null {
   const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
     return null;
   }
   const turnSourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
   if (!turnSourceChannel || turnSourceChannel === expectedChannel) {
-    return resolveApprovalRequestAccountId(params);
+    return resolveApprovalRequestAccountIdFromDelivery(params, sessionDelivery);
   }
 
   // A conflicting turn-source channel is authoritative for live routing; only
   // fall back to the persisted session when that stored binding names this channel.
-  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
+  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(sessionDelivery);
   return sessionBinding?.channel === expectedChannel ? (sessionBinding.accountId ?? null) : null;
 }
 
 /** Checks whether a channel/account pair is eligible to handle an approval request. */
-export function doesApprovalRequestMatchChannelAccount(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel: string;
-  accountId?: string | null;
-}): boolean {
+export function doesApprovalRequestMatchChannelAccountFromDelivery(
+  params: {
+    cfg: OpenClawConfig;
+    request: ApprovalRequestLike;
+    channel: string;
+    accountId?: string | null;
+  },
+  sessionDelivery: ApprovalRequestSessionDelivery | null,
+): boolean {
   const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
     return false;
   }
 
-  const binding = resolveApprovalRequestAccountBinding(params);
+  const binding = resolveApprovalRequestAccountBinding(params, sessionDelivery);
   if (!binding) {
     return false;
   }
@@ -206,21 +236,27 @@ export function doesApprovalRequestMatchChannelAccount(params: {
 }
 
 /** Selects the one channel account that owns a native approval request. */
-export function doesApprovalRequestSelectChannelAccount(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel: string;
-  accountId?: string | null;
-  defaultAccountId: string;
-  eligibleAccountIds: readonly string[];
-}): boolean {
+export function doesApprovalRequestSelectChannelAccountFromDelivery(
+  params: {
+    cfg: OpenClawConfig;
+    request: ApprovalRequestLike;
+    channel: string;
+    accountId?: string | null;
+    defaultAccountId: string;
+    eligibleAccountIds: readonly string[];
+  },
+  sessionDelivery: ApprovalRequestSessionDelivery | null,
+): boolean {
   const accountId =
     normalizeOptionalAccountId(params.accountId) ??
     normalizeOptionalAccountId(params.defaultAccountId);
   if (!accountId) {
     return false;
   }
-  const boundAccountId = resolveApprovalRequestChannelAccountId(params);
+  const boundAccountId = resolveApprovalRequestChannelAccountIdFromDelivery(
+    params,
+    sessionDelivery,
+  );
   if (accountId === normalizeOptionalAccountId(boundAccountId)) {
     return true;
   }
@@ -240,3 +276,148 @@ export function doesApprovalRequestSelectChannelAccount(params: {
     .filter((candidate): candidate is string => Boolean(candidate));
   return eligibleAccountIds.length === 1 && eligibleAccountIds[0] === accountId;
 }
+
+/** Reads one current routing snapshot through the session owner; supplied facts are reused. */
+export async function resolveApprovalRequestSessionDeliveryAsync(
+  params: ApprovalRequestSessionParams,
+): Promise<ApprovalRequestSessionDelivery | null> {
+  if (params.sessionDelivery !== undefined) {
+    return params.sessionDelivery;
+  }
+  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
+  if (!sessionKey) {
+    return null;
+  }
+  const agentId =
+    parseAgentSessionKey(sessionKey)?.agentId ?? params.request.request.agentId ?? "main";
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const memory = captureSessionActorStorageOwner(
+    { sessionKey, agentId, storePath },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (memory) {
+    const entry =
+      memory.binding?.actor.target.sessionKey === sessionKey
+        ? memory.binding.actor.snapshot(memory.authority)?.entry
+        : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
+    return entry
+      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+      : null;
+  }
+  const entry = await readSessionEntryReadOnlyInWorker({
+    agentId,
+    storePath,
+    sessionKey,
+    projection: "list",
+    hydrateSkillPromptRefs: false,
+  });
+  return entry
+    ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+    : null;
+}
+
+function warnLegacyApprovalRouting(name: string): void {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: name,
+    replacement: `${name}Async`,
+  });
+}
+
+/** @deprecated Use resolveApprovalRequestAccountIdAsync; removed in a later release after stable deprecation. */
+export function resolveApprovalRequestAccountId(
+  params: Parameters<typeof resolveApprovalRequestAccountIdFromDelivery>[0],
+): ReturnType<typeof resolveApprovalRequestAccountIdFromDelivery> {
+  warnLegacyApprovalRouting("resolveApprovalRequestAccountId");
+  return resolveApprovalRequestAccountIdFromDelivery(
+    params,
+    resolveLegacyApprovalRequestSessionDelivery(params),
+  );
+}
+
+export async function resolveApprovalRequestAccountIdAsync(
+  params: Parameters<typeof resolveApprovalRequestAccountIdFromDelivery>[0] &
+    ApprovalRequestSessionParams,
+): Promise<ReturnType<typeof resolveApprovalRequestAccountIdFromDelivery>> {
+  return resolveApprovalRequestAccountIdFromDelivery(
+    params,
+    normalizeOptionalAccountId(params.request.request.turnSourceAccountId)
+      ? null
+      : await resolveApprovalRequestSessionDeliveryAsync(params),
+  );
+}
+
+/** @deprecated Use resolveApprovalRequestChannelAccountIdAsync; removed in a later release after stable deprecation. */
+export function resolveApprovalRequestChannelAccountId(
+  params: Parameters<typeof resolveApprovalRequestChannelAccountIdFromDelivery>[0],
+): ReturnType<typeof resolveApprovalRequestChannelAccountIdFromDelivery> {
+  warnLegacyApprovalRouting("resolveApprovalRequestChannelAccountId");
+  return resolveApprovalRequestChannelAccountIdFromDelivery(
+    params,
+    resolveLegacyApprovalRequestSessionDelivery(params),
+  );
+}
+
+export async function resolveApprovalRequestChannelAccountIdAsync(
+  params: Parameters<typeof resolveApprovalRequestChannelAccountIdFromDelivery>[0] &
+    ApprovalRequestSessionParams,
+): Promise<ReturnType<typeof resolveApprovalRequestChannelAccountIdFromDelivery>> {
+  const channel = normalizeMessageChannel(params.channel);
+  const sourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
+  const sourceAccount = normalizeOptionalAccountId(params.request.request.turnSourceAccountId);
+  const useSourceAccount = sourceAccount && (!sourceChannel || sourceChannel === channel);
+  return resolveApprovalRequestChannelAccountIdFromDelivery(
+    params,
+    !channel || useSourceAccount ? null : await resolveApprovalRequestSessionDeliveryAsync(params),
+  );
+}
+
+/** @deprecated Use doesApprovalRequestMatchChannelAccountAsync; removed in a later release after stable deprecation. */
+export function doesApprovalRequestMatchChannelAccount(
+  params: Parameters<typeof doesApprovalRequestMatchChannelAccountFromDelivery>[0],
+): ReturnType<typeof doesApprovalRequestMatchChannelAccountFromDelivery> {
+  warnLegacyApprovalRouting("doesApprovalRequestMatchChannelAccount");
+  return doesApprovalRequestMatchChannelAccountFromDelivery(
+    params,
+    resolveLegacyApprovalRequestSessionDelivery(params),
+  );
+}
+
+export async function doesApprovalRequestMatchChannelAccountAsync(
+  params: Parameters<typeof doesApprovalRequestMatchChannelAccountFromDelivery>[0] &
+    ApprovalRequestSessionParams,
+): Promise<ReturnType<typeof doesApprovalRequestMatchChannelAccountFromDelivery>> {
+  return doesApprovalRequestMatchChannelAccountFromDelivery(
+    params,
+    normalizeOptionalAccountId(params.request.request.turnSourceAccountId)
+      ? null
+      : await resolveApprovalRequestSessionDeliveryAsync(params),
+  );
+}
+
+/** @deprecated Use doesApprovalRequestSelectChannelAccountAsync; removed in a later release after stable deprecation. */
+export function doesApprovalRequestSelectChannelAccount(
+  params: Parameters<typeof doesApprovalRequestSelectChannelAccountFromDelivery>[0],
+): ReturnType<typeof doesApprovalRequestSelectChannelAccountFromDelivery> {
+  warnLegacyApprovalRouting("doesApprovalRequestSelectChannelAccount");
+  return doesApprovalRequestSelectChannelAccountFromDelivery(
+    params,
+    resolveLegacyApprovalRequestSessionDelivery(params),
+  );
+}
+
+export async function doesApprovalRequestSelectChannelAccountAsync(
+  params: Parameters<typeof doesApprovalRequestSelectChannelAccountFromDelivery>[0] &
+    ApprovalRequestSessionParams,
+): Promise<ReturnType<typeof doesApprovalRequestSelectChannelAccountFromDelivery>> {
+  const channel = normalizeMessageChannel(params.channel);
+  const sourceChannel = normalizeMessageChannel(params.request.request.turnSourceChannel);
+  const sourceAccount = normalizeOptionalAccountId(params.request.request.turnSourceAccountId);
+  const useSourceAccount = sourceAccount && (!sourceChannel || sourceChannel === channel);
+  return doesApprovalRequestSelectChannelAccountFromDelivery(
+    params,
+    !channel || useSourceAccount ? null : await resolveApprovalRequestSessionDeliveryAsync(params),
+  );
+}
+
+export { resolveLegacyApprovalRequestSessionDelivery as resolveApprovalRequestSessionDelivery };

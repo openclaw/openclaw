@@ -138,6 +138,8 @@ export async function resolvePluginCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  /** Record explicit acceptance even when official provenance permits activation. */
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   beforePersistentApply?: () => void;
   metadata?: PluginMetadataSnapshot;
@@ -176,7 +178,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (!manifest) {
       throw new ManagedPluginLifecycleError(`Plugin "${pluginId}" has no installed manifest.`);
     }
-    if (manifest.trustedOfficialInstall) {
+    if (manifest.trustedOfficialInstall && !params.recordOfficialCapabilities) {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
@@ -247,6 +249,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousDeclared?: PluginAcceptedDeclaredSurface;
   previousRecord?: PluginInstallRecord;
@@ -292,7 +295,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
   const acknowledgment =
-    official || !params.enabled || acceptanceCurrent
+    (official && !params.recordOfficialCapabilities) || !params.enabled || acceptanceCurrent
       ? { reviewToken: review.reviewToken }
       : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
   // Review and staged-package rollback remain cancellable. Lock only when
@@ -322,7 +325,9 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
   // Provenance alone is not operator acceptance; an explicit review is.
-  return !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
+  return (!official || params.recordOfficialCapabilities) && (params.enabled || acceptanceCurrent)
+    ? finalDeclared
+    : undefined;
 }
 
 /** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
@@ -334,6 +339,8 @@ export function createManagedPluginArtifactConsentHandler(params: {
   expectedIntegrity?: string;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  /** Preserve official provenance while recording an explicit setup acceptance. */
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
@@ -399,6 +406,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
         sourceRecord: artifact.sourceRecord,
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        recordOfficialCapabilities: params.recordOfficialCapabilities,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),

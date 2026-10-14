@@ -47,17 +47,20 @@ vi.mock(
           claim,
           async (worker) => {
             const originalRun = worker.run.bind(worker);
-            const spy = vi.spyOn(worker, "run").mockImplementation((params) =>
-              originalRun({
+            const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+              let started = false;
+              return originalRun({
                 ...params,
-                onCommitRequest: () => {
-                  if (params.plan.kind === "entry") {
-                    checkpoint.startForeground?.();
-                  }
-                  return params.onCommitRequest();
-                },
-              }),
-            );
+                withWriteAdmission: (admit, diagnostics) =>
+                  params.withWriteAdmission(async (refusal) => {
+                    if (params.plan.kind === "entry" && !started) {
+                      started = true;
+                      checkpoint.startForeground?.();
+                    }
+                    return admit(refusal);
+                  }, diagnostics),
+              });
+            });
             try {
               return await run(worker);
             } finally {
@@ -194,7 +197,7 @@ describe("agent session persistence during reclamation", () => {
     }
   });
 
-  it("queues an unrelated custom-message append behind worker commit authorization", async () => {
+  it("queues an unrelated custom-message append behind reclamation writer admission", async () => {
     const sessionKey = "agent:main:reclamation-transcript";
     const sessionId = "reclamation-transcript";
     // Automatic retention remains enabled while the real archive Worker starts.

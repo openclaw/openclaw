@@ -1,10 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -24,7 +26,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 export const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
 export type StateSchemaContentVersionRowReader = (
-  db: DatabaseSync,
+  db: EngineConnection,
 ) => { value_json: string | null } | undefined;
 const contentVersionQuery = createSqliteQueryCache((db) =>
   prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>(db, () =>
@@ -37,10 +39,13 @@ const contentVersionQuery = createSqliteQueryCache((db) =>
 
 /** Content and its marker commit together, even while older readers retain their version floor. */
 export function readStateSchemaContentVersion(
-  db: DatabaseSync,
+  db: EngineConnection,
   published?: number,
   readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
 ): number {
+  if (isPostgresSqlConnection(db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   const admitted = getStateSchemaVersionAdmission(db);
   if (admitted) {
     return Math.max(published ?? admitted.userVersion, admitted.contentVersion);
@@ -50,13 +55,11 @@ export function readStateSchemaContentVersion(
   const contentVersion = parseContentVersion(
     tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
   );
-  if (getAdmittedSqliteSchemaFacts(db) === schema) {
-    rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
-  }
+  rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
   return Math.max(published ?? version, contentVersion);
 }
 
-export function readStateSchemaContentVersionRow(db: DatabaseSync) {
+export function readStateSchemaContentVersionRow(db: EngineConnection) {
   return contentVersionQuery(db)().rows[0];
 }
 
@@ -87,12 +90,47 @@ function parseContentVersion(valueJson: string | null | undefined): number {
 
 export type { StateSchemaVersionFacts } from "./openclaw-state-db-admission.js";
 
+/** Refuse newer headers before catalog inspection, then share one physical schema capture. */
+export function admitStateSchemaFacts(database: EngineConnection, pathname: string): void {
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
+  try {
+    admitSqliteSchema(database, (userVersion) =>
+      assertSupportedStateSchemaVersion(database, pathname, {
+        userVersion,
+        contentVersion: userVersion,
+      }),
+    );
+  } catch (error) {
+    // An unreadable newer catalog must not be mistaken for a repair this build can perform.
+    let version: number;
+    try {
+      version = readSqliteUserVersion(database);
+    } catch {
+      throw normalizeOpenClawStateSchemaReadError(error, pathname);
+    }
+    if (version > OPENCLAW_STATE_SCHEMA_VERSION) {
+      throw createNewerSqliteSchemaVersionError(
+        "OpenClaw state database",
+        pathname,
+        version,
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    }
+    throw normalizeOpenClawStateSchemaReadError(error, pathname);
+  }
+}
+
 export function assertSupportedStateSchemaVersion(
-  db: DatabaseSync,
+  db: EngineConnection,
   pathname: string,
   prepared?: StateSchemaVersionFacts,
   readRow?: StateSchemaContentVersionRowReader,
 ): number {
+  if (isPostgresSqlConnection(db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   try {
     const userVersion =
       prepared?.userVersion ??

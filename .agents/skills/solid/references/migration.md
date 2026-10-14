@@ -6,6 +6,8 @@ Done means **zero Lit outside third-party bundles**: no `lit`/`@lit/*` imports, 
 pnpm ui:solid:inventory --json
 ```
 
+The Lit ratchet blocks only new production files under `ui/src` that import Lit. Tests and recognized moves or splits of existing Lit code are exempt; metric totals and per-file growth, including TODO counts, remain advisory. Use `defineSolidBridge` from `ui/src/lit/solid-bridge.ts` to mount Solid components from remaining Lit callers.
+
 ## How a port lands
 
 - One focused PR per area, branched from `main` and landed on `main`. The app works at every commit.
@@ -19,7 +21,7 @@ pnpm ui:solid:inventory --json
 1. Every page, chat component, and shared component ported, with Lit callers on the bridge.
 2. The Web Awesome exit: every `wa-*` usage replaced by owned primitives; then remove the package, its patch, the theme import, the `--wa-*` token bridges, `wa-light`/`wa-dark`, and the PostCSS workaround. Re-home the five implicit theme values (font weights 400/500, the 75 ms fast transition, the 0.1875rem focus ring and its 0.0625rem offset).
 3. The final Lit sweep:
-   - delete `ui/src/lit/` (light-DOM bases, controllers, the bridge and its ratchet exception)
+   - delete `ui/src/lit/` (light-DOM bases, controllers, the bridge)
    - delete `i18n/lib/lit-controller.ts`, the `@lit/context` token in `app/context.ts`, and the Lit warnings test setup
    - remove `lit`, `@lit/*`, and `@lit-labs/*` from every manifest and the lockfile
    - delete Lit-only lint and stylelint configuration (postcss-lit) and the Lit ratchet itself

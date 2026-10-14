@@ -396,6 +396,29 @@ describe("scripts/pr wrappers", () => {
       ["123", "a".repeat(40), "--confirmed-no-running-tools"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--cancel-auto", "--cancel-auto"],
+      ["123", "a".repeat(40), "--confirmed-operator-recovery", "--observed-head", "b".repeat(40)],
+      ...[
+        [],
+        [""],
+        ["HEAD"],
+        ["B".repeat(40)],
+        ["b".repeat(40), "--observed-head", "c".repeat(40)],
+        ["b".repeat(40), "--merged-head", "c".repeat(40)],
+        ["b".repeat(40), "--replacement-head", "c".repeat(40)],
+        ["b".repeat(40), "--auto-merge"],
+        ["b".repeat(40), "--body-file", "message.md"],
+        ["b".repeat(40), "--legacy-refusal", "proof"],
+        ["b".repeat(40), "--pre-dispatch-refusal", "proof"],
+        ["b".repeat(40), "--admin-evidence", "proof", "--confirmed-operator-admin"],
+      ].map((suffix) =>
+        [
+          "123",
+          "a".repeat(40),
+          "--confirmed-operator-recovery",
+          "--cancel-auto",
+          "--observed-head",
+        ].concat(suffix),
+      ),
       [
         "123",
         "a".repeat(40),
@@ -440,6 +463,19 @@ describe("scripts/pr wrappers", () => {
         "--replacement-head",
         "b".repeat(40),
       ],
+      ...[
+        [],
+        ["HEAD"],
+        ["B".repeat(40)],
+        ["b".repeat(40), "--merged-head", "c".repeat(40)],
+        ["b".repeat(40), "--cancel-auto"],
+        ["b".repeat(40), "--auto-merge"],
+        ["b".repeat(40), "--replacement-head", "c".repeat(40)],
+        ["b".repeat(40), "--body-file", "message.md"],
+        ["b".repeat(40), "--admin-evidence", "proof.json", "--confirmed-operator-admin"],
+      ].map((suffix) =>
+        ["123", "a".repeat(40), "--confirmed-operator-recovery", "--merged-head"].concat(suffix),
+      ),
     ]) {
       const result = spawnSync(
         join(fixture.canonical, "scripts", "pr"),
@@ -505,7 +541,64 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<>\n<false>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<>\n<false>\n<>\n<>\n`,
+    );
+  });
+
+  itPosix("passes an explicitly observed head only to auto retirement", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      [
+        "merge-recover",
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--observed-head",
+        "b".repeat(40),
+        "--cancel-auto",
+      ],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<false>\n<${"a".repeat(40)}>\n<>\n<>\n<>\n<true>\n<>\n<>\n<false>\n<>\n<${"b".repeat(40)}>\n`,
+    );
+    const invalid = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      ["merge-run", "123", "--observed-head", "b".repeat(40)],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(invalid.status).toBe(2);
+  });
+
+  itPosix("passes an explicitly selected merged head to merge recovery", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      [
+        "merge-recover",
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--merged-head",
+        "b".repeat(40),
+      ],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<false>\n<${"a".repeat(40)}>\n<>\n<>\n<>\n<false>\n<>\n<>\n<false>\n<${"b".repeat(40)}>\n<>\n`,
     );
   });
 
@@ -539,7 +632,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
+        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n<>\n<>\n`,
       );
     }
   });
@@ -656,7 +749,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<>\n<false>\n`,
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<>\n<false>\n<>\n<>\n`,
       );
     },
   );
@@ -894,6 +987,7 @@ describe("scripts/pr wrappers", () => {
         cwd: fixture.linked,
         encoding: "utf8",
         env: { ...fixture.env, ...env },
+        maxBuffer: 8 * 1024 * 1024,
       });
     return { ...fixture, tooling, stale, run };
   }
@@ -944,11 +1038,25 @@ describe("scripts/pr wrappers", () => {
     },
   );
 
-  itPosix.each([true, false])(
-    "refreshes a stale clean main tooling root once (install repairs=%s)",
-    (repairs) => {
+  itPosix.each([
+    { repairs: true, largeOutput: false },
+    { repairs: false, largeOutput: false },
+    { repairs: true, largeOutput: true },
+  ])(
+    "refreshes a stale clean main tooling root once (install repairs=$repairs, merge output over 1 MiB=$largeOutput)",
+    ({ repairs, largeOutput }) => {
       const fixture = makeToolingRootFixture();
       const advanced = advanceToolingMain(fixture);
+      if (largeOutput) {
+        // Stands in for a far-behind root's diffstat without checking out
+        // thousands of files; Git sends hook stdout to its stderr.
+        const hooks = join(fixture.root, "tooling-hooks");
+        mkdirSync(hooks);
+        fixture.git(fixture.tooling, ["config", "core.hooksPath", hooks]);
+        writeFileSync(join(hooks, "post-merge"), "#!/bin/sh\nyes x | head -c 1200000\n", {
+          mode: 0o755,
+        });
+      }
       const target = realpathSync(join(fixture.tooling, "node_modules/tsx"));
       rmSync(join(fixture.tooling, "node_modules/tsx"));
       symlinkSync(fixture.stale, join(fixture.tooling, "node_modules/tsx"), "dir");
@@ -966,6 +1074,8 @@ if (${repairs}) {
       );
       const result = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
       expect(result.status, result.stdout + result.stderr).toBe(repairs ? 2 : 1);
+      // Merge output streams to the operator instead of filling a capture buffer.
+      expect(result.stderr.length).toBeGreaterThan(largeOutput ? 1_200_000 : 0);
       expect(result.stderr).toContain("has version 0.0.0; the trust anchor requires");
       expect(result.stderr).toContain(`Refreshing scripts/pr tooling root ${fixture.tooling}`);
       expect(
@@ -1553,26 +1663,29 @@ exit 99
     },
   );
 
-  it.each(["prepare-run"])("routes mismatched %s through the materialized anchor", (command) => {
-    const fixture = makeMismatchedWrapperRepo();
-    seedReadyReview(fixture);
-    parkCanonicalOffAnchor(fixture);
-    const result = spawnSync(join(fixture.linked, "scripts", "pr"), [command, "123"], {
-      cwd: fixture.linked,
-      encoding: "utf8",
-      env: fixture.env,
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
-    );
-    // The stubbed gh reports a non-main base: reaching this gate proves the
-    // materialized anchor wrapper ran the landing subcommand.
-    expect(result.stderr).toContain(
-      "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-    );
-    expect(result.stderr).not.toContain("Refusing to silently substitute");
-  });
+  it.each(["prepare-run", "prepare-baseline-refresh", "prepare-baseline-successor"])(
+    "routes mismatched %s through the materialized anchor",
+    (command) => {
+      const fixture = makeMismatchedWrapperRepo();
+      seedReadyReview(fixture);
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(join(fixture.linked, "scripts", "pr"), [command, "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
+      );
+      // The stubbed gh reports a non-main base: reaching this gate proves the
+      // materialized anchor wrapper ran the landing subcommand.
+      expect(result.stderr).toContain(
+        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+      );
+      expect(result.stderr).not.toContain("Refusing to silently substitute");
+    },
+  );
 
   it.each([
     {

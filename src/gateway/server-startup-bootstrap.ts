@@ -20,6 +20,7 @@ import { publishSystemEventStoreConfig } from "../config/sessions/session-store-
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -56,6 +57,7 @@ import {
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
 import type { GatewayServerOptions } from "./server-public.js";
+import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
@@ -420,7 +422,10 @@ export async function prepareGatewayServerBootstrap(input: {
       return applied;
     };
     const reapplyRuntimeOverlays = (config: OpenClawConfig): OpenClawConfig =>
-      applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config)));
+      resolveGatewayStartupSourceConfig(
+        applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config))),
+        runtimeEnv.env,
+      );
     const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
     // Both managed writes and watcher reloads must reject unmigrated workspaces
     // before persistence or publication, using the candidate's final config and env.
@@ -433,7 +438,7 @@ export async function prepareGatewayServerBootstrap(input: {
       reapplyCompareOverlays,
     };
   };
-  setAppliedRuntimeConfigSnapshot(cfgAtStart, configSnapshot.sourceConfig);
+  await setAppliedRuntimeConfigSnapshot(cfgAtStart, configSnapshot.sourceConfig);
   applyLoggingConfig(cfgAtStart.logging);
   initializePublishedConfigRuntimeEnv(configSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
@@ -443,44 +448,54 @@ export async function prepareGatewayServerBootstrap(input: {
     ),
     preserveExistingOwnership: true,
   });
-  const workerEnvironmentStartup =
+  const preparations = [
     minimalTestGateway || opts.updateCanary
-      ? undefined
-      : await startupTrace.measure("worker-environments.store-import", async () => {
+      ? Promise.resolve(undefined)
+      : startupTrace.measure("worker-environments.store-import", async () => {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.loadGatewayWorkerEnvironmentStartupState();
-        });
-  const { prepareGatewayPluginBootstrap } = await startupTrace.measure(
-    "plugins.bootstrap-imports",
-    () => import("./server-startup-plugins.js"),
-  );
+        }),
+    (async () => {
+      if (opts.updateCanary) {
+        log.warn("candidate gateway: session catalogs and maintenance deferred until activation");
+      }
+      if (minimalTestGateway || opts.updateCanary) {
+        return [];
+      }
+      await startupTrace.measure("state.desktop-approval-admission", async () => {
+        const { migrateLegacyDesktopStreamOptOuts } =
+          await import("../infra/device-pairing-node-desktop-migration.js");
+        const retired = await migrateLegacyDesktopStreamOptOuts(cfgAtStart);
+        if (retired > 0) {
+          log.warn(
+            `Preserved disabled desktop access for ${retired} paired node(s); approve their updated desktop capability to enable sharing.`,
+          );
+        }
+      });
+      return startupTrace.measure("sessions.admission", async () => {
+        const { prepareGatewayStartupSessions } =
+          await import("./server-startup-session-migration.js");
+        return prepareGatewayStartupSessions({ cfg: cfgAtStart, env: process.env, log });
+      });
+    })(),
+    startupTrace.measure("plugins.bootstrap-imports", () => import("./server-startup-plugins.js")),
+    startupTrace.measure("cron.store-path", () =>
+      resolveCronJobsStorePathFromConfigAsync(cfgAtStart),
+    ),
+  ] as const;
+  // These owners share admitted state, but no preparation consumes another's result.
+  // Join every owner before startup failure can close their database resources.
+  await Promise.allSettled(preparations);
+  const [
+    workerEnvironmentStartup,
+    startupSessionDatabases,
+    { prepareGatewayPluginBootstrap },
+    cronStorePath,
+  ] = await Promise.all(preparations);
   const pluginGatewayContext: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
   const resolvePluginGatewayContext = () => pluginGatewayContext.current;
-  const startupSessionDatabases: import("./server-startup-session-migration.js").PreparedStartupSessionDatabase[] =
-    [];
-  if (opts.updateCanary) {
-    log.warn("candidate gateway: session catalogs and maintenance deferred until activation");
-  } else if (!minimalTestGateway) {
-    await startupTrace.measure("state.desktop-approval-admission", async () => {
-      const { migrateLegacyDesktopStreamOptOuts } =
-        await import("../infra/device-pairing-node-desktop-migration.js");
-      const retired = await migrateLegacyDesktopStreamOptOuts(cfgAtStart);
-      if (retired > 0) {
-        log.warn(
-          `Preserved disabled desktop access for ${retired} paired node(s); approve their updated desktop capability to enable sharing.`,
-        );
-      }
-    });
-    startupSessionDatabases.push(
-      ...(await startupTrace.measure("sessions.admission", async () => {
-        const { prepareGatewayStartupSessions } =
-          await import("./server-startup-session-migration.js");
-        return prepareGatewayStartupSessions({ cfg: cfgAtStart, env: process.env, log });
-      })),
-    );
-  }
   publishSystemEventStoreConfig(cfgAtStart);
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", async () => {
     if (!opts.updateCanary) {
@@ -513,7 +528,7 @@ export async function prepareGatewayServerBootstrap(input: {
   // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
   // snapshot and reject the Gateway's own model catalog.
   copyConfigResolutionFacts(cfgAtStart, gatewayPluginConfigAtStart);
-  setAppliedRuntimeConfigSnapshot(gatewayPluginConfigAtStart, configSnapshot.sourceConfig);
+  await setAppliedRuntimeConfigSnapshot(gatewayPluginConfigAtStart, configSnapshot.sourceConfig);
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
   const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
@@ -557,6 +572,7 @@ export async function prepareGatewayServerBootstrap(input: {
     startupActivationSourceConfig,
     startupRuntimeConfig,
     startupSessionDatabases,
+    cronStorePath,
     cfgAtStart,
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,

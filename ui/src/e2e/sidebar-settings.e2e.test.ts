@@ -321,7 +321,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       if (testCase.collapseSidebar) {
-        await page.locator(".sidebar-brand__collapse").click();
+        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await page.locator(".shell--nav-collapsed").waitFor();
       }
       const chatInbox = page.locator(".sidebar-rail__bottom .sidebar-issues-button");
@@ -357,7 +357,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       const railInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
       await expect
         .poll(() => railInbox.locator(".sidebar-issues-button__count").textContent())
@@ -388,14 +388,7 @@ suite.define(() => {
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
       await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
-        )
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
         .toBe("connected");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -433,13 +426,13 @@ suite.define(() => {
         .poll(() => page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count())
         .toBe(0);
 
-      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       await page
         .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button")
         .waitFor();
       expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
       expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator('[data-navigation-view="sessions"]').click();
       await page.locator("openclaw-app-sidebar .sidebar-issues-button").waitFor();
 
       await gateway.setMethodResponse("cron.list", FAILED_CRON_RESPONSE);
@@ -459,7 +452,7 @@ suite.define(() => {
       await gateway.deferNext("cron.list");
       await gateway.deferNext("cron.status");
       await gateway.deferNext("models.authStatus");
-      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       await expect
         .poll(() =>
           page

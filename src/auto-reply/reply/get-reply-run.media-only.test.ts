@@ -283,6 +283,11 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
   persistSessionTranscriptTurn: vi.fn(),
 }));
 
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryInWorker: async (...args: unknown[]) => loadSessionEntryMock(...args),
+}));
+
 vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
   updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
 }));
@@ -343,8 +348,9 @@ vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../sessions/stored-model-overrides.js", () => ({
-  resolveStoredModelOverride: vi.fn(
+// mock-isolation: reply orchestration uses fixture model overrides without opening host session stores.
+vi.mock("../../sessions/stored-model-overrides.js", () => {
+  const resolveStoredModelOverride = vi.fn(
     (params: {
       sessionEntry?: { providerOverride?: string; modelOverride?: string };
       sessionStore?: Record<string, { providerOverride?: string; modelOverride?: string }>;
@@ -355,8 +361,14 @@ vi.mock("../../sessions/stored-model-overrides.js", () => ({
       }
       return null;
     },
-  ),
-}));
+  );
+  return {
+    resolveStoredModelOverride,
+    resolveStoredModelOverrideAsync: async (
+      params: Parameters<typeof resolveStoredModelOverride>[0],
+    ) => resolveStoredModelOverride(params),
+  };
+});
 
 vi.mock("./session-reset-prompt.js", () => ({
   resolveBareResetBootstrapFileAccess: vi.fn().mockReturnValue(false),
@@ -684,7 +696,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it.each(["explicit", "stored"] as const)(
-    "rejects unsupported %s thinking or applies a turn-local fallback without changing storage",
+    "validates %s thinking while preserving the stored preference",
     async (source) => {
       const sessionEntry: SessionEntry = {
         sessionId: "session-thinking",
@@ -712,7 +724,7 @@ describe("runPreparedReply media-only handling", () => {
         );
         expect(runReplyAgent).not.toHaveBeenCalled();
       } else {
-        expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).toBe("off");
+        expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).toBe("high");
         expect(sessionEntry.thinkingLevel).toBe("high");
         expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
       }
@@ -1639,7 +1651,7 @@ describe("runPreparedReply media-only handling", () => {
       (_ctx, _envelope, entry) =>
         entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : "",
     );
-    loadSessionEntryMock.mockReturnValue(completeEntry);
+    const sessionStore = { "session-key": activeEntry };
     const activeRun = createReplyOperation({
       sessionId: "session-goal-interrupt",
       sessionKey: "session-key",
@@ -1657,7 +1669,7 @@ describe("runPreparedReply media-only handling", () => {
       isNewSession: false,
       sessionId: "session-goal-interrupt",
       sessionEntry: activeEntry,
-      sessionStore: { "session-key": activeEntry },
+      sessionStore,
       storePath: "/tmp/openclaw-session-store.json",
     });
     while (!activeRun.abortSignal.aborted) {
@@ -1665,14 +1677,10 @@ describe("runPreparedReply media-only handling", () => {
         setImmediate(resolve);
       });
     }
+    sessionStore["session-key"] = completeEntry;
     activeRun.complete();
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
-    expect(loadSessionEntryMock).toHaveBeenCalledWith({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "session-key",
-      readConsistency: "latest",
-    });
     const call = requireRunReplyAgentCall(-1);
     expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain("Active goal:");
   });

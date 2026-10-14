@@ -14,11 +14,13 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { renderChat, type ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import { renderGroupedMessage } from "./components/chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./components/chat-message-markdown.ts";
-import "../../plugins/control-ui-view.runtime.ts";
+import "../../plugins/control-ui-view.solid.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
 
 afterEach(() => resetComposerFixture());
@@ -88,7 +90,7 @@ describe("native chat view session identity", () => {
       }
 
       override render() {
-        return html`${renderChat(props)}
+        return html`${renderChat(props, context)}
         ${renderGroupedMessage(
           prepareChatMessageRender({
             role: "toolResult",

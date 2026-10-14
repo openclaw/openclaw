@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readPersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import {
-  listSessionTranscriptInstances,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -17,6 +16,7 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sql
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -291,7 +291,7 @@ describe("reset canonical sessions", () => {
           expect(
             loadTranscriptEventsSync({ ...scope, sessionId: `${scope.agentId}-session` }),
           ).toEqual([]);
-          await expect(fs.access(scope.storePath)).resolves.toBeUndefined();
+          await fs.access(scope.storePath);
         }
         expect(loadTranscriptEventsSync({ ...main, sessionId: "current-session" })).toEqual([]);
         expect(
@@ -350,8 +350,8 @@ describe("reset canonical sessions", () => {
       await handleReset("config+creds+sessions", state.workspaceDir, runtime);
 
       expect(loadSessionEntry(scope)).toBeUndefined();
-      await expect(fs.access(scope.storePath)).resolves.toBeUndefined();
-      await expect(fs.access(state.workspaceDir)).resolves.toBeUndefined();
+      await fs.access(scope.storePath);
+      await fs.access(state.workspaceDir);
     });
   });
 

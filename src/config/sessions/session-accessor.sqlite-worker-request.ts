@@ -16,6 +16,7 @@ import {
   captureOpenClawAgentDatabaseValidationTransfer,
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
+  hasRevokedOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
@@ -119,7 +120,7 @@ export type SqliteMutationWorkerValidationOwner =
 export type SqliteMutationWorkerMessage<Result> =
   | { type: "refused"; operationId: number; settled: true }
   | { type: "commit-request"; operationId: number }
-  | { type: "admission-request" | "admission-release"; operationId: number; admissionId: number }
+  | { type: "admission-request" | "admission-release"; operationId: number }
   | {
       type: "reclaimed";
       operationId: number;
@@ -146,9 +147,10 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
     maintenanceScope?: OpenClawDatabaseMaintenanceScope;
     assertCurrent(): void;
   };
-  onCommitRequest: () => void;
+  onCommitRequest?: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
   validationOwner?: SqliteMutationWorkerValidationOwner;
+  validationPath?: string;
   /** Opening proof remains revocable and is adopted only against the worker's native identity. */
   readOpeningValidation?: () => OpenClawAgentDatabaseValidation | undefined;
   dispatch?: () => void;
@@ -157,6 +159,11 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
 }): Promise<Result> {
   const { transport, operationId } = params;
   const validationOwner = params.validationOwner;
+  const validationPath = validationOwner
+    ? "database" in validationOwner
+      ? validationOwner.database.path
+      : validationOwner.source.path
+    : params.validationPath;
   if (validationOwner && "source" in validationOwner) {
     validationOwner.claim.assertCurrent();
   }
@@ -207,7 +214,6 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
     let transportError: Error | undefined;
     let admission:
       | {
-          id: number;
           released: Deferred;
           diagnostics: SqliteSessionReclamationAdmissionDiagnostics;
         }
@@ -289,24 +295,17 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
       }
       if (message.type === "commit-request") {
         try {
-          params.onCommitRequest();
+          params.onCommitRequest?.();
         } catch (failure) {
           // The rejected shared gate makes the Worker roll back and unwind.
           workerError ??= toStringifiedError(failure);
         }
       } else if (message.type === "admission-request") {
-        if (admission || message.admissionId !== admissionId + 1) {
-          fail(
-            new Error(
-              "SQLite reclamation Worker requested invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
-            ),
-          );
-          return;
-        }
         const requested = {
-          id: ++admissionId,
           released: createDeferredCore(),
-          diagnostics: { admissionId } satisfies SqliteSessionReclamationAdmissionDiagnostics,
+          diagnostics: {
+            admissionId: ++admissionId,
+          } satisfies SqliteSessionReclamationAdmissionDiagnostics,
         };
         admission = requested;
         const task = params
@@ -320,14 +319,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
             const allowed = refusal === undefined && workerError === undefined;
             const authority = params.databaseAuthority;
             const assertCreationCurrent = () => {
-              if (
-                !allowed ||
-                admission !== requested ||
-                completed ||
-                workerError ||
-                transportError ||
-                params.getFailure?.()
-              ) {
+              if (!allowed || completed || workerError || transportError || params.getFailure?.()) {
                 throw new Error("SQLite reclamation creation grant is no longer current");
               }
               authority?.assertCurrent();
@@ -350,7 +342,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 });
               };
               metadata.bindDatabaseAuthority({
-                databasePath: authority.databasePath,
+                databasePath: resolveIdentityPathViaExistingAncestorSync(authority.databasePath),
                 assertRequest: assertCreationCurrent,
                 assertAccess,
                 assertCreate(location) {
@@ -389,9 +381,12 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 {
                   type: "admission",
                   operationId,
-                  admissionId: requested.id,
                   allowed,
                   validation: allowed ? readValidation() : undefined,
+                  integrityRevoked:
+                    allowed && validationPath !== undefined
+                      ? hasRevokedOpenClawAgentDatabaseValidation(validationPath)
+                      : false,
                   ...(metadata ? { databaseAdmissionPort: metadata.port } : {}),
                 },
                 metadata ? [metadata.port] : [],
@@ -412,12 +407,9 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
           }, requested.diagnostics)
           .catch(async (failure: unknown) => {
             workerError ??= toStringifiedError(failure);
-            if (!completed && admission === requested) {
+            if (!completed) {
               try {
-                worker.postMessage(
-                  { type: "admission", operationId, admissionId: requested.id, allowed: false },
-                  [],
-                );
+                worker.postMessage({ type: "admission", operationId, allowed: false }, []);
               } catch (dispatchError) {
                 fail(
                   new AggregateError(
@@ -431,31 +423,16 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
           });
         admissionTasks.push(task);
       } else if (message.type === "admission-release") {
-        if (!admission || message.admissionId !== admission.id) {
-          fail(
-            new Error(
-              "SQLite reclamation Worker released invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
-            ),
-          );
-          return;
+        if (admission) {
+          admission.diagnostics.releaseCause = "worker-release";
+          admission.released.resolve();
+          admission = undefined;
         }
-        const released = admission;
-        admission = undefined;
-        released.diagnostics.releaseCause = "worker-release";
-        released.released.resolve();
       } else if (message.type === "refused") {
-        if (!message.settled || params.completion !== "result") {
-          fail(new Error("SQLite reclamation Worker omitted refusal settlement"));
-          return;
-        }
         settledRefusal = true;
         workerError ??= new Error("SQLite reclamation Worker request was refused");
         finish();
       } else if (message.type === "reclaimed") {
-        if (!message.settled) {
-          fail(new Error("SQLite reclamation Worker omitted operation settlement"));
-          return;
-        }
         result = message.result;
         validation = message.validation;
         if (params.completion === "result") {

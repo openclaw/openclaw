@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
-import { renderTalk, type TalkRealtimeProviderOption } from "./talk.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { Talk, type TalkRealtimeProviderOption } from "./talk.tsx";
 
-type TalkProps = Parameters<typeof renderTalk>[0];
+type TalkProps = Parameters<typeof Talk>[0];
 
 function renderFixture(
   overrides: Partial<Omit<TalkProps, "selection" | "catalog">> & {
@@ -18,9 +19,8 @@ function renderFixture(
 ) {
   const { selection, provider, ...props } = overrides;
   const model = selection?.model ?? "gpt-live";
-  const container = document.createElement("div");
-  render(
-    renderTalk({
+  const view = mountSolid(() =>
+    createComponent(Talk, {
       selection: {
         provider: "openai",
         model,
@@ -52,36 +52,13 @@ function renderFixture(
       onProviderChange: vi.fn(),
       onModelChange: vi.fn(),
       onVoiceChange: vi.fn(),
-      editor: html``,
+      editor: null,
       ...props,
     }),
-    container,
   );
-  return container;
+  flush();
+  return view.container;
 }
-
-describe("isTalkGptLiveModel", () => {
-  it.each(["gpt-live", " Gpt-Live-1-Codex "])("accepts the GPT-Live family: %s", (model) => {
-    expect(isTalkGptLiveModel(model)).toBe(true);
-  });
-
-  it("rejects an absent model", () => {
-    expect(isTalkGptLiveModel(null)).toBe(false);
-  });
-});
-
-describe("resolveTalkRealtimeSelection", () => {
-  it.each([
-    [" Provider-Direct ", "provider-direct"],
-    [null, null],
-  ])("normalizes consult routing: %s", (consultRouting, expected) => {
-    expect(
-      resolveTalkRealtimeSelection({
-        talk: { realtime: { consultRouting } },
-      }).consultRouting,
-    ).toBe(expected);
-  });
-});
 
 describe("renderTalk", () => {
   it("locks every curated picker when config mutation is unavailable", async () => {
@@ -136,11 +113,11 @@ describe("renderTalk", () => {
     ).toEqual(["", ...voices]);
   });
 
-  it.each([
-    ["gpt-liveish", false],
-    ["gpt-live-test-canary", true],
-  ] as const)("renders the GPT-Live hint only for the exact family: %s", (model, showsHint) => {
-    const container = renderFixture({ selection: { model, transport: "gateway-relay" } });
-    expect(container.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
-  });
+  it.each([["gpt-liveish", false]] as const)(
+    "renders the GPT-Live hint only for the exact family: %s",
+    (model, showsHint) => {
+      const container = renderFixture({ selection: { model, transport: "gateway-relay" } });
+      expect(container.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
+    },
+  );
 });

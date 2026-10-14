@@ -26,6 +26,7 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ENETDOWN",
   "ENETUNREACH",
   "EHOSTUNREACH",
+  "ETIMEDOUT",
 ]);
 const TRANSPORT_ERROR_CODE_RE =
   /^(?:E(?:AI_|CONN|NET|HOST|ADDR|PIPE|TIMEDOUT|SOCKET)|UND_ERR_|ERR_(?:NETWORK|HTTP2|QUIC|TLS|SSL))/;
@@ -170,6 +171,30 @@ function hasDeliveryNotSentProof(candidates: readonly unknown[]): boolean {
 
 export function isProvenDeliveryNotSentError(err: unknown): boolean {
   return hasDeliveryNotSentProof(collectErrorGraphCandidates(err, nestedErrorCandidates));
+}
+
+/** Transport ambiguity is not no-send proof; only opted-in final text may replay it. */
+export function isAmbiguousDeliveryTransportError(error: unknown): boolean {
+  const candidates = collectErrorGraphCandidates(error, nestedErrorCandidates);
+  if (
+    hasDeliveryNotSentProof(candidates) ||
+    candidates.some(
+      (candidate) =>
+        isRecord(candidate) &&
+        ((Array.isArray(candidate.results) && candidate.results.length > 0) ||
+          candidate.visibleReplySent === true ||
+          (isRecord(candidate.deliveryResult) &&
+            (candidate.deliveryResult.visibleReplySent === true ||
+              (Array.isArray(candidate.deliveryResult.messageIds) &&
+                candidate.deliveryResult.messageIds.length > 0)))),
+    )
+  ) {
+    return false;
+  }
+  return candidates.some((candidate) => {
+    const code = extractErrorCode(candidate)?.trim().toUpperCase();
+    return code !== undefined && TRANSPORT_ERROR_CODE_RE.test(code);
+  });
 }
 
 /** Finds a provider's permanent pre-dispatch rejection through delivery wrappers. */

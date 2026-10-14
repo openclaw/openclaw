@@ -25,7 +25,7 @@ The command prints the URL and a pasteable command that installs a background
 node service and enables it to run agent sessions:
 
 ```bash
-npx -y openclaw connect https://gateway.example/j/<shortcode> --service --session-host
+npx -y openclaw@<gateway-version> connect https://gateway.example/j/<shortcode> --service --session-host
 ```
 
 Only use session hosting on a machine you trust as shared Gateway infrastructure.
@@ -34,6 +34,16 @@ runtime's default remains non-hosting. See [Session hosting](/nodes/session-host
 For a command-only node, omit `--session-host` and keep `--service`.
 The `-y` flag skips npm's package-install confirmation, not OpenClaw pairing or
 session-hosting consent.
+
+The Gateway chooses its own published npm version, even when you run
+`devices join-code` from a different CLI version. Source checkouts and
+unpublished builds use a resolvable matching release-channel tag when available,
+otherwise unpinned `openclaw`, with a note to use a matching Gateway build.
+Registry checks are bounded to two seconds; an unavailable registry also shows
+the matching-build note.
+
+Already have OpenClaw installed? Run: `openclaw connect <join-url> --service --session-host`.
+This uses your installed build instead of npx; make sure it matches the Gateway.
 
 The shortcode has 128 bits of entropy, expires with the setup credential after
 about 10 minutes, and can be fetched exactly once. Mint another code if it
@@ -142,6 +152,23 @@ For an intentional shared-credential override, use `openclaw node run
 [node-host authentication](/cli/node#gateway-auth-for-node-host).
 Use [`openclaw node status`](/cli/node#service-background) to inspect the
 installed service.
+
+When run through `npx`, service installation first installs the selected
+OpenClaw release into `npm` under the node's state directory. The service uses
+that durable installation, not npm's temporary `_npx` cache. The installation
+output shows the package version, chosen runtime, service command, and a node
+update command:
+
+```bash
+npx -y openclaw@latest node install --force
+```
+
+Run it on the node machine with the same profile and state-directory settings.
+It promotes the selected release into the same prefix and rewrites the service,
+without redeeming another join URL. Use `openclaw@beta` or an exact version in
+place of `openclaw@latest` when needed. Reinstalling the same version also repairs
+missing package files. This targets the node even when a separate Gateway is
+installed on the machine.
 
 The service does not host worker sessions by default. To consent to full
 worker-session hosting, add `--session-host`:

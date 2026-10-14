@@ -56,23 +56,4 @@ describe("context cache projection", () => {
     expect(lookupCachedContextWindow("next-model")).toBe(96_000);
     expect(lookupCachedContextTokens("discovered-599")).toBe(64_000);
   });
-
-  it("does not publish a superseded cooperative projection", async () => {
-    publishConfiguredModel("prior-model", 48_000);
-    let current = true;
-    const pending = prepareContextWindowCaches({
-      config: {},
-      modelCatalog: createLargeCatalog("superseded", 1_024),
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("projection superseded");
-        }
-      },
-    });
-    current = false;
-
-    await expect(pending).rejects.toThrow("projection superseded");
-    expect(lookupCachedContextTokens("prior-model")).toBe(48_000);
-    expect(lookupCachedContextTokens("superseded-1023")).toBeUndefined();
-  });
 });

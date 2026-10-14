@@ -5,7 +5,7 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import type { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
@@ -28,6 +28,7 @@ import type {
 } from "../plugins/provider-auth-choices.js";
 import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -77,8 +78,8 @@ export type SetupInferenceCandidate = {
   label: string;
   detail: string;
   modelRef: string;
-  /** @deprecated Gateway wire compatibility for older macOS clients. Always false. */
-  recommended: false;
+  /** Highest-ranked usable primary-model candidate from passive discovery. */
+  recommended: boolean;
   credentials?: boolean;
   icon?: string;
   website?: string;
@@ -184,6 +185,8 @@ export type BoundVerifySetupInferenceResult =
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Gateway first-run policy; never inherited by the manual picker. */
+  automaticSetup?: true;
   /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
   modelTarget?: "utility";
   /** Configured agent that owns the route being tested and persisted. */
@@ -211,6 +214,8 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Revalidate the caller's live authority before provider I/O or persistent effects. */
+  assertCurrent?: () => void;
   /** Lock the caller's cancellation boundary before the first durable setup effect. */
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
@@ -229,11 +234,12 @@ export class SetupInferenceCancelledError extends Error {
 }
 
 export function throwIfSetupInferenceCancelled(
-  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled">,
+  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled" | "assertCurrent">,
 ): void {
   if (params.signal?.aborted || params.isCancelled?.()) {
     throw new SetupInferenceCancelledError();
   }
+  params.assertCurrent?.();
 }
 
 export async function waitForProviderAuth<T>(
@@ -257,7 +263,7 @@ export type ActivateSetupInferenceDeps = {
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
   enablePluginInConfig?: typeof enablePluginInConfig;
-  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
+  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
@@ -513,6 +519,20 @@ export type StagedCandidate = {
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
 };
 export type StageFailure = { error: string };
+export type SaveSetupCredentialParams = {
+  profile: ProviderAuthResult["profiles"][number];
+  config: OpenClawConfig;
+  baseConfig: OpenClawConfig;
+  agentDir: string;
+  modelRef: string;
+  authChoice?: string;
+  pluginId?: string;
+  agentRuntimeId?: string;
+  beforePersistentEffect?: () => void | Promise<void>;
+  beforeWrite?: () => void;
+  /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
+  persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
+};
 export function validateSetupModelTarget(
   expected: "utility" | undefined,
   requested: "utility" | undefined,

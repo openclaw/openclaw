@@ -230,6 +230,7 @@ export function capturePluginNativeNamespace(params: {
   boundary: string;
   capturedRoot: string;
   managed: boolean;
+  copyOnly: boolean;
   outputRoot?: string;
   previous?: PluginNativeNamespaceFact;
   inspectionRoots?: readonly string[];
@@ -283,6 +284,7 @@ export function capturePluginNativeNamespace(params: {
       } else if (member.stat.isDirectory()) {
         fs.mkdirSync(target, { recursive: true, mode: 0o700 });
       } else if (
+        !params.copyOnly &&
         (previous ||
           (managed &&
             (params.managedRoots ?? [boundary]).some((root) =>
@@ -294,11 +296,11 @@ export function capturePluginNativeNamespace(params: {
         linkedSources.add(member.source);
       } else {
         copyPluginSourceFile(member.source, member.boundary, target);
-        fs.chmodSync(target, 0o600 | Number(member.stat.mode & 0o100n));
       }
     }
   } catch (error) {
     if (
+      params.copyOnly ||
       !managed ||
       previous ||
       !params.retainedRoot ||

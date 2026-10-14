@@ -47,14 +47,14 @@ const input = {
 };
 
 describe("delegated CLI tool policy", () => {
-  it("removes ambient tools and retains the policy-filtered host projection", () => {
-    const result = resolveCliRuntimeToolPolicy(input);
+  it("removes ambient tools and retains the policy-filtered host projection", async () => {
+    const result = await resolveCliRuntimeToolPolicy(input);
     expect(result.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
     expect(result.runtimeToolsAllowPolicy).toEqual(["*"]);
   });
-  it("refuses a backend that cannot enforce live delegated authority", () => {
-    expect(() =>
+  it("refuses a backend that cannot enforce live delegated authority", async () => {
+    await expect(
       resolveCliRuntimeToolPolicy({ ...input, canEnforceExactToolAvailability: false }),
-    ).toThrow("cannot enforce delegated execution tool policy");
+    ).rejects.toThrow("cannot enforce delegated execution tool policy");
   });
 });

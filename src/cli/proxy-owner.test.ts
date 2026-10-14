@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -14,14 +13,16 @@ import { withProxyCaptureOwner } from "./proxy-capture-owner.js";
 import { runDebugProxyRunCommand } from "./proxy-cli.runtime.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 const { stopServer } = vi.hoisted(() => ({ stopServer: vi.fn(async () => {}) }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: () => {
-    const child = new EventEmitter();
-    queueMicrotask(() => child.emit("exit", 0, null));
-    return child;
-  },
-}));
+vi.mock("../process/exec-spawn.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec-spawn.js")>();
+  return {
+    ...actual,
+    spawnCommand: (...args: Parameters<typeof actual.spawnCommand>) =>
+      args[0][0] === "synthetic-child"
+        ? Object.assign(Promise.resolve({ exitCode: 0, failed: false }), { kill: vi.fn() })
+        : actual.spawnCommand(...args),
+  };
+});
 vi.mock("../proxy-capture/proxy-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../proxy-capture/proxy-server.js")>()),
   startDebugProxyServer: async ({

@@ -5,6 +5,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -14,8 +15,12 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  prepareUserProfileCatalog,
+  readResidentUserProfileId,
+} from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail, resolveUserProfileId } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -129,6 +134,7 @@ describe("chat send stop ownership", () => {
         session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite") },
       };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       fixture.context.getRuntimeConfig = () => cfg;
       params.request.stopCommand = true;
       params.request.p.message = "/stop";
@@ -193,6 +199,7 @@ describe("chat send stop ownership", () => {
         },
       };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       fixture.context.getRuntimeConfig = () => cfg;
       params.request.stopCommand = true;
       params.request.p = {
@@ -581,11 +588,14 @@ describe("chat send retry identity", () => {
   it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as const)(
     "rechecks the canonical profile after real recovery without changing %s outcomes",
     async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
+      await withOpenClawTestState(stateOptions, async () => {
+        setRuntimeConfigSnapshot({});
         const { fixture, params } = preAdmissionFixture(`profile-recovery-${outcome}`);
         const sourceEmail = "recovery-source@example.test";
         const source = ensureProfileForEmail(sourceEmail);
         const target = ensureProfileForEmail("recovery-target@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const scope = { agentId: params.session.agentId, sessionKey: params.session.sessionKey };
         await upsertSessionEntryCore(scope, { sessionId: "mention-session", updatedAt: 100 });
         const originalEntry = loadSessionEntry(scope);
@@ -616,7 +626,7 @@ describe("chat send retry identity", () => {
         });
         // Keep the selected ID exact: resolving both sides would silently follow a merge.
         params.assertCurrent = () => {
-          if (resolveUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
+          if (readResidentUserProfileId(client.authenticatedUserProfile!.profileId) !== source.id) {
             throw mismatch;
           }
         };
@@ -640,7 +650,7 @@ describe("chat send retry identity", () => {
           expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
           if (outcome !== "unchanged") {
             linkEmail(sourceEmail, target.id);
-            expect(resolveUserProfileId(source.id)).toBe(target.id);
+            expect(readResidentUserProfileId(source.id)).toBe(target.id);
             expect(client.authenticatedUserProfile?.profileId).toBe(source.id);
           }
           if (outcome === "cached-success" || outcome === "cached-error") {

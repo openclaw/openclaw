@@ -117,6 +117,24 @@
       }
     },
     {
+      "name": "@openclaw/muse",
+      "description": "OpenClaw Muse Code agent runtime plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "muse",
+          "label": "Muse Code"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/muse",
+          "npmSpec": "@openclaw/muse",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
+        }
+      }
+    },
+    {
       "name": "@openclaw/cua-computer",
       "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
       "source": "official",

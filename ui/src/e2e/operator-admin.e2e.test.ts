@@ -3,9 +3,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { SkillsWorkshopReadResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  captureControlUiE2eFailureDiagnostics,
   installMockGateway,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -136,7 +138,10 @@ async function createContext(): Promise<BrowserContext> {
 async function selectAgentOnAgentsPage(page: Page, name: string) {
   const select = page.locator(".settings-sidebar__agent openclaw-agent-select");
   await select.locator(".agent-select__trigger").click();
-  await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
+  await select
+    .locator(".agent-select__option[data-agent-option]")
+    .filter({ hasText: name })
+    .click();
   await expect
     .poll(async () => (await select.locator(".agent-select__label").textContent())?.trim())
     .toBe(name);
@@ -238,7 +243,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator(".sidebar-agent-menu")
         .getByRole("menuitem", { name: "Reviewer" })
         .click();
       await waitForRequest(gateway, "skills.status", (params) => params.agentId === "reviewer");
@@ -391,6 +396,12 @@ suite.define(() => {
             },
           ],
         },
+        "skills.workshop.read": {
+          name: "read-only-skill",
+          filePath: "SKILL.md",
+          content: "# Read-only skill\n\nReview without mutation access.\n",
+          files: ["SKILL.md"],
+        } satisfies SkillsWorkshopReadResult,
         "skills.workshop.changes": {
           changes: [
             {
@@ -426,44 +437,34 @@ suite.define(() => {
       await screenshot(page, "05-read-only-agents.png", setDefault);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
-      await gateway.waitForRequest("agents.files.list");
-      await page.locator("openclaw-agents-page").evaluate((element) => {
-        const agentsPage = element as HTMLElement & {
-          agentFileActive: string | null;
-          agentFileEditors: Record<string, { content?: string; draft?: string }>;
-          agentFilesList: {
-            agentId: string;
-            files: Array<{ name: string; path: string; missing: boolean }>;
-            workspace: string;
-          };
-          requestUpdate: () => void;
-        };
-        agentsPage.agentFilesList = {
-          agentId: "main",
-          files: [
-            {
-              name: "AGENTS.md",
-              path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
-              missing: false,
-            },
-          ],
-          workspace: "/tmp/openclaw-e2e/workspace",
-        };
-        agentsPage.agentFileActive = "AGENTS.md";
-        agentsPage.agentFileEditors = {
-          "AGENTS.md": {
-            ...agentsPage.agentFileEditors["AGENTS.md"],
-            content: "# Main agent\n",
-            draft: "# Mutated\n",
-          },
-        };
-        agentsPage.requestUpdate();
-      });
+      await waitForRequest(
+        gateway,
+        "agents.files.get",
+        (params) => params.agentId === "main" && params.name === "AGENTS.md",
+      );
       const fileEditor = page.locator(".agent-file-textarea");
+      await expect.poll(() => fileEditor.inputValue()).toBe("# Main agent\n");
       await expect.poll(() => fileEditor.isDisabled()).toBe(true);
+      // Bypass only the DOM disabled state to exercise the owner's permission guard.
+      await fileEditor.evaluate((element: HTMLTextAreaElement) => {
+        element.disabled = false;
+        element.value = "# Mutated\n";
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await page
+        .locator(".agent-file-actions")
+        .getByRole("button", { name: "Preview", exact: true })
+        .click();
+      await expect
+        .poll(() => page.locator(".md-preview-dialog__reader").textContent())
+        .toContain("Mutated");
+      await page.getByRole("button", { name: "Close preview", exact: true }).click();
       const fileSave = page.locator(".agent-file-actions button").filter({ hasText: "Save" });
       await expect.poll(() => fileSave.isDisabled()).toBe(true);
-      await fileSave.click({ force: true });
+      await fileSave.evaluate((element: HTMLButtonElement) => {
+        element.disabled = false;
+      });
+      await fileSave.click();
       expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
@@ -503,6 +504,9 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
       await page.getByRole("button", { name: "read-only-skill" }).first().click();
       await gateway.waitForRequest("skills.workshop.read");
+      await expect
+        .poll(() => page.locator(".sw-markdown").textContent())
+        .toContain("Review without mutation access.");
       expect(await page.getByRole("button", { name: "Archive", exact: true }).count()).toBe(0);
       const learningOff = page.getByRole("button", { name: "Off", exact: true });
       await expect.poll(() => learningOff.isDisabled()).toBe(true);
@@ -516,6 +520,12 @@ suite.define(() => {
       await learn.click({ force: true });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(creates);
       await screenshot(page, "07-read-only-workshop.png", learn);
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: "read-only-operator-administration",
+      });
+      throw error;
     } finally {
       await context.close();
     }
@@ -631,7 +641,7 @@ suite.define(() => {
       const scopeSelect = page.locator("openclaw-agent-select.agent-select--settings");
       await scopeSelect.locator(".agent-select__trigger").click();
       await scopeSelect
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Reviewer (reviewer)" })
         .click();
       await expect

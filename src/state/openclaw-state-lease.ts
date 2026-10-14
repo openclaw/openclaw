@@ -1,7 +1,7 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -222,10 +222,17 @@ async function runStateLeaseOwnerInScope<T>(
       operationLabel: validated.operationLabel,
     };
     const execution = workerOperations;
+    // Runtime cleanup joins the worker writer queue; native contention must not abandon its lease.
+    // Existing-schema maintenance keeps its subset writer's no-migration contract.
+    const cleanupStorage =
+      workerStorage ??
+      (nativeLeaseSource && validated.database.schemaPolicy !== "existing"
+        ? createOpenClawStateLeaseWorkerStorage(nativeLeaseSource.context)
+        : undefined);
     await releaseBestEffort(
       params,
-      workerStorage && execution
-        ? () => workerStorage.release(execution, validated.operationLabel)
+      cleanupStorage && execution
+        ? () => cleanupStorage.release(execution, validated.operationLabel)
         : undefined,
     );
     await execution?.settle();
@@ -395,7 +402,7 @@ async function runStateLeaseOwnerInScope<T>(
       }
     };
 
-    const assertOperationOwned = (transaction?: DatabaseSync) => {
+    const assertOperationOwned = (transaction?: EngineConnection) => {
       assertActive();
       const params = { ...identity, database: validated.database, transaction };
       const expiresAt = verifyLeaseOwnership(params);
@@ -588,7 +595,13 @@ async function runStateLeaseOwnerInScope<T>(
           databasePath: resolveLeaseDatabasePath(validated.database),
           sourceContext: nativeLeaseSource?.context,
           sourceIdentity: nativeLeaseSource?.identity,
-          assertCurrent: () => {
+          assertCurrent: (purpose) => {
+            if (purpose === "release") {
+              if (disposed || phase !== "draining" || !heartbeatStopped) {
+                throw new Error("State lease cleanup has not joined its heartbeat");
+              }
+              return;
+            }
             assertActive();
             if (validated.database.schemaPolicy === "existing") {
               throw new Error("This lease mode does not support worker writes");

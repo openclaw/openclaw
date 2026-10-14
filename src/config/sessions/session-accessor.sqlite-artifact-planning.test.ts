@@ -151,7 +151,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
       }),
     );
     const nativePlanning = vi
-      .spyOn(artifactPlanning, "prepareSessionLifecycleArtifactCleanup")
+      .spyOn(artifactPlanning, "prepareSessionLifecycleArtifactCleanupForMaintenance")
       .mockRejectedValue(new Error("artifact planning ran on the calling thread"));
     const cleanup = cleanupSessionLifecycleArtifactsCore({
       storePath,

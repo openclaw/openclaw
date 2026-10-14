@@ -202,17 +202,6 @@ export async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<
   }
 }
 
-export function neverYieldsStream(): AsyncIterable<unknown> {
-  return {
-    [Symbol.asyncIterator]() {
-      return {
-        next: async () => await new Promise<IteratorResult<unknown>>(() => {}),
-        return: async () => ({ done: true, value: undefined }),
-      };
-    },
-  };
-}
-
 export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");

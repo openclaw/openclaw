@@ -1,19 +1,19 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusReport } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { clawhubVerdictKey } from "../../lib/skills/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import {
   createDialogMethodInstaller,
   createProps,
   createSkill,
   normalizeText,
 } from "./view.test-support.ts";
-import { renderSkills } from "./view.ts";
+afterEach(cleanupSkillsViews);
 
 const dialogRestores: Array<() => void> = [];
 const installDialogMethod = createDialogMethodInstaller(dialogRestores);
@@ -47,7 +47,7 @@ function createCodingAgentSkill(overrides: Parameters<typeof createSkill>[0] = {
 }
 
 function renderView(container: HTMLElement, overrides: Parameters<typeof createProps>[0] = {}) {
-  render(renderSkills(createProps(overrides)), container);
+  renderSkills(createProps(overrides), container);
 }
 
 function createLinkedSkill(ownerHandle?: string) {
@@ -263,7 +263,7 @@ describe("renderSkills", () => {
       onInstall,
       onClawHubInstall,
     });
-    render(renderSkills(props), container);
+    renderSkills(props, container);
     await Promise.resolve();
 
     const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -301,7 +301,7 @@ describe("renderSkills", () => {
     expect(onSaveKey).not.toHaveBeenCalled();
     expect(onInstall).not.toHaveBeenCalled();
 
-    render(renderSkills({ ...props, surface: "discovery" }), container);
+    renderSkills({ ...props, surface: "discovery" }, container);
     const remoteInstall = container.querySelector<HTMLButtonElement>(
       ".plugin-catalog-card__install",
     );

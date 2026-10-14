@@ -14,9 +14,10 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
-import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import "./app-sidebar.ts";
+import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
+import "./app-sidebar.tsx";
 
 const hint = "No active sessions match this filter";
 const pagination = ".sidebar-session-pagination--roster button";
@@ -41,7 +42,7 @@ async function useSidebarMode(
   mode: "chip" | "roster",
 ) {
   sidebar.sidebarAgentsMode = mode;
-  await sidebar.updateComplete;
+  await settleLitElement(sidebar);
   if (mode === "roster") {
     await vi.waitFor(() =>
       expect(rosterActivityStore(context).snapshot).toMatchObject({
@@ -49,7 +50,7 @@ async function useSidebarMode(
         result: expect.anything(),
       }),
     );
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
   }
 }
 
@@ -74,8 +75,8 @@ describe("sidebar session feedback", () => {
     const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
     expect(button().disabled).toBe(false);
     button().click();
-    button().click(); // The owner is already pending before Lit applies disabled.
-    await sidebar.updateComplete;
+    button().click(); // The owner is already pending before the renderer applies disabled.
+    await settleLitElement(sidebar);
     expect(button().disabled).toBe(true);
     expect(button().getAttribute("aria-busy")).toBe("true");
     button().click();
@@ -86,7 +87,7 @@ describe("sidebar session feedback", () => {
     const localMore = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]')!;
     expect(localMore.disabled).toBe(false);
     localMore.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(keys.length);
     pending.reject(new Error("Fixture page failed"));
     await vi.waitFor(() => expect(button().disabled).toBe(false));
@@ -95,7 +96,7 @@ describe("sidebar session feedback", () => {
     expect(sidebar.textContent).toContain("Fixture page failed");
     pending = createDeferred<typeof first>();
     button().click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(button().disabled).toBe(true);
     expect(harness.list).toHaveBeenCalledTimes(2);
     pending.resolve({
@@ -126,19 +127,19 @@ describe("sidebar session feedback", () => {
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.catalog.list", expect.anything()),
     );
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
     const initialScan = pending;
     pending = createDeferred<SessionsCatalogListResult>();
     initialScan.resolve(catalogPage([], "fixture-next"));
     await vi.waitFor(() => expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(1));
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
     pending.resolve(catalogPage([]));
     await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
     pending = createDeferred<SessionsCatalogListResult>();
     const refresh = sidebar.sessionData.refreshSessionCatalogs();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
     const catalogs = matchingCatalog().catalogs;
     pending.resolve({ catalogs });
@@ -153,7 +154,7 @@ describe("sidebar session feedback", () => {
       }),
     );
     sidebar.requestUpdate();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
   });
 
@@ -189,7 +190,7 @@ describe("sidebar session feedback", () => {
       },
     });
     await sidebar.sessionData.refreshSessionCatalogs();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     const params = request.mock.calls.findLast(
       ([method]) => method === "sessions.catalog.list",
     )?.[1];
@@ -214,7 +215,7 @@ describe("sidebar session feedback", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Catalog conversation");
     expect(sidebar.textContent).not.toContain(hint);
   });
@@ -231,7 +232,11 @@ describe("sidebar session feedback", () => {
       if (!failure) {
         for (const status of ["active", "archived", "all"]) {
           await selectFilter(sidebar, "status:" + status);
-          expect(sidebar).toHaveProperty("sessionsStatusFilter", status);
+          expect(
+            sidebar.querySelector<HTMLInputElement>(
+              `#sidebar-sessions-status input[value="${status}"]`,
+            )?.checked,
+          ).toBe(true);
           expect(sidebar.textContent).not.toContain(hint);
         }
         await selectFilter(sidebar, "status:active");
@@ -242,11 +247,11 @@ describe("sidebar session feedback", () => {
         const pending = createDeferred<never>();
         sessions.list.mockImplementation(async () => await pending.promise);
         const refresh = rosterActivityStore(context).refresh();
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);
         pending.reject(new Error("Fixture list failed"));
         await refresh;
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);
       } else {
         if (mode === "chip") {
@@ -254,7 +259,11 @@ describe("sidebar session feedback", () => {
         }
         for (const status of ["archived", "all"] as const) {
           await selectFilter(sidebar, "status:" + status);
-          expect(sidebar).toHaveProperty("sessionsStatusFilter", status);
+          expect(
+            sidebar.querySelector<HTMLInputElement>(
+              `#sidebar-sessions-status input[value="${status}"]`,
+            )?.checked,
+          ).toBe(true);
           expect(sidebar.textContent).not.toContain(hint);
         }
         await selectFilter(sidebar, "status:active");
@@ -269,14 +278,10 @@ describe("sidebar session feedback", () => {
           };
           sidebar.requestUpdate();
         }
-        await sidebar.updateComplete;
+        await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);
-        if (mode === "chip") {
-          sidebar.querySelector<HTMLButtonElement>(".sidebar-session-filter-summary")!.click();
-        } else {
-          await selectFilter(sidebar, "owner:");
-        }
-        await sidebar.updateComplete;
+        await selectFilter(sidebar, "owner:");
+        await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);
       }
     },

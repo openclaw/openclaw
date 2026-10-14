@@ -3,6 +3,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,6 +14,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
@@ -30,6 +32,7 @@ import {
 } from "./queue.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
 import {
   isReplyOperationStalledBeforeOutput,
   STALLED_TURN_NOTICE_TEXT,
@@ -91,11 +94,17 @@ export function createFollowupRunner(
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const defaults = { ...initialDefaults, resolveGatewayContext };
   // Every queue handoff, including delivery retries, retains this host owner
-  // without borrowing the invoking turn's request-local authority.
+  // without borrowing the invoking turn's request or workspace-preparation authority.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
-    withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
-      inheritRequestScope: false,
-    });
+    runWithAgentWorkspaceReadiness(undefined, () =>
+      withPluginRuntimeGatewayContextResolver(
+        resolveGatewayContext,
+        () => executeFollowup(queued),
+        {
+          inheritRequestScope: false,
+        },
+      ),
+    );
   const deliverProgress = async (
     turn: AdmittedFollowupTurn,
     payloads: ReplyPayload[],
@@ -159,6 +168,7 @@ export function createFollowupRunner(
       const turn: AdmittedFollowupTurn = admission.turn;
       admittedTurn = turn;
       operation = turn.operation;
+      retainReplyOperationUntilComplete(operation);
       const execution = await executeFollowupTurn({
         turn,
         defaults,
@@ -202,19 +212,43 @@ export function createFollowupRunner(
       ) {
         await defaults.opts?.onObservedReplyDelivery?.();
       }
-      const accounting = await accountFollowupTurn({ turn, defaults, execution });
       const deliveryOpts = {
         ...defaults.opts,
         sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
         resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+        resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
-      const decision = await resolveFollowupDeliveryDecision({
-        turn,
-        execution: execution.execution,
-        accounting,
-        opts: deliveryOpts,
-      });
+      const decision = await withAgentTurnCompletion(
+        {
+          agentId: turn.queued.run.agentId,
+          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+          sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+          entry: turn.session.current(),
+          writer:
+            execution.execution.outcome.kind === "settled"
+              ? execution.execution.outcome.sessionWriter
+              : undefined,
+          operation: turn.operation,
+          publish: (entry) => turn.session.publish(entry),
+        },
+        async (turnCompletion) => {
+          const accounting = await accountFollowupTurn({
+            turn,
+            defaults,
+            execution,
+            completion: turnCompletion,
+          });
+          const resolved = await resolveFollowupDeliveryDecision({
+            turn,
+            execution: execution.execution,
+            accounting,
+            opts: deliveryOpts,
+          });
+          await turnCompletion?.complete();
+          return resolved;
+        },
+      );
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {
           progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;

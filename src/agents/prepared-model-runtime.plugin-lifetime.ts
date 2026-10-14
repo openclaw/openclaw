@@ -226,11 +226,6 @@ export function retainPreparedPluginGeneration(
   };
 }
 
-// Only configured publication grants fresh-admission authority. Parent-derived and run-owned
-// generations stay confined to their exact selections after a newer configured publication.
-export const configuredPreparedPluginGenerations =
-  new WeakSet<PreparedModelRuntimePluginGeneration>();
-
 /** Publishing replaces one reference, while admitted leases retain their exact generation. */
 export function publishPreparedPluginGeneration(
   owner: PreparedModelRuntimeOwner,
@@ -253,9 +248,6 @@ export function publishPreparedPluginGeneration(
     );
   }
   const release = ownPreparedPluginGeneration(generation).retain();
-  if (owner.provenance === "configured") {
-    configuredPreparedPluginGenerations.add(generation);
-  }
   const version = owner.generation;
   const gatewayLenders = new Set<PluginRegistry>();
   let signal: AbortSignal | undefined;

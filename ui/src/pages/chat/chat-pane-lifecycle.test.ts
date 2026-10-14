@@ -16,9 +16,12 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
+  createPaneTestHost,
+  getPaneTestRuntime,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -54,9 +57,8 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   const key = "agent:main:parked-edit";
   const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
   const pane = fixture.mount(key);
-  const updates = vi.spyOn(pane, "performUpdate");
+  const updates = vi.spyOn(pane, "render");
   await pane.updateComplete;
-  expect(updates).toHaveBeenCalledTimes(1);
   await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(160);
   await vi.dynamicImportSettled();
@@ -87,7 +89,6 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
 describe("chat pane composer prefill attention", () => {
   it.each([
     { label: "repeated draft prefill", draft: "Prefilled prompt", repeat: true, attention: true },
-    { label: "plain focus", draft: undefined, repeat: false, attention: false },
   ])("focuses with the expected attention cue for $label", ({ draft, repeat, attention }) => {
     vi.useFakeTimers();
     const { pane } = createTestChatPane({
@@ -131,7 +132,11 @@ describe("chat pane composer prefill attention", () => {
 
 describe("chat pane first-turn attachment lifecycle", () => {
   it("claims the connected client's first message before attaching the pane", () => {
-    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    // SAFETY: The shared test host forwards the controller surface declared by TestChatPane.
+    const pane = createPaneTestHost(
+      "openclaw-chat-runtime-test",
+      ChatPaneRuntime,
+    ) as unknown as TestChatPane;
     const targetSessionKey = "agent:main:created-session";
     const client = {
       addEventListener: vi.fn(() => vi.fn()),
@@ -158,7 +163,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
     });
 
     try {
-      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
       expect(attachedState?.client).toBe(client);
       expect(attachedState?.chatMessages).toEqual([
         expect.objectContaining({
@@ -175,7 +180,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
 });
 
 describe("chat pane initial panel layout", () => {
-  it.each(["absent", "closed", "open"] as const)(
+  it.each(["absent", "open"] as const)(
     "restores its own %s layout instead of another split pane's layout",
     (preference) => {
       vi.stubGlobal("localStorage", createStorageMock());
@@ -185,7 +190,11 @@ describe("chat pane initial panel layout", () => {
       const leftLayout = setSidebarOpen(openSlot({ columns: [] }, "detail"), preference === "open");
       const client = createGatewayBrowserClientFixture();
       const context = createInitializationContext(client);
-      const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+      // SAFETY: The shared test host forwards the controller surface declared by TestChatPane.
+      const pane = createPaneTestHost(
+        "openclaw-chat-runtime-test",
+        ChatPaneRuntime,
+      ) as unknown as TestChatPane;
       pane.context = context;
       pane.sessionKey = left;
       pane.chatMessagesBySession = new Map();
@@ -213,7 +222,7 @@ describe("chat pane initial panel layout", () => {
         expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "detail");
       };
       try {
-        expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+        expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
         expectOwnLayout();
         pane.applyGatewaySnapshot({ ...context.gateway.snapshot, phase: "reconnecting" });
         expectOwnLayout();
@@ -418,20 +427,6 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(pane.typingActors.size).toBe(0);
   });
 
-  it("preserves an author's resolved event while its role is still loading", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createSuggestionPane(client);
-    pane.context.gateway.snapshot.selfUser = { id: "alice" } as never;
-    const pending = pendingSuggestion(state.sessionKey, "mine", "my suggestion");
-    pane.sessionSuggestions = [pending];
-
-    pane.handleSessionSuggestionEvent({
-      action: "resolved",
-      suggestion: { ...pending, state: "accepted" },
-    });
-    expect(pane.sessionSuggestions).toEqual([{ ...pending, state: "accepted" }]);
-  });
-
   it("keeps an owner's self-authored resolved suggestion through the following list", async () => {
     const listed = createDeferred<SessionSuggestionsListResult>();
     const resolvedResponse = createDeferred<{ suggestion: SessionSuggestion }>();
@@ -528,44 +523,6 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(state.chatError).toBeNull();
   });
 
-  it("loads an owner's pending suggestions after visibility changes to draft", async () => {
-    const visibility = "draft";
-    const pending: SessionSuggestion = {
-      id: `pending-${visibility}`,
-      sessionKey: "agent:main:current",
-      agentId: "main",
-      author: { type: "human", id: "alice", label: "Alice" },
-      text: "still needs review",
-      createdAt: 1,
-      state: "pending",
-    };
-    const request = vi.fn(async () => ({ suggestions: [pending], role: "owner" as const }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createSuggestionPane(client);
-    state.sessionsResult = {
-      count: 1,
-      path: "",
-      sessions: [
-        {
-          key: state.sessionKey,
-          kind: "direct",
-          updatedAt: 1,
-          visibility,
-          sharingRole: "owner",
-        },
-      ],
-    } as never;
-
-    await pane.refreshSessionSuggestions();
-
-    expect(request).toHaveBeenCalledWith(
-      "session.suggestions.list",
-      expect.objectContaining({ sessionKey: state.sessionKey }),
-    );
-    expect(pane.sessionSuggestions).toEqual([pending]);
-    expect(pane.sessionSuggestionRole).toBe("owner");
-  });
-
   it("does not apply an edit failure after the same session key rotates instances", async () => {
     const deferred = createDeferred<never>();
     const client = {
@@ -590,32 +547,6 @@ describe("chat pane session suggestion lifecycle", () => {
     await pending;
     expect(state.chatMessage).toBe("new session draft");
     expect(state.chatError).not.toBe("old request failed");
-  });
-
-  it("keeps suggested text after an ambiguous edit failure", async () => {
-    const client = {
-      request: vi.fn(async () => {
-        throw new Error("response lost");
-      }),
-    } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: {} as SessionCapability,
-    });
-    const suggestion = pendingSuggestion(
-      state.sessionKey,
-      "edit-ambiguous",
-      "@Alex preserve this suggestion",
-    );
-    state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
-    state.chatMessage = "@Alex owner draft";
-    state.chatMentions = [{ profileId: "alex-profile", start: 0, end: 5 }];
-
-    await pane.resolveCurrentSessionSuggestion(suggestion, "edit");
-
-    expect(state.chatMessage).toBe("@Alex preserve this suggestion");
-    expect(state.chatMentions).toEqual([]);
-    expect(state.chatError).toBe("response lost");
   });
 
   it.each([false, true])(

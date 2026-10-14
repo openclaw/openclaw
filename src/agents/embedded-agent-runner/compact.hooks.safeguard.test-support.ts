@@ -16,10 +16,14 @@ import { createEventBus } from "../sessions/event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
+import { mockCallArg } from "./compact.hooks.assertions.test-support.js";
 import {
+  applyExtraParamsToAgentMock,
   hookRunner,
   limitHistoryTurnsMock,
   resolveEffectiveCompactionModeMock,
+  sessionAutomaticCompactionMock,
+  sessionManualCompactionMock,
 } from "./compact.hooks.harness.js";
 
 type Compact = typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
@@ -33,6 +37,41 @@ export function registerCompactionSafeguardTests({
   wrappedCompactionArgs: (overrides?: Record<string, unknown>) => Parameters<Compact>[0];
   getWorkspaceDir: () => string;
 }) {
+  it.each([
+    { modelCallUrgency: undefined, expectedUrgency: "background" },
+    { modelCallUrgency: "foreground", expectedUrgency: "foreground" },
+    { modelCallUrgency: "normal", expectedUrgency: "normal" },
+  ] as const)(
+    "carries the pending request and $expectedUrgency urgency into safeguard budget recovery",
+    async ({ modelCallUrgency, expectedUrgency }) => {
+      const { attachCompactionAccountingRecorder } =
+        await import("./run/compaction-accounting-bridge.js");
+      const contextEngineRuntimeContext = {};
+      attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+        pendingRequestState: "unresolved",
+      });
+      resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
+
+      const compactionParams = wrappedCompactionArgs({
+        trigger: "budget",
+        modelCallUrgency,
+        contextEngineRuntimeContext,
+      });
+      const result = await compactEmbeddedAgentSessionDirect(compactionParams);
+
+      expect(result).toMatchObject({ ok: true, compacted: true });
+      expect(mockCallArg(applyExtraParamsToAgentMock, 0, 11)).toMatchObject({
+        modelCallUrgency: expectedUrgency,
+      });
+      expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
+        compactionParams.customInstructions,
+        "unresolved",
+        "none",
+      );
+      expect(sessionManualCompactionMock).not.toHaveBeenCalled();
+    },
+  );
+
   describe("safeguard failure provenance", () => {
     registerAgentSessionLoopTestLifecycle();
     const originalHistoryLimit = expectDefined(
@@ -185,10 +224,10 @@ export function registerCompactionSafeguardTests({
 
     it.each([
       ["provider timeout", "request timed out", "fallback"],
-      ["intentional quality rejection", undefined, "cancel"],
+      ["intentional quality rejection", undefined, "degrade"],
       ["explicit model timeout", "request timed out", "cancel"],
-      // A failed corrective attempt stays a terminal quality cancellation, even on a 408.
-      ["corrective 408", "408", "cancel"],
+      // A corrective failure reuses the successful earlier summary on the same model.
+      ["corrective 408", "408", "degrade"],
       [
         "reasoning-mandatory rejection",
         "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
@@ -262,7 +301,7 @@ export function registerCompactionSafeguardTests({
                   {
                     type: "text",
                     text:
-                      outcome === "cancel" || corrective
+                      outcome === "cancel" || outcome === "degrade" || corrective
                         ? "Missing required sections."
                         : fallbackSummary,
                   },
@@ -333,7 +372,16 @@ export function registerCompactionSafeguardTests({
           fallback ? [primary, backup] : [primary],
         );
         expect(config).toEqual(configBefore);
-        if (outcome !== "cancel") {
+        if (outcome === "degrade") {
+          expect(result).toMatchObject({ ok: true, compacted: true });
+          expect(
+            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+          ).toMatchObject({
+            summary: expect.stringContaining("Missing required sections."),
+            details: { qualityDegraded: true },
+          });
+          expect(sessionManager.buildSessionContext().messages).not.toEqual(originalMessages);
+        } else if (outcome !== "cancel") {
           if (outcome === "thinking") {
             expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
           }

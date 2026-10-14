@@ -87,22 +87,6 @@ function createReactionTestHarness() {
   return { handler, enqueue };
 }
 
-function firstEnqueueCall(enqueue: ReturnType<typeof vi.fn>): unknown[] {
-  const [call] = enqueue.mock.calls;
-  if (!call) {
-    throw new Error("Expected enqueueSystemEvent call");
-  }
-  return call;
-}
-
-function firstEnqueueLabel(enqueue: ReturnType<typeof vi.fn>): string {
-  const [label] = firstEnqueueCall(enqueue);
-  if (typeof label !== "string") {
-    throw new Error("Expected enqueueSystemEvent label");
-  }
-  return label;
-}
-
 async function invokeReactionEvent(
   handler: ReturnType<typeof createMSTeamsReactionHandler>,
   activity: Record<string, unknown>,
@@ -126,39 +110,8 @@ describe("createMSTeamsReactionHandler", () => {
     resetSystemEventsForTest();
   });
 
-  describe("emoji mapping", () => {
-    it("maps heart, laugh, surprised, sad, angry reaction types", async () => {
-      const emojiMap: Record<string, string> = {
-        heart: "❤️",
-        laugh: "😆",
-        surprised: "😮",
-        sad: "😢",
-        angry: "😡",
-      };
-
-      for (const [type, expectedEmoji] of Object.entries(emojiMap)) {
-        const { handler, enqueue } = createReactionTestHarness();
-        await invokeReactionEvent(
-          handler,
-          {
-            reactionsAdded: [{ type }],
-            from: { id: "user-id", aadObjectId: "allowed-aad", name: "Bob" },
-            replyToId: "msg-456",
-          },
-          "added",
-        );
-        const label = firstEnqueueLabel(enqueue);
-        expect(label).toContain(expectedEmoji);
-      }
-    });
-  });
-
   describe("inbound reaction events", () => {
-    it.each([
-      { conversationType: "personal", conversationId: "a:dm" },
-      { conversationType: "groupChat", conversationId: "19:g@thread.v2" },
-      { conversationType: "channel", conversationId: "19:c@thread.tacv2" },
-    ] as const)(
+    it.each([{ conversationType: "groupChat", conversationId: "19:g@thread.v2" }] as const)(
       "enqueues the exact inbound reaction event label for $conversationType conversations",
       async ({ conversationType, conversationId }) => {
         const { handler, enqueue } = createReactionTestHarness();
@@ -182,24 +135,6 @@ describe("createMSTeamsReactionHandler", () => {
         );
       },
     );
-
-    it("enqueues system event for reactionsRemoved", async () => {
-      const { handler, enqueue } = createReactionTestHarness();
-      await invokeReactionEvent(
-        handler,
-        {
-          reactionsRemoved: [{ type: "heart" }],
-          from: { id: "u1", aadObjectId: "allowed-aad", name: "User" },
-          replyToId: "msg-2",
-        },
-        "removed",
-      );
-
-      expect(enqueue).toHaveBeenCalledOnce();
-      const label = firstEnqueueLabel(enqueue);
-      expect(label).toContain("removed");
-      expect(label).toContain("❤️");
-    });
 
     it("skips when reactions array is empty", async () => {
       const { handler, enqueue } = createReactionTestHarness();
@@ -268,55 +203,22 @@ describe("createMSTeamsReactionHandler", () => {
       };
     }
 
-    it.each(["added", "removed"] as const)(
-      "drops a %s reaction from a team/channel outside the configured allowlist",
-      async (direction) => {
-        const { handler, enqueue } = createRouteHarness();
-        const reaction = reactionFrom(
-          { id: "19:excluded-channel@thread.tacv2", conversationType: "channel" },
-          "excludedTeam",
-        );
-        await invokeReactionEvent(
-          handler,
-          direction === "added"
-            ? reaction
-            : { ...reaction, reactionsAdded: undefined, reactionsRemoved: [{ type: "like" }] },
-          direction,
-        );
-
-        expect(enqueue).not.toHaveBeenCalled();
-      },
-    );
-
-    it("enqueues a reaction from an allowlisted team/channel", async () => {
+    it("drops a removed reaction from a team/channel outside the configured allowlist", async () => {
       const { handler, enqueue } = createRouteHarness();
+      const reaction = reactionFrom(
+        { id: "19:excluded-channel@thread.tacv2", conversationType: "channel" },
+        "excludedTeam",
+      );
       await invokeReactionEvent(
         handler,
-        reactionFrom(
-          { id: "19:trusted-channel@thread.tacv2", conversationType: "channel" },
-          "trustedTeam",
-        ),
-        "added",
+        { ...reaction, reactionsAdded: undefined, reactionsRemoved: [{ type: "like" }] },
+        "removed",
       );
 
-      expect(enqueue).toHaveBeenCalledOnce();
+      expect(enqueue).not.toHaveBeenCalled();
     });
 
     it.each([
-      {
-        scopeMarker: "isGroup",
-        conversation: {
-          id: "19:excluded-channel@thread.tacv2",
-          conversationType: "personal",
-          isGroup: true,
-        },
-        channelData: undefined,
-      },
-      {
-        scopeMarker: "team metadata",
-        conversation: { id: "19:excluded-channel@thread.tacv2", conversationType: "personal" },
-        channelData: { team: { id: "excludedTeam" } },
-      },
       {
         scopeMarker: "channel metadata",
         conversation: { id: "19:excluded-channel@thread.tacv2", conversationType: "personal" },

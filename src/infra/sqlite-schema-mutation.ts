@@ -1,5 +1,6 @@
 import {
   findSqlCharacter,
+  hasUnquotedSqlKeyword,
   normalizeSqlIdentifier,
   normalizeSqlWhitespace,
   readSqlToken,
@@ -91,7 +92,7 @@ function changesOnlyTemporaryTable(sql: string): boolean {
 
 // A write to another table can change policy through a trigger.
 function changesData(sql: string): boolean {
-  return /\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql);
+  return hasUnquotedSqlKeyword(sql, /\b(?:INSERT|UPDATE|DELETE|REPLACE)\b/giu);
 }
 
 function temporaryWriteTables(sql: string): string[] | undefined {

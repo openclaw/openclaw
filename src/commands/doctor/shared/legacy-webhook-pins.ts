@@ -10,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../../infra/kysely-sync.js";
+import { resolveUpdateRehearsalRoot } from "../../../infra/update-rehearsal-paths.js";
 import { resolveChannelConfigEnablement } from "../../../plugins/config-normalization-shared.js";
 import { normalizePluginsConfig } from "../../../plugins/config-state.js";
 import type { PluginDoctorHistoricalWebhookListener } from "../../../plugins/doctor-contract-module.js";
@@ -161,5 +162,12 @@ export function applyHistoricalWebhookPins(
   config.meta.migrations ??= {};
   config.meta.migrations.webhookListeners = existing ? completed : true;
   changes.push("Recorded webhook listener decisions; removed pins will not be recreated.");
-  return { ...mutation, config, changes };
+  const result = { ...mutation, config, changes };
+  if (
+    resolveUpdateRehearsalRoot(env) &&
+    recordUnwrittenWebhookCompletion({ sourceConfig: mutation.config }, result, env)
+  ) {
+    return mutation;
+  }
+  return result;
 }

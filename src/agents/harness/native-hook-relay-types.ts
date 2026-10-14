@@ -82,6 +82,8 @@ export type NativeHookRelayRegistration = {
   requester?: PluginHookToolRequesterContext;
   approvalContext?: NativeHookRelayApprovalContext;
   allowedEvents: readonly NativeHookRelayEvent[];
+  /** Keep host policy active for every native tool even without plugin hooks. */
+  requirePreToolUse?: boolean;
   expiresAtMs: number;
   signal?: AbortSignal;
   /** Exact host policy capability for authority-bearing native callbacks. */
@@ -90,6 +92,8 @@ export type NativeHookRelayRegistration = {
   approvalHost?: Pick<AgentHarnessHostCapabilities, "requestApproval" | "waitForApproval">;
   /** Revalidates the exact admitted owner after authority-bearing awaits. */
   assertActive?: AgentHarnessHostCapabilities["assertActive"];
+  /** Reads worker-owned execution policy before returning permission to the native runtime. */
+  assertActiveAsync?: () => Promise<void>;
   onPreToolUseFailure?: (failure: {
     toolName: string;
     toolCallId: string;
@@ -128,11 +132,14 @@ export type RegisterNativeHookRelayParams = {
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;
+  /** Never prune the all-tool PreToolUse policy relay. Requires runBeforeToolCall. */
+  requirePreToolUse?: boolean;
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
   runBeforeToolCall?: NativeHookRelayRegistration["runBeforeToolCall"];
   assertActive?: NativeHookRelayRegistration["assertActive"];
+  assertActiveAsync?: NativeHookRelayRegistration["assertActiveAsync"];
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
@@ -158,6 +165,7 @@ export type InvokeNativeHookRelayParams = {
 };
 
 export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
+  signal?: AbortSignal;
   registrationTimeoutMs?: number;
   stateDbPath?: string;
   timeoutMs?: number;

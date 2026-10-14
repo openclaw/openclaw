@@ -13,7 +13,12 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
+import {
+  createContext,
+  createGateway,
+  createRenderedPage,
+  reconnectPage,
+} from "./sessions-page.test-support.ts";
 
 function result(key: string): SessionsListResult {
   return sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
@@ -458,7 +463,7 @@ describe("Sessions page typing ownership", () => {
         await vi.advanceTimersByTimeAsync(400);
         expect(requests).toHaveLength(2);
         if (retirement === "detach") {
-          document.body.append(page);
+          reconnectPage(page);
         } else if (retirement === "context") {
           const replacement = createGateway(client);
           replacementSessions = createTestSessionCapability(replacement.gateway);

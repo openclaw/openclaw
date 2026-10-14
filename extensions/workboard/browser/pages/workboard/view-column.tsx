@@ -5,7 +5,6 @@ import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import {
-  getWorkboardState,
   moveWorkboardCard,
   type WorkboardCard,
   type WorkboardStatus,
@@ -18,6 +17,7 @@ import {
   canMutate,
   formatStatusLabel,
   workboardMutationContext,
+  workboardViewState,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
@@ -48,10 +48,7 @@ export function WorkboardColumn(input: {
     boardFilter?: string;
   };
 }) {
-  const state = () => {
-    void input.workboard.revision;
-    return getWorkboardState(input.workboard.host);
-  };
+  const state = workboardViewState(() => input.workboard);
   const writable = createMemo(() => {
     state();
     return canMutate(input.workboard);

@@ -115,7 +115,7 @@ export function preserveRosterPresentationMetadata(
   return row;
 }
 
-export function isOlderSessionSnapshot(
+function isOlderSessionSnapshot(
   incoming: GatewaySessionRow,
   existing: GatewaySessionRow | undefined,
 ): boolean {

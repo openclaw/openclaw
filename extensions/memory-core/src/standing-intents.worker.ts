@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import { ensureOpenClawAgentStandingIntentsSchema } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   assertTransactionUsable,
+  ensureOpenClawAgentStandingIntentsSchema,
   runSqliteImmediateTransactionSync,
   withSqlitePostCommitPublications,
   type SqliteWorkerBackend,
@@ -9,6 +9,9 @@ import {
 import {
   cancelStandingIntentInDatabase,
   createStandingIntentInDatabase,
+  getStandingIntentLifecycleDeadline,
+  hasNoActiveStandingIntents,
+  invalidateStandingIntentLifecycle,
   listStandingIntentsInDatabase,
   maintainStandingIntentLifecycle,
   matchStandingIntentsInDatabase,
@@ -21,20 +24,27 @@ export function bindSqliteWorkerBackend(
   context: { database: DatabaseSync; admit(stage: "transaction" | "commit"): void },
 ): SqliteWorkerBackend<StandingIntentWorkerOperations> {
   const db = context.database;
-  const transact = <T>(run: () => T): T =>
-    runSqliteImmediateTransactionSync(
-      db,
-      () => {
-        context.admit("transaction");
-        return run();
-      },
-      {
-        withCommit(commit) {
-          context.admit("commit");
-          commit();
+  const transact = <T>(run: () => T): T => {
+    try {
+      return runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          context.admit("transaction");
+          return run();
         },
-      },
-    );
+        {
+          withCommit(commit) {
+            context.admit("commit");
+            commit();
+          },
+        },
+      );
+    } catch (error) {
+      // A refused commit must not retain deadlines from its rolled-back transitions.
+      invalidateStandingIntentLifecycle(db);
+      throw error;
+    }
+  };
   let schemaPrepared = false;
   // First-use installation commits independently and consumes this request's grant pair.
   withSqlitePostCommitPublications(db, () =>
@@ -53,23 +63,29 @@ export function bindSqliteWorkerBackend(
       if (schemaPrepared) {
         return { kind: "schema-prepared" };
       }
+      const result = <T>(value: T) => ({
+        kind: "result" as const,
+        value,
+        nextDueAt: getStandingIntentLifecycleDeadline(db),
+      });
+      // Absence survives until an owner write; there is no effect to transact or authorize.
+      if (command.type === "match" && hasNoActiveStandingIntents(db)) {
+        return result([]);
+      }
       return transact<
         StandingIntentWorkerOperations[keyof StandingIntentWorkerOperations]["output"]
       >(() => {
         switch (command.type) {
           case "create":
-            return { kind: "result", value: createStandingIntentInDatabase(db, command.input) };
+            return result(createStandingIntentInDatabase(db, command.input));
           case "list":
-            return { kind: "result", value: listStandingIntentsInDatabase(db, command.input) };
+            return result(listStandingIntentsInDatabase(db, command.input));
           case "sweep":
-            return {
-              kind: "result",
-              value: maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()),
-            };
+            return result(maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()));
           case "cancel":
-            return { kind: "result", value: cancelStandingIntentInDatabase(db, command.input) };
+            return result(cancelStandingIntentInDatabase(db, command.input));
           case "match":
-            return { kind: "result", value: matchStandingIntentsInDatabase(db, command.input) };
+            return result(matchStandingIntentsInDatabase(db, command.input));
         }
         throw new Error("Unknown standing-intent command");
       });

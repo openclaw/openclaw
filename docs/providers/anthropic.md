@@ -167,6 +167,30 @@ OpenClaw release:
         captures recheck availability for their own generation. Model lists also
         recheck it in the background at most once a minute, so `claude auth login`
         or logout after Gateway startup reaches the model picker without a restart.
+
+        For native-login users, the model picker reads Claude Code's own model menu
+        in the background, without sending a prompt or using an inference turn.
+        It shows unique native model IDs as `anthropic/<id>` on the Claude CLI
+        runtime, with the effort levels reported by Claude Code. Models that allow
+        thinking to be disabled also offer `/think off`, independently of those
+        effort levels. Models with mandatory adaptive thinking do not offer `off`.
+        Account and organization restrictions therefore affect the menu. The hosted
+        OpenClaw catalog adds metadata only to those exact IDs; it cannot add native models.
+        New native models do not require an OpenClaw upgrade or a catalog edit.
+
+        Before the first discovery completes, only already configured or selected
+        models are available through the native route. Pickers never wait for the
+        subprocess. Existing configured and selected IDs remain listed and runnable,
+        including older IDs absent from the menu; deprecated rows stay hidden.
+        Use `openclaw models list --refresh --provider anthropic` to request fresh
+        discovery. API-only users and users with both API and native credentials
+        keep their existing API catalog behavior.
+
+        If a menu refresh fails temporarily, the picker keeps the last accepted
+        menu for the same authentication state. A successful refresh replaces
+        that menu, including when access becomes more restrictive. Changing
+        authentication discards the retained menu.
+
         New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
@@ -446,6 +470,9 @@ messages, without user-message delimiters. OpenClaw sends
 transcript but consume no input tokens after the next user message. Persistent
 prompt updates need no beta header. Operator system messages follow all other
 context for their user turn, including tool results.
+When replay excludes a Talk consult prompt, OpenClaw inserts a neutral user
+anchor (`.`) before any stranded system updates. This preserves their content,
+order, and lifetime without changing the pinned system prompt.
 Tool results and queued extension context also clear turn-scoped messages, so
 OpenClaw renews the current user turn's runtime context after those continuations.
 
@@ -928,8 +955,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     compaction occurs, OpenClaw assembles the streamed summary and stores it
     with the provider's opaque compaction metadata as hidden replay state. Both
     survive session reopening and are sent first on the next matching request.
-    Summary text still passes through transcript redaction; opaque metadata is
-    preserved for replay. The full transcript remains local; only the outbound
+    Summary text and opaque metadata are preserved without secret masking for
+    replay. The full transcript remains local; only the outbound
     history before the checkpoint is omitted. An empty compaction block is not
     stored as a checkpoint, so the next request sends the same history as
     before and OpenClaw's client-side compaction stays available. If Anthropic
@@ -1043,6 +1070,13 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Claude CLI login could not be verified">
+    OpenClaw waits up to 10 seconds for `claude auth status --json`, including
+    startup on slow hosts. A timeout does not mean that you are logged out.
+    Run that command as the Gateway user on the same host, then retry setup.
+    If it reports `loggedIn: false`, run `claude auth login` first.
+  </Accordion>
+
   <Accordion title="Claude CLI OAuth session expired or could not be refreshed">
     Run these commands as the Gateway user on the Gateway host:
 

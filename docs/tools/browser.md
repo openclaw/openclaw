@@ -32,7 +32,7 @@ one per reader job. Open the page that matches your task.
 ## What you get
 
 - A separate browser profile named **openclaw** (orange accent by default).
-- Deterministic tab control (list/open/focus/close).
+- Direct tab control (list/open/focus/close).
 - Agent actions (click/type/drag/select), snapshots, screenshots, PDFs.
 - Question answering over readable page text without returning a full snapshot.
 - Playwright-backed profiles save direct attachment navigations under the managed downloads directory and return `{ url, suggestedFilename, path }` metadata after final-URL policy validation.

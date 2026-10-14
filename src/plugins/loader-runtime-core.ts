@@ -54,6 +54,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
@@ -124,6 +125,7 @@ export type InternalPluginLoadOverrides = {
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
   const subagent: PluginRuntime["subagent"] = {
     complete: (...args) => runtime.subagent.complete(...args),
+    forkSession: (...args) => runtime.subagent.forkSession(...args),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
@@ -154,12 +156,24 @@ function createCapabilityCatalogContextResolver(
 }
 
 export function loadOpenClawPluginsCore(
+  ...args: Parameters<typeof loadOpenClawPluginsSteps>
+): PluginRegistry {
+  const steps = loadOpenClawPluginsSteps(...args);
+  let step = steps.next();
+  while (!step.done) {
+    step = steps.next();
+  }
+  return step.value;
+}
+
+/** One registration sequence, consumed synchronously by CLI/SDK callers or incrementally by hosts. */
+export function* loadOpenClawPluginsSteps(
   options: PluginLoadOptions,
   nativeBindings: NativePluginLoadBindings,
   overrides?: InternalPluginLoadOverrides,
   inspectionResources?: PluginRegistryInspectionResources,
   trackActivationCleanup?: (completion: Promise<void>) => void,
-): PluginRegistry {
+): Generator<void, PluginRegistry> {
   if (getPluginCache().retirement) {
     throw new Error("Plugin inventory has retired; begin a new plugin operation.");
   }
@@ -344,7 +358,6 @@ export function loadOpenClawPluginsCore(
         preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
       },
       context.registrationConfigKey,
-      loaderCacheIdentity,
     );
     const replacedIds = new Set([
       ...(options.replacePluginIds ?? []),
@@ -534,6 +547,7 @@ export function loadOpenClawPluginsCore(
         }
         continue;
       }
+      const attemptedBefore = state.pluginLoadAttemptCount;
       const input = inputs.get(manifestRecord.id);
       const loadCandidate = () =>
         loadRuntimePluginCandidate({
@@ -554,6 +568,12 @@ export function loadOpenClawPluginsCore(
         withPluginRegistryPreparationScope(registry, loadCandidate);
       } else {
         loadCandidate();
+      }
+      if (state.pluginLoadAttemptCount !== attemptedBefore) {
+        yield;
+        if (getPluginCache().retirement) {
+          throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+        }
       }
     }
     const pluginLoadElapsedMs = performance.now() - pluginLoadStartMs;
@@ -607,6 +627,8 @@ export function loadOpenClawPluginsCore(
         );
       }
     }
+    // Presence of this identity also admits immutable private-registry policy caching.
+    getPluginRuntimeLoadContextState(registry)!.loaderCacheIdentity = loaderCacheIdentity;
     if (context.shouldActivate) {
       // Install the complete bundle before hook-runner initialization.
       activatePluginRegistry(

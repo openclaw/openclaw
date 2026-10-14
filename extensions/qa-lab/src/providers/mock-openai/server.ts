@@ -742,9 +742,9 @@ async function buildResponsesPayload(
       completedToolName === "tool_search" &&
       !toolOutput.includes("FAKE_PLUGIN_OK") &&
       toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
-      hasDeclaredTool(body, "tool_call")
+      hasDeclaredTool(body, "dispatch_action")
     ) {
-      return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
+      return buildToolCallEventsWithArgs("dispatch_action", { id: targetTool, args: plannedArgs });
     }
     if (
       !hasCompletedToolOutput &&

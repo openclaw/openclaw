@@ -396,15 +396,14 @@ mkdirSync(process.argv[outIndex + 1]);
   });
 
   it.each(["synthesize", "synthesizeTelephony"] as const)(
-    "keeps %s debug previews free of lone surrogates",
+    "keeps spoken text out of %s debug logs",
     async (method) => {
-      const text = `${"a".repeat(49)}😀tail`;
+      const text = "private spoken message 😀";
       const providerConfig = { command: "missing-openclaw-tts-test-command" };
       const run = synthesize(providerConfig, { text, method });
       await expect(run).rejects.toThrow();
 
-      const preview = String(debugLogMock.mock.calls[0]?.[0]);
-      expect(Buffer.from(preview).toString()).toBe(preview);
+      expect(debugLogMock.mock.calls.flat().join("\n")).not.toContain("private spoken message");
     },
   );
 });

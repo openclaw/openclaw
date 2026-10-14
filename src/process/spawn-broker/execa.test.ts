@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
-import { execa, type Options } from "execa";
+import { execa } from "execa";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
@@ -12,6 +12,7 @@ import { runCommandWithTimeout } from "../exec.js";
 import { BrokerChild } from "./child.js";
 import { runWithSpawnBroker } from "./context.js";
 import { brokerExecaOptions, spawnBrokerCommand } from "./execa-client.js";
+import type { CommandSpawnOptions } from "./execa-types.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
@@ -29,7 +30,7 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
     await host.close();
   });
 
-  function start(source: string, options: Options, broker: boolean) {
+  function start(source: string, options: CommandSpawnOptions, broker: boolean) {
     const argv = [process.execPath, "-e", source];
     if (!broker) {
       return execa(argv[0]!, argv.slice(1), options);

@@ -229,7 +229,12 @@ suite.define(() => {
             await bottom.locator(".tabstrip-tab").first().click();
             await openChatSidePanelType(activePane, "Terminal");
             await embedded.locator(".tp-host canvas:visible").waitFor();
-            await openChatSidePanelType(activePane, "Terminal");
+            const addTab = activePane.getByRole("button", { name: "Add side panel tab" });
+            await addTab.click();
+            await addTab
+              .locator("..")
+              .getByRole("menuitem", { name: /^Terminal\b/ })
+              .click();
             await expect
               .poll(async () => (await gateway.getRequests("terminal.open")).length)
               .toBe(3);
@@ -348,7 +353,7 @@ suite.define(() => {
           await expect.poll(() => embedded.isVisible()).toBe(false);
           await selectChat(destination);
           await embedded.locator(".tp-host canvas:visible").waitFor();
-          await page.locator(".sidebar-brand__new-thread").click();
+          await page.locator(".sidebar-rail .sidebar-new-session").click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await expect.poll(() => bottom.locator(".tp").count()).toBe(0);
         },

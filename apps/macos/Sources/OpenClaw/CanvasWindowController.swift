@@ -10,7 +10,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     private let sessionDir: URL
     private let schemeHandler: CanvasSchemeHandler
     let webView: WKWebView
-    private let watcher: CanvasFileWatcher
+    let watcher: CanvasFileWatcher
     private let container: HoverChromeContainerView
     private let anchorProvider: () -> NSRect?
     var preferredPlacement: CanvasPlacement?
@@ -158,10 +158,6 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
 
     private func updateFilePolling() {
         self.watcher.setPollingEnabled(self.canvasVisible && self.watchesLocalCanvasFiles)
-    }
-
-    var _testIsFilePollingActive: Bool {
-        self.watcher.isPolling
     }
 
     func updateDebugStatus(enabled: Bool, title: String?, subtitle: String?) {

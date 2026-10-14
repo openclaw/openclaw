@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import * as logging from "../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -113,15 +114,18 @@ it.each(
             expect(database.db.isTransaction).toBe(false);
             expect(rows()).toEqual(before);
             order.push("native:prepare");
-            const result = await run({
-              commit: () => {
-                expect(database.db.isTransaction).toBe(true);
-                order.push("native:commit");
-              },
-              rollback: () => {
-                order.push("native:rollback");
-              },
-            });
+            const result = await run(
+              createNativeSessionCommitFinalizer({
+                commit: () => {
+                  expect(database.db.isTransaction).toBe(false);
+                  expect(rows()).toEqual([{ session_key: targetKey, label: "after" }]);
+                  order.push("native:commit");
+                },
+                rollback: () => {
+                  order.push("native:rollback");
+                },
+              }),
+            );
             order.push("native:release");
             return result;
           },
@@ -361,7 +365,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
     const reclaim = reclamationRun.runSqliteSessionReclamation;
     vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
       const result = await reclaim(params);
-      if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+      if (params.plan.kind === "maintenance-age") {
         deadlineRead.resolve();
       }
       return result;

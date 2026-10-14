@@ -26,9 +26,6 @@ export type ToolsEffectiveState = {
   toolsEffectiveResultKey?: string | null;
 };
 
-// Session/model keys can recur; only the exact dispatch may publish or retire its owner.
-const requestOwners = new WeakMap<ToolsEffectiveState, symbol>();
-
 export function buildToolsEffectiveRequestKey(
   state: Pick<ToolsEffectiveState, "sessions" | "sessionsResult" | "chatModelCatalog">,
   params: { agentId: string; sessionKey: string },
@@ -43,8 +40,6 @@ export async function loadToolsEffective(
   state: ToolsEffectiveState,
   params: { agentId: string; sessionKey: string },
   options: {
-    isCurrent?: () => boolean;
-    ignoreResponse?: (agentId: string, requestKey: string) => boolean;
     onError?: (error: unknown) => string;
   } = {},
 ) {
@@ -64,46 +59,34 @@ export async function loadToolsEffective(
   ) {
     return;
   }
-  const requestOwner = Symbol("effective-tools-request");
-  requestOwners.set(state, requestOwner);
-  const isCurrentRequest = () =>
-    state.client === client &&
-    state.connected &&
-    requestOwners.get(state) === requestOwner &&
-    (options.isCurrent?.() ?? true);
-  const shouldIgnoreResponse = () =>
-    !isCurrentRequest() || (options.ignoreResponse?.(resolvedAgentId, requestKey) ?? false);
   state.toolsEffectiveLoading = true;
   state.toolsEffectiveLoadingKey = requestKey;
   state.toolsEffectiveResultKey = null;
   state.toolsEffectiveError = null;
   state.toolsEffectiveResult = null;
-  try {
-    const result = await client.request<ToolsEffectiveResult>("tools.effective", {
+  const outcome = await client
+    .request<ToolsEffectiveResult>("tools.effective", {
       agentId: resolvedAgentId,
       sessionKey: resolvedSessionKey,
-    });
-    if (shouldIgnoreResponse()) {
-      return;
-    }
+    })
+    .then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+  if (state.client !== client || state.toolsEffectiveLoadingKey !== requestKey) {
+    return;
+  }
+  state.toolsEffectiveLoadingKey = null;
+  state.toolsEffectiveLoading = false;
+  if ("error" in outcome) {
+    state.toolsEffectiveError = options.onError?.(outcome.error) ?? formatUiError(outcome.error);
+  } else {
     state.toolsEffectiveResultKey = requestKey;
-    state.toolsEffectiveResult = result;
-  } catch (error) {
-    if (shouldIgnoreResponse()) {
-      return;
-    }
-    state.toolsEffectiveError = options.onError?.(error) ?? formatUiError(error);
-  } finally {
-    if (isCurrentRequest() && state.toolsEffectiveLoadingKey === requestKey) {
-      requestOwners.delete(state);
-      state.toolsEffectiveLoadingKey = null;
-      state.toolsEffectiveLoading = false;
-    }
+    state.toolsEffectiveResult = outcome.result;
   }
 }
 
 export function resetToolsEffectiveState(state: ToolsEffectiveState) {
-  requestOwners.delete(state);
   state.toolsEffectiveResult = null;
   state.toolsEffectiveResultKey = null;
   state.toolsEffectiveError = null;

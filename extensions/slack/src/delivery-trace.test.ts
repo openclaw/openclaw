@@ -32,6 +32,7 @@ import {
   buildSlackDeliveryProofVerdict,
   collectSlackWireTexts,
   createSlackTsNormalizer,
+  assertSlackProgressMentionHttpTrace,
 } from "./delivery-trace.test-support.js";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
@@ -531,6 +532,7 @@ async function setupSlackTrace(
   recorder: { recordWireCall: (call: RecordedWireCall) => void },
   scenario: SlackTraceScenarioName,
   configure?: (prepared: PreparedSlackMessage) => void,
+  httpClient?: WebClient,
 ) {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.tsCounter = 0;
@@ -545,7 +547,9 @@ async function setupSlackTrace(
     scenario === "short-final-native-rejection"
       ? "method_not_supported_for_channel_type"
       : undefined;
-  traceState.client = createRecordingSlackClient();
+  traceState.client = httpClient
+    ? (httpClient as unknown as Record<string, unknown>)
+    : createRecordingSlackClient();
 
   const prepared = createPreparedTraceMessage(scenario);
   configure?.(prepared);
@@ -674,6 +678,37 @@ async function setupSlackTrace(
 }
 
 describe("slack delivery trace goldens", () => {
+  it.each(["compact", "inferred-compact", "partial", "card"] as const)(
+    "keeps native mention policy through serialized %s posts and edits",
+    async (mode) => {
+      await assertSlackProgressMentionHttpTrace({
+        mode,
+        setup: (recorder, client) =>
+          setupSlackTrace(
+            recorder,
+            mode === "partial" ? "cancel-mid-stream" : "progress-compact-commentary",
+            (prepared) => {
+              if (mode !== "partial") {
+                prepared.account.config.streaming = {
+                  mode: "progress",
+                  progress: {
+                    ...(mode === "inferred-compact" ? {} : { style: mode }),
+                    nativeTaskCards: false,
+                    label: false,
+                    maxLineChars: 1000,
+                    commentary: true,
+                    toolProgress: false,
+                  },
+                };
+              }
+            },
+            client,
+          ),
+      });
+      expect(traceRuntimeError).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       name: "explicit progress mode",

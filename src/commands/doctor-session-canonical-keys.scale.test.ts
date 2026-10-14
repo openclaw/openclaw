@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -35,13 +36,11 @@ it("repairs deep owner aliases without losing a large healthy transcript", async
     const window = db.prepare(
       "INSERT INTO session_windows (session_id, session_key, reason, session_scope, created_at, updated_at) VALUES (?, ?, 'initial', 'conversation', 10, 10)",
     );
-    const event = db.prepare(
-      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, 10)",
-    );
     const identity = db.prepare(
       "INSERT INTO transcript_event_identities (session_id, event_id, seq, event_type, parent_id, created_at) VALUES (?, ?, ?, 'message', ?, 10)",
     );
     const sessionId = `scale-${aliasCount}`;
+    const insertEvent = createTranscriptEventInserter(db, sessionId);
     db.exec("BEGIN");
     try {
       for (let index = 0; index <= aliasCount; index += 1) {
@@ -57,16 +56,16 @@ it("repairs deep owner aliases without losing a large healthy transcript", async
       for (let seq = 0; seq < eventCount; seq += 1) {
         const id = `event-${seq}`;
         const parentId = seq === 0 ? null : `event-${seq - 1}`;
-        event.run(
-          sessionId,
+        insertEvent({
           seq,
-          JSON.stringify({
+          eventJson: JSON.stringify({
             id,
             parentId,
             type: "message",
             message: { role: "user", content: `history ${seq}` },
           }),
-        );
+          createdAt: 10,
+        });
         identity.run(sessionId, id, seq, parentId);
       }
       db.exec("COMMIT");

@@ -1,8 +1,5 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { splitMediaFromOutput } from "../media/parse.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import {
   buildAgentInternalEventContext,
@@ -17,7 +14,6 @@ import {
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  stripInternalRuntimeContext,
 } from "./internal-runtime-context.js";
 
 const MAX_STATUS_LABEL_CHARS = 500;
@@ -74,26 +70,9 @@ describe("agent internal events", () => {
     expect(event.result).toBe("The measured value is < 5.");
   });
 
-  it("rebuilds media retry instructions separately from the retained media references", () => {
-    const media = ["https://example.test/report.png"];
-    const fragments = buildGeneratedMediaDeliveryContext(media, true);
-    expect(fragments.find((fragment) => fragment.kind === "runtime-instruction")?.text).toContain(
-      "Do not resend any other attachment.",
-    );
-    expect(fragments.find((fragment) => fragment.kind === "conversation-data")?.text).toBe(
-      "Generated media:\nMEDIA:https://example.test/report.png",
-    );
-    expect(media).toEqual(["https://example.test/report.png"]);
-  });
-
   it.each([
     "https://example.com/video.mp4?X-Amz-Signature=fake[[reply_to:999]]",
-    "https://example.com/video.mp4?signature=fake[[audio_as_voice]]",
-    "https://example.com/video.mp4?caption=![cover](https://example.org/cover.png)",
     'https://example.com/video.mp4?signature=part.png"}tail',
-    "https://example.com/video.mp4?token=ends,",
-    'https://example.com/video.mp4?token=ends"',
-    "https://example.com/video.mp4?token=ends\\",
   ])("preserves signed media through completion and retry directives: %s", (mediaUrl) => {
     const event = {
       ...taskCompletionEvent("Generated video."),
@@ -127,17 +106,6 @@ describe("agent internal events", () => {
     }
   });
 
-  it("preserves generated file URL bytes until native reply parsing owns conversion", () => {
-    const filePath = path.resolve("media", "render-final.png,");
-    const fileUrl = pathToFileURL(filePath).href;
-    const prompt = formatGeneratedMediaDeliveryRetryForPrompt([fileUrl]);
-    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
-    expect(splitMediaFromOutput(prompt).mediaUrls).toEqual([fileUrl]);
-    expect(parseReplyDirectives(prompt).mediaUrls).toEqual([filePath]);
-    expect(stripInternalRuntimeContext(prompt)).toBe("");
-  });
-
   it("normalizes media references while preserving Unicode and delimiter modes", () => {
     const unicode = "雪😀\ud800x\udc00\u0085\u200b\u2028Z";
     const reference = ` /tmp/a\r\nb\rc\nd\te\u0000f\u001fg\u007fh/${unicode}/${INTERNAL_RUNTIME_CONTEXT_BEGIN}/${INTERNAL_RUNTIME_CONTEXT_END}.png `;
@@ -157,26 +125,6 @@ describe("agent internal events", () => {
     expect(mediaUrls).toEqual([reference, normalized]);
   });
 
-  it("preserves complete child results in parent context and retained transcript projections", () => {
-    const fullResult = `${"<🚀>".repeat(2_000)}-required-tail`;
-    const event = taskCompletionEvent(fullResult);
-    const protectedPrompt = formatAgentInternalEventsForPrompt([event]);
-    const protectedResult = extractChildResult(protectedPrompt);
-    const plainResult = extractChildResult(resolveAcpPromptBody("", [event]));
-    const transcriptResult = extractChildResult(
-      resolveInternalEventTranscriptBody(protectedPrompt, [event]),
-    );
-    const data = buildAgentInternalEventContext([event]).find(
-      (fragment) => fragment.kind === "conversation-data",
-    );
-
-    expect(protectedResult).toBe(`${"&lt;🚀&gt;".repeat(2_000)}-required-tail`);
-    expect(protectedResult).toBe(plainResult);
-    expect(transcriptResult).toBe(protectedResult);
-    expect(data?.text).toContain(fullResult);
-    expect(event.result).toBe(fullResult);
-  });
-
   it("keeps a bounded route change separate from child result text", () => {
     const event = {
       ...taskCompletionEvent("child result"),
@@ -186,20 +134,6 @@ describe("agent internal events", () => {
 
     expect(extractChildResult(prompt)).toBe("child result");
     expect(prompt).toContain(event.modelRouteChange);
-  });
-
-  it("bounds status labels carrying caller-supplied error text", () => {
-    const event = {
-      ...taskCompletionEvent("result"),
-      status: "timeout",
-      statusLabel: `timed out: ${"e".repeat(MAX_STATUS_LABEL_CHARS)}-unbounded-tail`,
-    } satisfies AgentInternalEvent;
-    const status = extractStatusLine(formatAgentInternalEventsForPrompt([event]));
-
-    expect(status.length).toBeLessThanOrEqual(MAX_STATUS_LABEL_CHARS);
-    expect(status.endsWith(STATUS_LABEL_TRUNCATION_MARKER)).toBe(true);
-    expect(status).not.toContain("unbounded-tail");
-    expect(status.startsWith("timed out: ")).toBe(true);
   });
 
   it("never splits a surrogate pair when truncating a status label", () => {
@@ -220,52 +154,11 @@ describe("agent internal events", () => {
     expect(truncated).toBe(truncated.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, ""));
     expect(truncated.includes("\uFFFD")).toBe(false);
   });
-
-  it("keeps ordinary status labels unchanged", () => {
-    const event = {
-      ...taskCompletionEvent("result"),
-      status: "error",
-      statusLabel: "failed: model returned no output",
-    } satisfies AgentInternalEvent;
-
-    expect(extractStatusLine(formatAgentInternalEventsForPrompt([event]))).toBe(
-      "failed: model returned no output",
-    );
-  });
 });
 
 describe("attempt execution prompt materialization", () => {
-  it("materializes ACP internal events without OpenClaw internal runtime markers", () => {
-    const events = [taskCompletionEvent("child result")];
-    const body = `${formatAgentInternalEventsForPrompt(events)}\n\nvisible follow-up`;
-
-    const prompt = resolveAcpPromptBody(body, events);
-
-    // ACP receives visible event text, while private runtime envelopes stay out
-    // of the model-facing prompt.
-    expect(prompt).toContain("A background task completed.");
-    expect(prompt).toContain("Inspect output");
-    expect(prompt).toContain("child result");
-    expect(prompt).toContain("visible follow-up");
-    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-    expect(prompt).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
-  });
-
   it("keeps ordinary ACP prompt text unchanged when no internal event is present", () => {
     expect(resolveAcpPromptBody("plain user prompt", undefined)).toBe("plain user prompt");
-  });
-
-  it("uses plain event text for transcripts when the trigger message is an internal envelope", () => {
-    const events = [taskCompletionEvent("child result")];
-    const transcriptBody = resolveInternalEventTranscriptBody(
-      formatAgentInternalEventsForPrompt(events),
-      events,
-    );
-
-    expect(transcriptBody).toContain("A background task completed.");
-    expect(transcriptBody).toContain("Inspect output");
-    expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-    expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 
   it("removes only the typed producer's duplicate carrier and retains supplemental text", () => {

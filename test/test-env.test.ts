@@ -1,4 +1,5 @@
 // Test environment tests validate shared env setup helpers.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -315,6 +316,9 @@ describe("installTestEnv", () => {
     setTestEnvValue("OPENCLAW_HOME", openClawHome);
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
     setTestEnvValue("OPENCLAW_LIVE_TEST_QUIET", "1");
+    setTestEnvValue("FAL_KEY", "fal-sentinel-not-a-real-key-0123456789");
+    setTestEnvValue("OPENAI_API_KEY", "openai-sentinel-not-a-real-key-0123456789");
+    setTestEnvValue("TWILIO_AUTH_TOKEN", "twilio-sentinel-not-a-real-token-0123456789");
     setTestEnvValue("OPENCLAW_CONFIG_PATH", "~/custom-openclaw.json5");
     setTestEnvValue("OPENCLAW_TEST_HOME", priorIsolatedHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", path.join(priorIsolatedHome, ".openclaw"));
@@ -327,6 +331,9 @@ describe("installTestEnv", () => {
     expect(process.env.OPENCLAW_HOME).toBeUndefined();
     expect(process.env.OPENCLAW_TEST_HOME).toBe(testEnv.tempHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    expect(process.env.FAL_KEY).toBe("fal-sentinel-not-a-real-key-0123456789");
+    expect(process.env.OPENAI_API_KEY).toBe("openai-sentinel-not-a-real-key-0123456789");
+    expect(process.env.TWILIO_AUTH_TOKEN).toBeUndefined();
 
     const copiedConfigPath = path.join(testEnv.tempHome, ".openclaw", "openclaw.json");
     const copiedConfig = JSON.parse(fs.readFileSync(copiedConfigPath, "utf8")) as {
@@ -576,6 +583,72 @@ describe("installTestEnv", () => {
     testEnv.cleanup();
     expect(process.env[key]).toBe("test-channel-value");
   });
+
+  it.each(["live-aware", "hermetic"] as const)(
+    "removes and restores inherited provider credentials in non-live %s mode",
+    (mode) => {
+      withEnv(
+        {
+          LIVE: undefined,
+          OPENCLAW_LIVE_TEST: undefined,
+          OPENCLAW_LIVE_GATEWAY: undefined,
+          FAL_KEY: "fal-sentinel-not-a-real-key-0123456789",
+          OPENAI_API_KEY: "openai-sentinel-not-a-real-key-0123456789",
+        },
+        () => {
+          const testEnv = installTestEnv({ mode });
+          cleanupFns.push(testEnv.cleanup);
+          expect(process.env.FAL_KEY).toBeUndefined();
+          expect(process.env.OPENAI_API_KEY).toBeUndefined();
+          testEnv.cleanup();
+          expect(process.env.FAL_KEY).toBe("fal-sentinel-not-a-real-key-0123456789");
+          expect(process.env.OPENAI_API_KEY).toBe("openai-sentinel-not-a-real-key-0123456789");
+        },
+      );
+    },
+  );
+
+  it.each(["live-aware", "hermetic"] as const)(
+    "clears counted Git config together and restores it in non-live %s mode",
+    (mode) => {
+      const gitConfig = {
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_0: "http.https://config-fixture.invalid/.extraheader",
+        GIT_CONFIG_VALUE_0: "Authorization: Bearer synthetic-fixture-token",
+        GIT_CONFIG_KEY_1: "openclaw.fixture",
+        GIT_CONFIG_VALUE_1: "caller-value",
+        GIT_CONFIG_KEY_19: "openclaw.unused",
+        GIT_CONFIG_VALUE_19: "",
+      };
+      withEnv(
+        {
+          LIVE: undefined,
+          OPENCLAW_LIVE_TEST: undefined,
+          OPENCLAW_LIVE_GATEWAY: undefined,
+          ...gitConfig,
+          OPENAI_API_KEY: "synthetic-provider-key",
+        },
+        () => {
+          const callerEnv = { ...process.env };
+          const testEnv = installTestEnv({ mode });
+          cleanupFns.push(testEnv.cleanup);
+          const git = spawnSync(
+            "git",
+            ["-c", "openclaw.isolated=active", "config", "--get", "openclaw.isolated"],
+            { encoding: "utf8" },
+          );
+          expect(git.status, git.stderr).toBe(0);
+          expect(git.stdout.trim()).toBe("active");
+          expect(Object.keys(gitConfig).filter((key) => process.env[key] !== undefined)).toEqual(
+            [],
+          );
+          expect(process.env.OPENAI_API_KEY).toBeUndefined();
+          testEnv.cleanup();
+          expect(changedEnvKeys(callerEnv)).toEqual([]);
+        },
+      );
+    },
+  );
 
   it.each(["live-aware", "hermetic"] as const)(
     "isolates and restores inherited supervisor identity in %s mode",

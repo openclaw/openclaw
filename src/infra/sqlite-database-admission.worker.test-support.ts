@@ -8,14 +8,12 @@ import {
   installSqliteDatabaseAdmissions,
   publishSqliteDatabaseAdmission,
   retireSqliteDatabaseAdmissionForPath,
+  withSqliteDatabaseWriteScope,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerBackend, SqliteWorkerCommand } from "./sqlite-worker-contract.js";
-import {
-  requestSqliteWorkerOperationAdmission,
-  takeSqliteWorkerOperationAdmissionAttachment,
-} from "./sqlite-worker-operation-admission.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 export type AdmissionOperations = {
   admitted: {
@@ -28,14 +26,10 @@ export type AdmissionOperations = {
   };
   mutate: { input: undefined; output: undefined };
   retirePath: { input: { path: string }; output: undefined };
-  writeRows: { input: { sql: string }; output: undefined };
+  writeRows: { input: { sql: string; sessionKeys?: string[] }; output: undefined };
   mutateAfterHostAdmission: {
     input: { path: string };
     output: { native: boolean; admitted: boolean };
-  };
-  mutateHeld: {
-    input: { rollback: boolean; exit: boolean; wait?: boolean };
-    output: undefined;
   };
   read: {
     input: { path: string; awaitPublication?: boolean };
@@ -154,7 +148,12 @@ export function createSqliteWorkerBackend(
       return undefined;
     }
     if (command.type === "writeRows") {
-      database.exec(command.input.sql);
+      const run = () => database.exec(command.input.sql);
+      if (command.input.sessionKeys) {
+        withSqliteDatabaseWriteScope(database, command.input.sessionKeys, run);
+      } else {
+        run();
+      }
       return undefined;
     }
     if (command.type === "mutateAfterHostAdmission") {
@@ -173,30 +172,6 @@ export function createSqliteWorkerBackend(
       } finally {
         writer.close();
       }
-    }
-    if (command.type === "mutateHeld") {
-      database.function("hold_publication", () => {
-        requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
-        if (command.input.exit) {
-          process.exit(0);
-        }
-        if (command.input.wait) {
-          const wait = takeSqliteWorkerOperationAdmissionAttachment();
-          if (!(wait instanceof SharedArrayBuffer)) {
-            throw new Error("Held mutation requires its admission gate");
-          }
-          Atomics.wait(new Int32Array(wait), 0, 0);
-        }
-        return 1;
-      });
-      if (command.input.rollback) {
-        database.exec(
-          "BEGIN; CREATE TABLE worker_publication (value); SELECT hold_publication(); ROLLBACK",
-        );
-      } else {
-        database.exec("CREATE TABLE worker_publication (value); SELECT hold_publication()");
-      }
-      return undefined;
     }
     if (command.input.awaitPublication) {
       requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });

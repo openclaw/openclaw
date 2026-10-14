@@ -20,8 +20,9 @@ import {
   createVitestProcessCompletion,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mts";
-import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
+import { writeFailedTrailer } from "./failed-trailer.mts";
 import { signalExitCode } from "./managed-child-process.mts";
+import { vitestInfrastructureExitCode } from "./vitest-outcome.mts";
 import {
   createVitestResourceOwner,
   findVitestResourceOwner,
@@ -140,14 +141,22 @@ export async function exitVitestBySignal(signal: NodeJS.Signals): Promise<void> 
 }
 
 /** Only public invocations report; internal children propagate their settled outcome. */
-export function runVitestCli(
-  tool: string,
+export async function runVitestCli(
+  tool: string | undefined,
   run: (exitBySignal: typeof exitVitestBySignal) => Promise<void>,
 ): Promise<void> {
-  return runWithFailedTrailer(tool, () =>
-    run(async (signal) => {
-      writeFailedTrailer(tool, signalExitCode(signal));
+  try {
+    await run(async (signal) => {
+      if (tool) {
+        writeFailedTrailer(tool, signalExitCode(signal));
+      }
       await exitVitestBySignal(signal);
-    }),
-  );
+    });
+  } catch (error) {
+    console.error(error);
+    process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
+  }
+  if (tool) {
+    writeFailedTrailer(tool, process.exitCode);
+  }
 }

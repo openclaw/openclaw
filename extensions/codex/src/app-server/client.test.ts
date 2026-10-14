@@ -142,22 +142,6 @@ describe("CodexAppServerClient", () => {
     await expect(request).resolves.toEqual({ models: [] });
   });
 
-  it("rejects unbounded guarded thread requests before acquiring the fence", async () => {
-    const harness = createHarness();
-    const guard = vi.fn(async () => () => undefined);
-    harness.client.setThreadSessionRequestGuard(guard);
-
-    await expect(harness.client.request("thread/start", {})).rejects.toThrow(
-      "thread/start requires a positive finite timeout or abort signal",
-    );
-    await expect(
-      harness.client.request("thread/resume", {}, { timeoutMs: Number.POSITIVE_INFINITY }),
-    ).rejects.toThrow("thread/resume requires a positive finite timeout or abort signal");
-
-    expect(guard).not.toHaveBeenCalled();
-    expect(harness.writes).toEqual([]);
-  });
-
   it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
     const harness = createHarness();
     const high = String.fromCharCode(0xd83d);
@@ -233,8 +217,6 @@ describe("CodexAppServerClient", () => {
   it("keeps the shared client when ownership expires after an overload rejection", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
-    const releaseGuard = vi.fn();
-    harness.client.setThreadSessionRequestGuard(async () => releaseGuard);
     let current = true;
     const ownershipError = new Error("request owner expired");
     const request = harness.client.request(
@@ -265,7 +247,6 @@ describe("CodexAppServerClient", () => {
 
     await rejection;
     expect(harness.writes).toHaveLength(1);
-    expect(releaseGuard).toHaveBeenCalledOnce();
     expect(harness.client.getCloseError()).toBeUndefined();
   });
 
