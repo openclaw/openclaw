@@ -694,6 +694,7 @@ export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;
   profileId: string;
+  modelId?: string;
   agentDir?: string;
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
@@ -707,7 +708,12 @@ export async function markAuthProfileSuccess(params: {
     return;
   }
   const updated = await runAuthProfileUsage(async () => {
-    const reduction = { kind: "success" as const, expectedProfile: profile, lastUsed: Date.now() };
+    const reduction = {
+      kind: "success" as const,
+      expectedProfile: profile,
+      lastUsed: Date.now(),
+      modelId: params.modelId,
+    };
     if (isUserModelAuthProfileId(profileId)) {
       return preparePersonalAuthProfileUsage(store, profileId).record(reduction);
     }

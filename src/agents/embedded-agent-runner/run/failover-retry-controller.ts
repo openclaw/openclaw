@@ -12,10 +12,14 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
+import {
+  hasOrganizationTpmRateLimitEvidence,
+  hasLongWindowRateLimitEvidence,
+} from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
 import { isConfigBackedInlineProviderApiKey } from "../../model-auth.js";
+import { markProbeAttempt, resolveProbeThrottleKey } from "../../model-fallback-cooldown.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
@@ -97,6 +101,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   const { provider, modelId, profileFailureStore } = preparedRuntime;
   const advanceAttemptAuthProfile = preparedRuntime.advanceAttemptAuthProfile;
   let rateLimitProfileRotations = 0;
+  let organizationTpmExhausted = false;
   let transientRetryCount = 0;
   let outputLimitRetryCount = 0;
   let rateLimitSeen = false;
@@ -113,7 +118,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     resolveAuthProfileFailureReason({
       failoverReason,
       providerStarted: opts?.providerStarted,
-      transientRateLimit: opts?.transientRateLimit,
+      transientRateLimit: organizationTpmExhausted ? false : opts?.transientRateLimit,
       policy: params.authProfileFailurePolicy,
     });
 
@@ -173,6 +178,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
   };
 
   const advanceRateLimitAuthProfile = async (context: RateLimitAuthProfileContext) => {
+    if (organizationTpmExhausted) {
+      return false;
+    }
     if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
       const status = resolveFailoverStatus("rate_limit");
       log.warn(
@@ -215,6 +223,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         "providerRetryMaxRetries" | "hasSuccessfulModelResponse"
       >,
     ) => {
+      organizationTpmExhausted = false;
       transientRetryBudget = attempt.providerRetryMaxRetries;
       rateLimitRetriesExhausted = undefined;
       if (attempt.hasSuccessfulModelResponse) {
@@ -263,6 +272,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     maybeRetryTransient: async (retry: {
       reason: TransientRetryReason;
+      sameModelRetry?: boolean;
       message?: string;
       code?: string;
       retryAfterMs?: number;
@@ -284,6 +294,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
           | "non_transient"
           | "connection_retry_disabled"
           | "long_window_rate_limit"
+          | "organization_tpm_exhausted"
           | "retry_budget_exhausted"
           | "retry_delay_unavailable"
           | "retry_delay_exceeds_cap"
@@ -320,6 +331,23 @@ export function createEmbeddedRunFailoverRetryController(input: {
       const rateLimit = retry.reason === "rate_limit";
       if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
         recordDecision("rejected", "long_window_rate_limit");
+        return false;
+      }
+      if (
+        rateLimit &&
+        fallbackConfigured &&
+        params.isFinalFallbackAttempt !== true &&
+        retry.failoverEligible !== false &&
+        hasOrganizationTpmRateLimitEvidence(retry.message)
+      ) {
+        organizationTpmExhausted = true;
+        // This failed request already checked the primary; defer its next cooldown probe.
+        markProbeAttempt(Date.now(), resolveProbeThrottleKey(provider, agentDir));
+        recordDecision("rejected", "organization_tpm_exhausted");
+        return false;
+      }
+      if (retry.sameModelRetry === false) {
+        recordDecision("rejected", "non_transient");
         return false;
       }
       // Honor the SDK's retry-delay cap when replay-safe fallback is available.

@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { For } from "solid-js";
-import { pairSessionDiffLines } from "../../../lib/chat/session-diff-split.ts";
 import type { DiffFilePaths, DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { HighlightedDiff } from "./chat-diff-render.solid.tsx";
@@ -34,13 +33,13 @@ export function SessionSplitDiff(props: {
 }) {
   return (
     <HighlightedDiff lines={props.lines} file={props.file}>
-      {(renderLine) => (
+      {(renderLine, rows) => (
         <div
           class="session-diff-split code-highlight"
           role="figure"
           aria-label={t("chat.toolCards.fileChanges")}
         >
-          <For each={pairSessionDiffLines(props.lines)}>
+          <For each={rows}>
             {(row) => (
               <>
                 {row.kind === "pair" ? (

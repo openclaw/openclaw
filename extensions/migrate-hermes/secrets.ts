@@ -28,7 +28,11 @@ import {
   readHermesSecretDetails,
 } from "./items.js";
 import { normalizeHermesProviderId } from "./model.js";
-import { SECRET_MAPPINGS, type SecretCredentialMode } from "./secret-mappings.js";
+import {
+  SECRET_MAPPINGS,
+  type SecretCredentialMode,
+  type SecretMapping,
+} from "./secret-mappings.js";
 import type { HermesSource } from "./source.js";
 
 type SecretCandidate = {
@@ -68,32 +72,20 @@ function buildEnvSecretCandidates(params: {
 }): SecretCandidate[] {
   const configuredBindings = collectHermesProviderSecretBindings(params.config, params.env);
   const claimedEnvVars = new Set(configuredBindings.map((binding) => binding.envVar));
-  const configured = configuredBindings.flatMap((binding) => {
-    const value = params.env[binding.envVar]?.trim();
-    if (!value) {
-      return [];
-    }
-    return [
-      {
-        id: `secret:${binding.provider}`,
-        source: params.envPath,
-        envVar: binding.envVar,
-        provider: binding.provider,
-        profileId: `${binding.provider}:hermes-import`,
-        mode: "api_key" as const,
-      },
-    ];
-  });
-  const standard = SECRET_MAPPINGS.flatMap((mapping) => {
-    if (claimedEnvVars.has(mapping.envVar)) {
-      return [];
-    }
+  const mappings: SecretMapping[] = [
+    ...configuredBindings.map((binding) =>
+      Object.assign({}, binding, { profileId: `${binding.provider}:hermes-import` }),
+    ),
+    ...SECRET_MAPPINGS.filter((mapping) => !claimedEnvVars.has(mapping.envVar)),
+  ];
+  return mappings.flatMap((mapping) => {
     const value = params.env[mapping.envVar]?.trim();
     if (!value) {
       return [];
     }
     const provider =
-      mapping.envVar === "KIMI_API_KEY" || mapping.envVar === "KIMI_CODING_API_KEY"
+      !claimedEnvVars.has(mapping.envVar) &&
+      (mapping.envVar === "KIMI_API_KEY" || mapping.envVar === "KIMI_CODING_API_KEY")
         ? value.startsWith("sk-kimi-")
           ? "kimi"
           : "moonshot"
@@ -109,7 +101,6 @@ function buildEnvSecretCandidates(params: {
       },
     ];
   });
-  return [...configured, ...standard];
 }
 
 async function buildOpenCodeSecretCandidates(

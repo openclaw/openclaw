@@ -196,6 +196,19 @@ description: | # note
     ).toBe("line one\nline two");
   });
 
+  it("drops comment-only values but keeps unquoted hash-led text", () => {
+    const parsed = parseFrontmatterBlock(`---
+name: hashes
+description: # Add a description here
+summary: #1 pick for audits
+color: #ff8800
+---`);
+
+    expect(parsed.description).toBeUndefined();
+    expect(parsed.summary).toBe("#1 pick for audits");
+    expect(parsed.color).toBe("#ff8800");
+  });
+
   it("retains structured-value parser errors for owning loaders", () => {
     const result = parseFrontmatterBlockResult(`---
 name: [broken

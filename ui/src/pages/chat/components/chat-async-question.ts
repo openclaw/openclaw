@@ -249,6 +249,7 @@ export function createAsyncQuestionPresentation(
     sessionKey: string;
     currentAgentId?: string;
     connectionEpoch?: number;
+    connected?: boolean;
     asyncQuestionStorage?: DurableComposerDraftScope | null;
     onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"];
     onReopen?: (itemId: string, scope: string) => void;
@@ -452,10 +453,12 @@ export function createAsyncQuestionPresentation(
         item.sendError,
       ]),
       Boolean(props.onAsyncQuestionSubmit && props.onQueueRetry),
+      props.connected,
     ]),
     drafts,
     resolved,
     delivery,
+    connected: props.connected,
     discard: (item) => {
       if (!isCurrent()) {
         return;

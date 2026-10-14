@@ -137,6 +137,7 @@ jobs:
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
+      run_docs_content: ${{ steps.manifest.outputs.run_docs_content }}
       release_scope: ${{ steps.manifest.outputs.release_scope }}
       release_fast_lane: ${{ steps.manifest.outputs.release_fast_lane }}
       validation_tier: ${{ steps.manifest.outputs.validation_tier }}
@@ -1447,6 +1448,7 @@ jobs:
         env:
           OPENCLAW_CI_DOCS_ONLY: ${{ github.event_name == 'schedule' && 'false' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}
+          OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY: ${{ steps.docs_scope.outputs.root_prose_only }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_NODE_TEST_DATA_ONLY: ${{ steps.changed_scope.outputs.node_test_data_only || 'false' }}
           OPENCLAW_CI_NODE_SELECTION: ${{ vars.OPENCLAW_CI_NODE_SELECTION }}
@@ -4538,16 +4540,16 @@ jobs:
         run: pnpm format:check
 
       - name: Check config docs baseline
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: pnpm config:docs:check
 
       - name: Check plugin inventory
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: pnpm plugins:inventory:check
 
       - name: Checkout ClawHub docs source
         id: clawhub_docs
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         shell: bash
         env:
           CHECKOUT_KIND: clawhub
@@ -4555,13 +4557,13 @@ jobs:
         run: *owned_checkout_run
 
       - name: Record external documentation dependency
-        if: ${{ !cancelled() && steps.clawhub_docs.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.clawhub_docs.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: |
           printf 'ClawHub documentation dependency: openclaw/clawhub@%s (external data, not qualification harness).\n' \
             "$(git -C clawhub-source rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check docs
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && steps.clawhub_docs.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && steps.clawhub_docs.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         env:
           OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
         # Keep the content checks serial; only their read-only formatter runs alongside.

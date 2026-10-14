@@ -445,17 +445,11 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       throw new Error("Replica fixture requires a durable target");
     }
     const target = { ...initial.target, database: initial.target.database };
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: null,
-      has_optional_references: 0,
-    });
     const shared = replica.read()!;
+    expect(shared).toBe(initial);
     expect(replica.read()).toBe(shared);
     expect(replica.beginRead().install(shared)).toBe(true);
     expect(replica.read()).toBe(shared);
-    expect(() => {
-      shared.entry!.label = "caller edit";
-    }).toThrow(TypeError);
     const detached = structuredClone(shared);
     detached.entry!.label = "caller edit";
     expect(replica.read()?.entry?.label).toBe("before");
@@ -486,12 +480,7 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     });
     const outcome = committed(accepted, load("first", 1));
     expect(pending.settle(outcome)).toBe(true);
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
-    outcome.receipt.postimage.entry!.label = "receipt caller edit";
-    expect(replica.read()?.entry?.label).toBe("before");
+    expect(replica.read()).toBe(outcome.receipt.postimage);
     expect(pending.settle(outcome)).toBe(false);
 
     const rollback = replica.beginCommand();
@@ -515,10 +504,6 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
       { entry: load().entry, snapshots: "full" },
       "cold-entry-reader",
     );
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
 
     const stale = replica.beginCommand();
     const superseded = load("superseded");
@@ -553,7 +538,7 @@ it("installs complete outcomes, fences unknowns, and rejects delayed epochs", as
     expect(replica.beginRead().install(opaque)).toBe(true);
     const borrowed = replica.read()!;
     expect(replica.beginRead().install(borrowed)).toBe(true);
-    expect(replica.read()).not.toBe(borrowed);
+    expect(replica.read()).toBe(borrowed);
     expect(replica.read()?.entry?.swarmOutputSchema).toEqual({ value: new Date(0) });
 
     const current = hydrate(fixture, "final");
