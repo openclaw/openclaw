@@ -1,10 +1,12 @@
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
+import type { StageTiming } from "../../../shared/stage-timing.js";
 import { buildBootstrapBudgetState, buildBootstrapInjectionStats } from "../../bootstrap-budget.js";
 import {
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
-  resolveBootstrapFilesForRun,
+  resolveBootstrapFilesForRunWithTiming,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
@@ -23,6 +25,7 @@ import { log } from "../logger.js";
 import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
+import { logEmbeddedRunStageSummary, measureBootstrapSubstage } from "./attempt-stage-timing.js";
 import type { EmbeddedRunAttemptBase, EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
@@ -56,33 +59,51 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     workspaceDir: bootstrapWorkspaceDir,
     warn: (message) => log.warn(message),
   });
+  // Bootstrap-context can stall the event loop; record per-substage timings so a
+  // slow run reports where it spent time instead of a single opaque total.
+  const bootstrapContextStartedAt = performance.now();
+  const bootstrapContextSubstageTimings: StageTiming[] = [];
+  const recordBootstrapContextSubstage = (name: string, durationMs: number) => {
+    bootstrapContextSubstageTimings.push({
+      name,
+      durationMs: Math.max(0, Math.round(durationMs)),
+      elapsedMs: Math.max(0, Math.round(performance.now() - bootstrapContextStartedAt)),
+    });
+  };
   const resolveWorkspaceBootstrapFiles = (workspaceDir: string) =>
-    resolveBootstrapFilesForRun({
+    resolveBootstrapFilesForRunWithTiming({
       ...attempt,
       workspaceDir,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
+      onBootstrapSubstageTiming: recordBootstrapContextSubstage,
     });
   let completedBootstrapTurn: boolean | undefined;
   const hasCompletedBootstrapTurnForAttempt = async () =>
     (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
-    resolveWorkspaceBootstrapRouting({
-      ...attempt,
-      isWorkspaceBootstrapPending,
-      bootstrapFiles,
-      isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
-      effectiveWorkspace: params.setup.effectiveWorkspace,
-      resolvedWorkspace: bootstrapWorkspaceDir,
-      hasBootstrapFileAccess: params.hasReadTool,
-    });
-  const shouldProbeContinuationSkip =
+    measureBootstrapSubstage(recordBootstrapContextSubstage, "bootstrap-routing", async () =>
+      resolveWorkspaceBootstrapRouting({
+        ...attempt,
+        isWorkspaceBootstrapPending,
+        bootstrapFiles,
+        isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
+        effectiveWorkspace: params.setup.effectiveWorkspace,
+        resolvedWorkspace: bootstrapWorkspaceDir,
+        hasBootstrapFileAccess: params.hasReadTool,
+      }),
+    );
+  const shouldProbeContinuation =
     !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
-    (await hasCompletedBootstrapTurnForAttempt());
+    !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind);
+  const shouldProbeContinuationSkip = shouldProbeContinuation
+    ? await measureBootstrapSubstage(recordBootstrapContextSubstage, "continuation-scan", () =>
+        hasCompletedBootstrapTurnForAttempt(),
+      )
+    : false;
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
     shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
@@ -128,16 +149,40 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
                 path.resolve(file.path) === executionAgentsPath,
             );
       const layeredBootstrapFiles = [...bootstrapFiles, ...executionProjectFiles];
+      const contextBuildStartedAt = performance.now();
+      const contextFiles = buildBootstrapContextForFiles(layeredBootstrapFiles, {
+        config: attempt.config,
+        agentId: params.setup.sessionAgentId,
+        warn: bootstrapWarn,
+      });
+      recordBootstrapContextSubstage("context-build", performance.now() - contextBuildStartedAt);
       return {
         bootstrapFiles: layeredBootstrapFiles,
-        contextFiles: buildBootstrapContextForFiles(layeredBootstrapFiles, {
-          config: attempt.config,
-          agentId: params.setup.sessionAgentId,
-          warn: bootstrapWarn,
-        }),
+        contextFiles,
       };
     },
   });
+  const bootstrapContextTotalMs = Math.max(
+    0,
+    Math.round(performance.now() - bootstrapContextStartedAt),
+  );
+  // The parent stage lets the owner's per-stage threshold flag a slow bootstrap
+  // even when no single substage crosses it.
+  logEmbeddedRunStageSummary(
+    {
+      totalMs: bootstrapContextTotalMs,
+      stages: [
+        ...bootstrapContextSubstageTimings,
+        {
+          name: "bootstrap-context",
+          durationMs: bootstrapContextTotalMs,
+          elapsedMs: bootstrapContextTotalMs,
+        },
+      ],
+    },
+    log,
+    () => `[trace:embedded-run] bootstrap-context substages: sessionId=${attempt.sessionId}`,
+  );
   params.setup.prepStages?.mark("bootstrap-context");
   const injectedContextFiles = bootstrapRouting.includeBootstrapInSystemContext
     ? resolvedContextFiles

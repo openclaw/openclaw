@@ -1,4 +1,5 @@
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
@@ -287,6 +288,18 @@ type BootstrapFileResolutionParams = {
   readOnlyState?: boolean;
 };
 
+/** `BootstrapFileResolutionParams` plus the embedded-runner substage-timing hook. */
+type BootstrapFileResolutionTimingParams = BootstrapFileResolutionParams & {
+  onBootstrapSubstageTiming?: (
+    name:
+      | "workspace-setup-state"
+      | "workspace-file-load"
+      | "automatic-memory-provenance"
+      | "hook-overrides",
+    durationMs: number,
+  ) => void;
+};
+
 // Diagnostics project declared files without executing registered hook handlers.
 type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
 
@@ -300,11 +313,23 @@ export async function resolveBootstrapFilesForPreparation(
 export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFilesForRunWithTiming(params);
+}
+
+/**
+ * Timing-aware variant used only by the embedded runner to record bootstrap
+ * substage durations. Kept off the plugin SDK surface (not re-exported by
+ * `src/plugin-sdk/agent-harness-runtime.ts`) so the public
+ * `resolveBootstrapFilesForRun` signature stays callback-free.
+ */
+export async function resolveBootstrapFilesForRunWithTiming(
+  params: BootstrapFileResolutionTimingParams,
+): Promise<WorkspaceBootstrapFile[]> {
   return resolveBootstrapFiles(params, "registered");
 }
 
 async function resolveBootstrapFiles(
-  params: BootstrapFileResolutionParams,
+  params: BootstrapFileResolutionTimingParams,
   hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
@@ -314,10 +339,16 @@ async function resolveBootstrapFiles(
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
+  const setupStateStartedAt = performance.now();
   const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
     params.workspaceDir,
     params.readOnlyState,
   );
+  params.onBootstrapSubstageTiming?.(
+    "workspace-setup-state",
+    performance.now() - setupStateStartedAt,
+  );
+  const fileLoadStartedAt = performance.now();
   const sharedFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
@@ -330,11 +361,13 @@ async function resolveBootstrapFiles(
     params.bootstrapUserProfileId,
     params.warn,
   );
+  params.onBootstrapSubstageTiming?.("workspace-file-load", performance.now() - fileLoadStartedAt);
   const userIndex = sharedFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
   const rawFiles = [...sharedFiles];
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);
   }
+  const provenanceStartedAt = performance.now();
   const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
     files: rawFiles,
     workspaceDir: params.workspaceDir,
@@ -342,6 +375,10 @@ async function resolveBootstrapFiles(
     agentId: params.agentId,
     warn: params.warn,
   });
+  params.onBootstrapSubstageTiming?.(
+    "automatic-memory-provenance",
+    performance.now() - provenanceStartedAt,
+  );
   const rootMemoryFile = rawFiles.find(
     (file) => file.name === DEFAULT_MEMORY_FILENAME && !file.missing,
   );
@@ -366,17 +403,24 @@ async function resolveBootstrapFiles(
   // Heartbeat scratch is runner-owned; all lightweight runs omit bootstrap context.
   const bootstrapFiles = params.contextMode === "lightweight" ? [] : sessionFiles;
 
-  const hooked =
-    hooks === "registered"
-      ? await applyBootstrapHookOverrides({
-          files: bootstrapFiles,
-          workspaceDir: params.workspaceDir,
-          config: params.config,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          agentId: params.agentId,
-        })
-      : bootstrapFiles;
+  let hooked: WorkspaceBootstrapFile[];
+  if (hooks === "registered") {
+    const hookOverridesStartedAt = performance.now();
+    hooked = await applyBootstrapHookOverrides({
+      files: bootstrapFiles,
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+    });
+    params.onBootstrapSubstageTiming?.(
+      "hook-overrides",
+      performance.now() - hookOverridesStartedAt,
+    );
+  } else {
+    hooked = bootstrapFiles;
+  }
   const updated = typeof hooks === "object" ? [...hooked, ...hooks.projected] : hooked;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     filterBootstrapFilesAfterHooks({
