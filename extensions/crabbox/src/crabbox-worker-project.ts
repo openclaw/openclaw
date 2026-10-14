@@ -23,7 +23,6 @@ export async function prepareCrabboxWorkerRuntime(params: {
   context: Omit<Parameters<typeof runProvisionSetup>[0], "phase" | "setup">;
   prepareNodeRuntime: NonNullable<Parameters<WorkerProvider["provision"]>[2]>["prepareNodeRuntime"];
   leaseId: string;
-  scrubScript?: string;
   preparationSignal?: AbortSignal;
   assertCurrent: () => void;
   onSetupFailure: () => void;
@@ -40,28 +39,35 @@ export async function prepareCrabboxWorkerRuntime(params: {
     leaseId: params.leaseId,
     target: params.context.profile.target,
   });
-  try {
-    await runProvisionSetup({
-      ...params.context,
-      phase: "node runtime preparation",
-      // Node clears its own environment; scrub must also inherit no shell credentials.
-      setup: params.scrubScript
-        ? `${setup.command}\nunset ${Object.keys(setup.forwardedEnv).join(" ")}\n${params.scrubScript}`
-        : setup.command,
-      forwardedEnv: setup.forwardedEnv,
-      timeoutMs:
-        resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs) +
-        (params.scrubScript ? WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS : 0),
-      signal:
-        runtime.signal && params.preparationSignal
-          ? AbortSignal.any([params.preparationSignal, runtime.signal])
-          : (params.preparationSignal ?? runtime.signal),
-    });
-  } catch (error) {
-    // The command owner stops on failure; callers must not stop the lease twice.
-    params.onSetupFailure();
-    throw error;
-  }
+  const timeoutMs = resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs);
+  return {
+    timeoutMs,
+    async run(scrubScript?: string) {
+      params.context.signal?.throwIfAborted();
+      runtime.signal?.throwIfAborted();
+      params.assertCurrent();
+      try {
+        await runProvisionSetup({
+          ...params.context,
+          phase: "node runtime preparation",
+          // Node clears its own environment; scrub must also inherit no shell credentials.
+          setup: scrubScript
+            ? `${setup.command}\nunset ${Object.keys(setup.forwardedEnv).join(" ")}\n${scrubScript}`
+            : setup.command,
+          forwardedEnv: setup.forwardedEnv,
+          timeoutMs: timeoutMs + (scrubScript ? WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS : 0),
+          signal:
+            runtime.signal && params.preparationSignal
+              ? AbortSignal.any([params.preparationSignal, runtime.signal])
+              : (params.preparationSignal ?? runtime.signal),
+        });
+      } catch (error) {
+        // The command owner stops on failure; callers must not stop the lease twice.
+        params.onSetupFailure();
+        throw error;
+      }
+    },
+  };
 }
 
 /** Core owns Git contents; this adapter owns only the existing lease's transport. */

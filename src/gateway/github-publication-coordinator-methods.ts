@@ -90,49 +90,6 @@ export function exactClaimForPlacement(
   };
 }
 
-export function createSharedGitHubPublicationReadMethods(
-  kind: Parameters<typeof readSharedGitHubPublication>[0],
-) {
-  return {
-    async sharedStatus(
-      session: PublicationSessionIdentity,
-      requestId: string,
-    ): Promise<SessionGitHubStatusResult | undefined> {
-      const row = await readSharedGitHubPublication(kind, session, { requestId });
-      return row ? { result: publicationResult(row), confirmation: null } : undefined;
-    },
-
-    async latestShared(
-      session: PublicationSessionIdentity,
-      idempotencyKey?: string,
-      isSuperseded?: (
-        snapshot: Pick<
-          PublicationRow,
-          "repository" | "branch" | "source_head_commit" | "workspace_tree"
-        >,
-      ) => Promise<boolean>,
-    ): Promise<SessionGitHubStatusResult | null> {
-      const row = await readSharedGitHubPublication(kind, session, { idempotencyKey });
-      // Discovery offers recovery for current work, not a failure whose accepted
-      // snapshot has since been published. Exact-key and by-id history stay intact.
-      if (
-        row?.status === "failed" &&
-        idempotencyKey === undefined &&
-        isSuperseded &&
-        (await isSuperseded({
-          repository: row.repository,
-          branch: row.branch,
-          source_head_commit: row.source_head_commit,
-          workspace_tree: row.workspace_tree,
-        }))
-      ) {
-        return null;
-      }
-      return row ? { result: publicationResult(row), confirmation: null } : null;
-    },
-  };
-}
-
 export function createGitHubPublicationCoordinatorMethods(params: {
   placements: WorkerSessionPlacementStore;
   assertCurrent: () => void;
@@ -490,7 +447,42 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       ];
     },
 
-    ...createSharedGitHubPublicationReadMethods("worktree"),
+    async sharedStatus(
+      session: PublicationSessionIdentity,
+      requestId: string,
+    ): Promise<SessionGitHubStatusResult | undefined> {
+      const row = await readSharedGitHubPublication(session, { requestId });
+      return row ? { result: publicationResult(row), confirmation: null } : undefined;
+    },
+
+    async latestShared(
+      session: PublicationSessionIdentity,
+      idempotencyKey?: string,
+      isSuperseded?: (
+        snapshot: Pick<
+          PublicationRow,
+          "repository" | "branch" | "source_head_commit" | "workspace_tree"
+        >,
+      ) => Promise<boolean>,
+    ): Promise<SessionGitHubStatusResult | null> {
+      const row = await readSharedGitHubPublication(session, { idempotencyKey });
+      // Discovery offers recovery for current work, not a failure whose accepted
+      // snapshot has since been published. Exact-key and by-id history stay intact.
+      if (
+        row?.status === "failed" &&
+        idempotencyKey === undefined &&
+        isSuperseded &&
+        (await isSuperseded({
+          repository: row.repository,
+          branch: row.branch,
+          source_head_commit: row.source_head_commit,
+          workspace_tree: row.workspace_tree,
+        }))
+      ) {
+        return null;
+      }
+      return row ? { result: publicationResult(row), confirmation: null } : null;
+    },
 
     async readAsync(requestId: string): Promise<SessionGitHubPublicationResult | undefined> {
       const row = await readGitHubPublicationRequestAsync({ requestId });

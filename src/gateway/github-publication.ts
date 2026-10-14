@@ -532,12 +532,6 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.requestPersonalForSessionV2(...args)
         : personal.requestPersonalForSessionV2(...args);
     },
-    async sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
-      return (await repository.sharedStatus(...args)) ?? (await methods.sharedStatus(...args));
-    },
-    async latestShared(...args: Parameters<typeof methods.latestShared>) {
-      return (await repository.latestShared(...args)) ?? (await methods.latestShared(...args));
-    },
     preparePersonalStatus: repository.preparePersonalStatus,
     /** @deprecated Use personalStatusAsync and await completion. */
     personalStatus(

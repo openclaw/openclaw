@@ -224,7 +224,7 @@ export function applyJobResult(
     if (opts.replaySchedule && job.schedule.kind !== "at") {
       applyReplaySchedule();
     }
-    if (shouldDelete) {
+    if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
     }
     const failureNotification = finalizeCronFailureNotifications(state, {
@@ -261,7 +261,11 @@ export function applyJobResult(
     job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
     job.state.forcePreservedNextRunAtMs = previousScheduleState.forcePreservedNextRunAtMs;
   } else if (!shouldDelete) {
-    if (preserveOneShotSchedule) {
+    if (job.schedule.kind === "event") {
+      // The transferred ingress receipt owns this occurrence. A timer retry
+      // would lose its immutable event and could repeat an external side effect.
+      job.state.nextRunAtMs = undefined;
+    } else if (preserveOneShotSchedule) {
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = oneShotOccurrenceAtMs;
