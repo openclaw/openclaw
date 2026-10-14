@@ -12,6 +12,7 @@ import {
   compactionTestRuntime,
   compactionTestState as state,
   GATEWAY_INGRESS_ARGS,
+  makeCompactionResult,
   registerAgentCommandCompactionTestHooks,
   requireCompactionStorePath,
 } from "./agent-command.compaction.test-support.js";
@@ -104,8 +105,6 @@ async function fixture() {
   return { target, opts, runId };
 }
 
-// Real command, attempt owner, pending-final persistence and claim cleanup.
-// Provider admission and the outbound send boundary are fixed fixtures.
 it.each(["sent", "failed"] as const)(
   "settles a refused continuation using the actual %s delivery outcome",
   async (status) => {
@@ -127,7 +126,9 @@ it.each(["sent", "failed"] as const)(
         ]);
         const payload = params.payloads?.[0];
         assert.isDefined(payload);
-        expect(payload.text).not.toContain("runtime replacement");
+        expect(payload.text).toBe(
+          "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+        );
         expect(getReplyPayloadMetadata(payload)).toMatchObject({
           deliverDespiteSourceReplySuppression: true,
         });
@@ -197,6 +198,30 @@ it.each(["sent", "failed"] as const)(
     ]);
   },
 );
+
+it("delivers an admitted continuation without a failure notice", async () => {
+  const { opts } = await fixture();
+  state.runAgentAttemptMock.mockResolvedValueOnce(
+    makeCompactionResult({
+      sessionId: opts.sessionId,
+      text: "The child failed; no work was lost.",
+    }),
+  );
+  platformSend.mockResolvedValueOnce([{ channel: "discord", messageId: "reply-1" }]);
+
+  const result = await agentCommandFromGatewayIngress(
+    { ...opts, sourceReplyDeliveryMode: "automatic" },
+    ...GATEWAY_INGRESS_ARGS,
+  );
+
+  expect(readAgentRunTerminalOutcome(result)).toBe("completed");
+  expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+  expect(sendMock).toHaveBeenCalledOnce();
+  expect(sendMock.mock.calls[0]?.[0].payloads).toEqual([
+    expect.objectContaining({ text: "The child failed; no work was lost." }),
+  ]);
+  expect(result.payloads?.some((payload) => payload.isError)).toBe(false);
+});
 
 it.each([
   "private",

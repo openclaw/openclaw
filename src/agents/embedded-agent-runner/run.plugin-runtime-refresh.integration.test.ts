@@ -85,10 +85,8 @@ describe("plugin runtime refresh admission", () => {
     mockedAcquireAgentRunPreparedModelRuntime
       .mockResolvedValueOnce(base)
       .mockRejectedValueOnce(refusal);
-    const completedEffect = vi.fn();
     const onAttemptStart = vi.fn();
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      completedEffect();
       params.registerPluginRuntimeRefreshConsumer?.(() => true);
       expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
       return makeAttemptResult({
@@ -113,7 +111,6 @@ describe("plugin runtime refresh admission", () => {
     ).rejects.toBe(refusal);
 
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledTimes(2);
-    expect(completedEffect).toHaveBeenCalledOnce();
     expect(onAttemptStart).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
   });

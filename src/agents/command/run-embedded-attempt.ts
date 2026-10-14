@@ -253,6 +253,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   });
   const logicalTurnOpts = { ...params.opts, abortSignal: deferredLifecycle.signal };
   let liveSwitchMediaTaskIds: ReadonlySet<string> = new Set();
+  let attemptMediaTaskIds = liveSwitchMediaTaskIds;
+  const currentAttemptCommittedCronMedia = () =>
+    hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds, sessionAgentId);
   for (;;) {
     try {
       liveSwitchMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(sessionKey, sessionAgentId);
@@ -275,9 +278,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
 
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
       attemptLifecycleState.currentTurnUserMessagePersisted = false;
-      let attemptMediaTaskIds = liveSwitchMediaTaskIds;
-      const currentAttemptCommittedCronMedia = () =>
-        hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds, sessionAgentId);
+      attemptMediaTaskIds = liveSwitchMediaTaskIds;
       const fallbackResult = await runEmbeddedAgentEntry<AgentAttemptResult>({
         preparedRunAdmission: params.preparedRunAdmission,
         modelResolve: {
@@ -648,12 +649,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             }),
             behavior: {
               kind: "command-rpc",
-              hasCommittedSideEffect: () =>
-                hasNewGeneratedMediaTaskForSessionKey(
-                  sessionKey,
-                  liveSwitchMediaTaskIds,
-                  sessionAgentId,
-                ),
+              hasCommittedSideEffect: currentAttemptCommittedCronMedia,
             },
             runId,
             requested: { provider, model },
