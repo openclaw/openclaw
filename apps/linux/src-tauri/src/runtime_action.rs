@@ -685,13 +685,16 @@ fn validate_runtime(runtime: &BundledRuntime) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
 fn quote(path: &Path) -> Result<String, String> {
     let value = path
         .to_str()
         .filter(|value| !value.contains(['\n', '\r', '\0']))
         .ok_or("Runtime paths must be single-line UTF-8.")?;
-    Ok(format!("'{}'", value.replace('\'', "'\\''")))
+    #[cfg(target_os = "windows")]
+    let value = value.replace('\'', "''");
+    #[cfg(not(target_os = "windows"))]
+    let value = value.replace('\'', "'\\''");
+    Ok(format!("'{value}'"))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -706,15 +709,6 @@ fn render(launcher: &Launcher) -> Result<Vec<u8>, String> {
     Ok(format!("#!/bin/sh\n{MARKER}{}\nunset OPENCLAW_SQLITE_LIBRARY LD_LIBRARY_PATH\n{sqlite}exec {} --no-install {} \"$@\"\n",
         serde_json::to_string(launcher).map_err(|error| error.to_string())?,
         quote(&launcher.runtime.bun)?, quote(&launcher.entry)?).into_bytes())
-}
-
-#[cfg(target_os = "windows")]
-fn quote(path: &Path) -> Result<String, String> {
-    let value = path
-        .to_str()
-        .filter(|value| !value.contains(['\n', '\r', '\0']))
-        .ok_or("Runtime paths must be single-line UTF-8.")?;
-    Ok(format!("'{}'", value.replace('\'', "''")))
 }
 
 #[cfg(target_os = "windows")]
