@@ -81,7 +81,7 @@ type PublicationView = () => Publication;
 const publications = new WeakMap<
   SessionRowProjection,
   {
-    revision: object;
+    revision: object | undefined;
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
@@ -196,21 +196,32 @@ export function prepareSessionRowPublication(
         lists: new Map(),
       };
       publications.set(projection, publication);
-      const published = publication;
-      const { lists } = published;
-      projection.onSelectionChange(() => lists.clear());
+      const retained = publication;
+      projection.onSelectionChange((change) => {
+        if (change.kind === "reset") {
+          retained.lists.clear();
+          return;
+        }
+        // Keyed changes retire selection, but immutable vectors remain comparison witnesses.
+        retained.revision = undefined;
+        for (const list of retained.lists.values()) {
+          list.selection = undefined;
+        }
+      });
       projection.onFactsChange((change) => {
-        published.factsRevision++;
+        retained.factsRevision++;
         // Retire wire snapshots even when no reader returns after a publication or disposal.
-        for (const list of lists.values()) {
+        for (const list of retained.lists.values()) {
           if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
             list.rows = undefined;
           }
         }
       });
     } else if (publication.revision !== revision) {
+      if (publication.revision !== undefined) {
+        publication.lists.clear();
+      }
       publication.revision = revision;
-      publication.lists.clear();
     }
     return publication;
   };
