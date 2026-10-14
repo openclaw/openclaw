@@ -5071,7 +5071,6 @@
 ["src/cli/webhooks-cli.test.ts","../runtime.js","c16762af0d3584b5012d69f7d3cde52553a84f822e49a786d2be054e90712da3",1]
 ["src/cli/worktrees-cli.import-boundary.test.ts","../agents/worktrees/owner-protection.js","c8ff438b9da7d878b2a0010c800a7150fdf818cac3f5c8bdf00708777f5e8223",1]
 ["src/cli/worktrees-cli.import-boundary.test.ts","../agents/worktrees/service.js","60575d80182d713a56f8cc68b83ebb089c3dfa3bee072b36bb9c337bde730ef7",1]
-["src/commands/agent-command-attempt.test-mocks.ts","../agents/command/attempt-execution.runtime.js","4e371509796f2564482fe08ced6e67ba65c55c28e93c07107d36f5f98194dca4",1]
 ["src/commands/agent-command-attempt.test-mocks.ts","../agents/command/cli-compaction.js","3858c7525c6c70632584834c3bfbde42ef9e1ec4ecb230a0e16d360bc8f2e219",1]
 ["src/commands/agent-command.test-mocks.ts","../acp/control-plane/manager.js","1cff3287c704d3d90c54fb09c21bd6712e6eb8f0c6e2b4dc0483512b1f471201",1]
 ["src/commands/agent-command.test-mocks.ts","../agents/embedded-agent.js","8d5b9632cb1894eda061a72d3556fa8278fd44dbb86fe22a18f5467e1c8944bc",1]

@@ -1,4 +1,6 @@
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
+import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 
 export function withoutPluginHarnessPrivateState(
   params: EmbeddedRunAttemptInternalParams & { __openclawSourceReplyDeliveryRuntime?: unknown },
@@ -21,8 +23,19 @@ export function withoutPluginHarnessPrivateState(
     trajectoryRecorder: _trajectoryRecorder,
     inputAttachmentMedia: _inputAttachmentMedia,
     supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
+    runtimeContextFragments,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
   } = params;
-  return pluginParams;
+  const fragments = runtimeContextFragments?.filter((fragment) => fragment.text.trim());
+  return fragments?.length
+    ? {
+        ...pluginParams,
+        currentInboundContext: appendCurrentInboundContext(
+          pluginParams.currentInboundContext,
+          fragments,
+          projectRuntimeContextFragments(fragments),
+        ),
+      }
+    : pluginParams;
 }
